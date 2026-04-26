@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use wasm_bindgen::{prelude::*, JsCast};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
-use web_sys::{File, HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement};
+use web_sys::{File, HtmlElement, HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement};
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
@@ -11,33 +11,73 @@ export function gpt2api_copy_text(text) {
         navigator.clipboard.writeText(text).catch(function(){});
     }
 }
+export function gpt2api_make_draggable(panelId, handleId) {
+    const panel = document.getElementById(panelId);
+    const handle = document.getElementById(handleId);
+    if (!panel || !handle || panel.dataset.dragBound === "1") return;
+    panel.dataset.dragBound = "1";
+    handle.addEventListener("pointerdown", function(event) {
+        if (event.button !== 0) return;
+        if (event.target && event.target.closest && event.target.closest("button,input,select,textarea,a")) return;
+        event.preventDefault();
+        const rect = panel.getBoundingClientRect();
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const startLeft = rect.left;
+        const startTop = rect.top;
+        panel.style.right = "auto";
+        panel.style.left = startLeft + "px";
+        panel.style.top = startTop + "px";
+        handle.setPointerCapture(event.pointerId);
+        function move(moveEvent) {
+            const nextLeft = Math.max(8, Math.min(window.innerWidth - 80, startLeft + moveEvent.clientX - startX));
+            const nextTop = Math.max(8, Math.min(window.innerHeight - 48, startTop + moveEvent.clientY - startY));
+            panel.style.left = nextLeft + "px";
+            panel.style.top = nextTop + "px";
+        }
+        function up(upEvent) {
+            handle.releasePointerCapture(upEvent.pointerId);
+            window.removeEventListener("pointermove", move);
+            window.removeEventListener("pointerup", up);
+        }
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+    });
+}
 "#)]
 extern "C" {
     fn gpt2api_copy_text(text: &str);
+    fn gpt2api_make_draggable(panel_id: &str, handle_id: &str);
 }
 
 use crate::{
     api::{
         admin_gpt2api_rs_chat_completions, admin_gpt2api_rs_edit_images,
         admin_gpt2api_rs_generate_images, admin_gpt2api_rs_responses,
-        check_admin_gpt2api_rs_proxy_config, create_admin_gpt2api_rs_key,
-        create_admin_gpt2api_rs_proxy_config, delete_admin_gpt2api_rs_accounts,
-        delete_admin_gpt2api_rs_key, delete_admin_gpt2api_rs_proxy_config,
-        fetch_admin_gpt2api_rs_accounts, fetch_admin_gpt2api_rs_config,
-        fetch_admin_gpt2api_rs_keys, fetch_admin_gpt2api_rs_models,
+        approve_admin_gpt2api_account_contribution_request, check_admin_gpt2api_rs_proxy_config,
+        create_admin_gpt2api_rs_account_group, create_admin_gpt2api_rs_key,
+        create_admin_gpt2api_rs_proxy_config, delete_admin_gpt2api_rs_account_group,
+        delete_admin_gpt2api_rs_accounts, delete_admin_gpt2api_rs_key,
+        delete_admin_gpt2api_rs_proxy_config, fetch_admin_gpt2api_account_contribution_requests,
+        fetch_admin_gpt2api_rs_account_groups, fetch_admin_gpt2api_rs_accounts,
+        fetch_admin_gpt2api_rs_config, fetch_admin_gpt2api_rs_keys, fetch_admin_gpt2api_rs_models,
         fetch_admin_gpt2api_rs_proxy_configs, fetch_admin_gpt2api_rs_status,
-        fetch_admin_gpt2api_rs_usage, fetch_admin_gpt2api_rs_version,
+        fetch_admin_gpt2api_rs_usage_events, fetch_admin_gpt2api_rs_version,
         import_admin_gpt2api_rs_accounts, post_admin_gpt2api_rs_login,
-        refresh_admin_gpt2api_rs_accounts, rotate_admin_gpt2api_rs_key,
-        update_admin_gpt2api_rs_account, update_admin_gpt2api_rs_config,
+        refresh_admin_gpt2api_rs_accounts, reject_admin_gpt2api_account_contribution_request,
+        rotate_admin_gpt2api_rs_key, update_admin_gpt2api_rs_account,
+        update_admin_gpt2api_rs_account_group, update_admin_gpt2api_rs_config,
         update_admin_gpt2api_rs_key, update_admin_gpt2api_rs_proxy_config,
-        AdminGpt2ApiRsAccountView, AdminGpt2ApiRsCreateKeyRequest,
+        AdminGpt2ApiAccountContributionRequestView, AdminGpt2ApiAccountContributionRequestsQuery,
+        AdminGpt2ApiRsAccountGroupView, AdminGpt2ApiRsAccountView,
+        AdminGpt2ApiRsCreateAccountGroupRequest, AdminGpt2ApiRsCreateKeyRequest,
         AdminGpt2ApiRsCreateProxyConfigRequest, AdminGpt2ApiRsDeleteAccountsRequest,
         AdminGpt2ApiRsImageEditRequest, AdminGpt2ApiRsImageGenerationRequest,
         AdminGpt2ApiRsImportAccountsRequest, AdminGpt2ApiRsKeyView, AdminGpt2ApiRsProxyCheckResult,
         AdminGpt2ApiRsProxyConfigView, AdminGpt2ApiRsRefreshAccountsRequest,
-        AdminGpt2ApiRsUpdateAccountRequest, AdminGpt2ApiRsUpdateKeyRequest,
-        AdminGpt2ApiRsUpdateProxyConfigRequest, AdminGpt2ApiRsUsageEventView, Gpt2ApiRsConfig,
+        AdminGpt2ApiRsUpdateAccountGroupRequest, AdminGpt2ApiRsUpdateAccountRequest,
+        AdminGpt2ApiRsUpdateKeyRequest, AdminGpt2ApiRsUpdateProxyConfigRequest,
+        AdminGpt2ApiRsUsageEventView, AdminGpt2ApiRsUsageEventsQuery, Gpt2ApiRsConfig,
     },
     components::{search_box::SearchBox, tab_bar::render_tab_bar},
     pages::llm_access_shared::{confirm_destructive, format_ms, MaskedSecretCode},
@@ -51,11 +91,244 @@ struct BrowserProfileView {
     impersonate_browser: Option<String>,
 }
 
+#[derive(Properties, PartialEq)]
+struct UsageDetailFieldProps {
+    label: &'static str,
+    value: String,
+}
+
+#[function_component(UsageDetailField)]
+fn usage_detail_field(props: &UsageDetailFieldProps) -> Html {
+    html! {
+        <div class={classes!("rounded", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-3")}>
+            <div class={classes!("text-xs", "text-[var(--muted)]")}>{ props.label }</div>
+            <div class={classes!("mt-1", "break-all", "font-mono", "text-xs")}>{ props.value.clone() }</div>
+        </div>
+    }
+}
+
+#[derive(Properties, PartialEq)]
+struct Gpt2ApiAccountGroupEditorProps {
+    group: AdminGpt2ApiRsAccountGroupView,
+    accounts: Vec<AdminGpt2ApiRsAccountView>,
+    on_changed: Callback<()>,
+    on_error: Callback<String>,
+    on_notice: Callback<String>,
+}
+
+#[function_component(Gpt2ApiAccountGroupEditor)]
+fn gpt2api_account_group_editor(props: &Gpt2ApiAccountGroupEditorProps) -> Html {
+    let name = use_state(|| props.group.name.clone());
+    let account_names =
+        use_state(|| sanitize_gpt2api_account_names(&props.group.account_names, &props.accounts));
+    let expanded = use_state(|| false);
+    let saving = use_state(|| false);
+
+    {
+        let group = props.group.clone();
+        let accounts = props.accounts.clone();
+        let name = name.clone();
+        let account_names = account_names.clone();
+        use_effect_with((props.group.clone(), props.accounts.clone()), move |_| {
+            name.set(group.name.clone());
+            account_names.set(sanitize_gpt2api_account_names(&group.account_names, &accounts));
+            || ()
+        });
+    }
+
+    let on_toggle_account = {
+        let account_names = account_names.clone();
+        Callback::from(move |account_name: String| {
+            let mut names = (*account_names).clone();
+            if let Some(index) = names.iter().position(|name| name == &account_name) {
+                names.remove(index);
+            } else {
+                names.push(account_name);
+                names.sort();
+            }
+            account_names.set(names);
+        })
+    };
+
+    let on_save = {
+        let group_id = props.group.id.clone();
+        let name = name.clone();
+        let account_names = account_names.clone();
+        let saving = saving.clone();
+        let on_changed = props.on_changed.clone();
+        let on_error = props.on_error.clone();
+        let on_notice = props.on_notice.clone();
+        Callback::from(move |_| {
+            if *saving {
+                return;
+            }
+            let group_id = group_id.clone();
+            let name_value = (*name).trim().to_string();
+            let account_names_value = (*account_names).clone();
+            let saving = saving.clone();
+            let on_changed = on_changed.clone();
+            let on_error = on_error.clone();
+            let on_notice = on_notice.clone();
+            spawn_local(async move {
+                saving.set(true);
+                match update_admin_gpt2api_rs_account_group(
+                    &group_id,
+                    &AdminGpt2ApiRsUpdateAccountGroupRequest {
+                        name: Some(name_value.clone()),
+                        account_names: Some(account_names_value),
+                    },
+                )
+                .await
+                {
+                    Ok(_) => {
+                        on_notice.emit(format!("Saved account group {name_value}"));
+                        on_changed.emit(());
+                    },
+                    Err(err) => on_error.emit(err),
+                }
+                saving.set(false);
+            });
+        })
+    };
+
+    let on_delete = {
+        let group_id = props.group.id.clone();
+        let group_name = props.group.name.clone();
+        let saving = saving.clone();
+        let on_changed = props.on_changed.clone();
+        let on_error = props.on_error.clone();
+        let on_notice = props.on_notice.clone();
+        Callback::from(move |_| {
+            if !confirm_destructive(&format!("Delete account group \"{group_name}\"?")) {
+                return;
+            }
+            let group_id = group_id.clone();
+            let group_name = group_name.clone();
+            let saving = saving.clone();
+            let on_changed = on_changed.clone();
+            let on_error = on_error.clone();
+            let on_notice = on_notice.clone();
+            spawn_local(async move {
+                saving.set(true);
+                match delete_admin_gpt2api_rs_account_group(&group_id).await {
+                    Ok(_) => {
+                        on_notice.emit(format!("Deleted account group {group_name}"));
+                        on_changed.emit(());
+                    },
+                    Err(err) => on_error.emit(err),
+                }
+                saving.set(false);
+            });
+        })
+    };
+
+    html! {
+        <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
+            <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                <div>
+                    <h3 class={classes!("m-0", "text-base", "font-semibold")}>{ props.group.name.clone() }</h3>
+                    <p class={classes!("m-0", "mt-1", "text-xs", "text-[var(--muted)]")}>
+                        {
+                            if props.group.account_names.is_empty() {
+                                "No member accounts".to_string()
+                            } else {
+                                format!("Members: {}", props.group.account_names.join(", "))
+                            }
+                        }
+                    </p>
+                </div>
+                <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                    <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                        { format!("{} accounts", props.group.account_names.len()) }
+                    </span>
+                    <button
+                        type="button"
+                        class={classes!("btn-terminal")}
+                        onclick={{
+                            let expanded = expanded.clone();
+                            Callback::from(move |_| expanded.set(!*expanded))
+                        }}
+                    >
+                        { if *expanded { "Collapse" } else { "Edit" } }
+                    </button>
+                </div>
+            </div>
+
+            if *expanded {
+                <div class={classes!("mt-4", "grid", "gap-3")}>
+                    <label class={classes!("text-sm")}>
+                        <span class={classes!("text-[var(--muted)]")}>{ "Name" }</span>
+                        <input
+                            type="text"
+                            class={classes!("mt-1", "w-full", "rounded", "border", "border-[var(--border)]", "bg-transparent", "px-3", "py-2")}
+                            value={(*name).clone()}
+                            oninput={{
+                                let name = name.clone();
+                                Callback::from(move |event: InputEvent| {
+                                    if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                        name.set(target.value());
+                                    }
+                                })
+                            }}
+                        />
+                    </label>
+                    <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
+                        { for props.accounts.iter().map(|account| {
+                            let checked = account_names.iter().any(|name| name == &account.name);
+                            let account_name = account.name.clone();
+                            let on_toggle_account = on_toggle_account.clone();
+                            html! {
+                                <label class={classes!(
+                                    "flex", "cursor-pointer", "items-center", "gap-3", "rounded", "border", "px-3", "py-2",
+                                    if checked { "border-sky-500/40 bg-sky-500/10" } else { "border-[var(--border)] bg-[var(--surface-alt)]" }
+                                )}>
+                                    <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onchange={Callback::from(move |_| on_toggle_account.emit(account_name.clone()))}
+                                    />
+                                    <div class={classes!("min-w-0")}>
+                                        <div class={classes!("font-medium")}>{ account.name.clone() }</div>
+                                        <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                                            { format!("{} · quota {}", account.status, account.quota_remaining) }
+                                        </div>
+                                    </div>
+                                </label>
+                            }
+                        }) }
+                    </div>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                            { format!(
+                                "Selected: {}",
+                                if account_names.is_empty() { "none".to_string() } else { account_names.join(", ") }
+                            ) }
+                        </span>
+                        <div class={classes!("flex", "items-center", "gap-2")}>
+                            <button class={classes!("btn-terminal")} onclick={on_save} disabled={*saving}>
+                                { if *saving { "Saving..." } else { "Save" } }
+                            </button>
+                            <button class={classes!("btn-terminal", "text-red-600")} onclick={on_delete} disabled={*saving}>
+                                { "Delete" }
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+        </article>
+    }
+}
+
 // Tabs on the gpt2api-rs admin page. Using &'static str to slot straight into
 // the shared `render_tab_bar` helper without boxing.
 const GPT2API_TAB_OVERVIEW: &str = "overview";
 const GPT2API_TAB_ACCOUNTS: &str = "accounts";
+const GPT2API_TAB_PROXIES: &str = "proxies";
+const GPT2API_TAB_GROUPS: &str = "groups";
 const GPT2API_TAB_KEYS: &str = "keys";
+const GPT2API_TAB_CONTRIBUTIONS: &str = "contributions";
+const GPT2API_TAB_USAGE: &str = "usage";
+const GPT2API_TAB_ADVANCED: &str = "advanced";
 const GPT2API_TAB_IMAGES: &str = "images";
 const GPT2API_TAB_PLAYGROUND: &str = "playground";
 
@@ -63,8 +336,82 @@ fn pretty_json(value: &serde_json::Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
+fn pretty_json_text(raw: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .map(|value| pretty_json(&value))
+        .unwrap_or_else(|_| raw.to_string())
+}
+
+fn sanitize_gpt2api_account_names(
+    names: &[String],
+    accounts: &[AdminGpt2ApiRsAccountView],
+) -> Vec<String> {
+    let valid_names = accounts
+        .iter()
+        .map(|account| account.name.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut sanitized = names
+        .iter()
+        .filter(|name| valid_names.contains(name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    sanitized.sort();
+    sanitized.dedup();
+    sanitized
+}
+
+fn gpt2api_account_option_label(account: &AdminGpt2ApiRsAccountView) -> String {
+    let email = account.email.as_deref().unwrap_or("no email");
+    let quota_suffix = if account.quota_known { "" } else { " unknown" };
+    format!(
+        "{} · {} · {} · quota {}{}",
+        account.name, email, account.status, account.quota_remaining, quota_suffix
+    )
+}
+
+fn gpt2api_group_name_for_id(groups: &[AdminGpt2ApiRsAccountGroupView], group_id: &str) -> String {
+    groups
+        .iter()
+        .find(|group| group.id == group_id)
+        .map(|group| group.name.clone())
+        .unwrap_or_else(|| group_id.to_string())
+}
+
+fn gpt2api_group_matches_query(group: &AdminGpt2ApiRsAccountGroupView, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    group.id.to_lowercase().contains(query)
+        || group.name.to_lowercase().contains(query)
+        || group
+            .account_names
+            .iter()
+            .any(|name| name.to_lowercase().contains(query))
+}
+
 fn parse_json_text(raw: &str) -> Result<serde_json::Value, String> {
     serde_json::from_str(raw).map_err(|err| format!("JSON parse error: {err}"))
+}
+
+fn image_size_credit_hint(size: &str) -> String {
+    let Some((width, height)) =
+        size.trim()
+            .to_ascii_lowercase()
+            .split_once('x')
+            .map(|(width, height)| {
+                (width.trim().parse::<u64>().ok(), height.trim().parse::<u64>().ok())
+            })
+    else {
+        return "Use WIDTHxHEIGHT; credits = ceil(width * height / 1024^2).".to_string();
+    };
+    let Some(width) = width else {
+        return "Use WIDTHxHEIGHT; credits = ceil(width * height / 1024^2).".to_string();
+    };
+    let Some(height) = height else {
+        return "Use WIDTHxHEIGHT; credits = ceil(width * height / 1024^2).".to_string();
+    };
+    let credits = (width * height).div_ceil(1024 * 1024).max(1);
+    format!("{credits} credit/image · formula ceil({width} * {height} / 1024^2)")
 }
 
 fn extract_image_data_urls(value: &serde_json::Value) -> Vec<String> {
@@ -194,16 +541,42 @@ pub fn admin_gpt2api_rs_page() -> Html {
 
     let accounts = use_state(Vec::<AdminGpt2ApiRsAccountView>::new);
     let proxy_configs = use_state(Vec::<AdminGpt2ApiRsProxyConfigView>::new);
+    let account_groups = use_state(Vec::<AdminGpt2ApiRsAccountGroupView>::new);
     let accounts_search = use_state(String::new);
+    let account_groups_search = use_state(String::new);
+    let account_group_form_expanded = use_state(|| false);
+    let create_account_group_name = use_state(String::new);
+    let create_account_group_account_names = use_state(Vec::<String>::new);
+    let creating_account_group = use_state(|| false);
     let keys = use_state(Vec::<AdminGpt2ApiRsKeyView>::new);
+    let contribution_requests = use_state(Vec::<AdminGpt2ApiAccountContributionRequestView>::new);
+    let contribution_total = use_state(|| 0_usize);
+    let contribution_page = use_state(|| 1_usize);
+    let contribution_status_filter = use_state(String::new);
+    let contribution_loading = use_state(|| false);
+    let contribution_action_inflight = use_state(std::collections::HashSet::<String>::new);
     let usage = use_state(Vec::<AdminGpt2ApiRsUsageEventView>::new);
     let usage_limit = use_state(|| "50".to_string());
+    let usage_search = use_state(String::new);
+    let usage_key_filter = use_state(String::new);
+    let usage_total = use_state(|| 0_u64);
+    let usage_offset = use_state(|| 0_u64);
+    let usage_current_rpm = use_state(|| 0_u32);
+    let usage_current_in_flight = use_state(|| 0_u32);
+    let usage_billable_total = use_state(|| 0_i64);
+    let usage_has_more = use_state(|| false);
+    let usage_scroll_top_ref = use_node_ref();
+    let usage_scroll_bottom_ref = use_node_ref();
+    let usage_scroll_width = use_state(|| 1_i32);
+    let selected_usage_event = use_state(|| None::<AdminGpt2ApiRsUsageEventView>);
     let editing_key_id = use_state(|| None::<String>);
     let key_form_name = use_state(String::new);
     let key_form_status = use_state(|| "active".to_string());
     let key_form_quota_total_calls = use_state(|| "100".to_string());
     let key_form_route_strategy = use_state(|| "auto".to_string());
+    let key_form_role = use_state(|| "user".to_string());
     let key_form_account_group_id = use_state(String::new);
+    let key_form_fixed_account_name = use_state(String::new);
     let key_form_request_max_concurrency = use_state(String::new);
     let key_form_request_min_start_interval_ms = use_state(String::new);
     let saving_key = use_state(|| false);
@@ -226,6 +599,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
     let update_proxy_config_id = use_state(String::new);
     let selected_scheduler_account_name = use_state(String::new);
     let saving_account_scheduler = use_state(|| false);
+    let saving_account_proxy_name = use_state(|| None::<String>);
 
     let editing_proxy_id = use_state(|| None::<String>);
     let proxy_form_name = use_state(String::new);
@@ -237,14 +611,16 @@ pub fn admin_gpt2api_rs_page() -> Html {
     let checking_proxy = use_state(|| false);
 
     let generation_prompt = use_state(String::new);
-    let generation_model = use_state(|| "gpt-image-1".to_string());
+    let generation_model = use_state(|| "gpt-image-2".to_string());
     let generation_n = use_state(|| "1".to_string());
+    let generation_size = use_state(|| "1024x1024".to_string());
     let generation_output = use_state(|| "{}".to_string());
     let generation_images = use_state(Vec::<String>::new);
 
     let edit_prompt = use_state(String::new);
-    let edit_model = use_state(|| "gpt-image-1".to_string());
+    let edit_model = use_state(|| "gpt-image-2".to_string());
     let edit_n = use_state(|| "1".to_string());
+    let edit_size = use_state(|| "1024x1024".to_string());
     let edit_image_base64 = use_state(String::new);
     let edit_file_name = use_state(|| "image.png".to_string());
     let edit_mime_type = use_state(|| "image/png".to_string());
@@ -278,6 +654,16 @@ pub fn admin_gpt2api_rs_page() -> Html {
     });
     let responses_output = use_state(|| "{}".to_string());
 
+    {
+        let selected_usage_event_id = (*selected_usage_event)
+            .as_ref()
+            .map(|event| event.event_id.clone());
+        use_effect_with(selected_usage_event_id, move |_| {
+            gpt2api_make_draggable("gpt2api-usage-detail", "gpt2api-usage-detail-handle");
+            || ()
+        });
+    }
+
     // Copy a secret to the clipboard and surface a short notice. Used by
     // MaskedSecretCode's built-in copy button, so the user gets consistent
     // feedback across gpt2api / llm / kiro pages.
@@ -306,9 +692,22 @@ pub fn admin_gpt2api_rs_page() -> Html {
         let models_json = models_json.clone();
         let accounts = accounts.clone();
         let proxy_configs = proxy_configs.clone();
+        let account_groups = account_groups.clone();
         let keys = keys.clone();
+        let contribution_requests = contribution_requests.clone();
+        let contribution_total = contribution_total.clone();
+        let contribution_page = contribution_page.clone();
+        let contribution_status_filter = contribution_status_filter.clone();
         let usage = usage.clone();
         let usage_limit = usage_limit.clone();
+        let usage_search = usage_search.clone();
+        let usage_key_filter = usage_key_filter.clone();
+        let usage_total = usage_total.clone();
+        let usage_offset = usage_offset.clone();
+        let usage_current_rpm = usage_current_rpm.clone();
+        let usage_current_in_flight = usage_current_in_flight.clone();
+        let usage_billable_total = usage_billable_total.clone();
+        let usage_has_more = usage_has_more.clone();
         Callback::from(move |_| {
             loading.set(true);
             load_error.set(None);
@@ -323,9 +722,22 @@ pub fn admin_gpt2api_rs_page() -> Html {
             let models_json = models_json.clone();
             let accounts = accounts.clone();
             let proxy_configs = proxy_configs.clone();
+            let account_groups = account_groups.clone();
             let keys = keys.clone();
+            let contribution_requests = contribution_requests.clone();
+            let contribution_total = contribution_total.clone();
+            let contribution_page = contribution_page.clone();
+            let contribution_status_filter = contribution_status_filter.clone();
             let usage = usage.clone();
             let usage_limit = usage_limit.clone();
+            let usage_search = usage_search.clone();
+            let usage_key_filter = usage_key_filter.clone();
+            let usage_total = usage_total.clone();
+            let usage_offset = usage_offset.clone();
+            let usage_current_rpm = usage_current_rpm.clone();
+            let usage_current_in_flight = usage_current_in_flight.clone();
+            let usage_billable_total = usage_billable_total.clone();
+            let usage_has_more = usage_has_more.clone();
             spawn_local(async move {
                 let config_envelope = match fetch_admin_gpt2api_rs_config().await {
                     Ok(value) => value,
@@ -359,13 +771,52 @@ pub fn admin_gpt2api_rs_page() -> Html {
                     Ok(value) => proxy_configs.set(value),
                     Err(err) => load_error.set(Some(err)),
                 }
+                match fetch_admin_gpt2api_rs_account_groups().await {
+                    Ok(value) => account_groups.set(value.groups),
+                    Err(err) => load_error.set(Some(err)),
+                }
                 match fetch_admin_gpt2api_rs_keys().await {
                     Ok(value) => keys.set(value),
                     Err(err) => load_error.set(Some(err)),
                 }
+                let contribution_limit = 25_usize;
+                let contribution_offset = (*contribution_page)
+                    .saturating_sub(1)
+                    .saturating_mul(contribution_limit);
+                match fetch_admin_gpt2api_account_contribution_requests(
+                    &AdminGpt2ApiAccountContributionRequestsQuery {
+                        status: Some((*contribution_status_filter).clone())
+                            .filter(|value| !value.trim().is_empty()),
+                        limit: Some(contribution_limit),
+                        offset: Some(contribution_offset),
+                    },
+                )
+                .await
+                {
+                    Ok(value) => {
+                        contribution_total.set(value.total);
+                        contribution_requests.set(value.requests);
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
                 let limit = (*usage_limit).trim().parse::<u64>().unwrap_or(50).max(1);
-                match fetch_admin_gpt2api_rs_usage(limit).await {
-                    Ok(value) => usage.set(value),
+                match fetch_admin_gpt2api_rs_usage_events(&AdminGpt2ApiRsUsageEventsQuery {
+                    key_id: Some((*usage_key_filter).clone())
+                        .filter(|value| !value.trim().is_empty()),
+                    q: Some((*usage_search).clone()).filter(|value| !value.trim().is_empty()),
+                    limit: Some(limit),
+                    offset: Some(*usage_offset),
+                })
+                .await
+                {
+                    Ok(value) => {
+                        usage.set(value.events);
+                        usage_total.set(value.total);
+                        usage_current_rpm.set(value.current_rpm);
+                        usage_current_in_flight.set(value.current_in_flight);
+                        usage_billable_total.set(value.billable_credit_total);
+                        usage_has_more.set(value.has_more);
+                    },
                     Err(err) => load_error.set(Some(err)),
                 }
                 loading.set(false);
@@ -377,6 +828,165 @@ pub fn admin_gpt2api_rs_page() -> Html {
         let reload_all = reload_all.clone();
         use_effect_with((), move |_| {
             reload_all.emit(());
+            || ()
+        });
+    }
+
+    let reload_usage_page = {
+        let load_error = load_error.clone();
+        let usage = usage.clone();
+        let usage_limit = usage_limit.clone();
+        let usage_search = usage_search.clone();
+        let usage_key_filter = usage_key_filter.clone();
+        let usage_total = usage_total.clone();
+        let usage_offset = usage_offset.clone();
+        let usage_current_rpm = usage_current_rpm.clone();
+        let usage_current_in_flight = usage_current_in_flight.clone();
+        let usage_billable_total = usage_billable_total.clone();
+        let usage_has_more = usage_has_more.clone();
+        Callback::from(move |offset: u64| {
+            load_error.set(None);
+            usage_offset.set(offset);
+            let load_error = load_error.clone();
+            let usage = usage.clone();
+            let usage_limit = usage_limit.clone();
+            let usage_search = usage_search.clone();
+            let usage_key_filter = usage_key_filter.clone();
+            let usage_total = usage_total.clone();
+            let usage_current_rpm = usage_current_rpm.clone();
+            let usage_current_in_flight = usage_current_in_flight.clone();
+            let usage_billable_total = usage_billable_total.clone();
+            let usage_has_more = usage_has_more.clone();
+            spawn_local(async move {
+                let limit = (*usage_limit).trim().parse::<u64>().unwrap_or(50).max(1);
+                match fetch_admin_gpt2api_rs_usage_events(&AdminGpt2ApiRsUsageEventsQuery {
+                    key_id: Some((*usage_key_filter).clone())
+                        .filter(|value| !value.trim().is_empty()),
+                    q: Some((*usage_search).clone()).filter(|value| !value.trim().is_empty()),
+                    limit: Some(limit),
+                    offset: Some(offset),
+                })
+                .await
+                {
+                    Ok(value) => {
+                        usage.set(value.events);
+                        usage_total.set(value.total);
+                        usage_current_rpm.set(value.current_rpm);
+                        usage_current_in_flight.set(value.current_in_flight);
+                        usage_billable_total.set(value.billable_credit_total);
+                        usage_has_more.set(value.has_more);
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+            });
+        })
+    };
+
+    let reload_contribution_requests = {
+        let contribution_requests = contribution_requests.clone();
+        let contribution_total = contribution_total.clone();
+        let contribution_page = contribution_page.clone();
+        let contribution_status_filter = contribution_status_filter.clone();
+        let contribution_loading = contribution_loading.clone();
+        let load_error = load_error.clone();
+        Callback::from(move |(page_override, status_override): (Option<usize>, Option<String>)| {
+            let page = page_override.unwrap_or(*contribution_page).max(1);
+            let status = status_override.unwrap_or_else(|| (*contribution_status_filter).clone());
+            contribution_page.set(page);
+            contribution_status_filter.set(status.clone());
+            contribution_loading.set(true);
+            load_error.set(None);
+            let contribution_requests = contribution_requests.clone();
+            let contribution_total = contribution_total.clone();
+            let contribution_loading = contribution_loading.clone();
+            let load_error = load_error.clone();
+            spawn_local(async move {
+                let limit = 25_usize;
+                let offset = page.saturating_sub(1).saturating_mul(limit);
+                match fetch_admin_gpt2api_account_contribution_requests(
+                    &AdminGpt2ApiAccountContributionRequestsQuery {
+                        status: Some(status).filter(|value| !value.trim().is_empty()),
+                        limit: Some(limit),
+                        offset: Some(offset),
+                    },
+                )
+                .await
+                {
+                    Ok(value) => {
+                        contribution_total.set(value.total);
+                        contribution_requests.set(value.requests);
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+                contribution_loading.set(false);
+            });
+        })
+    };
+
+    let on_usage_scroll_top = {
+        let usage_scroll_top_ref = usage_scroll_top_ref.clone();
+        let usage_scroll_bottom_ref = usage_scroll_bottom_ref.clone();
+        Callback::from(move |_| {
+            let Some(top) = usage_scroll_top_ref.cast::<HtmlElement>() else {
+                return;
+            };
+            let Some(bottom) = usage_scroll_bottom_ref.cast::<HtmlElement>() else {
+                return;
+            };
+            let left = top.scroll_left();
+            if bottom.scroll_left() != left {
+                bottom.set_scroll_left(left);
+            }
+        })
+    };
+
+    let on_usage_scroll_bottom = {
+        let usage_scroll_top_ref = usage_scroll_top_ref.clone();
+        let usage_scroll_bottom_ref = usage_scroll_bottom_ref.clone();
+        Callback::from(move |_| {
+            let Some(bottom) = usage_scroll_bottom_ref.cast::<HtmlElement>() else {
+                return;
+            };
+            let Some(top) = usage_scroll_top_ref.cast::<HtmlElement>() else {
+                return;
+            };
+            let left = bottom.scroll_left();
+            if top.scroll_left() != left {
+                top.set_scroll_left(left);
+            }
+        })
+    };
+
+    let scroll_usage_table_by = {
+        let usage_scroll_top_ref = usage_scroll_top_ref.clone();
+        let usage_scroll_bottom_ref = usage_scroll_bottom_ref.clone();
+        Callback::from(move |delta: i32| {
+            let Some(bottom) = usage_scroll_bottom_ref.cast::<HtmlElement>() else {
+                return;
+            };
+            let next_left = (bottom.scroll_left() + delta).max(0);
+            bottom.set_scroll_left(next_left);
+            if let Some(top) = usage_scroll_top_ref.cast::<HtmlElement>() {
+                top.set_scroll_left(next_left);
+            }
+        })
+    };
+
+    {
+        let usage_scroll_top_ref = usage_scroll_top_ref.clone();
+        let usage_scroll_bottom_ref = usage_scroll_bottom_ref.clone();
+        let usage_scroll_width = usage_scroll_width.clone();
+        let event_count = usage.len();
+        let offset = *usage_offset;
+        let active_tab_name = (*active_tab).clone();
+        use_effect_with((event_count, offset, active_tab_name), move |_| {
+            if let Some(bottom) = usage_scroll_bottom_ref.cast::<HtmlElement>() {
+                let measured_width = bottom.scroll_width().max(bottom.client_width()).max(1);
+                usage_scroll_width.set(measured_width);
+                if let Some(top) = usage_scroll_top_ref.cast::<HtmlElement>() {
+                    top.set_scroll_left(bottom.scroll_left());
+                }
+            }
             || ()
         });
     }
@@ -771,6 +1381,61 @@ pub fn admin_gpt2api_rs_page() -> Html {
         })
     };
 
+    let on_set_account_proxy = {
+        let saving_account_proxy_name = saving_account_proxy_name.clone();
+        let load_error = load_error.clone();
+        let notice = notice.clone();
+        let reload_all = reload_all.clone();
+        Callback::from(
+            move |(access_token, account_name, proxy_value): (String, String, String)| {
+                if access_token.trim().is_empty()
+                    || *saving_account_proxy_name == Some(account_name.clone())
+                {
+                    return;
+                }
+                let (proxy_mode, proxy_config_id) =
+                    if let Some(proxy_id) = proxy_value.strip_prefix("fixed:") {
+                        ("fixed".to_string(), Some(Some(proxy_id.to_string())))
+                    } else if proxy_value == "direct" {
+                        ("direct".to_string(), Some(None))
+                    } else {
+                        ("inherit".to_string(), Some(None))
+                    };
+                saving_account_proxy_name.set(Some(account_name.clone()));
+                load_error.set(None);
+                notice.set(None);
+                let saving_account_proxy_name = saving_account_proxy_name.clone();
+                let load_error = load_error.clone();
+                let notice = notice.clone();
+                let reload_all = reload_all.clone();
+                spawn_local(async move {
+                    let request = AdminGpt2ApiRsUpdateAccountRequest {
+                        access_token,
+                        plan_type: None,
+                        status: None,
+                        quota_remaining: None,
+                        restore_at: None,
+                        session_token: None,
+                        user_agent: None,
+                        impersonate_browser: None,
+                        request_max_concurrency: None,
+                        request_min_start_interval_ms: None,
+                        proxy_mode: Some(proxy_mode),
+                        proxy_config_id,
+                    };
+                    match update_admin_gpt2api_rs_account(&request).await {
+                        Ok(_) => {
+                            notice.set(Some("Updated account proxy".to_string()));
+                            reload_all.emit(());
+                        },
+                        Err(err) => load_error.set(Some(err)),
+                    }
+                    saving_account_proxy_name.set(None);
+                });
+            },
+        )
+    };
+
     let on_save_account_scheduler = {
         let update_access_token = update_access_token.clone();
         let selected_scheduler_account_name = selected_scheduler_account_name.clone();
@@ -856,13 +1521,76 @@ pub fn admin_gpt2api_rs_page() -> Html {
         })
     };
 
+    let on_toggle_create_account_group_member = {
+        let create_account_group_account_names = create_account_group_account_names.clone();
+        Callback::from(move |account_name: String| {
+            let mut names = (*create_account_group_account_names).clone();
+            if let Some(index) = names.iter().position(|name| name == &account_name) {
+                names.remove(index);
+            } else {
+                names.push(account_name);
+                names.sort();
+            }
+            create_account_group_account_names.set(names);
+        })
+    };
+
+    let on_create_account_group = {
+        let create_account_group_name = create_account_group_name.clone();
+        let create_account_group_account_names = create_account_group_account_names.clone();
+        let creating_account_group = creating_account_group.clone();
+        let load_error = load_error.clone();
+        let notice = notice.clone();
+        let reload_all = reload_all.clone();
+        Callback::from(move |_| {
+            if *creating_account_group {
+                return;
+            }
+            let name = (*create_account_group_name).trim().to_string();
+            if name.is_empty() {
+                load_error.set(Some("Account group name is required".to_string()));
+                return;
+            }
+            let account_names = (*create_account_group_account_names).clone();
+            let create_account_group_name = create_account_group_name.clone();
+            let create_account_group_account_names = create_account_group_account_names.clone();
+            let creating_account_group = creating_account_group.clone();
+            let load_error = load_error.clone();
+            let notice = notice.clone();
+            let reload_all = reload_all.clone();
+            spawn_local(async move {
+                creating_account_group.set(true);
+                load_error.set(None);
+                match create_admin_gpt2api_rs_account_group(
+                    &AdminGpt2ApiRsCreateAccountGroupRequest {
+                        name: name.clone(),
+                        account_names,
+                    },
+                )
+                .await
+                {
+                    Ok(_) => {
+                        create_account_group_name.set(String::new());
+                        create_account_group_account_names.set(Vec::new());
+                        notice.set(Some(format!("Created account group {name}")));
+                        reload_all.emit(());
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+                creating_account_group.set(false);
+            });
+        })
+    };
+
     let reset_key_form = {
         let editing_key_id = editing_key_id.clone();
         let key_form_name = key_form_name.clone();
         let key_form_status = key_form_status.clone();
         let key_form_quota_total_calls = key_form_quota_total_calls.clone();
         let key_form_route_strategy = key_form_route_strategy.clone();
+        let key_form_role = key_form_role.clone();
         let key_form_account_group_id = key_form_account_group_id.clone();
+        let key_form_fixed_account_name = key_form_fixed_account_name.clone();
         let key_form_request_max_concurrency = key_form_request_max_concurrency.clone();
         let key_form_request_min_start_interval_ms = key_form_request_min_start_interval_ms.clone();
         let latest_key_secret = latest_key_secret.clone();
@@ -872,7 +1600,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
             key_form_status.set("active".to_string());
             key_form_quota_total_calls.set("100".to_string());
             key_form_route_strategy.set("auto".to_string());
+            key_form_role.set("user".to_string());
             key_form_account_group_id.set(String::new());
+            key_form_fixed_account_name.set(String::new());
             key_form_request_max_concurrency.set(String::new());
             key_form_request_min_start_interval_ms.set(String::new());
             latest_key_secret.set(None);
@@ -885,7 +1615,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
         let key_form_status = key_form_status.clone();
         let key_form_quota_total_calls = key_form_quota_total_calls.clone();
         let key_form_route_strategy = key_form_route_strategy.clone();
+        let key_form_role = key_form_role.clone();
         let key_form_account_group_id = key_form_account_group_id.clone();
+        let key_form_fixed_account_name = key_form_fixed_account_name.clone();
         let key_form_request_max_concurrency = key_form_request_max_concurrency.clone();
         let key_form_request_min_start_interval_ms = key_form_request_min_start_interval_ms.clone();
         let latest_key_secret = latest_key_secret.clone();
@@ -894,8 +1626,24 @@ pub fn admin_gpt2api_rs_page() -> Html {
             key_form_name.set(key.name);
             key_form_status.set(key.status);
             key_form_quota_total_calls.set(key.quota_total_calls.to_string());
-            key_form_route_strategy.set(key.route_strategy);
+            let route_mode = if key
+                .fixed_account_name
+                .as_deref()
+                .unwrap_or_default()
+                .is_empty()
+            {
+                if key.account_group_id.is_some() {
+                    "group"
+                } else {
+                    "auto"
+                }
+            } else {
+                "account"
+            };
+            key_form_route_strategy.set(route_mode.to_string());
+            key_form_role.set(key.role);
             key_form_account_group_id.set(key.account_group_id.unwrap_or_default());
+            key_form_fixed_account_name.set(key.fixed_account_name.unwrap_or_default());
             key_form_request_max_concurrency.set(
                 key.request_max_concurrency
                     .map(|value| value.to_string())
@@ -916,7 +1664,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
         let key_form_status = key_form_status.clone();
         let key_form_quota_total_calls = key_form_quota_total_calls.clone();
         let key_form_route_strategy = key_form_route_strategy.clone();
+        let key_form_role = key_form_role.clone();
         let key_form_account_group_id = key_form_account_group_id.clone();
+        let key_form_fixed_account_name = key_form_fixed_account_name.clone();
         let key_form_request_max_concurrency = key_form_request_max_concurrency.clone();
         let key_form_request_min_start_interval_ms = key_form_request_min_start_interval_ms.clone();
         let saving_key = saving_key.clone();
@@ -961,13 +1711,44 @@ pub fn admin_gpt2api_rs_page() -> Html {
                 },
             };
             let status = (*key_form_status).trim().to_string();
-            let route_strategy = (*key_form_route_strategy).trim().to_string();
-            if route_strategy.is_empty() {
-                load_error.set(Some("route_strategy is required".to_string()));
+            let route_mode = (*key_form_route_strategy).trim().to_string();
+            if route_mode.is_empty() {
+                load_error.set(Some("Route mode is required".to_string()));
                 return;
             }
-            let account_group_id = (!(*key_form_account_group_id).trim().is_empty())
-                .then(|| (*key_form_account_group_id).trim().to_string());
+            let role = (*key_form_role).trim().to_ascii_lowercase();
+            if !matches!(role.as_str(), "user" | "admin") {
+                load_error.set(Some("role must be user or admin".to_string()));
+                return;
+            }
+            let mut route_strategy = "auto".to_string();
+            let mut account_group_id = None::<String>;
+            let mut fixed_account_name = None::<String>;
+            match route_mode.as_str() {
+                "auto" => {},
+                "group" => {
+                    let value = (*key_form_account_group_id).trim().to_string();
+                    if value.is_empty() {
+                        load_error
+                            .set(Some("Select an account group for group routing".to_string()));
+                        return;
+                    }
+                    account_group_id = Some(value);
+                },
+                "account" => {
+                    let value = (*key_form_fixed_account_name).trim().to_string();
+                    if value.is_empty() {
+                        load_error.set(Some("Select one account to bind this key".to_string()));
+                        return;
+                    }
+                    route_strategy = "fixed".to_string();
+                    fixed_account_name = Some(value);
+                },
+                _ => {
+                    load_error.set(Some("Route mode must be all, group, or account".to_string()));
+                    return;
+                },
+            }
             let editing_key_id_value = (*editing_key_id).clone();
             let saving_key = saving_key.clone();
             let latest_key_secret = latest_key_secret.clone();
@@ -979,7 +1760,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
             let key_form_status = key_form_status.clone();
             let key_form_quota_total_calls = key_form_quota_total_calls.clone();
             let key_form_route_strategy = key_form_route_strategy.clone();
+            let key_form_role = key_form_role.clone();
             let key_form_account_group_id = key_form_account_group_id.clone();
+            let key_form_fixed_account_name = key_form_fixed_account_name.clone();
             let key_form_request_max_concurrency = key_form_request_max_concurrency.clone();
             let key_form_request_min_start_interval_ms =
                 key_form_request_min_start_interval_ms.clone();
@@ -994,7 +1777,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
                         status: Some(status.clone()),
                         quota_total_calls: Some(quota_total_calls),
                         route_strategy: Some(route_strategy.clone()),
-                        account_group_id: account_group_id.clone(),
+                        role: Some(role.clone()),
+                        account_group_id: Some(account_group_id.clone()),
+                        fixed_account_name: Some(fixed_account_name.clone()),
                         request_max_concurrency,
                         request_min_start_interval_ms,
                     };
@@ -1005,7 +1790,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
                         quota_total_calls,
                         status: Some(status.clone()),
                         route_strategy: route_strategy.clone(),
+                        role: Some(role.clone()),
                         account_group_id: account_group_id.clone(),
+                        fixed_account_name: fixed_account_name.clone(),
                         request_max_concurrency,
                         request_min_start_interval_ms,
                     };
@@ -1018,9 +1805,26 @@ pub fn admin_gpt2api_rs_page() -> Html {
                         key_form_name.set(key.name.clone());
                         key_form_status.set(key.status.clone());
                         key_form_quota_total_calls.set(key.quota_total_calls.to_string());
-                        key_form_route_strategy.set(key.route_strategy.clone());
+                        let route_mode = if key
+                            .fixed_account_name
+                            .as_deref()
+                            .unwrap_or_default()
+                            .is_empty()
+                        {
+                            if key.account_group_id.is_some() {
+                                "group"
+                            } else {
+                                "auto"
+                            }
+                        } else {
+                            "account"
+                        };
+                        key_form_route_strategy.set(route_mode.to_string());
+                        key_form_role.set(key.role.clone());
                         key_form_account_group_id
                             .set(key.account_group_id.clone().unwrap_or_default());
+                        key_form_fixed_account_name
+                            .set(key.fixed_account_name.clone().unwrap_or_default());
                         key_form_request_max_concurrency.set(
                             key.request_max_concurrency
                                 .map(|value| value.to_string())
@@ -1109,6 +1913,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
         let generation_prompt = generation_prompt.clone();
         let generation_model = generation_model.clone();
         let generation_n = generation_n.clone();
+        let generation_size = generation_size.clone();
         let generation_output = generation_output.clone();
         let generation_images = generation_images.clone();
         let load_error = load_error.clone();
@@ -1128,6 +1933,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                 prompt: (*generation_prompt).clone(),
                 model: (*generation_model).clone(),
                 n,
+                size: (*generation_size).clone(),
                 response_format: "b64_json".to_string(),
             };
             spawn_local(async move {
@@ -1181,6 +1987,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
         let edit_prompt = edit_prompt.clone();
         let edit_model = edit_model.clone();
         let edit_n = edit_n.clone();
+        let edit_size = edit_size.clone();
         let edit_image_base64 = edit_image_base64.clone();
         let edit_file_name = edit_file_name.clone();
         let edit_mime_type = edit_mime_type.clone();
@@ -1204,6 +2011,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                 prompt: (*edit_prompt).clone(),
                 model: (*edit_model).clone(),
                 n,
+                size: (*edit_size).clone(),
                 image_base64: (*edit_image_base64).clone(),
                 file_name: (*edit_file_name).clone(),
                 mime_type: (*edit_mime_type).clone(),
@@ -1271,6 +2079,106 @@ pub fn admin_gpt2api_rs_page() -> Html {
         })
     };
 
+    let on_contribution_status_filter_change = {
+        let reload_contribution_requests = reload_contribution_requests.clone();
+        Callback::from(move |event: Event| {
+            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                reload_contribution_requests.emit((Some(1), Some(target.value())));
+            }
+        })
+    };
+
+    let on_contribution_page_change = {
+        let reload_contribution_requests = reload_contribution_requests.clone();
+        Callback::from(move |page: usize| {
+            reload_contribution_requests.emit((Some(page), None));
+        })
+    };
+
+    let on_approve_contribution = {
+        let contribution_action_inflight = contribution_action_inflight.clone();
+        let contribution_requests = contribution_requests.clone();
+        let reload_contribution_requests = reload_contribution_requests.clone();
+        let load_error = load_error.clone();
+        let notice = notice.clone();
+        let reload_all = reload_all.clone();
+        Callback::from(move |request_id: String| {
+            let contribution_action_inflight = contribution_action_inflight.clone();
+            let contribution_requests = contribution_requests.clone();
+            let reload_contribution_requests = reload_contribution_requests.clone();
+            let load_error = load_error.clone();
+            let notice = notice.clone();
+            let reload_all = reload_all.clone();
+            spawn_local(async move {
+                let mut inflight = (*contribution_action_inflight).clone();
+                inflight.insert(request_id.clone());
+                contribution_action_inflight.set(inflight);
+                match approve_admin_gpt2api_account_contribution_request(&request_id, None).await {
+                    Ok(updated) => {
+                        let mut items = (*contribution_requests).clone();
+                        if let Some(item) = items
+                            .iter_mut()
+                            .find(|item| item.request_id == updated.request_id)
+                        {
+                            *item = updated;
+                        }
+                        contribution_requests.set(items);
+                        notice.set(Some("Contribution approved and key issued".to_string()));
+                        load_error.set(None);
+                        reload_all.emit(());
+                        reload_contribution_requests.emit((None, None));
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+                let mut inflight = (*contribution_action_inflight).clone();
+                inflight.remove(&request_id);
+                contribution_action_inflight.set(inflight);
+            });
+        })
+    };
+
+    let on_reject_contribution = {
+        let contribution_action_inflight = contribution_action_inflight.clone();
+        let contribution_requests = contribution_requests.clone();
+        let reload_contribution_requests = reload_contribution_requests.clone();
+        let load_error = load_error.clone();
+        let notice = notice.clone();
+        Callback::from(move |request_id: String| {
+            if !confirm_destructive("确认拒绝这个 GPT 账号贡献请求？") {
+                return;
+            }
+            let contribution_action_inflight = contribution_action_inflight.clone();
+            let contribution_requests = contribution_requests.clone();
+            let reload_contribution_requests = reload_contribution_requests.clone();
+            let load_error = load_error.clone();
+            let notice = notice.clone();
+            spawn_local(async move {
+                let mut inflight = (*contribution_action_inflight).clone();
+                inflight.insert(request_id.clone());
+                contribution_action_inflight.set(inflight);
+                match reject_admin_gpt2api_account_contribution_request(&request_id, None).await {
+                    Ok(updated) => {
+                        let mut items = (*contribution_requests).clone();
+                        if let Some(item) = items
+                            .iter_mut()
+                            .find(|item| item.request_id == updated.request_id)
+                        {
+                            *item = updated;
+                        }
+                        contribution_requests.set(items);
+                        notice.set(Some("Contribution rejected".to_string()));
+                        load_error.set(None);
+                        reload_contribution_requests.emit((None, None));
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+                let mut inflight = (*contribution_action_inflight).clone();
+                inflight.remove(&request_id);
+                contribution_action_inflight.set(inflight);
+            });
+        })
+    };
+
     // Client-side account filter: matches on name / access_token prefix /
     // user_agent fragment (case-insensitive). Kept as a cloned Vec so the
     // existing `.iter().map()` rendering below still works unchanged.
@@ -1298,20 +2206,48 @@ pub fn admin_gpt2api_rs_page() -> Html {
         .as_ref()
         .clone();
 
+    let account_groups_query_lower = (*account_groups_search).trim().to_lowercase();
+    let filtered_account_groups: Vec<AdminGpt2ApiRsAccountGroupView> =
+        use_memo(((*account_groups).clone(), account_groups_query_lower.clone()), |(items, q)| {
+            items
+                .iter()
+                .filter(|group| gpt2api_group_matches_query(group, q))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .as_ref()
+        .clone();
+    let on_account_groups_search_change = {
+        let account_groups_search = account_groups_search.clone();
+        Callback::from(move |value: String| account_groups_search.set(value))
+    };
+    let on_account_group_error = {
+        let load_error = load_error.clone();
+        Callback::from(move |value: String| load_error.set(Some(value)))
+    };
+    let on_account_group_notice = {
+        let notice = notice.clone();
+        Callback::from(move |value: String| notice.set(Some(value)))
+    };
+
     // Tab wiring. Pure UI switch — all data is still reloaded together by
     // `reload_all`, so switching tabs does not trigger additional network.
     let on_tab_select = {
         let active_tab = active_tab.clone();
         Callback::from(move |id: String| active_tab.set(id))
     };
-    let tabs: [(&str, &str); 5] = [
-        (GPT2API_TAB_OVERVIEW, "Overview"),
+    let tabs: [(&str, &str); 8] = [
+        (GPT2API_TAB_OVERVIEW, "Dashboard"),
         (GPT2API_TAB_ACCOUNTS, "Accounts"),
-        (GPT2API_TAB_KEYS, "Keys & Usage"),
-        (GPT2API_TAB_IMAGES, "Image Gen"),
-        (GPT2API_TAB_PLAYGROUND, "Playground"),
+        (GPT2API_TAB_PROXIES, "Proxies"),
+        (GPT2API_TAB_GROUPS, "Groups"),
+        (GPT2API_TAB_KEYS, "Keys & Routing"),
+        (GPT2API_TAB_CONTRIBUTIONS, "Contributions"),
+        (GPT2API_TAB_USAGE, "Usage Logs"),
+        (GPT2API_TAB_ADVANCED, "Advanced"),
     ];
     let active = (*active_tab).clone();
+    let contribution_total_pages = ((*contribution_total).saturating_add(24) / 25).max(1);
 
     html! {
         <main class={classes!("container", "py-8", "space-y-5")}>
@@ -1320,7 +2256,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                     <div>
                         <h1 class={classes!("m-0", "text-xl", "font-semibold")}>{ "gpt2api-rs Admin" }</h1>
                         <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>
-                            { "Manage the deployed gpt2api-rs service, sync config, operate accounts, inspect usage, and run image-generation playground calls through StaticFlow admin." }
+                            { "Operate service health, accounts, proxies, key routing, and usage logs for the deployed gpt2api-rs service." }
                         </p>
                     </div>
                     <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
@@ -1332,9 +2268,6 @@ pub fn admin_gpt2api_rs_page() -> Html {
                             Callback::from(move |_| reload_all.emit(()))
                         }} disabled={*loading}>
                             { if *loading { "Loading..." } else { "Reload" } }
-                        </button>
-                        <button class={classes!("btn-fluent-secondary")} onclick={on_test_login} disabled={*loading}>
-                            { "Test Login" }
                         </button>
                     </div>
                 </div>
@@ -1431,19 +2364,33 @@ pub fn admin_gpt2api_rs_page() -> Html {
                 </label>
             </section>
 
-            <section class={classes!("grid", "gap-5", "lg:grid-cols-2")}>
+            <section class={classes!("grid", "gap-4", "md:grid-cols-4")}>
+                <div class={classes!("rounded", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
+                    <div class={classes!("text-xs", "uppercase", "text-[var(--muted)]")}>{ "Accounts" }</div>
+                    <div class={classes!("mt-1", "text-2xl", "font-semibold")}>{ accounts.len() }</div>
+                    <div class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("{} active", accounts.iter().filter(|a| a.status == "active").count()) }</div>
+                </div>
+                <div class={classes!("rounded", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
+                    <div class={classes!("text-xs", "uppercase", "text-[var(--muted)]")}>{ "Keys" }</div>
+                    <div class={classes!("mt-1", "text-2xl", "font-semibold")}>{ keys.len() }</div>
+                    <div class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("{} admin", keys.iter().filter(|key| key.role == "admin").count()) }</div>
+                </div>
+                <div class={classes!("rounded", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
+                    <div class={classes!("text-xs", "uppercase", "text-[var(--muted)]")}>{ "Proxies" }</div>
+                    <div class={classes!("mt-1", "text-2xl", "font-semibold")}>{ proxy_configs.len() }</div>
+                    <div class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("{} active", proxy_configs.iter().filter(|proxy| proxy.status == "active").count()) }</div>
+                </div>
+                <div class={classes!("rounded", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
+                    <div class={classes!("text-xs", "uppercase", "text-[var(--muted)]")}>{ "Usage" }</div>
+                    <div class={classes!("mt-1", "text-2xl", "font-semibold")}>{ *usage_current_rpm }</div>
+                    <div class={classes!("text-xs", "text-[var(--muted)]")}>{ format!("in-flight {}", *usage_current_in_flight) }</div>
+                </div>
+            </section>
+
+            <section class={classes!("grid", "gap-5")}>
                 <article class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5")}>
                     <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "Service Snapshot" }</h2>
                     <pre class={classes!("mt-3", "overflow-x-auto", "rounded", "bg-[var(--surface-alt)]", "p-3", "text-xs")}>{ (*status_json).clone() }</pre>
-                </article>
-                <article class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5")}>
-                    <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "Version / Models / Login" }</h2>
-                    <h3 class={classes!("mt-3", "mb-1", "text-sm", "font-semibold")}>{ "Version" }</h3>
-                    <pre class={classes!("overflow-x-auto", "rounded", "bg-[var(--surface-alt)]", "p-3", "text-xs")}>{ (*version_json).clone() }</pre>
-                    <h3 class={classes!("mt-3", "mb-1", "text-sm", "font-semibold")}>{ "Models" }</h3>
-                    <pre class={classes!("overflow-x-auto", "rounded", "bg-[var(--surface-alt)]", "p-3", "text-xs")}>{ (*models_json).clone() }</pre>
-                    <h3 class={classes!("mt-3", "mb-1", "text-sm", "font-semibold")}>{ "Login" }</h3>
-                    <pre class={classes!("overflow-x-auto", "rounded", "bg-[var(--surface-alt)]", "p-3", "text-xs")}>{ (*login_json).clone() }</pre>
                 </article>
             </section>
             }
@@ -1491,210 +2438,6 @@ pub fn admin_gpt2api_rs_page() -> Html {
                     </div>
                 </div>
                 <button class={classes!("btn-fluent-primary")} onclick={on_import_accounts}>{ "Import Accounts" }</button>
-
-                <div class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4", "space-y-4")}>
-                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                        <div>
-                            <h3 class={classes!("m-0", "text-base", "font-semibold")}>{ "Proxy Configs" }</h3>
-                            <p class={classes!("m-0", "mt-1", "text-sm", "text-[var(--muted)]")}>
-                                { "Reusable per-account upstream proxy configs. New configs default to http://127.0.0.1:11118 for this rollout." }
-                            </p>
-                        </div>
-                        <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                            if let Some(proxy_id) = (*editing_proxy_id).clone() {
-                                <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>
-                                    { format!("Editing {}", proxy_id) }
-                                </span>
-                            }
-                            <button
-                                class={classes!("btn-fluent-secondary")}
-                                onclick={{
-                                    let reset_proxy_form = reset_proxy_form.clone();
-                                    Callback::from(move |_| reset_proxy_form.emit(()))
-                                }}
-                            >
-                                { if (*editing_proxy_id).is_some() { "New Proxy Config" } else { "Reset Form" } }
-                            </button>
-                        </div>
-                    </div>
-
-                    <div class={classes!("grid", "gap-4", "lg:grid-cols-[minmax(0,24rem)_minmax(0,1fr)]")}>
-                        <div class={classes!("space-y-3")}>
-                            <label class="block text-sm">
-                                <span>{ "Name" }</span>
-                                <input
-                                    class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
-                                    value={(*proxy_form_name).clone()}
-                                    oninput={{
-                                        let proxy_form_name = proxy_form_name.clone();
-                                        Callback::from(move |e: InputEvent| {
-                                            proxy_form_name.set(e.target_unchecked_into::<HtmlInputElement>().value())
-                                        })
-                                    }}
-                                />
-                            </label>
-                            <label class="block text-sm">
-                                <span>{ "Proxy URL" }</span>
-                                <input
-                                    class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2 font-mono"
-                                    value={(*proxy_form_url).clone()}
-                                    oninput={{
-                                        let proxy_form_url = proxy_form_url.clone();
-                                        Callback::from(move |e: InputEvent| {
-                                            proxy_form_url.set(e.target_unchecked_into::<HtmlInputElement>().value())
-                                        })
-                                    }}
-                                />
-                            </label>
-                            <div class={classes!("grid", "gap-3", "md:grid-cols-2")}>
-                                <label class="block text-sm">
-                                    <span>{ "Proxy Username" }</span>
-                                    <input
-                                        class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
-                                        value={(*proxy_form_username).clone()}
-                                        oninput={{
-                                            let proxy_form_username = proxy_form_username.clone();
-                                            Callback::from(move |e: InputEvent| {
-                                                proxy_form_username.set(e.target_unchecked_into::<HtmlInputElement>().value())
-                                            })
-                                        }}
-                                    />
-                                </label>
-                                <label class="block text-sm">
-                                    <span>{ "Proxy Password" }</span>
-                                    <input
-                                        class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
-                                        value={(*proxy_form_password).clone()}
-                                        oninput={{
-                                            let proxy_form_password = proxy_form_password.clone();
-                                            Callback::from(move |e: InputEvent| {
-                                                proxy_form_password.set(e.target_unchecked_into::<HtmlInputElement>().value())
-                                            })
-                                        }}
-                                    />
-                                </label>
-                            </div>
-                            <label class="block text-sm">
-                                <span>{ "Status" }</span>
-                                <select
-                                    class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
-                                    value={(*proxy_form_status).clone()}
-                                    onchange={{
-                                        let proxy_form_status = proxy_form_status.clone();
-                                        Callback::from(move |e: Event| {
-                                            proxy_form_status.set(e.target_unchecked_into::<HtmlSelectElement>().value())
-                                        })
-                                    }}
-                                >
-                                    <option value="active">{ "active" }</option>
-                                    <option value="disabled">{ "disabled" }</option>
-                                </select>
-                            </label>
-                            <div class={classes!("flex", "items-center", "gap-3", "flex-wrap")}>
-                                <button
-                                    class={classes!("btn-fluent-primary")}
-                                    onclick={on_submit_proxy_config}
-                                    disabled={*saving_proxy}
-                                >
-                                    {
-                                        if *saving_proxy {
-                                            "Saving..."
-                                        } else if (*editing_proxy_id).is_some() {
-                                            "Update Proxy Config"
-                                        } else {
-                                            "Create Proxy Config"
-                                        }
-                                    }
-                                </button>
-                                <span class={classes!("text-xs", "text-[var(--muted)]")}>
-                                    { "账号可绑定 inherit / direct / fixed 三种代理模式。" }
-                                </span>
-                            </div>
-                        </div>
-
-                        <div class={classes!("overflow-x-auto")}>
-                            <table class={classes!("w-full", "text-sm")}>
-                                <thead>
-                                    <tr class={classes!("text-left", "border-b", "border-[var(--border)]")}>
-                                        <th class="py-2 pr-3">{ "Name" }</th>
-                                        <th class="py-2 pr-3">{ "Proxy URL" }</th>
-                                        <th class="py-2 pr-3">{ "Status" }</th>
-                                        <th class="py-2 pr-3">{ "Actions" }</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    { for proxy_configs.iter().map(|proxy_config| {
-                                        let proxy_for_edit = proxy_config.clone();
-                                        let proxy_for_check = proxy_config.clone();
-                                        let proxy_for_delete = proxy_config.clone();
-                                        html! {
-                                            <tr class={classes!("border-b", "border-[var(--border)]", "align-top")}>
-                                                <td class="py-2 pr-3">
-                                                    <div class={classes!("font-medium")}>{ proxy_config.name.clone() }</div>
-                                                    <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
-                                                        { format!(
-                                                            "created {} · updated {}",
-                                                            format_ms(proxy_config.created_at * 1000),
-                                                            format_ms(proxy_config.updated_at * 1000),
-                                                        ) }
-                                                    </div>
-                                                </td>
-                                                <td class="py-2 pr-3">
-                                                    <div class={classes!("font-mono", "text-xs", "break-all")}>
-                                                        { proxy_config.proxy_url.clone() }
-                                                    </div>
-                                                    if let Some(username) = proxy_config.proxy_username.clone() {
-                                                        <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
-                                                            { format!("user={username}") }
-                                                        </div>
-                                                    }
-                                                </td>
-                                                <td class="py-2 pr-3">{ proxy_config.status.clone() }</td>
-                                                <td class="py-2 pr-3">
-                                                    <div class={classes!("flex", "gap-2", "flex-wrap")}>
-                                                        <button
-                                                            class={classes!("btn-fluent-secondary")}
-                                                            onclick={{
-                                                                let on_edit_proxy_config = on_edit_proxy_config.clone();
-                                                                Callback::from(move |_| on_edit_proxy_config.emit(proxy_for_edit.clone()))
-                                                            }}
-                                                        >
-                                                            { "Edit" }
-                                                        </button>
-                                                        <button
-                                                            class={classes!("btn-fluent-secondary")}
-                                                            onclick={{
-                                                                let on_check_proxy_config = on_check_proxy_config.clone();
-                                                                Callback::from(move |_| on_check_proxy_config.emit(proxy_for_check.clone()))
-                                                            }}
-                                                            disabled={*checking_proxy}
-                                                        >
-                                                            { if *checking_proxy { "Checking..." } else { "Check" } }
-                                                        </button>
-                                                        <button
-                                                            class={classes!("btn-fluent-secondary")}
-                                                            onclick={{
-                                                                let on_delete_proxy_config = on_delete_proxy_config.clone();
-                                                                Callback::from(move |_| on_delete_proxy_config.emit(proxy_for_delete.clone()))
-                                                            }}
-                                                        >
-                                                            { "Delete" }
-                                                        </button>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        }
-                                    }) }
-                                </tbody>
-                            </table>
-                            if proxy_configs.is_empty() {
-                                <p class={classes!("m-0", "mt-3", "text-sm", "text-[var(--muted)]")}>
-                                    { "No proxy configs yet." }
-                                </p>
-                            }
-                        </div>
-                    </div>
-                </div>
 
                 <div class={classes!("flex", "items-center", "gap-3", "flex-wrap")}>
                     <div class={classes!("flex-1", "min-w-[240px]")}>
@@ -1745,10 +2488,21 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                 let update_proxy_mode = update_proxy_mode.clone();
                                 let update_proxy_config_id = update_proxy_config_id.clone();
                                 let selected_scheduler_account_name = selected_scheduler_account_name.clone();
-                                let load_error = load_error.clone();
-                                let notice = notice.clone();
-                                let reload_all = reload_all.clone();
-                                html! {
+                                    let load_error = load_error.clone();
+                                    let notice = notice.clone();
+                                    let reload_all = reload_all.clone();
+                                    let on_set_account_proxy = on_set_account_proxy.clone();
+                                    let saving_account_proxy_name = saving_account_proxy_name.clone();
+                                    let current_proxy_value = match account.proxy_mode.as_str() {
+                                        "fixed" => account
+                                            .proxy_config_id
+                                            .as_ref()
+                                            .map(|id| format!("fixed:{id}"))
+                                            .unwrap_or_else(|| "inherit".to_string()),
+                                        "direct" => "direct".to_string(),
+                                        _ => "inherit".to_string(),
+                                    };
+                                    html! {
                                     <tr class={classes!("border-b", "border-[var(--border)]", "align-top")}>
                                         <td class="py-2 pr-3">{ account.name.clone() }</td>
                                         <td class="py-2 pr-3">
@@ -1772,14 +2526,37 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                                 { format_account_scheduler(account) }
                                             </div>
                                         </td>
-                                        <td class="py-2 pr-3">
-                                            <div class={classes!("text-xs", "font-mono")}>
-                                                { format_account_proxy_binding(account) }
-                                            </div>
-                                            <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]", "break-all")}>
-                                                { format_account_effective_proxy(account) }
-                                            </div>
-                                        </td>
+                                            <td class="py-2 pr-3">
+                                                <select
+                                                    class="w-full min-w-[14rem] rounded border border-[var(--border)] bg-transparent px-2 py-1 text-xs"
+                                                    value={current_proxy_value}
+                                                    disabled={*saving_account_proxy_name == Some(account.name.clone())}
+                                                    onchange={{
+                                                        let on_set_account_proxy = on_set_account_proxy.clone();
+                                                        let access_token = account.access_token.clone();
+                                                        let account_name = account.name.clone();
+                                                        Callback::from(move |e: Event| {
+                                                            on_set_account_proxy.emit((
+                                                                access_token.clone(),
+                                                                account_name.clone(),
+                                                                e.target_unchecked_into::<HtmlSelectElement>().value(),
+                                                            ))
+                                                        })
+                                                    }}
+                                                >
+                                                    <option value="inherit">{ "Inherit default" }</option>
+                                                    <option value="direct">{ "Direct" }</option>
+                                                    { for proxy_configs.iter().filter(|proxy| proxy.status == "active").map(|proxy| html! {
+                                                        <option value={format!("fixed:{}", proxy.id)}>{ format!("Fixed · {}", proxy.name) }</option>
+                                                    }) }
+                                                </select>
+                                                <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]", "break-all")}>
+                                                    { format_account_effective_proxy(account) }
+                                                </div>
+                                                <div class={classes!("mt-1", "text-xs", "font-mono", "text-[var(--muted)]")}>
+                                                    { format_account_proxy_binding(account) }
+                                                </div>
+                                            </td>
                                         <td class="py-2 pr-3">
                                             <div class={classes!("flex", "gap-2", "flex-wrap")}>
                                                 <button
@@ -1801,7 +2578,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                                         selected_scheduler_account_name.set(account_for_edit.name.clone());
                                                     })}
                                                 >
-                                                    { "Load Account" }
+                                                        { "Advanced" }
                                                 </button>
                                                 <button
                                                     class={classes!("btn-fluent-secondary")}
@@ -1844,7 +2621,15 @@ pub fn admin_gpt2api_rs_page() -> Html {
                     </table>
                 </div>
 
-                <div class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4", "space-y-4")}>
+                <details class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                    <summary class={classes!("cursor-pointer", "text-sm", "font-semibold")}>
+                        { "Advanced account fields" }
+                        <span class={classes!("ml-2", "font-normal", "text-[var(--muted)]")}>
+                            { if (*selected_scheduler_account_name).trim().is_empty() { "Select Load Account to edit scheduler, tokens, and metadata." } else { "Loaded account is ready for advanced edits." } }
+                        </span>
+                    </summary>
+                    <div class={classes!("mt-4", "space-y-4")}>
+                <div class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4", "space-y-4")}>
                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                         <div>
                             <h3 class={classes!("m-0", "text-base", "font-semibold")}>{ "Account Scheduler" }</h3>
@@ -2005,17 +2790,290 @@ pub fn admin_gpt2api_rs_page() -> Html {
                     }
                 </div>
                 <button class={classes!("btn-fluent-primary")} onclick={on_update_account}>{ "Update Selected Account" }</button>
+                    </div>
+                </details>
+            </section>
+            }
+
+            if active == GPT2API_TAB_PROXIES {
+            <section class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5", "space-y-4")}>
+                <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                    <div>
+                        <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "Proxies" }</h2>
+                        <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "Create, test, and assign upstream proxies. Account rows can bind to these proxies directly." }</p>
+                    </div>
+                    <button
+                        class={classes!("btn-fluent-secondary")}
+                        onclick={{
+                            let reset_proxy_form = reset_proxy_form.clone();
+                            Callback::from(move |_| reset_proxy_form.emit(()))
+                        }}
+                    >
+                        { if (*editing_proxy_id).is_some() { "New Proxy" } else { "Reset" } }
+                    </button>
+                </div>
+
+                <div class={classes!("grid", "gap-4", "lg:grid-cols-[minmax(18rem,26rem)_minmax(0,1fr)]")}>
+                    <div class={classes!("space-y-3", "rounded", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                        <div class={classes!("text-sm", "font-semibold")}>
+                            { if (*editing_proxy_id).is_some() { "Edit Proxy" } else { "Create Proxy" } }
+                        </div>
+                        <label class="block text-sm">
+                            <span>{ "Name" }</span>
+                            <input class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2" value={(*proxy_form_name).clone()} oninput={{
+                                let proxy_form_name = proxy_form_name.clone();
+                                Callback::from(move |e: InputEvent| proxy_form_name.set(e.target_unchecked_into::<HtmlInputElement>().value()))
+                            }} />
+                        </label>
+                        <label class="block text-sm">
+                            <span>{ "Proxy URL" }</span>
+                            <input class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2 font-mono" value={(*proxy_form_url).clone()} oninput={{
+                                let proxy_form_url = proxy_form_url.clone();
+                                Callback::from(move |e: InputEvent| proxy_form_url.set(e.target_unchecked_into::<HtmlInputElement>().value()))
+                            }} />
+                        </label>
+                        <div class={classes!("grid", "gap-3", "md:grid-cols-2")}>
+                            <label class="block text-sm">
+                                <span>{ "Username" }</span>
+                                <input class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2" value={(*proxy_form_username).clone()} oninput={{
+                                    let proxy_form_username = proxy_form_username.clone();
+                                    Callback::from(move |e: InputEvent| proxy_form_username.set(e.target_unchecked_into::<HtmlInputElement>().value()))
+                                }} />
+                            </label>
+                            <label class="block text-sm">
+                                <span>{ "Password" }</span>
+                                <input class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2" value={(*proxy_form_password).clone()} oninput={{
+                                    let proxy_form_password = proxy_form_password.clone();
+                                    Callback::from(move |e: InputEvent| proxy_form_password.set(e.target_unchecked_into::<HtmlInputElement>().value()))
+                                }} />
+                            </label>
+                        </div>
+                        <label class="block text-sm">
+                            <span>{ "Status" }</span>
+                            <select class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2" value={(*proxy_form_status).clone()} onchange={{
+                                let proxy_form_status = proxy_form_status.clone();
+                                Callback::from(move |e: Event| proxy_form_status.set(e.target_unchecked_into::<HtmlSelectElement>().value()))
+                            }}>
+                                <option value="active">{ "active" }</option>
+                                <option value="disabled">{ "disabled" }</option>
+                            </select>
+                        </label>
+                        <button class={classes!("btn-fluent-primary")} onclick={on_submit_proxy_config} disabled={*saving_proxy}>
+                            { if *saving_proxy { "Saving..." } else if (*editing_proxy_id).is_some() { "Update Proxy" } else { "Create Proxy" } }
+                        </button>
+                    </div>
+
+                    <div class={classes!("overflow-x-auto")}>
+                        <table class={classes!("w-full", "text-sm")}>
+                            <thead>
+                                <tr class={classes!("text-left", "border-b", "border-[var(--border)]")}>
+                                    <th class="py-2 pr-3">{ "Name" }</th>
+                                    <th class="py-2 pr-3">{ "URL" }</th>
+                                    <th class="py-2 pr-3">{ "Bound Accounts" }</th>
+                                    <th class="py-2 pr-3">{ "Actions" }</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                { for proxy_configs.iter().map(|proxy_config| {
+                                    let proxy_for_edit = proxy_config.clone();
+                                    let proxy_for_check = proxy_config.clone();
+                                    let proxy_for_delete = proxy_config.clone();
+                                    let bound_accounts: Vec<String> = accounts
+                                        .iter()
+                                        .filter(|account| account.proxy_mode == "fixed" && account.proxy_config_id.as_deref() == Some(proxy_config.id.as_str()))
+                                        .map(|account| account.name.clone())
+                                        .collect();
+                                    html! {
+                                        <tr class={classes!("border-b", "border-[var(--border)]", "align-top")}>
+                                            <td class="py-2 pr-3">
+                                                <div class={classes!("font-medium")}>{ proxy_config.name.clone() }</div>
+                                                <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>{ proxy_config.status.clone() }</div>
+                                            </td>
+                                            <td class="py-2 pr-3">
+                                                <div class={classes!("font-mono", "text-xs", "break-all")}>{ proxy_config.proxy_url.clone() }</div>
+                                            </td>
+                                            <td class="py-2 pr-3">
+                                                { if bound_accounts.is_empty() { "none".to_string() } else { bound_accounts.join(", ") } }
+                                            </td>
+                                            <td class="py-2 pr-3">
+                                                <div class={classes!("flex", "gap-2", "flex-wrap")}>
+                                                    <button class={classes!("btn-fluent-secondary")} onclick={{
+                                                        let on_edit_proxy_config = on_edit_proxy_config.clone();
+                                                        Callback::from(move |_| on_edit_proxy_config.emit(proxy_for_edit.clone()))
+                                                    }}>{ "Edit" }</button>
+                                                    <button class={classes!("btn-fluent-secondary")} onclick={{
+                                                        let on_check_proxy_config = on_check_proxy_config.clone();
+                                                        Callback::from(move |_| on_check_proxy_config.emit(proxy_for_check.clone()))
+                                                    }} disabled={*checking_proxy}>{ if *checking_proxy { "Checking..." } else { "Check" } }</button>
+                                                    <button class={classes!("btn-fluent-secondary")} onclick={{
+                                                        let on_delete_proxy_config = on_delete_proxy_config.clone();
+                                                        Callback::from(move |_| on_delete_proxy_config.emit(proxy_for_delete.clone()))
+                                                    }}>{ "Delete" }</button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    }
+                                }) }
+                            </tbody>
+                        </table>
+                        if proxy_configs.is_empty() {
+                            <p class={classes!("m-0", "mt-3", "text-sm", "text-[var(--muted)]")}>{ "No proxy configs yet." }</p>
+                        }
+                    </div>
+                </div>
+            </section>
+            }
+
+            if active == GPT2API_TAB_GROUPS {
+            <section class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5", "space-y-4")}>
+                <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                    <div>
+                        <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "Account Groups" }</h2>
+                        <p class={classes!("m-0", "mt-1", "text-sm", "text-[var(--muted)]")}>
+                            { "Use groups as the route unit. Keys can use the full account pool, an automatic subset group, or a single-account group for fixed routing." }
+                        </p>
+                    </div>
+                    <button
+                        class={classes!("btn-fluent-secondary")}
+                        onclick={{
+                            let reload_all = reload_all.clone();
+                            Callback::from(move |_| reload_all.emit(()))
+                        }}
+                        disabled={*loading}
+                    >
+                        { if *loading { "Refreshing..." } else { "Refresh Groups" } }
+                    </button>
+                </div>
+
+                <div class={classes!("max-w-md")}>
+                    <SearchBox
+                        value={(*account_groups_search).clone()}
+                        on_change={on_account_groups_search_change.clone()}
+                        placeholder={"Search group name / id / member account"}
+                    />
+                </div>
+
+                <div class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <div>
+                            <h3 class={classes!("m-0", "text-base", "font-semibold")}>{ "Create Account Group" }</h3>
+                            <p class={classes!("m-0", "mt-1", "text-xs", "text-[var(--muted)]")}>
+                                { "Collapsed by default. Select one member to make a fixed-route group; select multiple members for an automatic subset." }
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            class={classes!("btn-fluent-secondary")}
+                            onclick={{
+                                let account_group_form_expanded = account_group_form_expanded.clone();
+                                Callback::from(move |_| account_group_form_expanded.set(!*account_group_form_expanded))
+                            }}
+                        >
+                            { if *account_group_form_expanded { "Collapse" } else { "Expand" } }
+                        </button>
+                    </div>
+
+                    if *account_group_form_expanded {
+                    <div class={classes!("mt-4", "grid", "gap-3")}>
+                        <label class="block text-sm">
+                            <span>{ "Name" }</span>
+                            <input
+                                class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                                value={(*create_account_group_name).clone()}
+                                oninput={{
+                                    let create_account_group_name = create_account_group_name.clone();
+                                    Callback::from(move |e: InputEvent| {
+                                        create_account_group_name.set(e.target_unchecked_into::<HtmlInputElement>().value())
+                                    })
+                                }}
+                            />
+                        </label>
+
+                        <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
+                            { for accounts.iter().map(|account| {
+                                let checked = create_account_group_account_names.iter().any(|name| name == &account.name);
+                                let account_name = account.name.clone();
+                                let on_toggle_create_account_group_member =
+                                    on_toggle_create_account_group_member.clone();
+                                html! {
+                                    <label class={classes!(
+                                        "flex", "cursor-pointer", "items-center", "gap-3", "rounded", "border", "px-3", "py-2",
+                                        if checked { "border-sky-500/40 bg-sky-500/10" } else { "border-[var(--border)] bg-[var(--surface)]" }
+                                    )}>
+                                        <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onchange={Callback::from(move |_| {
+                                                on_toggle_create_account_group_member.emit(account_name.clone())
+                                            })}
+                                        />
+                                        <div class={classes!("min-w-0")}>
+                                            <div class={classes!("font-medium")}>{ account.name.clone() }</div>
+                                            <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                                                { format!("{} · quota {}", account.status, account.quota_remaining) }
+                                            </div>
+                                        </div>
+                                    </label>
+                                }
+                            }) }
+                        </div>
+
+                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                            <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                                { format!(
+                                    "Selected: {}",
+                                    if create_account_group_account_names.is_empty() {
+                                        "none".to_string()
+                                    } else {
+                                        create_account_group_account_names.join(", ")
+                                    }
+                                ) }
+                            </span>
+                            <button
+                                class={classes!("btn-fluent-primary")}
+                                onclick={on_create_account_group}
+                                disabled={*creating_account_group}
+                            >
+                                { if *creating_account_group { "Creating..." } else { "Create Group" } }
+                            </button>
+                        </div>
+                    </div>
+                    }
+                </div>
+
+                <div class={classes!("grid", "gap-4", "2xl:grid-cols-2")}>
+                    if account_groups.is_empty() && !*loading {
+                        <div class={classes!("rounded", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-8", "text-center", "text-[var(--muted)]")}>
+                            { "No account groups yet." }
+                        </div>
+                    } else if filtered_account_groups.is_empty() {
+                        <div class={classes!("rounded", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-8", "text-center", "text-[var(--muted)]")}>
+                            { "No matching account groups." }
+                        </div>
+                    } else {
+                        { for filtered_account_groups.iter().map(|group| html! {
+                            <Gpt2ApiAccountGroupEditor
+                                key={group.id.clone()}
+                                group={group.clone()}
+                                accounts={(*accounts).clone()}
+                                on_changed={reload_all.clone()}
+                                on_error={on_account_group_error.clone()}
+                                on_notice={on_account_group_notice.clone()}
+                            />
+                        }) }
+                    }
+                </div>
             </section>
             }
 
             if active == GPT2API_TAB_KEYS {
-            <section class={classes!("grid", "gap-5", "lg:grid-cols-2")}>
+            <section class={classes!("grid", "gap-5")}>
                 <article class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5")}>
                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                         <div>
                             <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "API Keys" }</h2>
                             <p class={classes!("m-0", "mt-1", "text-sm", "text-[var(--muted)]")}>
-                                { "Create, reissue, disable, or delete public keys. The plaintext sk-... secret is stored directly and can be copied from the inventory below whenever you need to log in." }
+                                { "Create, reissue, disable, delete, or promote public keys. Admin-role keys unlock the product admin tools after logging in at /gpt2api/login." }
                             </p>
                         </div>
                         <button class={classes!("btn-fluent-secondary")} onclick={{
@@ -2026,7 +3084,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                         </button>
                     </div>
 
-                    <div class={classes!("mt-4", "grid", "gap-3", "sm:grid-cols-2")}>
+                    <div class={classes!("mt-4", "grid", "gap-3", "md:grid-cols-2", "xl:grid-cols-4")}>
                         <label class="block text-sm">
                             <span>{ "Name" }</span>
                             <input
@@ -2067,31 +3125,163 @@ pub fn admin_gpt2api_rs_page() -> Html {
                             />
                         </label>
                         <label class="block text-sm">
-                            <span>{ "Route Strategy" }</span>
-                            <input
+                            <span>{ "Route" }</span>
+                            <select
+                                key={format!("route-mode-{}", (*editing_key_id).clone().unwrap_or_default())}
                                 class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
                                 value={(*key_form_route_strategy).clone()}
-                                oninput={{
+                                onchange={{
                                     let key_form_route_strategy = key_form_route_strategy.clone();
-                                    Callback::from(move |e: InputEvent| {
-                                        key_form_route_strategy.set(e.target_unchecked_into::<HtmlInputElement>().value())
+                                    let key_form_fixed_account_name = key_form_fixed_account_name.clone();
+                                    let key_form_account_group_id = key_form_account_group_id.clone();
+                                    let accounts = accounts.clone();
+                                    Callback::from(move |e: Event| {
+                                        let next = e.target_unchecked_into::<HtmlSelectElement>().value();
+                                        if next == "account" && (*key_form_fixed_account_name).trim().is_empty() {
+                                            if let Some(first_account) = accounts.first() {
+                                                key_form_fixed_account_name.set(first_account.name.clone());
+                                            }
+                                        } else if next != "account" {
+                                            key_form_fixed_account_name.set(String::new());
+                                        }
+                                        if next != "group" {
+                                            key_form_account_group_id.set(String::new());
+                                        }
+                                        key_form_route_strategy.set(next)
                                     })
                                 }}
-                            />
+                            >
+                                <option value="auto">{ "All accounts" }</option>
+                                <option value="group">{ "Account group" }</option>
+                                <option value="account">{ "Bind one account" }</option>
+                            </select>
                         </label>
                         <label class="block text-sm">
-                            <span>{ "Account Group ID" }</span>
-                            <input
+                            <span>{ "Role" }</span>
+                            <select
+                                key={format!("role-{}", (*editing_key_id).clone().unwrap_or_default())}
                                 class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
-                                value={(*key_form_account_group_id).clone()}
-                                oninput={{
-                                    let key_form_account_group_id = key_form_account_group_id.clone();
-                                    Callback::from(move |e: InputEvent| {
-                                        key_form_account_group_id.set(e.target_unchecked_into::<HtmlInputElement>().value())
+                                value={(*key_form_role).clone()}
+                                onchange={{
+                                    let key_form_role = key_form_role.clone();
+                                    Callback::from(move |e: Event| {
+                                        key_form_role.set(e.target_unchecked_into::<HtmlSelectElement>().value())
                                     })
                                 }}
-                            />
+                            >
+                                <option value="user">{ "User" }</option>
+                                <option value="admin">{ "Admin" }</option>
+                            </select>
                         </label>
+                        if (*key_form_route_strategy).as_str() == "group" {
+                            <label class="block text-sm md:col-span-2 xl:col-span-2">
+                                <span>{ "Account Group" }</span>
+                                <select
+                                    key={format!("group-{}", (*editing_key_id).clone().unwrap_or_default())}
+                                    class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                                    value={(*key_form_account_group_id).clone()}
+                                    onchange={{
+                                        let key_form_account_group_id = key_form_account_group_id.clone();
+                                        Callback::from(move |e: Event| {
+                                            key_form_account_group_id.set(e.target_unchecked_into::<HtmlSelectElement>().value())
+                                        })
+                                    }}
+                                >
+                                    <option value="">{ "-- Select group --" }</option>
+                                    { for account_groups.iter().map(|group| html! {
+                                        <option value={group.id.clone()}>{ format!("{} ({} accounts)", group.name, group.account_names.len()) }</option>
+                                    }) }
+                                </select>
+                            </label>
+                        } else if (*key_form_route_strategy).as_str() == "account" {
+                            <div class={classes!("md:col-span-2", "xl:col-span-4", "rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                                <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                    <div>
+                                        <div class={classes!("text-sm", "font-semibold")}>{ "Bound Account" }</div>
+                                        <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                                            {
+                                                if accounts.is_empty() {
+                                                    "No imported ChatGPT accounts are available. Import or refresh an account first.".to_string()
+                                                } else {
+                                                    format!("Choose exactly one upstream account. {} account(s) available.", accounts.len())
+                                                }
+                                            }
+                                        </div>
+                                    </div>
+                                    <select
+                                        key={format!("account-{}", (*editing_key_id).clone().unwrap_or_default())}
+                                        class="min-w-[18rem] rounded border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm"
+                                        value={(*key_form_fixed_account_name).clone()}
+                                        disabled={accounts.is_empty()}
+                                        onchange={{
+                                            let key_form_fixed_account_name = key_form_fixed_account_name.clone();
+                                            Callback::from(move |e: Event| {
+                                                key_form_fixed_account_name.set(e.target_unchecked_into::<HtmlSelectElement>().value())
+                                            })
+                                        }}
+                                    >
+                                        <option value="">{ "-- Select account --" }</option>
+                                        { for accounts.iter().map(|account| html! {
+                                            <option value={account.name.clone()}>{ gpt2api_account_option_label(account) }</option>
+                                        }) }
+                                    </select>
+                                </div>
+                                if !accounts.is_empty() {
+                                    <div class={classes!("mt-3", "grid", "gap-2", "md:grid-cols-2", "2xl:grid-cols-3")}>
+                                        { for accounts.iter().map(|account| {
+                                            let selected = (*key_form_fixed_account_name) == account.name;
+                                            let account_name = account.name.clone();
+                                            html! {
+                                                <button
+                                                    type="button"
+                                                    class={classes!(
+                                                        "w-full", "rounded-[var(--radius)]", "border", "px-3", "py-3", "text-left", "transition",
+                                                        if selected {
+                                                            "border-emerald-500 bg-emerald-500/10 ring-2 ring-emerald-500/20"
+                                                        } else {
+                                                            "border-[var(--border)] bg-[var(--surface)] hover:border-emerald-500/70 hover:bg-emerald-500/5"
+                                                        }
+                                                    )}
+                                                    onclick={{
+                                                        let key_form_fixed_account_name = key_form_fixed_account_name.clone();
+                                                        Callback::from(move |_| key_form_fixed_account_name.set(account_name.clone()))
+                                                    }}
+                                                >
+                                                    <div class={classes!("flex", "items-center", "justify-between", "gap-3")}>
+                                                        <span class={classes!("font-mono", "text-sm", "font-semibold")}>{ account.name.clone() }</span>
+                                                        <span class={classes!(
+                                                            "rounded-full", "px-2", "py-0.5", "text-xs",
+                                                            if account.status == "active" {
+                                                                "bg-emerald-500/10 text-emerald-700 dark:text-emerald-200"
+                                                            } else {
+                                                                "bg-amber-500/10 text-amber-700 dark:text-amber-200"
+                                                            }
+                                                        )}>{ account.status.clone() }</span>
+                                                    </div>
+                                                    <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
+                                                        { format!(
+                                                            "{} · quota {}{}",
+                                                            account.email.clone().unwrap_or_else(|| "no email".to_string()),
+                                                            account.quota_remaining,
+                                                            if account.quota_known { "" } else { " (unknown)" }
+                                                        ) }
+                                                    </div>
+                                                    <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
+                                                        { format!(
+                                                            "proxy: {}",
+                                                            account.effective_proxy_config_name
+                                                                .clone()
+                                                                .or_else(|| account.effective_proxy_url.clone())
+                                                                .unwrap_or_else(|| account.effective_proxy_source.clone())
+                                                        ) }
+                                                    </div>
+                                                </button>
+                                            }
+                                        }) }
+                                    </div>
+                                }
+                            </div>
+                        }
                         <label class="block text-sm">
                             <span>{ "Request Max Concurrency" }</span>
                             <input
@@ -2107,7 +3297,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                 }}
                             />
                         </label>
-                        <label class="block text-sm sm:col-span-2">
+                        <label class="block text-sm md:col-span-2 xl:col-span-2">
                             <span>{ "Request Min Start Interval Ms" }</span>
                             <input
                                 class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
@@ -2168,6 +3358,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                             <thead>
                                 <tr class={classes!("text-left", "border-b", "border-[var(--border)]")}>
                                     <th class="py-2 pr-3">{ "Name" }</th>
+                                    <th class="py-2 pr-3">{ "Role" }</th>
                                     <th class="py-2 pr-3">{ "Status" }</th>
                                     <th class="py-2 pr-3">{ "Quota" }</th>
                                     <th class="py-2 pr-3">{ "Plaintext Key" }</th>
@@ -2180,8 +3371,38 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                         <td class="py-2 pr-3">
                                             <div class={classes!("font-medium")}>{ key.name.clone() }</div>
                                             <div class={classes!("text-xs", "text-[var(--muted)]")}>
-                                                { format!("route={}{}", key.route_strategy, key.account_group_id.as_ref().map(|id| format!(" · group={id}")).unwrap_or_default()) }
+                                                {
+                                                    if let Some(account_name) = key.fixed_account_name.as_ref().filter(|value| !value.trim().is_empty()) {
+                                                        format!("bound account: {account_name}")
+                                                    } else if key.route_strategy == "fixed" {
+                                                        key.account_group_id
+                                                            .as_ref()
+                                                            .map(|id| format!("bound: {}", gpt2api_group_name_for_id(&account_groups, id)))
+                                                            .unwrap_or_else(|| "bound: not configured".to_string())
+                                                    } else {
+                                                        key.account_group_id
+                                                            .as_ref()
+                                                            .map(|id| format!("auto group: {}", gpt2api_group_name_for_id(&account_groups, id)))
+                                                            .unwrap_or_else(|| "auto: all accounts".to_string())
+                                                    }
+                                                }
                                             </div>
+                                        </td>
+                                        <td class="py-2 pr-3">
+                                            <span class={classes!(
+                                                "inline-flex",
+                                                "rounded-full",
+                                                "px-2.5",
+                                                "py-1",
+                                                "text-xs",
+                                                "font-medium",
+                                                match key.role.as_str() {
+                                                    "admin" => "bg-indigo-500/10 text-indigo-700 dark:text-indigo-200",
+                                                    _ => "bg-slate-500/10 text-slate-700 dark:text-slate-200",
+                                                }
+                                            )}>
+                                                { key.role.clone() }
+                                            </span>
                                         </td>
                                         <td class="py-2 pr-3">
                                             <span class={classes!(
@@ -2260,46 +3481,594 @@ pub fn admin_gpt2api_rs_page() -> Html {
                         </table>
                     </div>
                 </article>
+            </section>
+            }
 
-                <article class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5")}>
-                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                        <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "Usage" }</h2>
-                        <div class={classes!("flex", "items-center", "gap-2")}>
-                            <input class="rounded border border-[var(--border)] bg-transparent px-3 py-2 text-sm" value={(*usage_limit).clone()} oninput={{
-                                let usage_limit = usage_limit.clone();
-                                Callback::from(move |e: InputEvent| usage_limit.set(e.target_unchecked_into::<HtmlInputElement>().value()))
-                            }} />
-                            <button class={classes!("btn-fluent-secondary")} onclick={{
-                                let reload_all = reload_all.clone();
-                                Callback::from(move |_| reload_all.emit(()))
-                            }}>{ "Reload Usage" }</button>
+            if active == GPT2API_TAB_CONTRIBUTIONS {
+            <section class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5", "space-y-4")}>
+                <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                    <div>
+                        <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "GPT Contributions" }</h2>
+                        <p class={classes!("m-0", "mt-1", "text-sm", "text-[var(--muted)]")}>
+                            { "Review public GPT account submissions from /llm-access. Approval imports the account, creates a fixed-route key, binds the contributor email, and emails /gpt2api/login instructions." }
+                        </p>
+                    </div>
+                    <button
+                        class={classes!("btn-fluent-secondary")}
+                        onclick={{
+                            let reload_contribution_requests = reload_contribution_requests.clone();
+                            Callback::from(move |_| reload_contribution_requests.emit((None, None)))
+                        }}
+                        disabled={*contribution_loading}
+                    >
+                        { if *contribution_loading { "Refreshing..." } else { "Refresh" } }
+                    </button>
+                </div>
+
+                <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                    <label class={classes!("text-sm")}>
+                        <span class={classes!("mr-2", "text-[var(--muted)]")}>{ "Status" }</span>
+                        <select
+                            class="rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                            value={(*contribution_status_filter).clone()}
+                            onchange={on_contribution_status_filter_change}
+                        >
+                            <option value="">{ "All" }</option>
+                            <option value="pending">{ "Pending" }</option>
+                            <option value="failed">{ "Failed" }</option>
+                            <option value="issued">{ "Issued" }</option>
+                            <option value="rejected">{ "Rejected" }</option>
+                        </select>
+                    </label>
+                    <div class={classes!("flex", "items-center", "gap-2", "text-sm", "text-[var(--muted)]")}>
+                        <span>{ format!("{} requests", *contribution_total) }</span>
+                        <button
+                            class={classes!("btn-fluent-secondary")}
+                            disabled={*contribution_page <= 1}
+                            onclick={{
+                                let on_contribution_page_change = on_contribution_page_change.clone();
+                                let page = (*contribution_page).saturating_sub(1).max(1);
+                                Callback::from(move |_| on_contribution_page_change.emit(page))
+                            }}
+                        >
+                            { "Prev" }
+                        </button>
+                        <span>{ format!("{}/{}", *contribution_page, contribution_total_pages) }</span>
+                        <button
+                            class={classes!("btn-fluent-secondary")}
+                            disabled={*contribution_page >= contribution_total_pages}
+                            onclick={{
+                                let on_contribution_page_change = on_contribution_page_change.clone();
+                                let page = (*contribution_page).saturating_add(1);
+                                Callback::from(move |_| on_contribution_page_change.emit(page))
+                            }}
+                        >
+                            { "Next" }
+                        </button>
+                    </div>
+                </div>
+
+                if contribution_requests.is_empty() && !*contribution_loading {
+                    <div class={classes!("rounded", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-8", "text-center", "text-[var(--muted)]")}>
+                        { "No GPT contribution requests for this filter." }
+                    </div>
+                } else {
+                    <div class={classes!("grid", "gap-4")}>
+                        { for contribution_requests.iter().map(|item| {
+                            let approving = contribution_action_inflight.contains(&item.request_id);
+                            let finalized = item.status == "issued" || item.status == "rejected";
+                            let request_id_for_approve = item.request_id.clone();
+                            let request_id_for_reject = item.request_id.clone();
+                            let credential_type = match (
+                                item.access_token.as_ref().filter(|value| !value.trim().is_empty()),
+                                item.session_json.as_ref().filter(|value| !value.trim().is_empty()),
+                            ) {
+                                (Some(_), Some(_)) => "access token + session JSON",
+                                (Some(_), None) => "access token",
+                                (None, Some(_)) => "session JSON",
+                                (None, None) => "none",
+                            };
+                            html! {
+                                <article class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                                    <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
+                                        <div class={classes!("min-w-0")}>
+                                            <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                                <h3 class={classes!("m-0", "font-mono", "text-base", "font-semibold")}>{ item.account_name.clone() }</h3>
+                                                <span class={classes!(
+                                                    "rounded-full", "px-2.5", "py-1", "text-xs", "font-semibold",
+                                                    match item.status.as_str() {
+                                                        "pending" => "bg-amber-500/10 text-amber-700 dark:text-amber-200",
+                                                        "issued" => "bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
+                                                        "failed" => "bg-red-500/10 text-red-700 dark:text-red-200",
+                                                        "rejected" => "bg-slate-500/10 text-slate-700 dark:text-slate-200",
+                                                        _ => "bg-sky-500/10 text-sky-700 dark:text-sky-200",
+                                                    }
+                                                )}>{ item.status.clone() }</span>
+                                            </div>
+                                            <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
+                                                { format!("{} · {} · {}", item.request_id, item.requester_email, credential_type) }
+                                            </div>
+                                        </div>
+                                        <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                            <button
+                                                class={classes!("btn-fluent-primary")}
+                                                disabled={approving || finalized}
+                                                onclick={{
+                                                    let on_approve_contribution = on_approve_contribution.clone();
+                                                    Callback::from(move |_| on_approve_contribution.emit(request_id_for_approve.clone()))
+                                                }}
+                                            >
+                                                { if approving { "Working..." } else { "Approve & Issue" } }
+                                            </button>
+                                            <button
+                                                class={classes!("btn-fluent-secondary")}
+                                                disabled={approving || finalized}
+                                                onclick={{
+                                                    let on_reject_contribution = on_reject_contribution.clone();
+                                                    Callback::from(move |_| on_reject_contribution.emit(request_id_for_reject.clone()))
+                                                }}
+                                            >
+                                                { "Reject" }
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div class={classes!("mt-3", "grid", "gap-3", "lg:grid-cols-3")}>
+                                        <div>
+                                            <div class={classes!("text-xs", "uppercase", "text-[var(--muted)]")}>{ "Contributor" }</div>
+                                            <div class={classes!("mt-1", "text-sm")}>{ item.requester_email.clone() }</div>
+                                            <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
+                                                { item.github_id.clone().unwrap_or_else(|| "no GitHub ID".to_string()) }
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div class={classes!("text-xs", "uppercase", "text-[var(--muted)]")}>{ "Review State" }</div>
+                                            <div class={classes!("mt-1", "text-sm")}>
+                                                { item.imported_account_name.clone().unwrap_or_else(|| "not imported".to_string()) }
+                                            </div>
+                                            <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
+                                                { item.issued_key_name.clone().unwrap_or_else(|| "no issued key".to_string()) }
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div class={classes!("text-xs", "uppercase", "text-[var(--muted)]")}>{ "Source" }</div>
+                                            <div class={classes!("mt-1", "text-sm")}>{ format!("{} · {}", item.ip_region, item.client_ip) }</div>
+                                            <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>{ format_ms(item.created_at) }</div>
+                                        </div>
+                                    </div>
+
+                                    <div class={classes!("mt-3", "rounded", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-3")}>
+                                        <div class={classes!("text-xs", "uppercase", "text-[var(--muted)]")}>{ "Message" }</div>
+                                        <p class={classes!("m-0", "mt-1", "whitespace-pre-wrap", "text-sm")}>{ item.contributor_message.clone() }</p>
+                                    </div>
+
+                                    if let Some(reason) = item.failure_reason.as_ref().filter(|value| !value.trim().is_empty()) {
+                                        <div class={classes!("mt-3", "rounded", "border", "border-red-400/35", "bg-red-500/8", "p-3", "text-sm", "text-red-700", "dark:text-red-200")}>
+                                            { reason.clone() }
+                                        </div>
+                                    }
+
+                                    <details class={classes!("mt-3")}>
+                                        <summary class={classes!("cursor-pointer", "text-sm", "font-semibold")}>{ "Credentials" }</summary>
+                                        <div class={classes!("mt-3", "grid", "gap-3")}>
+                                            if let Some(access_token) = item.access_token.clone() {
+                                                <div>
+                                                    <div class={classes!("mb-1", "text-xs", "uppercase", "text-[var(--muted)]")}>{ "access_token" }</div>
+                                                    <MaskedSecretCode value={access_token} copy_label={"GPT access token"} on_copy={on_copy.clone()} />
+                                                </div>
+                                            }
+                                            if let Some(session_json) = item.session_json.clone() {
+                                                <div>
+                                                    <div class={classes!("mb-1", "text-xs", "uppercase", "text-[var(--muted)]")}>{ "session_json" }</div>
+                                                    <MaskedSecretCode value={session_json} copy_label={"GPT session JSON"} on_copy={on_copy.clone()} />
+                                                </div>
+                                            }
+                                        </div>
+                                    </details>
+                                </article>
+                            }
+                        }) }
+                    </div>
+                }
+            </section>
+            }
+
+            if active == GPT2API_TAB_USAGE {
+            <section class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5")}>
+                <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                    <div>
+                        <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "Usage Logs" }</h2>
+                        <p class={classes!("m-0", "mt-1", "text-sm", "text-[var(--muted)]")}>
+                            { "Credit totals are aggregated from gpt2api-rs DuckDB usage events, not from mutable key counters." }
+                        </p>
+                    </div>
+                    <div class={classes!("flex", "items-center", "gap-2", "flex-wrap", "text-sm", "text-[var(--muted)]")}>
+                        <span class={classes!("rounded-full", "border", "border-[var(--border)]", "px-3", "py-1", "text-xs", "font-semibold")}>
+                            { format!("RPM {}", *usage_current_rpm) }
+                        </span>
+                        <span class={classes!("rounded-full", "border", "border-[var(--border)]", "px-3", "py-1", "text-xs", "font-semibold")}>
+                            { format!("In Flight {}", *usage_current_in_flight) }
+                        </span>
+                        <span>{ format!("{} events", *usage_total) }</span>
+                        <span>{ format!("{} credits", *usage_billable_total) }</span>
+                    </div>
+                </div>
+
+                <div class={classes!("mt-4", "grid", "gap-3", "xl:grid-cols-[minmax(16rem,1fr)_minmax(14rem,20rem)_8rem_auto]", "items-end")}>
+                    <label class={classes!("text-sm")}>
+                        <span class={classes!("text-[var(--muted)]")}>{ "Search" }</span>
+                        <div class={classes!("mt-1")}>
+                            <SearchBox
+                                value={(*usage_search).clone()}
+                                on_change={{
+                                    let usage_search = usage_search.clone();
+                                    let usage_offset = usage_offset.clone();
+                                    Callback::from(move |value: String| {
+                                        usage_search.set(value);
+                                        usage_offset.set(0);
+                                    })
+                                }}
+                                on_submit={{
+                                    let reload_usage_page = reload_usage_page.clone();
+                                    Callback::from(move |_| reload_usage_page.emit(0))
+                                }}
+                                placeholder={AttrValue::Static("Search key, request, endpoint, IP, prompt")}
+                            />
                         </div>
+                    </label>
+                    <label class={classes!("text-sm")}>
+                        <span class={classes!("text-[var(--muted)]")}>{ "Key" }</span>
+                        <select
+                            class={classes!("mt-1", "w-full", "rounded", "border", "border-[var(--border)]", "bg-transparent", "px-3", "py-2")}
+                            value={(*usage_key_filter).clone()}
+                            onchange={{
+                                let usage_key_filter = usage_key_filter.clone();
+                                let usage_offset = usage_offset.clone();
+                                Callback::from(move |e: Event| {
+                                    usage_key_filter.set(e.target_unchecked_into::<HtmlSelectElement>().value());
+                                    usage_offset.set(0);
+                                })
+                            }}
+                        >
+                            <option value="">{ "All keys" }</option>
+                            { for keys.iter().map(|key| html! {
+                                <option value={key.id.clone()}>{ format!("{} · {}", key.name, key.id) }</option>
+                            }) }
+                        </select>
+                    </label>
+                    <label class={classes!("text-sm")}>
+                        <span class={classes!("text-[var(--muted)]")}>{ "Limit" }</span>
+                        <input
+                            class="mt-1 w-full rounded border border-[var(--border)] bg-transparent px-3 py-2"
+                            value={(*usage_limit).clone()}
+                            oninput={{
+                                let usage_limit = usage_limit.clone();
+                                let usage_offset = usage_offset.clone();
+                                Callback::from(move |e: InputEvent| {
+                                    usage_limit.set(e.target_unchecked_into::<HtmlInputElement>().value());
+                                    usage_offset.set(0);
+                                })
+                            }}
+                        />
+                    </label>
+                    <button
+                        class={classes!("btn-fluent-secondary")}
+                        onclick={{
+                            let reload_usage_page = reload_usage_page.clone();
+                            Callback::from(move |_| reload_usage_page.emit(0))
+                        }}
+                    >
+                        { "Reload Logs" }
+                    </button>
+                </div>
+
+                {
+                    if let Some(item) = (*selected_usage_event).clone() {
+                        let credits = if item.billable_credits > 0 { item.billable_credits } else { item.billable_images };
+                        let headers = item
+                            .request_headers_json
+                            .as_deref()
+                            .map(pretty_json_text)
+                            .unwrap_or_else(|| "{}".to_string());
+                        let last_message = item
+                            .last_message_content
+                            .clone()
+                            .or_else(|| item.prompt_preview.clone())
+                            .unwrap_or_default();
+                        let request_body = item
+                            .request_body_json
+                            .as_deref()
+                            .map(pretty_json_text)
+                            .unwrap_or_default();
+                        html! {
+                            <div
+                                id="gpt2api-usage-detail"
+                                class={classes!(
+                                    "fixed", "right-6", "top-20", "z-50", "w-[min(46rem,calc(100vw-2rem))]",
+                                    "max-h-[82vh]", "resize", "overflow-auto", "rounded-[var(--radius)]",
+                                    "border", "border-[var(--border)]", "bg-[var(--surface)]",
+                                    "shadow-2xl"
+                                )}
+                            >
+                                <div
+                                    id="gpt2api-usage-detail-handle"
+                                    class={classes!("cursor-move", "border-b", "border-[var(--border)]", "px-4", "py-3", "flex", "items-center", "justify-between", "gap-3")}
+                                >
+                                    <div>
+                                        <h3 class={classes!("m-0", "text-base", "font-semibold")}>{ "Usage Event Detail" }</h3>
+                                        <p class={classes!("m-0", "mt-1", "font-mono", "text-xs", "text-[var(--muted)]")}>{ item.event_id.clone() }</p>
+                                    </div>
+                                    <button
+                                        class={classes!("btn-terminal", "!px-2.5", "!py-1.5", "!text-xs")}
+                                        onclick={{
+                                            let selected_usage_event = selected_usage_event.clone();
+                                            Callback::from(move |_| selected_usage_event.set(None))
+                                        }}
+                                    >
+                                        { "Close" }
+                                    </button>
+                                </div>
+                                <div class={classes!("grid", "gap-4", "p-4")}>
+                                    <div class={classes!("grid", "gap-3", "md:grid-cols-2")}>
+                                        <UsageDetailField label="Key" value={format!("{} · {}", item.key_name, item.key_id)} />
+                                        <UsageDetailField label="Request" value={format!("{} {}", item.request_method, item.request_url)} />
+                                        <UsageDetailField label="Status" value={format!("{}", item.status_code)} />
+                                        <UsageDetailField label="Latency" value={format!("{} ms", item.latency_ms)} />
+                                        <UsageDetailField label="Mode" value={item.mode.clone()} />
+                                        <UsageDetailField label="Size" value={item.image_size.clone().unwrap_or_else(|| "-".to_string())} />
+                                        <UsageDetailField label="Credits" value={format!("{credits}")} />
+                                        <UsageDetailField label="IP" value={if item.client_ip.is_empty() { "-".to_string() } else { item.client_ip.clone() }} />
+                                        <UsageDetailField label="Session" value={item.session_id.clone().unwrap_or_default()} />
+                                        <UsageDetailField label="Task" value={item.task_id.clone().unwrap_or_default()} />
+                                    </div>
+                                    if !last_message.is_empty() {
+                                        <section>
+                                            <h4 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "Last Message / Prompt" }</h4>
+                                            <pre class={classes!("max-h-44", "overflow-auto", "rounded", "bg-[var(--surface-alt)]", "p-3", "text-xs", "whitespace-pre-wrap")}>{ last_message }</pre>
+                                        </section>
+                                    }
+                                    <section>
+                                        <h4 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "Headers" }</h4>
+                                        <pre class={classes!("max-h-56", "overflow-auto", "rounded", "bg-[var(--surface-alt)]", "p-3", "text-xs", "whitespace-pre-wrap")}>{ headers }</pre>
+                                    </section>
+                                    if item.status_code >= 400 {
+                                        <section>
+                                            <h4 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "Error" }</h4>
+                                            <pre class={classes!("max-h-44", "overflow-auto", "rounded", "bg-[var(--surface-alt)]", "p-3", "text-xs", "whitespace-pre-wrap")}>
+                                                { format!(
+                                                    "code: {}\nmessage: {}",
+                                                    item.error_code.clone().unwrap_or_default(),
+                                                    item.error_message.clone().unwrap_or_default()
+                                                ) }
+                                            </pre>
+                                        </section>
+                                    }
+                                    if !request_body.is_empty() {
+                                        <section>
+                                            <h4 class={classes!("m-0", "mb-2", "text-sm", "font-semibold")}>{ "Failed Request Body" }</h4>
+                                            <pre class={classes!("max-h-64", "overflow-auto", "rounded", "bg-[var(--surface-alt)]", "p-3", "text-xs", "whitespace-pre-wrap")}>{ request_body }</pre>
+                                        </section>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    } else {
+                        Html::default()
+                    }
+                }
+
+                <div class={classes!("mt-4", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                    <span class={classes!("text-sm", "text-[var(--muted)]")}>
+                        { format!("offset {}", *usage_offset) }
+                    </span>
+                    <div class={classes!("flex", "items-center", "gap-2")}>
+                        <button
+                            class={classes!("btn-fluent-secondary")}
+                            disabled={*usage_offset == 0}
+                            onclick={{
+                                let reload_usage_page = reload_usage_page.clone();
+                                let usage_offset = usage_offset.clone();
+                                let usage_limit = usage_limit.clone();
+                                Callback::from(move |_| {
+                                    let limit = (*usage_limit).trim().parse::<u64>().unwrap_or(50).max(1);
+                                    reload_usage_page.emit((*usage_offset).saturating_sub(limit));
+                                })
+                            }}
+                        >
+                            { "Previous" }
+                        </button>
+                        <button
+                            class={classes!("btn-fluent-secondary")}
+                            disabled={!*usage_has_more}
+                            onclick={{
+                                let reload_usage_page = reload_usage_page.clone();
+                                let usage_offset = usage_offset.clone();
+                                let usage_limit = usage_limit.clone();
+                                Callback::from(move |_| {
+                                    let limit = (*usage_limit).trim().parse::<u64>().unwrap_or(50).max(1);
+                                    reload_usage_page.emit((*usage_offset).saturating_add(limit));
+                                })
+                            }}
+                        >
+                            { "Next" }
+                        </button>
                     </div>
-                    <div class={classes!("mt-3", "max-h-[28rem]", "overflow-auto")}>
-                        <table class={classes!("w-full", "text-sm")}>
-                            <thead>
-                                <tr class={classes!("text-left", "border-b", "border-[var(--border)]")}>
-                                    <th class="py-2 pr-3">{ "Time" }</th>
-                                    <th class="py-2 pr-3">{ "Endpoint" }</th>
-                                    <th class="py-2 pr-3">{ "Account" }</th>
-                                    <th class="py-2 pr-3">{ "Status" }</th>
-                                    <th class="py-2 pr-3">{ "Latency" }</th>
+                </div>
+
+                <div class={classes!("mt-4", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                    <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                        { "Columns are wide; use the mirror scrollbar or arrow buttons to inspect logs horizontally." }
+                    </div>
+                    <div class={classes!("flex", "items-center", "gap-2")}>
+                        <button
+                            type="button"
+                            class={classes!("btn-terminal")}
+                            title="Scroll left"
+                            aria-label="Scroll left"
+                            onclick={{
+                                let scroll_usage_table_by = scroll_usage_table_by.clone();
+                                Callback::from(move |_| scroll_usage_table_by.emit(-360))
+                            }}
+                        >
+                            <i class={classes!("fas", "fa-arrow-left")} />
+                        </button>
+                        <button
+                            type="button"
+                            class={classes!("btn-terminal")}
+                            title="Scroll right"
+                            aria-label="Scroll right"
+                            onclick={{
+                                let scroll_usage_table_by = scroll_usage_table_by.clone();
+                                Callback::from(move |_| scroll_usage_table_by.emit(360))
+                            }}
+                        >
+                            <i class={classes!("fas", "fa-arrow-right")} />
+                        </button>
+                    </div>
+                </div>
+
+                <div
+                    ref={usage_scroll_top_ref}
+                    class={classes!("mt-3", "overflow-x-auto", "overflow-y-hidden", "rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-2", "py-2")}
+                    onscroll={on_usage_scroll_top}
+                >
+                    <div
+                        class={classes!("h-3", "rounded-full", "bg-[linear-gradient(90deg,rgba(37,99,235,0.18),rgba(16,185,129,0.22))]")}
+                        style={format!("width: {}px;", (*usage_scroll_width).max(1))}
+                    />
+                </div>
+
+                <div
+                    ref={usage_scroll_bottom_ref}
+                    class={classes!("mt-4", "overflow-x-auto", "rounded-[var(--radius)]", "border", "border-[var(--border)]")}
+                    onscroll={on_usage_scroll_bottom}
+                >
+                    <table class={classes!("min-w-[124rem]", "w-full", "text-sm")}>
+                        <thead>
+                            <tr class={classes!("text-left", "border-b", "border-[var(--border)]", "text-[var(--muted)]")}>
+                                <th class="py-2 pr-3 pl-3">{ "Time" }</th>
+                                <th class="py-2 pr-3">{ "Key" }</th>
+                                <th class="py-2 pr-3">{ "Endpoint" }</th>
+                                <th class="py-2 pr-3">{ "Mode" }</th>
+                                <th class="py-2 pr-3">{ "Size" }</th>
+                                <th class="py-2 pr-3">{ "Account" }</th>
+                                <th class="py-2 pr-3">{ "Images" }</th>
+                                <th class="py-2 pr-3">{ "Credits" }</th>
+                                <th class="py-2 pr-3">{ "Context" }</th>
+                                <th class="py-2 pr-3">{ "Status" }</th>
+                                <th class="py-2 pr-3">{ "IP" }</th>
+                                <th class="py-2 pr-3">{ "Latency" }</th>
+                                <th class="py-2 pr-3">{ "Last Message" }</th>
+                                <th class="py-2 pr-3">{ "Request" }</th>
+                                <th class="py-2 pr-3">{ "Details" }</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            if usage.is_empty() {
+                                <tr>
+                                    <td colspan="15" class="py-8 text-center text-[var(--muted)]">{ "No usage events for this filter" }</td>
                                 </tr>
-                            </thead>
-                            <tbody>
-                                { for usage.iter().map(|item| html! {
-                                    <tr class={classes!("border-b", "border-[var(--border)]", "align-top")}>
-                                        <td class="py-2 pr-3">{ format_ms(item.created_at * 1000) }</td>
-                                        <td class="py-2 pr-3">{ item.endpoint.clone() }</td>
-                                        <td class="py-2 pr-3">{ item.account_name.clone() }</td>
-                                        <td class="py-2 pr-3">{ item.status_code }</td>
-                                        <td class="py-2 pr-3">{ format!("{} ms", item.latency_ms) }</td>
-                                    </tr>
+                            } else {
+                                { for usage.iter().map(|item| {
+                                    let credits = if item.billable_credits > 0 { item.billable_credits } else { item.billable_images };
+                                    let status_classes = if item.status_code >= 400 {
+                                        classes!("font-semibold", "text-red-600")
+                                    } else {
+                                        classes!("font-semibold")
+                                    };
+                                    let size_text = item.image_size.clone().unwrap_or_else(|| "-".to_string());
+                                    let last_message = item
+                                        .last_message_content
+                                        .clone()
+                                        .or_else(|| item.prompt_preview.clone())
+                                        .unwrap_or_default();
+                                    html! {
+                                        <tr class={classes!("border-b", "border-[var(--border)]", "align-top")}>
+                                            <td class="py-2 pr-3 pl-3 whitespace-nowrap">{ format_ms(item.created_at * 1000) }</td>
+                                            <td class="py-2 pr-3 min-w-[14rem]">
+                                                <div class={classes!("font-medium")}>{ item.key_name.clone() }</div>
+                                                <div class={classes!("font-mono", "text-xs", "text-[var(--muted)]")}>{ item.key_id.clone() }</div>
+                                            </td>
+                                            <td class="py-2 pr-3 min-w-[14rem]">
+                                                <div>{ format!("{} {}", item.request_method, item.request_url) }</div>
+                                                <div class={classes!("font-mono", "text-xs", "text-[var(--muted)]")}>{ item.endpoint.clone() }</div>
+                                            </td>
+                                            <td class="py-2 pr-3">{ item.mode.clone() }</td>
+                                            <td class="py-2 pr-3">
+                                                <div>{ size_text }</div>
+                                                <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                                                    { if item.size_credit_units > 0 { format!("{} credit/image", item.size_credit_units) } else { "-".to_string() } }
+                                                </div>
+                                            </td>
+                                            <td class="py-2 pr-3">{ item.account_name.clone() }</td>
+                                            <td class="py-2 pr-3">{ format!("{}/{}", item.generated_n, item.requested_n) }</td>
+                                            <td class="py-2 pr-3 font-semibold">{ credits }</td>
+                                            <td class="py-2 pr-3">
+                                                { format!("text {} · image {} · +{}", item.context_text_count, item.context_image_count, item.context_credit_surcharge) }
+                                            </td>
+                                            <td class="py-2 pr-3">
+                                                <div class={status_classes}>{ item.status_code }</div>
+                                                <div class={classes!("text-xs", "text-[var(--muted)]")}>{ item.error_code.clone().unwrap_or_default() }</div>
+                                            </td>
+                                            <td class="py-2 pr-3">{ if item.client_ip.is_empty() { "-".to_string() } else { item.client_ip.clone() } }</td>
+                                            <td class="py-2 pr-3">{ format!("{} ms", item.latency_ms) }</td>
+                                            <td class="py-2 pr-3 min-w-[20rem]">{ last_message }</td>
+                                            <td class="py-2 pr-3 min-w-[16rem]">
+                                                <div class={classes!("font-mono", "text-xs")}>{ item.request_id.clone() }</div>
+                                                <div class={classes!("font-mono", "text-xs", "text-[var(--muted)]")}>
+                                                    { item.session_id.clone().unwrap_or_default() }
+                                                </div>
+                                                <div class={classes!("font-mono", "text-xs", "text-[var(--muted)]")}>
+                                                    { item.task_id.clone().unwrap_or_default() }
+                                                </div>
+                                            </td>
+                                            <td class="py-2 pr-3">
+                                                <button
+                                                    class={classes!("btn-terminal", "!px-2.5", "!py-1.5", "!text-xs")}
+                                                    onclick={{
+                                                        let selected_usage_event = selected_usage_event.clone();
+                                                        let item = item.clone();
+                                                        Callback::from(move |_| selected_usage_event.set(Some(item.clone())))
+                                                    }}
+                                                >
+                                                    { "View" }
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    }
                                 }) }
-                            </tbody>
-                        </table>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+            }
+
+            if active == GPT2API_TAB_ADVANCED {
+            <section class={classes!("bg-[var(--surface)]", "border", "border-[var(--border)]", "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5", "space-y-4")}>
+                <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                    <div>
+                        <h2 class={classes!("m-0", "text-lg", "font-semibold")}>{ "Advanced Diagnostics" }</h2>
+                        <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "Raw service probes and compatibility playgrounds live here so they do not distract from daily admin work." }</p>
                     </div>
-                </article>
+                    <button class={classes!("btn-fluent-secondary")} onclick={on_test_login} disabled={*loading}>
+                        { "Test Login" }
+                    </button>
+                </div>
+                <div class={classes!("grid", "gap-4", "lg:grid-cols-3")}>
+                    <article class={classes!("rounded", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                        <h3 class={classes!("m-0", "text-sm", "font-semibold")}>{ "Version" }</h3>
+                        <pre class={classes!("mt-2", "overflow-x-auto", "rounded", "bg-[var(--surface)]", "p-3", "text-xs")}>{ (*version_json).clone() }</pre>
+                    </article>
+                    <article class={classes!("rounded", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                        <h3 class={classes!("m-0", "text-sm", "font-semibold")}>{ "Models" }</h3>
+                        <pre class={classes!("mt-2", "overflow-x-auto", "rounded", "bg-[var(--surface)]", "p-3", "text-xs")}>{ (*models_json).clone() }</pre>
+                    </article>
+                    <article class={classes!("rounded", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                        <h3 class={classes!("m-0", "text-sm", "font-semibold")}>{ "Login Probe" }</h3>
+                        <pre class={classes!("mt-2", "overflow-x-auto", "rounded", "bg-[var(--surface)]", "p-3", "text-xs")}>{ (*login_json).clone() }</pre>
+                    </article>
+                </div>
             </section>
             }
 
@@ -2311,7 +4080,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                         let generation_prompt = generation_prompt.clone();
                         Callback::from(move |e: InputEvent| generation_prompt.set(e.target_unchecked_into::<HtmlInputElement>().value()))
                     }} />
-                    <div class={classes!("grid", "gap-3", "sm:grid-cols-2")}>
+                    <div class={classes!("grid", "gap-3", "sm:grid-cols-3")}>
                         <input class="rounded border border-[var(--border)] bg-transparent px-3 py-2" placeholder="Model" value={(*generation_model).clone()} oninput={{
                             let generation_model = generation_model.clone();
                             Callback::from(move |e: InputEvent| generation_model.set(e.target_unchecked_into::<HtmlInputElement>().value()))
@@ -2320,6 +4089,13 @@ pub fn admin_gpt2api_rs_page() -> Html {
                             let generation_n = generation_n.clone();
                             Callback::from(move |e: InputEvent| generation_n.set(e.target_unchecked_into::<HtmlInputElement>().value()))
                         }} />
+                        <div class={classes!("grid", "gap-1")}>
+                            <input class="rounded border border-[var(--border)] bg-transparent px-3 py-2" placeholder="Size, e.g. 1536x1024" value={(*generation_size).clone()} oninput={{
+                            let generation_size = generation_size.clone();
+                                Callback::from(move |e: InputEvent| generation_size.set(e.target_unchecked_into::<HtmlInputElement>().value()))
+                            }} />
+                            <span class={classes!("text-xs", "text-[var(--muted)]")}>{ image_size_credit_hint((*generation_size).as_str()) }</span>
+                        </div>
                     </div>
                     <button class={classes!("btn-fluent-primary")} onclick={on_generate_images}>{ "Call /v1/images/generations" }</button>
                     <div class={classes!("grid", "gap-3", "sm:grid-cols-2")}>
@@ -2334,7 +4110,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                         let edit_prompt = edit_prompt.clone();
                         Callback::from(move |e: InputEvent| edit_prompt.set(e.target_unchecked_into::<HtmlInputElement>().value()))
                     }} />
-                    <div class={classes!("grid", "gap-3", "sm:grid-cols-2")}>
+                    <div class={classes!("grid", "gap-3", "sm:grid-cols-3")}>
                         <input class="rounded border border-[var(--border)] bg-transparent px-3 py-2" placeholder="Model" value={(*edit_model).clone()} oninput={{
                             let edit_model = edit_model.clone();
                             Callback::from(move |e: InputEvent| edit_model.set(e.target_unchecked_into::<HtmlInputElement>().value()))
@@ -2343,6 +4119,13 @@ pub fn admin_gpt2api_rs_page() -> Html {
                             let edit_n = edit_n.clone();
                             Callback::from(move |e: InputEvent| edit_n.set(e.target_unchecked_into::<HtmlInputElement>().value()))
                         }} />
+                        <div class={classes!("grid", "gap-1")}>
+                            <input class="rounded border border-[var(--border)] bg-transparent px-3 py-2" placeholder="Size, e.g. 1024x1536" value={(*edit_size).clone()} oninput={{
+                            let edit_size = edit_size.clone();
+                                Callback::from(move |e: InputEvent| edit_size.set(e.target_unchecked_into::<HtmlInputElement>().value()))
+                            }} />
+                            <span class={classes!("text-xs", "text-[var(--muted)]")}>{ image_size_credit_hint((*edit_size).as_str()) }</span>
+                        </div>
                     </div>
                     <input type="file" accept="image/*" class="block w-full text-sm" onchange={on_edit_image_file_change} />
                     <p class={classes!("m-0", "text-xs", "text-[var(--muted)]")}>

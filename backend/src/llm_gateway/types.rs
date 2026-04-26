@@ -83,6 +83,17 @@ pub(crate) struct PublicLlmGatewayUsageEventView {
     pub request_method: String,
     pub request_url: String,
     pub latency_ms: i32,
+    pub routing_wait_ms: Option<i32>,
+    pub upstream_headers_ms: Option<i32>,
+    pub post_headers_body_ms: Option<i32>,
+    pub request_body_bytes: Option<u64>,
+    pub request_body_read_ms: Option<i32>,
+    pub request_json_parse_ms: Option<i32>,
+    pub pre_handler_ms: Option<i32>,
+    pub first_sse_write_ms: Option<i32>,
+    pub stream_finish_ms: Option<i32>,
+    pub other_latency_ms: Option<i32>,
+    pub quota_failover_count: u64,
     pub endpoint: String,
     pub model: Option<String>,
     pub status_code: i32,
@@ -241,6 +252,18 @@ pub struct AdminLlmGatewayUsageEventDetailView {
     pub request_method: String,
     pub request_url: String,
     pub latency_ms: i32,
+    pub routing_wait_ms: Option<i32>,
+    pub upstream_headers_ms: Option<i32>,
+    pub post_headers_body_ms: Option<i32>,
+    pub request_body_bytes: Option<u64>,
+    pub request_body_read_ms: Option<i32>,
+    pub request_json_parse_ms: Option<i32>,
+    pub pre_handler_ms: Option<i32>,
+    pub first_sse_write_ms: Option<i32>,
+    pub stream_finish_ms: Option<i32>,
+    pub other_latency_ms: Option<i32>,
+    pub quota_failover_count: u64,
+    pub routing_diagnostics_json: Option<String>,
     pub endpoint: String,
     pub model: Option<String>,
     pub status_code: i32,
@@ -530,6 +553,18 @@ pub struct AdminLlmGatewayUsageEventView {
     pub request_method: String,
     pub request_url: String,
     pub latency_ms: i32,
+    pub routing_wait_ms: Option<i32>,
+    pub upstream_headers_ms: Option<i32>,
+    pub post_headers_body_ms: Option<i32>,
+    pub request_body_bytes: Option<u64>,
+    pub request_body_read_ms: Option<i32>,
+    pub request_json_parse_ms: Option<i32>,
+    pub pre_handler_ms: Option<i32>,
+    pub first_sse_write_ms: Option<i32>,
+    pub stream_finish_ms: Option<i32>,
+    pub other_latency_ms: Option<i32>,
+    pub quota_failover_count: u64,
+    pub routing_diagnostics_json: Option<String>,
     pub endpoint: String,
     pub model: Option<String>,
     pub status_code: i32,
@@ -544,6 +579,25 @@ pub struct AdminLlmGatewayUsageEventView {
     pub ip_region: String,
     pub last_message_content: Option<String>,
     pub created_at: i64,
+}
+
+pub(crate) fn compute_other_latency_ms(
+    latency_ms: i32,
+    routing_wait_ms: Option<i32>,
+    upstream_headers_ms: Option<i32>,
+    post_headers_body_ms: Option<i32>,
+) -> Option<i32> {
+    if routing_wait_ms.is_none() && upstream_headers_ms.is_none() && post_headers_body_ms.is_none()
+    {
+        return None;
+    }
+    let measured_ms: i64 = [routing_wait_ms, upstream_headers_ms, post_headers_body_ms]
+        .into_iter()
+        .flatten()
+        .map(|value| i64::from(value.max(0)))
+        .sum();
+    let total_ms = i64::from(latency_ms.max(0));
+    Some((total_ms - measured_ms).clamp(0, i64::from(i32::MAX)) as i32)
 }
 
 /// Lightweight admin response for runtime gateway configuration.
@@ -995,6 +1049,23 @@ impl From<&LlmGatewayUsageEventSummaryRecord> for AdminLlmGatewayUsageEventView 
             request_method: value.request_method.clone(),
             request_url: value.request_url.clone(),
             latency_ms: value.latency_ms,
+            routing_wait_ms: value.routing_wait_ms,
+            upstream_headers_ms: value.upstream_headers_ms,
+            post_headers_body_ms: value.post_headers_body_ms,
+            request_body_bytes: value.request_body_bytes,
+            request_body_read_ms: value.request_body_read_ms,
+            request_json_parse_ms: value.request_json_parse_ms,
+            pre_handler_ms: value.pre_handler_ms,
+            first_sse_write_ms: value.first_sse_write_ms,
+            stream_finish_ms: value.stream_finish_ms,
+            other_latency_ms: compute_other_latency_ms(
+                value.latency_ms,
+                value.routing_wait_ms,
+                value.upstream_headers_ms,
+                value.post_headers_body_ms,
+            ),
+            quota_failover_count: value.quota_failover_count,
+            routing_diagnostics_json: value.routing_diagnostics_json.clone(),
             endpoint: value.endpoint.clone(),
             model: value.model.clone(),
             status_code: value.status_code,
@@ -1023,6 +1094,23 @@ impl From<&LlmGatewayUsageEventRecord> for AdminLlmGatewayUsageEventDetailView {
             request_method: value.request_method.clone(),
             request_url: value.request_url.clone(),
             latency_ms: value.latency_ms,
+            routing_wait_ms: value.routing_wait_ms,
+            upstream_headers_ms: value.upstream_headers_ms,
+            post_headers_body_ms: value.post_headers_body_ms,
+            request_body_bytes: value.request_body_bytes,
+            request_body_read_ms: value.request_body_read_ms,
+            request_json_parse_ms: value.request_json_parse_ms,
+            pre_handler_ms: value.pre_handler_ms,
+            first_sse_write_ms: value.first_sse_write_ms,
+            stream_finish_ms: value.stream_finish_ms,
+            other_latency_ms: compute_other_latency_ms(
+                value.latency_ms,
+                value.routing_wait_ms,
+                value.upstream_headers_ms,
+                value.post_headers_body_ms,
+            ),
+            quota_failover_count: value.quota_failover_count,
+            routing_diagnostics_json: value.routing_diagnostics_json.clone(),
             endpoint: value.endpoint.clone(),
             model: value.model.clone(),
             status_code: value.status_code,
@@ -1054,6 +1142,22 @@ impl From<&LlmGatewayUsageEventRecord> for PublicLlmGatewayUsageEventView {
             request_method: value.request_method.clone(),
             request_url: value.request_url.clone(),
             latency_ms: value.latency_ms,
+            routing_wait_ms: value.routing_wait_ms,
+            upstream_headers_ms: value.upstream_headers_ms,
+            post_headers_body_ms: value.post_headers_body_ms,
+            request_body_bytes: value.request_body_bytes,
+            request_body_read_ms: value.request_body_read_ms,
+            request_json_parse_ms: value.request_json_parse_ms,
+            pre_handler_ms: value.pre_handler_ms,
+            first_sse_write_ms: value.first_sse_write_ms,
+            stream_finish_ms: value.stream_finish_ms,
+            other_latency_ms: compute_other_latency_ms(
+                value.latency_ms,
+                value.routing_wait_ms,
+                value.upstream_headers_ms,
+                value.post_headers_body_ms,
+            ),
+            quota_failover_count: value.quota_failover_count,
             endpoint: value.endpoint.clone(),
             model: value.model.clone(),
             status_code: value.status_code,
@@ -1204,6 +1308,17 @@ mod tests {
             request_method: "POST".to_string(),
             request_url: "https://example.com".to_string(),
             latency_ms: 42,
+            routing_wait_ms: Some(7),
+            upstream_headers_ms: Some(30),
+            post_headers_body_ms: None,
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 1,
+            routing_diagnostics_json: None,
             endpoint: "/v1/messages".to_string(),
             model: Some("claude-sonnet-4-6".to_string()),
             status_code: 200,
@@ -1224,6 +1339,12 @@ mod tests {
 
         assert_eq!(view.id, "evt-1");
         assert_eq!(view.key_name, "alpha");
+        assert_eq!(view.routing_wait_ms, Some(7));
+        assert_eq!(view.upstream_headers_ms, Some(30));
+        assert_eq!(view.upstream_headers_ms, Some(30));
+        assert_eq!(view.post_headers_body_ms, None);
+        assert_eq!(view.other_latency_ms, Some(5));
+        assert_eq!(view.quota_failover_count, 1);
         assert_eq!(view.last_message_content.as_deref(), Some("hello"));
         assert_eq!(view.created_at, 123);
     }

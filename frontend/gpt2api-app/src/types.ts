@@ -1,4 +1,5 @@
 export type KeyRole = "user" | "admin";
+export type ImageSize = string;
 
 export interface ProductKey {
   id: string;
@@ -112,6 +113,7 @@ export interface RuntimeConfig {
   global_image_concurrency: number;
   signed_link_ttl_seconds: number;
   queue_eta_window_size: number;
+  image_task_timeout_seconds: number;
 }
 
 export interface AdminQueueResponse {
@@ -136,4 +138,46 @@ export interface TaskEventRecord {
   event_kind: string;
   payload_json: string;
   created_at: number;
+}
+
+export interface UsageEventRecord {
+  event_id: string;
+  request_id: string;
+  key_id: string;
+  key_name: string;
+  account_name: string;
+  endpoint: string;
+  request_method: string;
+  request_url: string;
+  requested_model: string;
+  resolved_upstream_model: string;
+  session_id?: string | null;
+  task_id?: string | null;
+  mode: string;
+  image_size?: string | null;
+  requested_n: number;
+  generated_n: number;
+  billable_images: number;
+  billable_credits: number;
+  size_credit_units: number;
+  context_text_count: number;
+  context_image_count: number;
+  context_credit_surcharge: number;
+  prompt_preview?: string | null;
+  last_message_content?: string | null;
+  status_code: number;
+  latency_ms: number;
+  error_code?: string | null;
+  error_message?: string | null;
+  created_at: number;
+}
+
+export interface UsageEventsResponse {
+  key: ProductKey;
+  total: number;
+  offset: number;
+  limit: number;
+  has_more: boolean;
+  billable_credit_total: number;
+  events: UsageEventRecord[];
 }

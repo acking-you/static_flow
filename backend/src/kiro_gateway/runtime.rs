@@ -27,7 +27,7 @@ use super::{
     local_import,
     provider::{build_client, KIRO_AUX_CLIENT_PROFILE},
     scheduler::KiroRequestScheduler,
-    status_cache::KiroStatusCacheSnapshot,
+    status_cache::{load_persisted_status_cache, KiroStatusCacheSnapshot},
     wire::{
         IdcRefreshRequest, IdcRefreshResponse, RefreshRequest, RefreshResponse, UsageLimitsResponse,
     },
@@ -84,6 +84,7 @@ pub struct KiroGatewayRuntimeState {
     pub(crate) llm_gateway_store: Arc<LlmGatewayStore>,
     pub(crate) token_manager: Arc<KiroTokenManager>,
     pub(crate) status_cache: Arc<RwLock<KiroStatusCacheSnapshot>>,
+    status_refresh_locks: Arc<RwLock<HashMap<String, Arc<Mutex<()>>>>>,
     pub(crate) request_scheduler: Arc<KiroRequestScheduler>,
     pub(crate) cache_simulator: Arc<KiroCacheSimulator>,
     pub(crate) runtime_config: Arc<RwLock<LlmGatewayRuntimeConfig>>,
@@ -115,10 +116,15 @@ impl KiroGatewayRuntimeState {
                 "backfilled missing per-account Kiro scheduler settings from legacy global config"
             );
         }
+        let status_cache = load_persisted_status_cache().await.unwrap_or_else(|err| {
+            tracing::warn!("failed to load persisted kiro status cache: {err:#}");
+            KiroStatusCacheSnapshot::default()
+        });
         Ok(Self {
             llm_gateway_store: store,
             token_manager,
-            status_cache: Arc::new(RwLock::new(KiroStatusCacheSnapshot::default())),
+            status_cache: Arc::new(RwLock::new(status_cache)),
+            status_refresh_locks: Arc::new(RwLock::new(HashMap::new())),
             request_scheduler: KiroRequestScheduler::new(),
             cache_simulator: Arc::new(KiroCacheSimulator::default()),
             runtime_config,
@@ -129,6 +135,17 @@ impl KiroGatewayRuntimeState {
     /// Return a clone of the latest cached per-account status snapshot.
     pub async fn cached_status_snapshot(&self) -> KiroStatusCacheSnapshot {
         self.status_cache.read().clone()
+    }
+
+    pub(crate) fn status_refresh_lock_for_account(&self, account_name: &str) -> Arc<Mutex<()>> {
+        if let Some(lock) = self.status_refresh_locks.read().get(account_name).cloned() {
+            return lock;
+        }
+        let mut locks = self.status_refresh_locks.write();
+        locks
+            .entry(account_name.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 }
 

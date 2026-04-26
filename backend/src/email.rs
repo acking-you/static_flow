@@ -16,8 +16,8 @@ use serde::Deserialize;
 use static_flow_shared::{
     article_request_store::ArticleRequestRecord,
     llm_gateway_store::{
-        LlmGatewayAccountContributionRequestRecord, LlmGatewayKeyRecord,
-        LlmGatewayTokenRequestRecord,
+        Gpt2ApiAccountContributionRequestRecord, LlmGatewayAccountContributionRequestRecord,
+        LlmGatewayKeyRecord, LlmGatewayTokenRequestRecord,
     },
     music_wish_store::MusicWishRecord,
 };
@@ -311,6 +311,52 @@ impl EmailNotifier {
             .await
     }
 
+    pub async fn send_admin_new_gpt2api_account_contribution_request_notification(
+        &self,
+        request: &Gpt2ApiAccountContributionRequestRecord,
+    ) -> Result<()> {
+        let subject = format!(
+            "[StaticFlow] New GPT Account Contribution {} ({})",
+            request.account_name, request.request_id
+        );
+        let supplied = match (
+            request
+                .access_token
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+            request
+                .session_json
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+        ) {
+            (Some(_), Some(_)) => "access token + session JSON",
+            (Some(_), None) => "access token",
+            (None, Some(_)) => "session JSON",
+            (None, None) => "none",
+        };
+        let body_markdown = format!(
+            "## New GPT account contribution submitted\n\n- Request ID: `{}`\n- Display name: \
+             `{}`\n- Credential type: {}\n- Requester email: {}\n- GitHub ID: {}\n- Status: \
+             `{}`\n- Region: {}\n- Client IP: {}\n- Created at (ms): `{}`\n- Frontend page: \
+             {}\n\n### Message\n\n{}\n",
+            request.request_id,
+            request.account_name,
+            supplied,
+            request.requester_email,
+            request.github_id.as_deref().unwrap_or("-"),
+            request.status,
+            request.ip_region,
+            request.client_ip,
+            request.created_at,
+            request.frontend_page_url.as_deref().unwrap_or("-"),
+            request.contributor_message,
+        );
+        self.send_markdown_email(&self.admin_recipient, &subject, &body_markdown)
+            .await
+    }
+
     pub async fn send_user_llm_token_issued_notification(
         &self,
         request: &LlmGatewayTokenRequestRecord,
@@ -376,6 +422,45 @@ impl EmailNotifier {
             llm_access_url
                 .map(|url| format!("## 查看页面\n- LLM Access: [{url}]({url})"))
                 .unwrap_or_default(),
+        );
+        self.send_markdown_email(&request.requester_email, &subject, &body_markdown)
+            .await
+    }
+
+    pub async fn send_user_gpt2api_account_contribution_issued_notification(
+        &self,
+        request: &Gpt2ApiAccountContributionRequestRecord,
+        key_id: &str,
+        key_name: &str,
+        api_key: &str,
+        login_url: &str,
+    ) -> Result<()> {
+        let subject = "[StaticFlow] 你的 GPT 生图账号贡献已审核通过".to_string();
+        let account_name = request
+            .imported_account_name
+            .as_deref()
+            .unwrap_or(request.account_name.as_str());
+        let body_markdown = format!(
+            "你好，\n\n感谢你贡献 GPT \
+             生图账号给站点共享池。你的申请已经审核通过，\
+             系统已经导入账号并为你创建了一把绑定到该账号的新 key；这个 key \
+             已经绑定你的邮箱，后续生图完成提醒会发送到这个邮箱。\n\n## 贡献信息\n- Request ID: \
+             `{}`\n- 状态: `{}`\n- 贡献账号: `{}`\n- GitHub ID: {}\n- 发放 Key ID: `{}`\n- Key \
+             名称: {}\n\n## 使用信息\n- 登录页面: [{}]({})\n- API Key: `{}`\n- 路由策略: \
+             `fixed`\n- 绑定账号: `{}`\n- 邮件提醒: `enabled`\n\n## \
+             你的留言\n\n{}\n\n再次感谢你的贡献。以后如果这个账号需要下线、改名或重新发放 \
+             key，请直接联系管理员。\n",
+            request.request_id,
+            request.status,
+            account_name,
+            request.github_id.as_deref().unwrap_or("-"),
+            key_id,
+            key_name,
+            login_url,
+            login_url,
+            api_key,
+            account_name,
+            request.contributor_message,
         );
         self.send_markdown_email(&request.requester_email, &subject, &body_markdown)
             .await
@@ -751,6 +836,16 @@ pub fn build_llm_access_url(frontend_page_url: &str) -> Result<String> {
     Ok(url.into())
 }
 
+pub fn build_gpt2api_login_url(frontend_page_url: &str) -> Result<String> {
+    validate_frontend_url(frontend_page_url)?;
+
+    let mut url = Url::parse(frontend_page_url).context("invalid frontend_page_url")?;
+    url.set_path("/gpt2api/login");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.into())
+}
+
 pub fn build_llm_gateway_base_url(frontend_page_url: &str) -> Result<String> {
     validate_frontend_url(frontend_page_url)?;
 
@@ -840,8 +935,8 @@ mod tests {
     use std::fs;
 
     use super::{
-        build_html_email_document, build_music_player_url, normalize_frontend_page_url_input,
-        normalize_requester_email_input, render_markdown_email,
+        build_gpt2api_login_url, build_html_email_document, build_music_player_url,
+        normalize_frontend_page_url_input, normalize_requester_email_input, render_markdown_email,
     };
 
     #[test]
@@ -871,6 +966,13 @@ mod tests {
     fn normalize_requester_email_rejects_invalid_email() {
         let err = normalize_requester_email_input(Some("not-email".to_string()));
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn build_gpt2api_login_url_points_to_product_login() {
+        let url = build_gpt2api_login_url("https://example.com/llm-access?x=1#top")
+            .expect("should build login URL");
+        assert_eq!(url, "https://example.com/gpt2api/login");
     }
 
     #[test]

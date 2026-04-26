@@ -18,6 +18,7 @@ use reqwest::{
     header::{HeaderMap, HeaderValue},
     StatusCode,
 };
+use serde::Serialize;
 use static_flow_shared::llm_gateway_store::{LlmGatewayKeyRecord, LLM_GATEWAY_PROVIDER_KIRO};
 
 use super::{
@@ -28,7 +29,8 @@ use super::{
     runtime::{CallContext, KiroGatewayRuntimeState},
     scheduler::KiroRequestLease,
     status_cache::{
-        account_is_request_eligible, account_request_block_reason, mark_account_quota_exhausted,
+        account_is_request_eligible, account_request_block_reason,
+        ensure_cached_status_for_account, mark_account_quota_exhausted, KiroCachedAccountStatus,
         KiroStatusCacheSnapshot, RequestEligibilityBlockReason,
     },
     wire::{ConversationState, KiroRequest},
@@ -69,7 +71,120 @@ pub struct ProviderCallResult {
     pub response: reqwest::Response,
     pub account_name: String,
     pub request_body: String,
+    pub routing_wait_ms: u64,
+    pub upstream_headers_ms: u64,
+    pub quota_failover_count: u64,
+    pub routing_diagnostics_json: Option<String>,
     _channel_lease: KiroRequestLease,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct KiroRoutingAttemptDiagnostic {
+    account_name: String,
+    routing_identity: String,
+    outcome: &'static str,
+    reason: Option<String>,
+    wait_ms: Option<u64>,
+    cache_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct KiroRoutingDiagnostics {
+    request_kind: &'static str,
+    route_total_ms: u64,
+    selection_ms: u64,
+    status_load_ms: u64,
+    status_load_count: u64,
+    local_queue_wait_ms: u64,
+    upstream_cooldown_wait_ms: u64,
+    account_attempt_count: u64,
+    skipped_account_count: u64,
+    local_throttle_count: u64,
+    quota_failover_count: u64,
+    rate_limit_failover_count: u64,
+    retry_next_count: u64,
+    selected_account: Option<String>,
+    selected_routing_identity: Option<String>,
+    attempts: Vec<KiroRoutingAttemptDiagnostic>,
+}
+
+impl KiroRoutingDiagnostics {
+    fn new(request_kind: &'static str) -> Self {
+        Self {
+            request_kind,
+            route_total_ms: 0,
+            selection_ms: 0,
+            status_load_ms: 0,
+            status_load_count: 0,
+            local_queue_wait_ms: 0,
+            upstream_cooldown_wait_ms: 0,
+            account_attempt_count: 0,
+            skipped_account_count: 0,
+            local_throttle_count: 0,
+            quota_failover_count: 0,
+            rate_limit_failover_count: 0,
+            retry_next_count: 0,
+            selected_account: None,
+            selected_routing_identity: None,
+            attempts: Vec::new(),
+        }
+    }
+
+    fn add_status_load(&mut self, elapsed_ms: u64) {
+        self.status_load_count = self.status_load_count.saturating_add(1);
+        self.status_load_ms = self.status_load_ms.saturating_add(elapsed_ms);
+    }
+
+    fn add_local_wait(&mut self, elapsed_ms: u64) {
+        self.local_queue_wait_ms = self.local_queue_wait_ms.saturating_add(elapsed_ms);
+    }
+
+    fn add_cooldown_wait(&mut self, elapsed_ms: u64) {
+        self.upstream_cooldown_wait_ms = self.upstream_cooldown_wait_ms.saturating_add(elapsed_ms);
+    }
+
+    fn add_attempt(
+        &mut self,
+        account_name: &str,
+        routing_identity: &str,
+        outcome: &'static str,
+        reason: Option<String>,
+        wait_ms: Option<u64>,
+        cache_status: Option<&str>,
+    ) {
+        if outcome == "skipped" {
+            self.skipped_account_count = self.skipped_account_count.saturating_add(1);
+        } else {
+            self.account_attempt_count = self.account_attempt_count.saturating_add(1);
+        }
+        if self.attempts.len() >= 64 {
+            return;
+        }
+        self.attempts.push(KiroRoutingAttemptDiagnostic {
+            account_name: account_name.to_string(),
+            routing_identity: routing_identity.to_string(),
+            outcome,
+            reason: reason.map(truncate_diagnostic_reason),
+            wait_ms,
+            cache_status: cache_status.map(str::to_string),
+        });
+    }
+
+    fn mark_success(&mut self, account_name: &str, routing_identity: &str) {
+        self.selected_account = Some(account_name.to_string());
+        self.selected_routing_identity = Some(routing_identity.to_string());
+    }
+
+    fn into_json(mut self, route_total_ms: u64, quota_failover_count: u64) -> Option<String> {
+        self.route_total_ms = route_total_ms;
+        self.quota_failover_count = quota_failover_count;
+        let attributed_wait = self
+            .status_load_ms
+            .saturating_add(self.local_queue_wait_ms)
+            .saturating_add(self.upstream_cooldown_wait_ms);
+        self.selection_ms = route_total_ms.saturating_sub(attributed_wait);
+        serde_json::to_string(&self).ok()
+    }
 }
 
 #[derive(Debug)]
@@ -99,6 +214,20 @@ fn validate_generate_request_size(request_body_len: usize) -> Result<()> {
          request_body_limit={KIRO_GENERATE_REQUEST_MAX_BODY_BYTES} \
          over_limit_bytes={over_limit_bytes}"
     ))
+}
+
+fn elapsed_ms(started_at: Instant) -> u64 {
+    started_at.elapsed().as_millis().min(u64::MAX as u128) as u64
+}
+
+fn truncate_diagnostic_reason(reason: String) -> String {
+    const MAX_CHARS: usize = 512;
+    if reason.chars().count() <= MAX_CHARS {
+        return reason;
+    }
+    let mut truncated: String = reason.chars().take(MAX_CHARS).collect();
+    truncated.push_str("...");
+    truncated
 }
 
 impl std::fmt::Display for ProviderCallError {
@@ -190,6 +319,32 @@ impl KiroProvider {
         self.call_mcp_inner(key_record, request_body).await
     }
 
+    async fn ensure_status_for_selection(
+        &self,
+        snapshot: &mut KiroStatusCacheSnapshot,
+        auth: &KiroAuthRecord,
+        request_kind: &str,
+        request_body: Option<&str>,
+    ) -> std::result::Result<KiroCachedAccountStatus, ProviderCallError> {
+        if let Some(entry) = snapshot.accounts.get(&auth.name).cloned() {
+            return Ok(entry);
+        }
+        let entry = ensure_cached_status_for_account(&self.runtime, &auth.name)
+            .await
+            .map_err(|err| {
+                ProviderCallError::new(
+                    anyhow!(
+                        "failed to load kiro account status for `{}` before {request_kind} \
+                         selection: {err:#}",
+                        auth.name
+                    ),
+                    request_body.map(str::to_string),
+                )
+            })?;
+        snapshot.accounts.insert(auth.name.clone(), entry.clone());
+        Ok(entry)
+    }
+
     // Outer loop: retries the full account rotation when all accounts are
     // cooling down. Breaks out on success, fatal error, or full exhaustion.
     async fn call_api_inner(
@@ -198,6 +353,8 @@ impl KiroProvider {
         conversation_state: &ConversationState,
     ) -> std::result::Result<ProviderCallResult, ProviderCallError> {
         let queued_at = Instant::now();
+        let mut quota_failover_count = 0u64;
+        let mut diagnostics = KiroRoutingDiagnostics::new("messages");
         loop {
             let auths = self.runtime.token_manager.list_auths().await?;
             if auths.is_empty() {
@@ -209,7 +366,7 @@ impl KiroProvider {
                 key_record,
             )
             .await?;
-            let snapshot = self.runtime.cached_status_snapshot().await;
+            let mut snapshot = self.runtime.cached_status_snapshot().await;
             let mut last_error: Option<ProviderCallError> = None;
             let mut saw_quota_exhausted = false;
             let mut saw_minimum_remaining_threshold = false;
@@ -226,6 +383,31 @@ impl KiroProvider {
             // Iterate accounts in fairness order so ready identities rotate
             // instead of repeatedly draining the current balance leader.
             for auth in ordered_auths {
+                let status_was_cached = snapshot.accounts.contains_key(&auth.name);
+                let status_load_started = Instant::now();
+                let cache_entry = match self
+                    .ensure_status_for_selection(&mut snapshot, &auth, "messages", None)
+                    .await
+                {
+                    Ok(entry) => {
+                        if !status_was_cached {
+                            diagnostics.add_status_load(elapsed_ms(status_load_started));
+                        }
+                        entry
+                    },
+                    Err(err) => {
+                        diagnostics.add_attempt(
+                            &auth.name,
+                            &auth.name,
+                            "skipped",
+                            Some(format!("status_load_error: {err}")),
+                            None,
+                            None,
+                        );
+                        last_error = Some(err);
+                        continue;
+                    },
+                };
                 let routing_identity = routing_identity_for_account(&auth, &snapshot);
                 // Skip accounts still in an upstream cooldown window.
                 if let Some(cooldown) = self
@@ -251,13 +433,20 @@ impl KiroProvider {
                         cooldown.remaining.as_millis() as u64,
                         cooldown.reason
                     ));
+                    diagnostics.add_attempt(
+                        &auth.name,
+                        &routing_identity,
+                        "skipped",
+                        Some(format!("upstream_cooldown: {}", cooldown.reason)),
+                        Some(cooldown.remaining.as_millis() as u64),
+                        Some(cache_entry.cache.status.as_str()),
+                    );
                     continue;
                 }
 
                 // Skip accounts that the status cache marks as ineligible.
-                let cache_entry = snapshot.accounts.get(&auth.name);
-                if !account_is_request_eligible(&auth, cache_entry) {
-                    let block_reason = account_request_block_reason(&auth, cache_entry);
+                if !account_is_request_eligible(&auth, Some(&cache_entry)) {
+                    let block_reason = account_request_block_reason(&auth, Some(&cache_entry));
                     let threshold = auth.effective_minimum_remaining_credits_before_block();
                     match block_reason {
                         Some(RequestEligibilityBlockReason::QuotaExhausted) => {
@@ -276,9 +465,7 @@ impl KiroProvider {
                     tracing::info!(
                     account_name = %auth.name,
                     routing_identity = %routing_identity,
-                    cache_status = cache_entry
-                        .map(|status| status.cache.status.as_str())
-                        .unwrap_or("unknown"),
+                    cache_status = cache_entry.cache.status.as_str(),
                     reason = match block_reason {
                         Some(RequestEligibilityBlockReason::QuotaExhausted) => "cached_quota_unavailable",
                         Some(RequestEligibilityBlockReason::MinimumRemainingCreditsThreshold) => "minimum_remaining_credits_threshold",
@@ -298,15 +485,30 @@ impl KiroProvider {
                             ) => "minimum_remaining_credits_threshold",
                             _ => "disabled",
                         },
+                        cache_entry.cache.status.as_str(),
                         cache_entry
-                            .map(|status| status.cache.status.as_str())
-                            .unwrap_or("unknown"),
-                        cache_entry
-                            .and_then(|status| status.balance.as_ref())
+                            .balance
+                            .as_ref()
                             .map(|balance| format!("{:.4}", balance.remaining))
                             .unwrap_or_else(|| "unknown".to_string()),
                         threshold
                     ));
+                    diagnostics.add_attempt(
+                        &auth.name,
+                        &routing_identity,
+                        "skipped",
+                        Some(match block_reason {
+                            Some(RequestEligibilityBlockReason::QuotaExhausted) => {
+                                "cached_quota_unavailable".to_string()
+                            },
+                            Some(
+                                RequestEligibilityBlockReason::MinimumRemainingCreditsThreshold,
+                            ) => "minimum_remaining_credits_threshold".to_string(),
+                            _ => "disabled".to_string(),
+                        }),
+                        None,
+                        Some(cache_entry.cache.status.as_str()),
+                    );
                     continue;
                 }
 
@@ -353,6 +555,16 @@ impl KiroProvider {
                                 .map(|value| value.as_millis() as u64)
                                 .unwrap_or(0)
                         ));
+                        diagnostics.local_throttle_count =
+                            diagnostics.local_throttle_count.saturating_add(1);
+                        diagnostics.add_attempt(
+                            &auth.name,
+                            &routing_identity,
+                            "skipped",
+                            Some(throttle.reason.to_string()),
+                            throttle.wait.map(|value| value.as_millis() as u64),
+                            Some(cache_entry.cache.status.as_str()),
+                        );
                         continue;
                     },
                 };
@@ -369,9 +581,32 @@ impl KiroProvider {
                     .call_api_for_account(&auth.name, conversation_state, channel_lease)
                     .await
                 {
-                    Ok(result) => return Ok(result),
+                    Ok(mut result) => {
+                        result.quota_failover_count = quota_failover_count;
+                        diagnostics.mark_success(&auth.name, &routing_identity);
+                        diagnostics.add_attempt(
+                            &auth.name,
+                            &routing_identity,
+                            "success",
+                            None,
+                            None,
+                            Some(cache_entry.cache.status.as_str()),
+                        );
+                        result.routing_diagnostics_json =
+                            diagnostics.into_json(result.routing_wait_ms, quota_failover_count);
+                        return Ok(result);
+                    },
                     Err(ProviderAttemptError::QuotaExhausted(err)) => {
+                        quota_failover_count = quota_failover_count.saturating_add(1);
                         saw_quota_exhausted = true;
+                        diagnostics.add_attempt(
+                            &auth.name,
+                            &routing_identity,
+                            "quota_exhausted",
+                            Some(err.to_string()),
+                            None,
+                            Some(cache_entry.cache.status.as_str()),
+                        );
                         let shared_accounts =
                             accounts_for_routing_identity(&auths, &snapshot, &routing_identity);
                         tracing::warn!(
@@ -395,6 +630,16 @@ impl KiroProvider {
                         error,
                         cooldown,
                     }) => {
+                        diagnostics.rate_limit_failover_count =
+                            diagnostics.rate_limit_failover_count.saturating_add(1);
+                        diagnostics.add_attempt(
+                            &auth.name,
+                            &routing_identity,
+                            "rate_limited",
+                            Some(error.to_string()),
+                            Some(cooldown.as_millis() as u64),
+                            Some(cache_entry.cache.status.as_str()),
+                        );
                         shortest_cooldown = Some(match shortest_cooldown {
                             Some(current) => current.min(cooldown),
                             None => cooldown,
@@ -414,6 +659,16 @@ impl KiroProvider {
                         last_error = Some(error);
                     },
                     Err(ProviderAttemptError::RetryNext(err)) => {
+                        diagnostics.retry_next_count =
+                            diagnostics.retry_next_count.saturating_add(1);
+                        diagnostics.add_attempt(
+                            &auth.name,
+                            &routing_identity,
+                            "retry_next",
+                            Some(err.to_string()),
+                            None,
+                            Some(cache_entry.cache.status.as_str()),
+                        );
                         tracing::warn!(
                             account_name = %auth.name,
                             routing_identity = %routing_identity,
@@ -447,10 +702,12 @@ impl KiroProvider {
                     "all currently eligible kiro accounts are locally throttled or cooling down; \
                      waiting before retrying request"
                 );
+                let wait_started = Instant::now();
                 self.runtime
                     .request_scheduler
                     .wait_for_available(combined_wait)
                     .await;
+                diagnostics.add_local_wait(elapsed_ms(wait_started));
                 continue;
             }
             if let Some(wait) = upstream_wait {
@@ -461,7 +718,9 @@ impl KiroProvider {
                     "all currently eligible kiro accounts are cooling down; waiting before \
                      retrying request"
                 );
+                let wait_started = Instant::now();
                 tokio::time::sleep(wait).await;
+                diagnostics.add_cooldown_wait(elapsed_ms(wait_started));
                 continue;
             }
 
@@ -501,6 +760,8 @@ impl KiroProvider {
         request_body: &str,
     ) -> std::result::Result<ProviderCallResult, ProviderCallError> {
         let queued_at = Instant::now();
+        let mut quota_failover_count = 0u64;
+        let mut diagnostics = KiroRoutingDiagnostics::new("mcp");
         loop {
             let auths = self.runtime.token_manager.list_auths().await?;
             if auths.is_empty() {
@@ -512,7 +773,7 @@ impl KiroProvider {
                 key_record,
             )
             .await?;
-            let snapshot = self.runtime.cached_status_snapshot().await;
+            let mut snapshot = self.runtime.cached_status_snapshot().await;
             let mut last_error: Option<ProviderCallError> = None;
             let mut saw_quota_exhausted = false;
             let mut saw_minimum_remaining_threshold = false;
@@ -527,6 +788,31 @@ impl KiroProvider {
                 self.runtime.request_scheduler.as_ref(),
             );
             for auth in ordered_auths {
+                let status_was_cached = snapshot.accounts.contains_key(&auth.name);
+                let status_load_started = Instant::now();
+                let cache_entry = match self
+                    .ensure_status_for_selection(&mut snapshot, &auth, "mcp", Some(request_body))
+                    .await
+                {
+                    Ok(entry) => {
+                        if !status_was_cached {
+                            diagnostics.add_status_load(elapsed_ms(status_load_started));
+                        }
+                        entry
+                    },
+                    Err(err) => {
+                        diagnostics.add_attempt(
+                            &auth.name,
+                            &auth.name,
+                            "skipped",
+                            Some(format!("status_load_error: {err}")),
+                            None,
+                            None,
+                        );
+                        last_error = Some(err);
+                        continue;
+                    },
+                };
                 let routing_identity = routing_identity_for_account(&auth, &snapshot);
                 if let Some(cooldown) = self
                     .runtime
@@ -551,12 +837,19 @@ impl KiroProvider {
                         cooldown.remaining.as_millis() as u64,
                         cooldown.reason
                     ));
+                    diagnostics.add_attempt(
+                        &auth.name,
+                        &routing_identity,
+                        "skipped",
+                        Some(format!("upstream_cooldown: {}", cooldown.reason)),
+                        Some(cooldown.remaining.as_millis() as u64),
+                        Some(cache_entry.cache.status.as_str()),
+                    );
                     continue;
                 }
 
-                let cache_entry = snapshot.accounts.get(&auth.name);
-                if !account_is_request_eligible(&auth, cache_entry) {
-                    let block_reason = account_request_block_reason(&auth, cache_entry);
+                if !account_is_request_eligible(&auth, Some(&cache_entry)) {
+                    let block_reason = account_request_block_reason(&auth, Some(&cache_entry));
                     let threshold = auth.effective_minimum_remaining_credits_before_block();
                     match block_reason {
                         Some(RequestEligibilityBlockReason::QuotaExhausted) => {
@@ -575,9 +868,7 @@ impl KiroProvider {
                     tracing::info!(
                     account_name = %auth.name,
                     routing_identity = %routing_identity,
-                    cache_status = cache_entry
-                        .map(|status| status.cache.status.as_str())
-                        .unwrap_or("unknown"),
+                    cache_status = cache_entry.cache.status.as_str(),
                     reason = match block_reason {
                         Some(RequestEligibilityBlockReason::QuotaExhausted) => "cached_quota_unavailable",
                         Some(RequestEligibilityBlockReason::MinimumRemainingCreditsThreshold) => "minimum_remaining_credits_threshold",
@@ -597,15 +888,30 @@ impl KiroProvider {
                             ) => "minimum_remaining_credits_threshold",
                             _ => "disabled",
                         },
+                        cache_entry.cache.status.as_str(),
                         cache_entry
-                            .map(|status| status.cache.status.as_str())
-                            .unwrap_or("unknown"),
-                        cache_entry
-                            .and_then(|status| status.balance.as_ref())
+                            .balance
+                            .as_ref()
                             .map(|balance| format!("{:.4}", balance.remaining))
                             .unwrap_or_else(|| "unknown".to_string()),
                         threshold
                     ));
+                    diagnostics.add_attempt(
+                        &auth.name,
+                        &routing_identity,
+                        "skipped",
+                        Some(match block_reason {
+                            Some(RequestEligibilityBlockReason::QuotaExhausted) => {
+                                "cached_quota_unavailable".to_string()
+                            },
+                            Some(
+                                RequestEligibilityBlockReason::MinimumRemainingCreditsThreshold,
+                            ) => "minimum_remaining_credits_threshold".to_string(),
+                            _ => "disabled".to_string(),
+                        }),
+                        None,
+                        Some(cache_entry.cache.status.as_str()),
+                    );
                     continue;
                 }
 
@@ -652,6 +958,16 @@ impl KiroProvider {
                                 .map(|value| value.as_millis() as u64)
                                 .unwrap_or(0)
                         ));
+                        diagnostics.local_throttle_count =
+                            diagnostics.local_throttle_count.saturating_add(1);
+                        diagnostics.add_attempt(
+                            &auth.name,
+                            &routing_identity,
+                            "skipped",
+                            Some(throttle.reason.to_string()),
+                            throttle.wait.map(|value| value.as_millis() as u64),
+                            Some(cache_entry.cache.status.as_str()),
+                        );
                         continue;
                     },
                 };
@@ -668,9 +984,32 @@ impl KiroProvider {
                     .call_mcp_for_account(&auth.name, request_body, channel_lease)
                     .await
                 {
-                    Ok(result) => return Ok(result),
+                    Ok(mut result) => {
+                        result.quota_failover_count = quota_failover_count;
+                        diagnostics.mark_success(&auth.name, &routing_identity);
+                        diagnostics.add_attempt(
+                            &auth.name,
+                            &routing_identity,
+                            "success",
+                            None,
+                            None,
+                            Some(cache_entry.cache.status.as_str()),
+                        );
+                        result.routing_diagnostics_json =
+                            diagnostics.into_json(result.routing_wait_ms, quota_failover_count);
+                        return Ok(result);
+                    },
                     Err(ProviderAttemptError::QuotaExhausted(err)) => {
+                        quota_failover_count = quota_failover_count.saturating_add(1);
                         saw_quota_exhausted = true;
+                        diagnostics.add_attempt(
+                            &auth.name,
+                            &routing_identity,
+                            "quota_exhausted",
+                            Some(err.to_string()),
+                            None,
+                            Some(cache_entry.cache.status.as_str()),
+                        );
                         let shared_accounts =
                             accounts_for_routing_identity(&auths, &snapshot, &routing_identity);
                         tracing::warn!(
@@ -694,6 +1033,16 @@ impl KiroProvider {
                         error,
                         cooldown,
                     }) => {
+                        diagnostics.rate_limit_failover_count =
+                            diagnostics.rate_limit_failover_count.saturating_add(1);
+                        diagnostics.add_attempt(
+                            &auth.name,
+                            &routing_identity,
+                            "rate_limited",
+                            Some(error.to_string()),
+                            Some(cooldown.as_millis() as u64),
+                            Some(cache_entry.cache.status.as_str()),
+                        );
                         shortest_cooldown = Some(match shortest_cooldown {
                             Some(current) => current.min(cooldown),
                             None => cooldown,
@@ -713,6 +1062,16 @@ impl KiroProvider {
                         last_error = Some(error);
                     },
                     Err(ProviderAttemptError::RetryNext(err)) => {
+                        diagnostics.retry_next_count =
+                            diagnostics.retry_next_count.saturating_add(1);
+                        diagnostics.add_attempt(
+                            &auth.name,
+                            &routing_identity,
+                            "retry_next",
+                            Some(err.to_string()),
+                            None,
+                            Some(cache_entry.cache.status.as_str()),
+                        );
                         tracing::warn!(
                             account_name = %auth.name,
                             routing_identity = %routing_identity,
@@ -746,10 +1105,12 @@ impl KiroProvider {
                     "all currently eligible kiro accounts are locally throttled or cooling down; \
                      waiting before retrying mcp request"
                 );
+                let wait_started = Instant::now();
                 self.runtime
                     .request_scheduler
                     .wait_for_available(combined_wait)
                     .await;
+                diagnostics.add_local_wait(elapsed_ms(wait_started));
                 continue;
             }
             if let Some(wait) = upstream_wait {
@@ -760,7 +1121,9 @@ impl KiroProvider {
                     "all currently eligible kiro accounts are cooling down; waiting before \
                      retrying mcp request"
                 );
+                let wait_started = Instant::now();
                 tokio::time::sleep(wait).await;
+                diagnostics.add_cooldown_wait(elapsed_ms(wait_started));
                 continue;
             }
 
@@ -885,6 +1248,7 @@ impl KiroProvider {
                 queue_wait_ms,
                 request_body_len: request_body.len(),
             };
+            let upstream_started = Instant::now();
             let response = client
                 .post(url)
                 .headers(
@@ -893,6 +1257,7 @@ impl KiroProvider {
                 .body(request_body.clone())
                 .send()
                 .await;
+            let upstream_headers_ms = elapsed_ms(upstream_started);
             let response = match response {
                 Ok(response) => response,
                 Err(err) => {
@@ -927,12 +1292,17 @@ impl KiroProvider {
                     status = %response.status(),
                     endpoint = log_ctx.endpoint,
                     queue_wait_ms,
+                    upstream_headers_ms,
                     "kiro upstream request succeeded"
                 );
                 return Ok(ProviderCallResult {
                     response,
                     account_name: ctx.auth.name,
                     request_body,
+                    routing_wait_ms: queue_wait_ms,
+                    upstream_headers_ms,
+                    quota_failover_count: 0,
+                    routing_diagnostics_json: None,
                     _channel_lease: channel_lease,
                 });
             }
@@ -1081,6 +1451,7 @@ impl KiroProvider {
                 queue_wait_ms,
                 request_body_len: request_body.len(),
             };
+            let upstream_started = Instant::now();
             let response = client
                 .post(url)
                 .headers(
@@ -1090,6 +1461,7 @@ impl KiroProvider {
                 .body(request_body.to_string())
                 .send()
                 .await;
+            let upstream_headers_ms = elapsed_ms(upstream_started);
             let response = match response {
                 Ok(response) => response,
                 Err(err) => {
@@ -1124,12 +1496,17 @@ impl KiroProvider {
                     status = %response.status(),
                     endpoint = log_ctx.endpoint,
                     queue_wait_ms,
+                    upstream_headers_ms,
                     "kiro upstream mcp request succeeded"
                 );
                 return Ok(ProviderCallResult {
                     response,
                     account_name: ctx.auth.name,
                     request_body: request_body.to_string(),
+                    routing_wait_ms: queue_wait_ms,
+                    upstream_headers_ms,
+                    quota_failover_count: 0,
+                    routing_diagnostics_json: None,
                     _channel_lease: channel_lease,
                 });
             }
@@ -1678,6 +2055,47 @@ mod tests {
             .await
             .expect("connect llm gateway store");
         (dir, store)
+    }
+
+    #[test]
+    fn routing_diagnostics_json_breaks_down_waits_and_account_outcomes() {
+        let mut diagnostics = KiroRoutingDiagnostics::new("messages");
+        diagnostics.add_status_load(40);
+        diagnostics.add_local_wait(100);
+        diagnostics.add_cooldown_wait(200);
+        diagnostics.local_throttle_count = 1;
+        diagnostics.rate_limit_failover_count = 1;
+        diagnostics.retry_next_count = 1;
+        diagnostics.add_attempt(
+            "acct-a",
+            "identity-a",
+            "skipped",
+            Some("local_concurrency_limit".to_string()),
+            Some(100),
+            Some("ready"),
+        );
+        diagnostics.mark_success("acct-b", "identity-b");
+        diagnostics.add_attempt("acct-b", "identity-b", "success", None, None, Some("ready"));
+
+        let json = diagnostics
+            .into_json(500, 2)
+            .expect("routing diagnostics should serialize");
+        let value: serde_json::Value =
+            serde_json::from_str(&json).expect("routing diagnostics should be JSON");
+
+        assert_eq!(value["request_kind"], "messages");
+        assert_eq!(value["route_total_ms"], 500);
+        assert_eq!(value["status_load_ms"], 40);
+        assert_eq!(value["local_queue_wait_ms"], 100);
+        assert_eq!(value["upstream_cooldown_wait_ms"], 200);
+        assert_eq!(value["selection_ms"], 160);
+        assert_eq!(value["quota_failover_count"], 2);
+        assert_eq!(value["rate_limit_failover_count"], 1);
+        assert_eq!(value["retry_next_count"], 1);
+        assert_eq!(value["skipped_account_count"], 1);
+        assert_eq!(value["account_attempt_count"], 1);
+        assert_eq!(value["selected_account"], "acct-b");
+        assert_eq!(value["attempts"].as_array().unwrap().len(), 2);
     }
 
     fn call_context(profile_arn: Option<&str>) -> CallContext {

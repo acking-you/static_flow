@@ -12,6 +12,7 @@ use static_flow_shared::llm_gateway_store::{
 };
 
 use super::{auth_file::KiroAuthRecord, wire::UsageLimitsResponse};
+use crate::llm_gateway::compute_other_latency_ms;
 
 /// Public access bundle returned by the Kiro gateway status endpoint.
 ///
@@ -35,7 +36,7 @@ pub struct KiroAccessResponse {
 ///
 /// Tracks when the background refresh last ran, whether it succeeded,
 /// and any error that occurred.
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct KiroCacheView {
     /// Human-readable cache state (e.g. `"fresh"`, `"stale"`, `"error"`).
     pub status: String,
@@ -251,6 +252,18 @@ pub struct AdminKiroUsageEventView {
     pub request_method: String,
     pub request_url: String,
     pub latency_ms: i32,
+    pub routing_wait_ms: Option<i32>,
+    pub upstream_headers_ms: Option<i32>,
+    pub post_headers_body_ms: Option<i32>,
+    pub request_body_bytes: Option<u64>,
+    pub request_body_read_ms: Option<i32>,
+    pub request_json_parse_ms: Option<i32>,
+    pub pre_handler_ms: Option<i32>,
+    pub first_sse_write_ms: Option<i32>,
+    pub stream_finish_ms: Option<i32>,
+    pub other_latency_ms: Option<i32>,
+    pub quota_failover_count: u64,
+    pub routing_diagnostics_json: Option<String>,
     pub endpoint: String,
     pub model: Option<String>,
     pub status_code: i32,
@@ -277,6 +290,18 @@ pub struct AdminKiroUsageEventDetailView {
     pub request_method: String,
     pub request_url: String,
     pub latency_ms: i32,
+    pub routing_wait_ms: Option<i32>,
+    pub upstream_headers_ms: Option<i32>,
+    pub post_headers_body_ms: Option<i32>,
+    pub request_body_bytes: Option<u64>,
+    pub request_body_read_ms: Option<i32>,
+    pub request_json_parse_ms: Option<i32>,
+    pub pre_handler_ms: Option<i32>,
+    pub first_sse_write_ms: Option<i32>,
+    pub stream_finish_ms: Option<i32>,
+    pub other_latency_ms: Option<i32>,
+    pub quota_failover_count: u64,
+    pub routing_diagnostics_json: Option<String>,
     pub endpoint: String,
     pub model: Option<String>,
     pub status_code: i32,
@@ -307,6 +332,23 @@ impl From<&LlmGatewayUsageEventSummaryRecord> for AdminKiroUsageEventView {
             request_method: value.request_method.clone(),
             request_url: value.request_url.clone(),
             latency_ms: value.latency_ms,
+            routing_wait_ms: value.routing_wait_ms,
+            upstream_headers_ms: value.upstream_headers_ms,
+            post_headers_body_ms: value.post_headers_body_ms,
+            request_body_bytes: value.request_body_bytes,
+            request_body_read_ms: value.request_body_read_ms,
+            request_json_parse_ms: value.request_json_parse_ms,
+            pre_handler_ms: value.pre_handler_ms,
+            first_sse_write_ms: value.first_sse_write_ms,
+            stream_finish_ms: value.stream_finish_ms,
+            other_latency_ms: compute_other_latency_ms(
+                value.latency_ms,
+                value.routing_wait_ms,
+                value.upstream_headers_ms,
+                value.post_headers_body_ms,
+            ),
+            quota_failover_count: value.quota_failover_count,
+            routing_diagnostics_json: value.routing_diagnostics_json.clone(),
             endpoint: value.endpoint.clone(),
             model: value.model.clone(),
             status_code: value.status_code,
@@ -335,6 +377,23 @@ impl From<&LlmGatewayUsageEventRecord> for AdminKiroUsageEventDetailView {
             request_method: value.request_method.clone(),
             request_url: value.request_url.clone(),
             latency_ms: value.latency_ms,
+            routing_wait_ms: value.routing_wait_ms,
+            upstream_headers_ms: value.upstream_headers_ms,
+            post_headers_body_ms: value.post_headers_body_ms,
+            request_body_bytes: value.request_body_bytes,
+            request_body_read_ms: value.request_body_read_ms,
+            request_json_parse_ms: value.request_json_parse_ms,
+            pre_handler_ms: value.pre_handler_ms,
+            first_sse_write_ms: value.first_sse_write_ms,
+            stream_finish_ms: value.stream_finish_ms,
+            other_latency_ms: compute_other_latency_ms(
+                value.latency_ms,
+                value.routing_wait_ms,
+                value.upstream_headers_ms,
+                value.post_headers_body_ms,
+            ),
+            quota_failover_count: value.quota_failover_count,
+            routing_diagnostics_json: value.routing_diagnostics_json.clone(),
             endpoint: value.endpoint.clone(),
             model: value.model.clone(),
             status_code: value.status_code,
@@ -429,7 +488,7 @@ pub struct PatchKiroAccountGroupRequest {
 }
 
 /// Normalized account-balance snapshot derived from Kiro `getUsageLimits`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KiroBalanceView {
     pub current_usage: f64,
     pub usage_limit: f64,
@@ -746,6 +805,19 @@ mod tests {
             request_method: "POST".to_string(),
             request_url: "https://example.com".to_string(),
             latency_ms: 42,
+            routing_wait_ms: Some(10),
+            upstream_headers_ms: Some(20),
+            post_headers_body_ms: Some(30),
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 1,
+            routing_diagnostics_json: Some(
+                r#"{"account_attempt_count":1,"selected_account":"acct-a"}"#.to_string(),
+            ),
             endpoint: "/v1/messages".to_string(),
             model: Some("claude-sonnet-4-6".to_string()),
             status_code: 200,
@@ -768,6 +840,17 @@ mod tests {
         assert_eq!(view.key_name, "alpha");
         assert_eq!(view.model.as_deref(), Some("claude-sonnet-4-6"));
         assert_eq!(view.credit_usage, Some(1.25));
+        assert_eq!(view.routing_wait_ms, Some(10));
+        assert_eq!(view.upstream_headers_ms, Some(20));
+        assert_eq!(view.upstream_headers_ms, Some(20));
+        assert_eq!(view.post_headers_body_ms, Some(30));
+        assert_eq!(view.post_headers_body_ms, Some(30));
+        assert_eq!(view.other_latency_ms, Some(0));
+        assert_eq!(view.quota_failover_count, 1);
+        assert_eq!(
+            view.routing_diagnostics_json.as_deref(),
+            Some(r#"{"account_attempt_count":1,"selected_account":"acct-a"}"#)
+        );
         assert_eq!(view.last_message_content.as_deref(), Some("hello"));
         assert_eq!(view.created_at, 123);
     }

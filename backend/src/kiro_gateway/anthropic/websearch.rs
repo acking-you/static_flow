@@ -17,6 +17,7 @@ use futures_util::{stream, Stream};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use static_flow_shared::llm_gateway_store::{KiroCachePolicy, LlmGatewayKeyRecord};
+use tokio::time::Instant;
 use uuid::Uuid;
 
 use super::{
@@ -169,8 +170,20 @@ pub async fn handle_websearch_request(
             let McpCallSuccess {
                 response,
                 account_name,
+                routing_wait_ms,
+                upstream_headers_ms,
+                post_headers_body_ms,
+                quota_failover_count,
+                routing_diagnostics_json,
             } = success;
             event_context.account_name = Some(account_name);
+            event_context.routing_wait_ms = Some(super::clamp_u64_ms_to_i32(routing_wait_ms));
+            event_context.upstream_headers_ms =
+                Some(super::clamp_u64_ms_to_i32(upstream_headers_ms));
+            event_context.post_headers_body_ms =
+                Some(super::clamp_u64_ms_to_i32(post_headers_body_ms));
+            event_context.quota_failover_count = quota_failover_count;
+            event_context.routing_diagnostics_json = routing_diagnostics_json;
             parse_search_results(&response)
         },
         Err(err) => {
@@ -326,12 +339,21 @@ async fn call_mcp_api(
     })?;
     let response = provider.call_mcp(key_record, &request_body).await?;
     let account_name = response.account_name;
+    let routing_wait_ms = response.routing_wait_ms;
+    let upstream_headers_ms = response.upstream_headers_ms;
+    let quota_failover_count = response.quota_failover_count;
+    let routing_diagnostics_json = response.routing_diagnostics_json;
+    let upstream_body_started = Instant::now();
     let body = response.response.text().await.map_err(|err| {
         ProviderCallError::new(
             anyhow::anyhow!("read mcp response body: {err}"),
             Some(request_body.clone()),
         )
     })?;
+    let post_headers_body_ms = upstream_body_started
+        .elapsed()
+        .as_millis()
+        .min(u64::MAX as u128) as u64;
     let mcp_response: McpResponse = serde_json::from_str(&body).map_err(|err| {
         ProviderCallError::new(
             anyhow::anyhow!("parse mcp response body: {err}; body={body}"),
@@ -351,12 +373,22 @@ async fn call_mcp_api(
     Ok(McpCallSuccess {
         response: mcp_response,
         account_name,
+        routing_wait_ms,
+        upstream_headers_ms,
+        post_headers_body_ms,
+        quota_failover_count,
+        routing_diagnostics_json,
     })
 }
 
 struct McpCallSuccess {
     response: McpResponse,
     account_name: String,
+    routing_wait_ms: u64,
+    upstream_headers_ms: u64,
+    post_headers_body_ms: u64,
+    quota_failover_count: u64,
+    routing_diagnostics_json: Option<String>,
 }
 
 fn parse_search_results(mcp_response: &McpResponse) -> Option<WebSearchResults> {

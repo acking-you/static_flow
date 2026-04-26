@@ -16,7 +16,6 @@ mod types;
 
 pub(crate) mod accounts;
 pub(crate) mod token_refresh;
-
 use std::{
     collections::{BTreeMap, HashSet},
     env,
@@ -50,6 +49,7 @@ use static_flow_shared::llm_gateway_store::{
     LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED, LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING,
     LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED,
 };
+pub(crate) use types::compute_other_latency_ms;
 
 pub use self::runtime::LlmGatewayRuntimeState;
 pub(crate) use self::{
@@ -2147,6 +2147,17 @@ fn build_gateway_usage_event_record(
         request_method: args.context.request_method.clone(),
         request_url: args.context.request_url.clone(),
         latency_ms: args.latency_ms,
+        routing_wait_ms: None,
+        upstream_headers_ms: None,
+        post_headers_body_ms: None,
+        request_body_bytes: None,
+        request_body_read_ms: None,
+        request_json_parse_ms: None,
+        pre_handler_ms: None,
+        first_sse_write_ms: None,
+        stream_finish_ms: None,
+        quota_failover_count: 0,
+        routing_diagnostics_json: None,
         endpoint: args.prepared.upstream_path.clone(),
         model: args.prepared.model.clone(),
         status_code: args.status_code,
@@ -6290,6 +6301,17 @@ mod tests {
             request_method: "POST".to_string(),
             request_url: "/api/llm-gateway/v1/responses".to_string(),
             latency_ms: 120,
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
             endpoint: "/responses".to_string(),
             model: Some("gpt-5.3-codex".to_string()),
             status_code: 200,

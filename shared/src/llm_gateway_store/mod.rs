@@ -28,22 +28,26 @@ use lancedb::{
 
 use self::{
     codec::{
-        batches_to_account_contribution_requests, batches_to_account_groups, batches_to_keys,
+        batches_to_account_contribution_requests, batches_to_account_groups,
+        batches_to_gpt2api_account_contribution_requests, batches_to_keys,
         batches_to_proxy_bindings, batches_to_proxy_configs, batches_to_runtime_config,
         batches_to_sponsor_requests, batches_to_token_requests, batches_to_usage_event_summaries,
         batches_to_usage_events, build_account_contribution_requests_batch,
-        build_account_groups_batch, build_keys_batch, build_proxy_bindings_batch,
-        build_proxy_configs_batch, build_runtime_config_batch, build_sponsor_requests_batch,
-        build_token_requests_batch, build_usage_events_batch,
+        build_account_groups_batch, build_gpt2api_account_contribution_requests_batch,
+        build_keys_batch, build_proxy_bindings_batch, build_proxy_configs_batch,
+        build_runtime_config_batch, build_sponsor_requests_batch, build_token_requests_batch,
+        build_usage_events_batch,
     },
     schema::{
         account_contribution_request_columns, account_group_columns,
-        ensure_account_contribution_requests_table, ensure_account_groups_table, ensure_keys_table,
+        ensure_account_contribution_requests_table, ensure_account_groups_table,
+        ensure_gpt2api_account_contribution_requests_table, ensure_keys_table,
         ensure_proxy_bindings_table, ensure_proxy_configs_table, ensure_runtime_config_table,
         ensure_sponsor_requests_table, ensure_token_requests_table, ensure_usage_events_table,
-        escape_literal, key_columns, proxy_binding_columns, proxy_config_columns,
-        runtime_config_columns, sponsor_request_columns, token_request_columns,
-        usage_event_columns, usage_event_rebuild_columns, usage_event_summary_columns,
+        escape_literal, gpt2api_account_contribution_request_columns, key_columns,
+        proxy_binding_columns, proxy_config_columns, runtime_config_columns,
+        sponsor_request_columns, token_request_columns, usage_event_columns,
+        usage_event_rebuild_columns, usage_event_summary_columns,
     },
 };
 pub use self::{
@@ -59,13 +63,15 @@ pub use self::{
         compute_billable_tokens, compute_kiro_billable_tokens,
         default_kiro_billable_model_multipliers, default_kiro_billable_model_multipliers_json,
         default_kiro_cache_kmodels, default_kiro_cache_kmodels_json,
-        is_valid_kiro_prefix_cache_mode, now_ms, LlmGatewayAccountContributionRequestRecord,
-        LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayKeyUsageRollupRecord,
-        LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord,
-        LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
-        LlmGatewayUsageEventSummaryRecord, NewLlmGatewayAccountContributionRequestInput,
-        NewLlmGatewaySponsorRequestInput, NewLlmGatewayTokenRequestInput,
-        DEFAULT_CODEX_CLIENT_VERSION, DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+        is_valid_kiro_prefix_cache_mode, now_ms, Gpt2ApiAccountContributionRequestRecord,
+        LlmGatewayAccountContributionRequestRecord, LlmGatewayAccountGroupRecord,
+        LlmGatewayKeyRecord, LlmGatewayKeyUsageRollupRecord, LlmGatewayProxyBindingRecord,
+        LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord,
+        LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
+        LlmGatewayUsageEventSummaryRecord, NewGpt2ApiAccountContributionRequestInput,
+        NewLlmGatewayAccountContributionRequestInput, NewLlmGatewaySponsorRequestInput,
+        NewLlmGatewayTokenRequestInput, DEFAULT_CODEX_CLIENT_VERSION,
+        DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
         DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
         DEFAULT_KIRO_BILLABLE_MODEL_MULTIPLIER_HAIKU, DEFAULT_KIRO_BILLABLE_MODEL_MULTIPLIER_OPUS,
@@ -84,13 +90,14 @@ pub use self::{
         DEFAULT_LLM_GATEWAY_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
         DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_ENABLED,
         DEFAULT_LLM_GATEWAY_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS,
-        KIRO_PREFIX_CACHE_MODE_FORMULA, KIRO_PREFIX_CACHE_MODE_PREFIX_TREE,
-        LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE, LLM_GATEWAY_ACCOUNT_GROUPS_TABLE,
-        LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_KEY_STATUS_DISABLED,
-        LLM_GATEWAY_PROTOCOL_ANTHROPIC, LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX,
-        LLM_GATEWAY_PROVIDER_KIRO, LLM_GATEWAY_PROXY_BINDINGS_TABLE,
-        LLM_GATEWAY_PROXY_CONFIGS_TABLE, LLM_GATEWAY_RUNTIME_CONFIG_TABLE,
-        LLM_GATEWAY_SPONSOR_REQUESTS_TABLE, LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
+        GPT2API_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE, KIRO_PREFIX_CACHE_MODE_FORMULA,
+        KIRO_PREFIX_CACHE_MODE_PREFIX_TREE, LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
+        LLM_GATEWAY_ACCOUNT_GROUPS_TABLE, LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_KEY_STATUS_ACTIVE,
+        LLM_GATEWAY_KEY_STATUS_DISABLED, LLM_GATEWAY_PROTOCOL_ANTHROPIC,
+        LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
+        LLM_GATEWAY_PROXY_BINDINGS_TABLE, LLM_GATEWAY_PROXY_CONFIGS_TABLE,
+        LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
+        LLM_GATEWAY_SPONSOR_REQUEST_STATUS_APPROVED,
         LLM_GATEWAY_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT,
         LLM_GATEWAY_SPONSOR_REQUEST_STATUS_SUBMITTED, LLM_GATEWAY_TABLE_NAMES,
         LLM_GATEWAY_TOKEN_REQUESTS_TABLE, LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED,
@@ -161,6 +168,7 @@ impl LlmGatewayStore {
         ensure_proxy_bindings_table(&self.db).await?;
         ensure_token_requests_table(&self.db).await?;
         ensure_account_contribution_requests_table(&self.db).await?;
+        ensure_gpt2api_account_contribution_requests_table(&self.db).await?;
         ensure_sponsor_requests_table(&self.db).await?;
         Ok(())
     }
@@ -203,6 +211,11 @@ impl LlmGatewayStore {
 
     async fn account_contribution_requests_table(&self) -> Result<Table> {
         self.open_table(LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE)
+            .await
+    }
+
+    async fn gpt2api_account_contribution_requests_table(&self) -> Result<Table> {
+        self.open_table(GPT2API_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE)
             .await
     }
 
@@ -1397,6 +1410,131 @@ impl LlmGatewayStore {
         Ok(rows)
     }
 
+    pub async fn upsert_gpt2api_account_contribution_request(
+        &self,
+        record: &Gpt2ApiAccountContributionRequestRecord,
+    ) -> Result<()> {
+        let table = self.gpt2api_account_contribution_requests_table().await?;
+        let batch =
+            build_gpt2api_account_contribution_requests_batch(std::slice::from_ref(record))?;
+        let schema = batch.schema();
+        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        let mut merge = table.merge_insert(&["request_id"]);
+        merge.when_matched_update_all(None);
+        merge.when_not_matched_insert_all();
+        merge
+            .execute(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
+            .await
+            .context("failed to upsert gpt2api account contribution request")?;
+        Ok(())
+    }
+
+    pub async fn create_gpt2api_account_contribution_request(
+        &self,
+        input: NewGpt2ApiAccountContributionRequestInput,
+    ) -> Result<Gpt2ApiAccountContributionRequestRecord> {
+        let now = now_ms();
+        let record = Gpt2ApiAccountContributionRequestRecord {
+            request_id: input.request_id,
+            account_name: input.account_name,
+            access_token: input.access_token,
+            session_json: input.session_json,
+            requester_email: input.requester_email,
+            contributor_message: input.contributor_message,
+            github_id: input.github_id,
+            frontend_page_url: input.frontend_page_url,
+            status: LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING.to_string(),
+            fingerprint: input.fingerprint,
+            client_ip: input.client_ip,
+            ip_region: input.ip_region,
+            admin_note: None,
+            failure_reason: None,
+            imported_account_name: None,
+            issued_key_id: None,
+            issued_key_name: None,
+            created_at: now,
+            updated_at: now,
+            processed_at: None,
+        };
+        self.upsert_gpt2api_account_contribution_request(&record)
+            .await?;
+        Ok(record)
+    }
+
+    pub async fn get_gpt2api_account_contribution_request(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<Gpt2ApiAccountContributionRequestRecord>> {
+        let table = self.gpt2api_account_contribution_requests_table().await?;
+        let escaped = escape_literal(request_id);
+        let batches = table
+            .query()
+            .only_if(format!("request_id = '{escaped}'"))
+            .limit(1)
+            .select(Select::columns(&gpt2api_account_contribution_request_columns()))
+            .execute()
+            .await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        batches_to_gpt2api_account_contribution_requests(&batch_list).map(|mut rows| rows.pop())
+    }
+
+    pub async fn count_gpt2api_account_contribution_requests(
+        &self,
+        status: Option<&str>,
+    ) -> Result<usize> {
+        let table = self.gpt2api_account_contribution_requests_table().await?;
+        let filter = status
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("status = '{}'", escape_literal(value)));
+        let total = table
+            .count_rows(filter)
+            .await
+            .context("failed to count gpt2api account contribution requests")?;
+        Ok(total as usize)
+    }
+
+    pub async fn list_gpt2api_account_contribution_requests_page(
+        &self,
+        status: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Gpt2ApiAccountContributionRequestRecord>> {
+        let total = self
+            .count_gpt2api_account_contribution_requests(status)
+            .await?;
+        if total == 0 || offset >= total {
+            return Ok(vec![]);
+        }
+        let fetch_count = (total - offset).min(limit.max(1));
+        let reverse_offset = total.saturating_sub(offset.saturating_add(fetch_count));
+        let mut rows = self
+            .query_gpt2api_account_contribution_requests(status, fetch_count, reverse_offset)
+            .await?;
+        rows.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        Ok(rows)
+    }
+
+    pub async fn query_gpt2api_account_contribution_requests(
+        &self,
+        status: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Gpt2ApiAccountContributionRequestRecord>> {
+        let table = self.gpt2api_account_contribution_requests_table().await?;
+        let mut query = table
+            .query()
+            .select(Select::columns(&gpt2api_account_contribution_request_columns()))
+            .offset(offset)
+            .limit(limit.max(1));
+        if let Some(status) = status.map(str::trim).filter(|value| !value.is_empty()) {
+            query = query.only_if(format!("status = '{}'", escape_literal(status)));
+        }
+        let batches = query.execute().await?;
+        let batch_list = batches.try_collect::<Vec<_>>().await?;
+        batches_to_gpt2api_account_contribution_requests(&batch_list)
+    }
+
     pub async fn upsert_sponsor_request(
         &self,
         record: &LlmGatewaySponsorRequestRecord,
@@ -2295,6 +2433,17 @@ mod tests {
             request_method: "POST".to_string(),
             request_url: "/api/kiro-gateway/v1/messages".to_string(),
             latency_ms: 42,
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
             endpoint: "/v1/messages".to_string(),
             model: Some("claude-sonnet-4-6".to_string()),
             status_code: 200,
@@ -2388,6 +2537,17 @@ mod tests {
             request_method: "POST".to_string(),
             request_url: "/api/llm-gateway/v1/responses".to_string(),
             latency_ms: 12,
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
             endpoint: "/generateAssistantResponse".to_string(),
             model: Some("claude-sonnet-4-6".to_string()),
             status_code: 200,
@@ -2467,6 +2627,17 @@ mod tests {
             request_method: "POST".to_string(),
             request_url: "/api/llm-gateway/v1/responses".to_string(),
             latency_ms: 25,
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
             endpoint: "/responses".to_string(),
             model: Some("gpt-5.3-codex".to_string()),
             status_code: 200,
@@ -2543,6 +2714,17 @@ mod tests {
             request_method: "POST".to_string(),
             request_url: "/api/llm-gateway/v1/responses".to_string(),
             latency_ms: 25,
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
             endpoint: "/v1/responses".to_string(),
             model: Some("gpt-5".to_string()),
             status_code: 200,
@@ -2600,6 +2782,20 @@ mod tests {
             request_method: "POST".to_string(),
             request_url: "/api/kiro-gateway/v1/messages".to_string(),
             latency_ms: 21,
+            routing_wait_ms: Some(13),
+            upstream_headers_ms: Some(5),
+            post_headers_body_ms: Some(16),
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 2,
+            routing_diagnostics_json: Some(
+                r#"{"quota_failover_count":2,"attempts":[{"account_name":"default","outcome":"success"}]}"#
+                    .to_string(),
+            ),
             endpoint: "/v1/messages".to_string(),
             model: Some("claude-sonnet-4-6".to_string()),
             status_code: 200,
@@ -2638,6 +2834,11 @@ mod tests {
         assert_eq!(rows[0].id, record.id);
         assert_eq!(rows[0].billable_tokens, record.billable_tokens);
         assert_eq!(rows[0].request_url, record.request_url);
+        assert_eq!(rows[0].routing_wait_ms, record.routing_wait_ms);
+        assert_eq!(rows[0].upstream_headers_ms, record.upstream_headers_ms);
+        assert_eq!(rows[0].post_headers_body_ms, record.post_headers_body_ms);
+        assert_eq!(rows[0].quota_failover_count, record.quota_failover_count);
+        assert_eq!(rows[0].routing_diagnostics_json, record.routing_diagnostics_json);
         assert_eq!(rows[0].last_message_content, record.last_message_content);
 
         let _ = fs::remove_dir_all(&dir);
@@ -2662,6 +2863,17 @@ mod tests {
             request_method: "POST".to_string(),
             request_url: "/api/llm-gateway/v1/responses".to_string(),
             latency_ms: 19,
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: Some(8),
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 0,
+            routing_diagnostics_json: Some(r#"{"account_attempt_count":1}"#.to_string()),
             endpoint: "/v1/responses".to_string(),
             model: Some("gpt-5.3-codex".to_string()),
             status_code: 200,
@@ -2694,6 +2906,8 @@ mod tests {
 
         assert_eq!(loaded.id, record.id);
         assert_eq!(loaded.request_headers_json, record.request_headers_json);
+        assert_eq!(loaded.post_headers_body_ms, record.post_headers_body_ms);
+        assert_eq!(loaded.routing_diagnostics_json, record.routing_diagnostics_json);
         assert_eq!(loaded.client_request_body_json, record.client_request_body_json);
         assert_eq!(loaded.upstream_request_body_json, record.upstream_request_body_json);
         assert_eq!(loaded.full_request_json, record.full_request_json);
@@ -2721,6 +2935,17 @@ mod tests {
             request_method: "POST".to_string(),
             request_url: "/api/llm-gateway/v1/responses".to_string(),
             latency_ms: 19,
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
             endpoint: "/v1/responses".to_string(),
             model: Some("gpt-5.3-codex".to_string()),
             status_code: 200,
@@ -2800,6 +3025,17 @@ mod tests {
             request_method: "POST".to_string(),
             request_url: "/api/llm-gateway/v1/responses".to_string(),
             latency_ms: 21,
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
             endpoint: "/v1/responses".to_string(),
             model: Some("gpt-5.3-codex".to_string()),
             status_code: 200,
@@ -2855,6 +3091,59 @@ mod tests {
 
         file.unlock()
             .expect("release exclusive usage-events rewrite lock");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn gpt2api_account_contribution_requests_round_trip() {
+        let dir = temp_store_dir("gpt2api-contribution");
+        let store = LlmGatewayStore::connect(&dir.to_string_lossy())
+            .await
+            .expect("connect store");
+
+        let record = store
+            .create_gpt2api_account_contribution_request(
+                NewGpt2ApiAccountContributionRequestInput {
+                    request_id: "gptacct-test".to_string(),
+                    account_name: "gpt image account".to_string(),
+                    access_token: Some("access-token".to_string()),
+                    session_json: None,
+                    requester_email: "user@example.com".to_string(),
+                    contributor_message: "happy to contribute".to_string(),
+                    github_id: Some("ackingliu".to_string()),
+                    frontend_page_url: Some("https://example.com/llm-access".to_string()),
+                    fingerprint: "fp".to_string(),
+                    client_ip: "203.0.113.1".to_string(),
+                    ip_region: "US".to_string(),
+                },
+            )
+            .await
+            .expect("create contribution request");
+        assert_eq!(record.status, LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING);
+
+        let loaded = store
+            .get_gpt2api_account_contribution_request("gptacct-test")
+            .await
+            .expect("load contribution request")
+            .expect("record should exist");
+        assert_eq!(loaded.access_token.as_deref(), Some("access-token"));
+        assert_eq!(loaded.requester_email, "user@example.com");
+
+        let count = store
+            .count_gpt2api_account_contribution_requests(Some(
+                LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING,
+            ))
+            .await
+            .expect("count contribution requests");
+        assert_eq!(count, 1);
+
+        let page = store
+            .list_gpt2api_account_contribution_requests_page(None, 25, 0)
+            .await
+            .expect("list contribution requests");
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].request_id, "gptacct-test");
+
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -3047,6 +3336,17 @@ mod tests {
             request_method: "POST".to_string(),
             request_url: "/api/kiro-gateway/v1/messages".to_string(),
             latency_ms: 10,
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
             endpoint: "/v1/messages".to_string(),
             model: Some("claude-sonnet-4-5".to_string()),
             status_code: 200,
@@ -3075,6 +3375,17 @@ mod tests {
             request_method: "POST".to_string(),
             request_url: "/api/llm-gateway/v1/responses".to_string(),
             latency_ms: 12,
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
             endpoint: "/v1/responses".to_string(),
             model: Some("gpt-5.3-codex".to_string()),
             status_code: 200,

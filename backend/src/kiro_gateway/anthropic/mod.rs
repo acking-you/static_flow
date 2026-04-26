@@ -5,17 +5,18 @@
 //! responses as SSE (with optional buffered mode for Claude Code), and persists
 //! usage events.
 
-use std::convert::Infallible;
+use std::{convert::Infallible, time::Instant};
 
 use async_stream::stream;
 use axum::{
-    body::Body,
-    extract::{Json as JsonExtractor, State},
+    body::{to_bytes, Body},
+    extract::{Json as JsonExtractor, Request, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
 };
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
+use serde::de::DeserializeOwned;
 use tokio::{
     sync::{oneshot, watch},
     time::{interval, Duration},
@@ -26,7 +27,7 @@ use super::{
         KiroCacheSimulationConfig, KiroCacheSimulationMode, PrefixCacheMatch, PromptProjection,
     },
     parser::decoder::EventStreamDecoder,
-    provider::{KiroProvider, ProviderCallError},
+    provider::{KiroProvider, ProviderCallError, ProviderCallResult},
     token, AppKiroStateExt, KiroUsageSummary,
 };
 use crate::kiro_gateway::{
@@ -45,6 +46,7 @@ pub mod websearch;
 
 use static_flow_shared::llm_gateway_store::{
     compute_kiro_billable_tokens, KiroCachePolicy, LlmGatewayKeyRecord,
+    DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES,
 };
 
 use self::{
@@ -64,8 +66,108 @@ use self::{
 };
 use crate::{
     kiro_gateway::wire::{AssistantMessage, ConversationState, Event, ToolUseEntry},
+    request_context::RequestReceivedAt,
     state::{AppState, LlmGatewayRuntimeConfig},
 };
+
+const KIRO_CLIENT_REQUEST_MAX_BODY_BYTES: usize =
+    DEFAULT_LLM_GATEWAY_MAX_REQUEST_BODY_BYTES as usize;
+
+#[derive(Clone, Debug, Default)]
+pub struct KiroRequestIngressTimings {
+    pub request_body_bytes: u64,
+    pub request_body_read_ms: Option<i32>,
+    pub request_json_parse_ms: Option<i32>,
+    pub pre_handler_ms: Option<i32>,
+}
+
+pub(super) fn clamp_u64_ms_to_i32(value: u64) -> i32 {
+    value.min(i32::MAX as u64) as i32
+}
+
+fn elapsed_ms_i32(started_at: Instant) -> i32 {
+    started_at.elapsed().as_millis().min(i32::MAX as u128) as i32
+}
+
+fn json_error_response(status: StatusCode, message: impl Into<String>) -> Response {
+    (status, Json(ErrorResponse::new("invalid_request_error", message.into()))).into_response()
+}
+
+fn is_json_content_type(headers: &HeaderMap) -> bool {
+    let Some(content_type) = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    let media_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    media_type == "application/json" || media_type.ends_with("+json")
+}
+
+async fn read_timed_json_request<T>(
+    request: Request,
+) -> Result<(HeaderMap, T, KiroRequestIngressTimings), Response>
+where
+    T: DeserializeOwned,
+{
+    let (parts, body) = request.into_parts();
+    let request_received_at = parts
+        .extensions
+        .get::<RequestReceivedAt>()
+        .map(|value| value.0);
+    let headers = parts.headers;
+
+    if !is_json_content_type(&headers) {
+        return Err(json_error_response(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "Expected request with `Content-Type: application/json`",
+        ));
+    }
+
+    let body_read_started_at = Instant::now();
+    let body = to_bytes(body, KIRO_CLIENT_REQUEST_MAX_BODY_BYTES)
+        .await
+        .map_err(|err| {
+            let status = if err
+                .to_string()
+                .to_ascii_lowercase()
+                .contains("length limit")
+            {
+                StatusCode::PAYLOAD_TOO_LARGE
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            json_error_response(status, format!("Failed to read request body: {err}"))
+        })?;
+    let request_body_read_ms = Some(elapsed_ms_i32(body_read_started_at));
+
+    let parse_started_at = Instant::now();
+    let payload = serde_json::from_slice::<T>(&body).map_err(|err| {
+        json_error_response(StatusCode::BAD_REQUEST, format!("Invalid JSON body: {err}"))
+    })?;
+    let request_json_parse_ms = Some(elapsed_ms_i32(parse_started_at));
+    let pre_handler_ms = request_received_at.map(elapsed_ms_i32);
+
+    Ok((headers, payload, KiroRequestIngressTimings {
+        request_body_bytes: body.len().min(u64::MAX as usize) as u64,
+        request_body_read_ms,
+        request_json_parse_ms,
+        pre_handler_ms,
+    }))
+}
+
+fn apply_provider_metrics(event_context: &mut KiroEventContext, response: &ProviderCallResult) {
+    event_context.routing_wait_ms = Some(clamp_u64_ms_to_i32(response.routing_wait_ms));
+    event_context.upstream_headers_ms = Some(clamp_u64_ms_to_i32(response.upstream_headers_ms));
+    event_context.upstream_headers_at = Some(Instant::now());
+    event_context.quota_failover_count = response.quota_failover_count;
+    event_context.routing_diagnostics_json = response.routing_diagnostics_json.clone();
+}
 
 const SUPPORTED_MODEL_CATALOG: [(&str, &str, i64); 10] = [
     ("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5", 1727568000),
@@ -631,10 +733,12 @@ fn log_non_header_session_resolution(
 
 enum UsagePersistOutcome {
     Success {
+        event_context: KiroEventContext,
         summary: KiroUsageSummary,
         usage_missing: bool,
     },
     Failure {
+        event_context: KiroEventContext,
         status_code: i32,
         summary: KiroUsageSummary,
         usage_missing: bool,
@@ -1468,23 +1572,25 @@ pub async fn count_tokens(
 }
 
 /// Handler for `POST /v1/messages` — standard streaming mode.
-pub async fn post_messages(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
-) -> Response {
-    handle_messages(state, headers, &mut payload, false).await
+pub async fn post_messages(State(state): State<AppState>, request: Request) -> Response {
+    let (headers, mut payload, ingress_timings) =
+        match read_timed_json_request::<MessagesRequest>(request).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    handle_messages(state, headers, &mut payload, false, ingress_timings).await
 }
 
 /// Handler for `POST /cc/v1/messages` — buffered mode for Claude Code.
 /// Collects all upstream events before flushing, so input_tokens can be
 /// rewritten with the actual value from context-usage feedback.
-pub async fn post_messages_cc(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
-) -> Response {
-    handle_messages(state, headers, &mut payload, true).await
+pub async fn post_messages_cc(State(state): State<AppState>, request: Request) -> Response {
+    let (headers, mut payload, ingress_timings) =
+        match read_timed_json_request::<MessagesRequest>(request).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    handle_messages(state, headers, &mut payload, true, ingress_timings).await
 }
 
 // Shared implementation for both /v1/messages and /cc/v1/messages.
@@ -1495,11 +1601,16 @@ async fn handle_messages(
     headers: HeaderMap,
     payload: &mut MessagesRequest,
     buffered_for_cc: bool,
+    ingress_timings: KiroRequestIngressTimings,
 ) -> Response {
     let (key_record, mut event_context) = match state.authenticate_kiro_key(&headers).await {
         Ok(value) => value,
         Err(err) => return err.into_response(),
     };
+    event_context.request_body_bytes = Some(ingress_timings.request_body_bytes);
+    event_context.request_body_read_ms = ingress_timings.request_body_read_ms;
+    event_context.request_json_parse_ms = ingress_timings.request_json_parse_ms;
+    event_context.pre_handler_ms = ingress_timings.pre_handler_ms;
     let runtime_config = state.llm_gateway_runtime_config.read().clone();
     let effective_cache_policy =
         match resolve_effective_kiro_cache_policy(&runtime_config, &key_record) {
@@ -1905,6 +2016,7 @@ async fn handle_messages(
                 .await;
             },
         };
+        apply_provider_metrics(&mut event_context, &response);
         event_context.upstream_request_body_json = Some(response.request_body.clone());
         event_context.account_name = Some(response.account_name);
         let stream_request_ctx = StreamRequestContext {
@@ -1975,6 +2087,7 @@ async fn handle_messages(
             .await;
         },
     };
+    apply_provider_metrics(&mut event_context, &response);
     event_context.upstream_request_body_json = Some(response.request_body.clone());
     event_context.account_name = Some(response.account_name);
     handle_non_stream_request(
@@ -2023,13 +2136,14 @@ async fn handle_stream_request(
         if let Ok(outcome) = done_rx.await {
             let persist_result = match outcome {
                 UsagePersistOutcome::Success {
+                    event_context,
                     summary,
                     usage_missing,
                 } => {
                     record_messages_usage(
                         &usage_ctx.state,
                         &usage_ctx.key_record,
-                        &usage_ctx.event_context,
+                        &event_context,
                         &usage_ctx.effective_cache_policy,
                         summary,
                         usage_missing,
@@ -2037,6 +2151,7 @@ async fn handle_stream_request(
                     .await
                 },
                 UsagePersistOutcome::Failure {
+                    event_context,
                     status_code,
                     summary,
                     usage_missing,
@@ -2045,7 +2160,7 @@ async fn handle_stream_request(
                     crate::kiro_gateway::record_failed_request_event(
                         &usage_ctx.state,
                         &usage_ctx.key_record,
-                        &usage_ctx.event_context,
+                        &event_context,
                         FailedKiroRequestEvent {
                             _effective_policy: &usage_ctx.effective_cache_policy,
                             status_code,
@@ -2099,13 +2214,14 @@ async fn handle_stream_request_buffered(
         if let Ok(outcome) = done_rx.await {
             let persist_result = match outcome {
                 UsagePersistOutcome::Success {
+                    event_context,
                     summary,
                     usage_missing,
                 } => {
                     record_messages_usage(
                         &usage_ctx.state,
                         &usage_ctx.key_record,
-                        &usage_ctx.event_context,
+                        &event_context,
                         &usage_ctx.effective_cache_policy,
                         summary,
                         usage_missing,
@@ -2113,6 +2229,7 @@ async fn handle_stream_request_buffered(
                     .await
                 },
                 UsagePersistOutcome::Failure {
+                    event_context,
                     status_code,
                     summary,
                     usage_missing,
@@ -2121,7 +2238,7 @@ async fn handle_stream_request_buffered(
                     crate::kiro_gateway::record_failed_request_event(
                         &usage_ctx.state,
                         &usage_ctx.key_record,
-                        &usage_ctx.event_context,
+                        &event_context,
                         FailedKiroRequestEvent {
                             _effective_policy: &usage_ctx.effective_cache_policy,
                             status_code,
@@ -2153,7 +2270,7 @@ async fn handle_stream_request_buffered(
 async fn handle_non_stream_request(
     state: AppState,
     key_record: static_flow_shared::llm_gateway_store::LlmGatewayKeyRecord,
-    event_context: KiroEventContext,
+    mut event_context: KiroEventContext,
     response: reqwest::Response,
     request_ctx: NonStreamRequestContext,
 ) -> Response {
@@ -2172,6 +2289,7 @@ async fn handle_non_stream_request(
         Ok(body) => body,
         Err(err) => {
             log_kiro_stream_read_error(&log_ctx, "non_stream_body", &err);
+            event_context.stream_finish_ms = Some(elapsed_ms_i32(event_context.started_at));
             let diagnostic_payload = build_failure_diagnostic_payload(
                 DiagnosticRequestContext {
                     event_context: &event_context,
@@ -2405,6 +2523,7 @@ async fn handle_non_stream_request(
         usage_output_tokens = usage.output_tokens,
         "finished kiro non-stream request"
     );
+    event_context.stream_finish_ms = Some(elapsed_ms_i32(event_context.started_at));
     record_successful_kiro_prefix_state(
         &state,
         &request_ctx.simulation,
@@ -2576,7 +2695,7 @@ fn truncate_summary(text: &str, max_chars: usize) -> String {
 }
 
 fn create_sse_stream(
-    request_ctx: StreamRequestContext,
+    mut request_ctx: StreamRequestContext,
     response: reqwest::Response,
     mut ctx: StreamContext,
     log_ctx: KiroUpstreamLogContext,
@@ -2591,6 +2710,10 @@ fn create_sse_stream(
             "starting kiro streaming response"
         );
         for event in ctx.generate_initial_events() {
+            if request_ctx.event_context.first_sse_write_ms.is_none() {
+                request_ctx.event_context.first_sse_write_ms =
+                    Some(elapsed_ms_i32(request_ctx.event_context.started_at));
+            }
             yield Ok(Bytes::from(event.to_sse_string()));
         }
         let mut body_stream = response.bytes_stream();
@@ -2702,6 +2825,12 @@ fn create_sse_stream(
             credit_usage_missing,
             "finished kiro streaming response"
         );
+        request_ctx.event_context.stream_finish_ms =
+            Some(elapsed_ms_i32(request_ctx.event_context.started_at));
+        if request_ctx.event_context.first_sse_write_ms.is_none() {
+            request_ctx.event_context.first_sse_write_ms =
+                request_ctx.event_context.stream_finish_ms;
+        }
         if let Some(sender) = done_tx.take() {
             let assistant_message = ctx.final_assistant_message();
             log_missing_upstream_input_tokens(MissingUpstreamInputLogContext {
@@ -2733,12 +2862,14 @@ fn create_sse_stream(
             }
             let _ = match failure_diagnostic_payload {
                 Some(diagnostic_payload) => sender.send(UsagePersistOutcome::Failure {
+                    event_context: request_ctx.event_context.clone(),
                     status_code: KIRO_STREAM_FAILURE_STATUS_CODE,
                     summary,
                     usage_missing: true,
                     diagnostic_payload,
                 }),
                 None => sender.send(UsagePersistOutcome::Success {
+                    event_context: request_ctx.event_context.clone(),
                     summary,
                     usage_missing: false,
                 }),
@@ -2751,7 +2882,7 @@ fn create_sse_stream(
 }
 
 fn create_buffered_sse_stream(
-    request_ctx: StreamRequestContext,
+    mut request_ctx: StreamRequestContext,
     response: reqwest::Response,
     mut ctx: BufferedStreamContext,
     log_ctx: KiroUpstreamLogContext,
@@ -2907,6 +3038,12 @@ fn create_buffered_sse_stream(
             credit_usage_missing,
             "finished kiro buffered streaming response"
         );
+        request_ctx.event_context.stream_finish_ms =
+            Some(elapsed_ms_i32(request_ctx.event_context.started_at));
+        if request_ctx.event_context.first_sse_write_ms.is_none() {
+            request_ctx.event_context.first_sse_write_ms =
+                request_ctx.event_context.stream_finish_ms;
+        }
         if let Some(sender) = done_tx.take() {
             if failure_diagnostic_payload.is_none() {
                 record_successful_kiro_prefix_state(
@@ -2918,12 +3055,14 @@ fn create_buffered_sse_stream(
             }
             let _ = match failure_diagnostic_payload {
                 Some(diagnostic_payload) => sender.send(UsagePersistOutcome::Failure {
+                    event_context: request_ctx.event_context.clone(),
                     status_code: KIRO_STREAM_FAILURE_STATUS_CODE,
                     summary,
                     usage_missing: true,
                     diagnostic_payload,
                 }),
                 None => sender.send(UsagePersistOutcome::Success {
+                    event_context: request_ctx.event_context.clone(),
                     summary,
                     usage_missing: false,
                 }),
@@ -2991,7 +3130,8 @@ fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
 mod tests {
     use std::collections::BTreeMap;
 
-    use axum::http::{HeaderMap, HeaderValue};
+    use axum::http::{HeaderMap, HeaderValue, Request};
+    use serde::Deserialize;
     use serde_json::json;
     use static_flow_shared::llm_gateway_store::{
         default_kiro_cache_policy, merge_kiro_cache_policy, KiroCachePolicyOverride,
@@ -3005,6 +3145,35 @@ mod tests {
             CurrentMessage, HistoryAssistantMessage, HistoryUserMessage, Message, UserInputMessage,
         },
     };
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct TimedJsonProbe {
+        message: String,
+    }
+
+    #[tokio::test]
+    async fn timed_json_request_records_ingress_read_and_parse_metrics() {
+        let mut request = Request::builder()
+            .uri("/api/kiro-gateway/v1/messages")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"message":"hello"}"#))
+            .expect("build request");
+        request
+            .extensions_mut()
+            .insert(crate::request_context::RequestReceivedAt(Instant::now()));
+
+        let (_, payload, timings) = read_timed_json_request::<TimedJsonProbe>(request)
+            .await
+            .expect("parse timed json");
+
+        assert_eq!(payload, TimedJsonProbe {
+            message: "hello".to_string()
+        });
+        assert!(timings.request_body_bytes > 0);
+        assert!(timings.request_body_read_ms.is_some());
+        assert!(timings.request_json_parse_ms.is_some());
+        assert!(timings.pre_handler_ms.is_some());
+    }
 
     fn base_request(model: &str) -> MessagesRequest {
         MessagesRequest {
@@ -3371,6 +3540,18 @@ mod tests {
             request_url: "/api/kiro-gateway/v1/messages".to_string(),
             endpoint: "/generateAssistantResponse".to_string(),
             model: Some("claude-sonnet-4-6".to_string()),
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
+            upstream_headers_at: None,
             client_ip: "127.0.0.1".to_string(),
             ip_region: "local".to_string(),
             request_headers_json: "[]".to_string(),
@@ -3445,6 +3626,18 @@ mod tests {
             request_url: "/api/kiro-gateway/v1/messages".to_string(),
             endpoint: "/generateAssistantResponse".to_string(),
             model: Some("claude-sonnet-4-6".to_string()),
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
+            upstream_headers_at: None,
             client_ip: "127.0.0.1".to_string(),
             ip_region: "local".to_string(),
             request_headers_json: "[]".to_string(),

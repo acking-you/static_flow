@@ -2024,6 +2024,10 @@ fn default_admin_gpt2api_rs_proxy_mode() -> String {
     "inherit".to_string()
 }
 
+fn default_admin_gpt2api_rs_key_role() -> String {
+    "user".to_string()
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Gpt2ApiRsConfig {
     pub base_url: String,
@@ -2133,10 +2137,28 @@ pub struct AdminGpt2ApiRsKeyView {
     pub quota_used_calls: i64,
     pub route_strategy: String,
     pub account_group_id: Option<String>,
+    #[serde(default)]
+    pub fixed_account_name: Option<String>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
+    #[serde(default = "default_admin_gpt2api_rs_key_role")]
+    pub role: String,
     #[serde(default)]
     pub secret_plaintext: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsAccountGroupView {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub account_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsAccountGroupsResponse {
+    #[serde(default)]
+    pub groups: Vec<AdminGpt2ApiRsAccountGroupView>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2147,17 +2169,77 @@ pub struct AdminGpt2ApiRsUsageEventView {
     pub key_name: String,
     pub account_name: String,
     pub endpoint: String,
+    #[serde(default)]
+    pub request_method: String,
+    #[serde(default)]
+    pub request_url: String,
     pub requested_model: String,
     pub resolved_upstream_model: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub image_size: Option<String>,
     pub requested_n: i64,
     pub generated_n: i64,
     pub billable_images: i64,
+    #[serde(default)]
+    pub billable_credits: i64,
+    #[serde(default)]
+    pub size_credit_units: i64,
+    #[serde(default)]
+    pub context_text_count: i64,
+    #[serde(default)]
+    pub context_image_count: i64,
+    #[serde(default)]
+    pub context_credit_surcharge: i64,
+    #[serde(default)]
+    pub client_ip: String,
+    #[serde(default)]
+    pub request_headers_json: Option<String>,
+    #[serde(default)]
+    pub prompt_preview: Option<String>,
+    #[serde(default)]
+    pub last_message_content: Option<String>,
+    #[serde(default)]
+    pub request_body_json: Option<String>,
+    #[serde(default)]
+    pub prompt_chars: i64,
+    #[serde(default)]
+    pub effective_prompt_chars: i64,
     pub status_code: i64,
     pub latency_ms: i64,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
     pub detail_ref: Option<String>,
     pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsUsageEventsQuery {
+    pub key_id: Option<String>,
+    pub q: Option<String>,
+    pub limit: Option<u64>,
+    pub offset: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsUsageEventsResponse {
+    pub total: u64,
+    pub offset: u64,
+    pub limit: u64,
+    pub has_more: bool,
+    #[serde(default)]
+    pub current_rpm: u32,
+    #[serde(default)]
+    pub current_in_flight: u32,
+    pub billable_credit_total: i64,
+    pub events: Vec<AdminGpt2ApiRsUsageEventView>,
+    #[serde(default)]
+    pub generated_at: i64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2172,6 +2254,21 @@ pub struct AdminGpt2ApiRsImportAccountsRequest {
 pub struct AdminGpt2ApiRsDeleteAccountsRequest {
     #[serde(default)]
     pub access_tokens: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsCreateAccountGroupRequest {
+    pub name: String,
+    #[serde(default)]
+    pub account_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminGpt2ApiRsUpdateAccountGroupRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_names: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2215,7 +2312,11 @@ pub struct AdminGpt2ApiRsCreateKeyRequest {
     pub status: Option<String>,
     pub route_strategy: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub account_group_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixed_account_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_max_concurrency: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2233,7 +2334,11 @@ pub struct AdminGpt2ApiRsUpdateKeyRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub route_strategy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub account_group_id: Option<String>,
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_group_id: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixed_account_name: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_max_concurrency: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2245,6 +2350,7 @@ pub struct AdminGpt2ApiRsImageGenerationRequest {
     pub prompt: String,
     pub model: String,
     pub n: usize,
+    pub size: String,
     pub response_format: String,
 }
 
@@ -2252,8 +2358,9 @@ impl Default for AdminGpt2ApiRsImageGenerationRequest {
     fn default() -> Self {
         Self {
             prompt: String::new(),
-            model: "gpt-image-1".to_string(),
+            model: "gpt-image-2".to_string(),
             n: 1,
+            size: "1024x1024".to_string(),
             response_format: "b64_json".to_string(),
         }
     }
@@ -2264,6 +2371,7 @@ pub struct AdminGpt2ApiRsImageEditRequest {
     pub prompt: String,
     pub model: String,
     pub n: usize,
+    pub size: String,
     pub image_base64: String,
     pub file_name: String,
     pub mime_type: String,
@@ -2273,8 +2381,9 @@ impl Default for AdminGpt2ApiRsImageEditRequest {
     fn default() -> Self {
         Self {
             prompt: String::new(),
-            model: "gpt-image-1".to_string(),
+            model: "gpt-image-2".to_string(),
             n: 1,
+            size: "1024x1024".to_string(),
             image_base64: String::new(),
             file_name: "image.png".to_string(),
             mime_type: "image/png".to_string(),
@@ -2581,6 +2690,70 @@ pub async fn check_admin_gpt2api_rs_proxy_config(
     }
 }
 
+pub async fn fetch_admin_gpt2api_rs_account_groups(
+) -> Result<AdminGpt2ApiRsAccountGroupsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminGpt2ApiRsAccountGroupsResponse::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        get_admin_gpt2api_rs("/account-groups").await
+    }
+}
+
+pub async fn create_admin_gpt2api_rs_account_group(
+    request: &AdminGpt2ApiRsCreateAccountGroupRequest,
+) -> Result<AdminGpt2ApiRsAccountGroupView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminGpt2ApiRsAccountGroupView {
+            id: "mock-group".to_string(),
+            name: request.name.clone(),
+            account_names: request.account_names.clone(),
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs("/account-groups", request).await
+    }
+}
+
+pub async fn update_admin_gpt2api_rs_account_group(
+    group_id: &str,
+    request: &AdminGpt2ApiRsUpdateAccountGroupRequest,
+) -> Result<AdminGpt2ApiRsAccountGroupView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminGpt2ApiRsAccountGroupView {
+            id: group_id.to_string(),
+            name: request.name.clone().unwrap_or_else(|| "mock".to_string()),
+            account_names: request.account_names.clone().unwrap_or_default(),
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        patch_admin_gpt2api_rs(&format!("/account-groups/{group_id}"), request).await
+    }
+}
+
+pub async fn delete_admin_gpt2api_rs_account_group(
+    group_id: &str,
+) -> Result<serde_json::Value, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(serde_json::json!({ "deleted": true, "id": group_id }))
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        delete_admin_gpt2api_rs_empty(&format!("/account-groups/{group_id}")).await
+    }
+}
+
 pub async fn import_admin_gpt2api_rs_accounts(
     request: &AdminGpt2ApiRsImportAccountsRequest,
 ) -> Result<serde_json::Value, String> {
@@ -2653,6 +2826,80 @@ pub async fn fetch_admin_gpt2api_rs_keys() -> Result<Vec<AdminGpt2ApiRsKeyView>,
     }
 }
 
+pub async fn fetch_admin_gpt2api_account_contribution_requests(
+    query: &AdminGpt2ApiAccountContributionRequestsQuery,
+) -> Result<AdminGpt2ApiAccountContributionRequestsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = query;
+        Ok(AdminGpt2ApiAccountContributionRequestsResponse {
+            total: 0,
+            offset: 0,
+            limit: 25,
+            has_more: false,
+            requests: vec![],
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut params = Vec::new();
+        if let Some(status) = query.status.as_deref() {
+            params.push(format!("status={}", urlencoding::encode(status)));
+        }
+        if let Some(limit) = query.limit {
+            params.push(format!("limit={limit}"));
+        }
+        if let Some(offset) = query.offset {
+            params.push(format!("offset={offset}"));
+        }
+        let suffix =
+            if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
+        get_admin_gpt2api_rs(&format!("/account-contribution-requests{suffix}")).await
+    }
+}
+
+pub async fn approve_admin_gpt2api_account_contribution_request(
+    request_id: &str,
+    admin_note: Option<&str>,
+) -> Result<AdminGpt2ApiAccountContributionRequestView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (request_id, admin_note);
+        Err("mock not supported".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs(
+            &format!("/account-contribution-requests/{}/approve", urlencoding::encode(request_id)),
+            &serde_json::json!({ "admin_note": admin_note }),
+        )
+        .await
+    }
+}
+
+pub async fn reject_admin_gpt2api_account_contribution_request(
+    request_id: &str,
+    admin_note: Option<&str>,
+) -> Result<AdminGpt2ApiAccountContributionRequestView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (request_id, admin_note);
+        Err("mock not supported".to_string())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        post_admin_gpt2api_rs(
+            &format!("/account-contribution-requests/{}/reject", urlencoding::encode(request_id)),
+            &serde_json::json!({ "admin_note": admin_note }),
+        )
+        .await
+    }
+}
+
 pub async fn create_admin_gpt2api_rs_key(
     request: &AdminGpt2ApiRsCreateKeyRequest,
 ) -> Result<AdminGpt2ApiRsKeyView, String> {
@@ -2667,6 +2914,7 @@ pub async fn create_admin_gpt2api_rs_key(
                 .unwrap_or_else(|| "active".to_string()),
             quota_total_calls: request.quota_total_calls,
             route_strategy: request.route_strategy.clone(),
+            role: request.role.clone().unwrap_or_else(|| "user".to_string()),
             secret_plaintext: Some("sk-mock-secret".to_string()),
             ..Default::default()
         })
@@ -2696,6 +2944,7 @@ pub async fn update_admin_gpt2api_rs_key(
                 .route_strategy
                 .clone()
                 .unwrap_or_else(|| "auto".to_string()),
+            role: request.role.clone().unwrap_or_else(|| "user".to_string()),
             ..Default::default()
         })
     }
@@ -2735,18 +2984,43 @@ pub async fn delete_admin_gpt2api_rs_key(key_id: &str) -> Result<serde_json::Val
     }
 }
 
-pub async fn fetch_admin_gpt2api_rs_usage(
-    limit: u64,
-) -> Result<Vec<AdminGpt2ApiRsUsageEventView>, String> {
+pub async fn fetch_admin_gpt2api_rs_usage_events(
+    query: &AdminGpt2ApiRsUsageEventsQuery,
+) -> Result<AdminGpt2ApiRsUsageEventsResponse, String> {
     #[cfg(feature = "mock")]
     {
-        let _ = limit;
-        Ok(Vec::new())
+        let _ = query;
+        Ok(AdminGpt2ApiRsUsageEventsResponse::default())
     }
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/gpt2api-rs/usage?limit={}", admin_base(), limit.max(1));
+        let mut params = Vec::new();
+        if let Some(key_id) = query
+            .key_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("key_id={}", urlencoding::encode(key_id)));
+        }
+        if let Some(q) = query
+            .q
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("q={}", urlencoding::encode(q)));
+        }
+        if let Some(limit) = query.limit {
+            params.push(format!("limit={limit}"));
+        }
+        if let Some(offset) = query.offset {
+            params.push(format!("offset={offset}"));
+        }
+        let suffix =
+            if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
+        let url = format!("{}/admin/gpt2api-rs/usage/events{}", admin_base(), suffix);
         let response = api_get(&url)
             .send()
             .await
@@ -5501,6 +5775,17 @@ pub struct PublicLlmGatewayUsageEventView {
     pub request_method: String,
     pub request_url: String,
     pub latency_ms: i32,
+    pub routing_wait_ms: Option<i32>,
+    pub upstream_headers_ms: Option<i32>,
+    pub post_headers_body_ms: Option<i32>,
+    pub request_body_bytes: Option<u64>,
+    pub request_body_read_ms: Option<i32>,
+    pub request_json_parse_ms: Option<i32>,
+    pub pre_handler_ms: Option<i32>,
+    pub first_sse_write_ms: Option<i32>,
+    pub stream_finish_ms: Option<i32>,
+    pub other_latency_ms: Option<i32>,
+    pub quota_failover_count: u64,
     pub endpoint: String,
     pub model: Option<String>,
     pub status_code: i32,
@@ -5691,6 +5976,18 @@ pub struct AdminLlmGatewayUsageEventView {
     pub request_method: String,
     pub request_url: String,
     pub latency_ms: i32,
+    pub routing_wait_ms: Option<i32>,
+    pub upstream_headers_ms: Option<i32>,
+    pub post_headers_body_ms: Option<i32>,
+    pub request_body_bytes: Option<u64>,
+    pub request_body_read_ms: Option<i32>,
+    pub request_json_parse_ms: Option<i32>,
+    pub pre_handler_ms: Option<i32>,
+    pub first_sse_write_ms: Option<i32>,
+    pub stream_finish_ms: Option<i32>,
+    pub other_latency_ms: Option<i32>,
+    pub quota_failover_count: u64,
+    pub routing_diagnostics_json: Option<String>,
     pub endpoint: String,
     pub model: Option<String>,
     pub status_code: i32,
@@ -5717,6 +6014,18 @@ pub struct AdminLlmGatewayUsageEventDetailView {
     pub request_method: String,
     pub request_url: String,
     pub latency_ms: i32,
+    pub routing_wait_ms: Option<i32>,
+    pub upstream_headers_ms: Option<i32>,
+    pub post_headers_body_ms: Option<i32>,
+    pub request_body_bytes: Option<u64>,
+    pub request_body_read_ms: Option<i32>,
+    pub request_json_parse_ms: Option<i32>,
+    pub pre_handler_ms: Option<i32>,
+    pub first_sse_write_ms: Option<i32>,
+    pub stream_finish_ms: Option<i32>,
+    pub other_latency_ms: Option<i32>,
+    pub quota_failover_count: u64,
+    pub routing_diagnostics_json: Option<String>,
     pub endpoint: String,
     pub model: Option<String>,
     pub status_code: i32,
@@ -5816,6 +6125,25 @@ pub struct SubmitLlmGatewayAccountContributionInput {
     pub contributor_message: String,
     pub github_id: Option<String>,
     pub frontend_page_url: Option<String>,
+}
+
+/// Public form payload for contributing a GPT image account.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SubmitGpt2ApiAccountContributionInput {
+    pub account_name: String,
+    pub access_token: Option<String>,
+    pub session_json: Option<String>,
+    pub requester_email: String,
+    pub contributor_message: String,
+    pub github_id: Option<String>,
+    pub frontend_page_url: Option<String>,
+}
+
+/// Public acknowledgement returned after a GPT contribution is queued.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SubmitGpt2ApiAccountContributionRequestResponse {
+    pub request_id: String,
+    pub status: String,
 }
 
 /// Public form payload for requesting to become a sponsor.
@@ -5924,6 +6252,49 @@ pub struct AdminLlmGatewayAccountContributionRequestsResponse {
 /// Query options for admin account contribution request listing.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct AdminLlmGatewayAccountContributionRequestsQuery {
+    pub status: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+/// Admin-only view of one GPT account contribution request.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminGpt2ApiAccountContributionRequestView {
+    pub request_id: String,
+    pub account_name: String,
+    pub access_token: Option<String>,
+    pub session_json: Option<String>,
+    pub requester_email: String,
+    pub contributor_message: String,
+    pub github_id: Option<String>,
+    pub frontend_page_url: Option<String>,
+    pub status: String,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub admin_note: Option<String>,
+    pub failure_reason: Option<String>,
+    pub imported_account_name: Option<String>,
+    pub issued_key_id: Option<String>,
+    pub issued_key_name: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub processed_at: Option<i64>,
+}
+
+/// Paginated admin response for GPT account contribution requests.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdminGpt2ApiAccountContributionRequestsResponse {
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+    pub requests: Vec<AdminGpt2ApiAccountContributionRequestView>,
+    pub generated_at: i64,
+}
+
+/// Query options for admin GPT account contribution request listing.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct AdminGpt2ApiAccountContributionRequestsQuery {
     pub status: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
@@ -6215,6 +6586,17 @@ pub async fn fetch_public_llm_gateway_usage(
                     request_method: "POST".to_string(),
                     request_url: "/api/llm-gateway/v1/responses".to_string(),
                     latency_ms: 842,
+                    routing_wait_ms: None,
+                    upstream_headers_ms: None,
+                    post_headers_body_ms: None,
+                    request_body_bytes: None,
+                    request_body_read_ms: None,
+                    request_json_parse_ms: None,
+                    pre_handler_ms: None,
+                    first_sse_write_ms: None,
+                    stream_finish_ms: None,
+                    other_latency_ms: None,
+                    quota_failover_count: 0,
                     endpoint: "/responses".to_string(),
                     model: Some("gpt-5.3-codex".to_string()),
                     status_code: 200,
@@ -6236,6 +6618,17 @@ pub async fn fetch_public_llm_gateway_usage(
                     request_method: "POST".to_string(),
                     request_url: "/api/llm-gateway/v1/responses".to_string(),
                     latency_ms: 1_204,
+                    routing_wait_ms: None,
+                    upstream_headers_ms: None,
+                    post_headers_body_ms: None,
+                    request_body_bytes: None,
+                    request_body_read_ms: None,
+                    request_json_parse_ms: None,
+                    pre_handler_ms: None,
+                    first_sse_write_ms: None,
+                    stream_finish_ms: None,
+                    other_latency_ms: None,
+                    quota_failover_count: 0,
                     endpoint: "/responses".to_string(),
                     model: Some("gpt-5.3-codex".to_string()),
                     status_code: 200,
@@ -6432,6 +6825,68 @@ pub async fn submit_llm_gateway_account_contribution_request(
             .filter(|value| !value.trim().is_empty())
         {
             body["account_id"] = serde_json::Value::String(account_id.trim().to_string());
+        }
+        if let Some(github_id) = input
+            .github_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            body["github_id"] = serde_json::Value::String(github_id.trim().to_string());
+        }
+        if let Some(page_url) = input.frontend_page_url.as_deref() {
+            body["frontend_page_url"] = serde_json::Value::String(page_url.to_string());
+        }
+        let response = api_post(&url)
+            .json(&body)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Submit a public GPT account contribution request from `/llm-access`.
+pub async fn submit_gpt2api_account_contribution_request(
+    input: &SubmitGpt2ApiAccountContributionInput,
+) -> Result<SubmitGpt2ApiAccountContributionRequestResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = input;
+        Ok(SubmitGpt2ApiAccountContributionRequestResponse {
+            request_id: "mock-gpt2api-account-contribution-1".to_string(),
+            status: "pending".to_string(),
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/gpt2api/account-contribution-requests/submit", API_BASE);
+        let mut body = serde_json::json!({
+            "account_name": input.account_name,
+            "requester_email": input.requester_email,
+            "contributor_message": input.contributor_message,
+        });
+        if let Some(access_token) = input
+            .access_token
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            body["access_token"] = serde_json::Value::String(access_token.trim().to_string());
+        }
+        if let Some(session_json) = input
+            .session_json
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            body["session_json"] = serde_json::Value::String(session_json.trim().to_string());
         }
         if let Some(github_id) = input
             .github_id

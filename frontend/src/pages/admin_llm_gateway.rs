@@ -110,6 +110,121 @@ fn format_latency_ms(latency_ms: i32) -> String {
     format!("{} ms", latency_ms.max(0))
 }
 
+fn format_optional_latency_ms(latency_ms: Option<i32>) -> String {
+    latency_ms
+        .map(format_latency_ms)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_optional_bytes(bytes: Option<u64>) -> String {
+    let Some(bytes) = bytes else {
+        return "-".to_string();
+    };
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1} KiB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn compute_other_latency_ms(
+    latency_ms: i32,
+    routing_wait_ms: Option<i32>,
+    upstream_headers_ms: Option<i32>,
+    post_headers_body_ms: Option<i32>,
+) -> Option<i32> {
+    if routing_wait_ms.is_none() && upstream_headers_ms.is_none() && post_headers_body_ms.is_none()
+    {
+        return None;
+    }
+    let measured_ms: i64 = [routing_wait_ms, upstream_headers_ms, post_headers_body_ms]
+        .into_iter()
+        .flatten()
+        .map(|value| i64::from(value.max(0)))
+        .sum();
+    Some((i64::from(latency_ms.max(0)) - measured_ms).clamp(0, i64::from(i32::MAX)) as i32)
+}
+
+#[derive(Clone, Copy)]
+struct LatencyBreakdown {
+    latency_ms: i32,
+    routing_wait_ms: Option<i32>,
+    upstream_headers_ms: Option<i32>,
+    post_headers_body_ms: Option<i32>,
+    request_body_bytes: Option<u64>,
+    request_body_read_ms: Option<i32>,
+    request_json_parse_ms: Option<i32>,
+    pre_handler_ms: Option<i32>,
+    first_sse_write_ms: Option<i32>,
+    stream_finish_ms: Option<i32>,
+    other_latency_ms: Option<i32>,
+    quota_failover_count: u64,
+}
+
+fn format_latency_breakdown(parts: LatencyBreakdown) -> String {
+    let other_latency_ms = parts.other_latency_ms.or_else(|| {
+        compute_other_latency_ms(
+            parts.latency_ms,
+            parts.routing_wait_ms,
+            parts.upstream_headers_ms,
+            parts.post_headers_body_ms,
+        )
+    });
+    format!(
+        "total {} · ingress {} body {} parse {} pre-handler {} · route {} · upstream headers {} · \
+         post-headers body {} · first SSE {} · stream finish {} · other {} · quota failover {}",
+        format_latency_ms(parts.latency_ms),
+        format_optional_bytes(parts.request_body_bytes),
+        format_optional_latency_ms(parts.request_body_read_ms),
+        format_optional_latency_ms(parts.request_json_parse_ms),
+        format_optional_latency_ms(parts.pre_handler_ms),
+        format_optional_latency_ms(parts.routing_wait_ms),
+        format_optional_latency_ms(parts.upstream_headers_ms),
+        format_optional_latency_ms(parts.post_headers_body_ms),
+        format_optional_latency_ms(parts.first_sse_write_ms),
+        format_optional_latency_ms(parts.stream_finish_ms),
+        format_optional_latency_ms(other_latency_ms),
+        parts.quota_failover_count
+    )
+}
+
+fn routing_diagnostics_summary(raw: &str) -> Vec<(String, String)> {
+    let Some(value) = serde_json::from_str::<serde_json::Value>(raw).ok() else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    let mut push_ms = |label: &str, key: &str| {
+        if let Some(value) = value.get(key).and_then(|value| value.as_u64()) {
+            rows.push((label.to_string(), format!("{value} ms")));
+        }
+    };
+    push_ms("Route total", "route_total_ms");
+    push_ms("Status load", "status_load_ms");
+    push_ms("Selection", "selection_ms");
+    push_ms("Local queue", "local_queue_wait_ms");
+    push_ms("Cooldown wait", "upstream_cooldown_wait_ms");
+    for (label, key) in [
+        ("Attempts", "account_attempt_count"),
+        ("Skipped", "skipped_account_count"),
+        ("Quota failover", "quota_failover_count"),
+        ("Rate-limit failover", "rate_limit_failover_count"),
+        ("Retry next", "retry_next_count"),
+    ] {
+        if let Some(count) = value.get(key).and_then(|value| value.as_u64()) {
+            rows.push((label.to_string(), count.to_string()));
+        }
+    }
+    if let Some(account) = value
+        .get("selected_account")
+        .and_then(|value| value.as_str())
+    {
+        rows.push(("Selected".to_string(), account.to_string()));
+    }
+    rows
+}
+
 fn format_credit4(value: f64) -> String {
     format!("{value:.4}")
 }
@@ -3356,13 +3471,43 @@ pub fn admin_llm_gateway_page() -> Html {
             event.status_code,
             event.model.clone().unwrap_or_else(|| "-".to_string()),
             event.endpoint,
-            format_latency_ms(event.latency_ms),
+            format_latency_breakdown(LatencyBreakdown {
+                latency_ms: event.latency_ms,
+                routing_wait_ms: event.routing_wait_ms,
+                upstream_headers_ms: event.upstream_headers_ms,
+                post_headers_body_ms: event.post_headers_body_ms,
+                request_body_bytes: event.request_body_bytes,
+                request_body_read_ms: event.request_body_read_ms,
+                request_json_parse_ms: event.request_json_parse_ms,
+                pre_handler_ms: event.pre_handler_ms,
+                first_sse_write_ms: event.first_sse_write_ms,
+                stream_finish_ms: event.stream_finish_ms,
+                other_latency_ms: event.other_latency_ms,
+                quota_failover_count: event.quota_failover_count,
+            }),
         );
         let last_message_for_copy = event
             .last_message_content
             .clone()
             .unwrap_or_else(|| "-".to_string());
         let headers_json_for_copy = pretty_headers_json(&event.request_headers_json);
+        let routing_diagnostics_for_copy = event
+            .routing_diagnostics_json
+            .as_deref()
+            .map(pretty_json_text);
+        let routing_diagnostics_summary_rows = event
+            .routing_diagnostics_json
+            .as_deref()
+            .map(routing_diagnostics_summary)
+            .unwrap_or_default();
+        let detail_other_latency_ms = event.other_latency_ms.or_else(|| {
+            compute_other_latency_ms(
+                event.latency_ms,
+                event.routing_wait_ms,
+                event.upstream_headers_ms,
+                event.post_headers_body_ms,
+            )
+        });
         let client_request_json_for_copy = event
             .client_request_body_json
             .as_deref()
@@ -3475,6 +3620,19 @@ pub fn admin_llm_gateway_page() -> Html {
                         <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
                             <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Latency" }</div>
                             <div class={classes!("mt-1", "text-sm", "font-semibold")}>{ format_latency_ms(event.latency_ms) }</div>
+                            <div class={classes!("mt-2", "grid", "gap-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                                <span>{ format!("route {}", format_optional_latency_ms(event.routing_wait_ms)) }</span>
+                                <span>{ format!("upstream headers {}", format_optional_latency_ms(event.upstream_headers_ms)) }</span>
+                                <span>{ format!("post-headers body {}", format_optional_latency_ms(event.post_headers_body_ms)) }</span>
+                                <span>{ format!("request body {}", format_optional_bytes(event.request_body_bytes)) }</span>
+                                <span>{ format!("body read {}", format_optional_latency_ms(event.request_body_read_ms)) }</span>
+                                <span>{ format!("json parse {}", format_optional_latency_ms(event.request_json_parse_ms)) }</span>
+                                <span>{ format!("pre-handler {}", format_optional_latency_ms(event.pre_handler_ms)) }</span>
+                                <span>{ format!("first SSE {}", format_optional_latency_ms(event.first_sse_write_ms)) }</span>
+                                <span>{ format!("stream finish {}", format_optional_latency_ms(event.stream_finish_ms)) }</span>
+                                <span>{ format!("other {}", format_optional_latency_ms(detail_other_latency_ms)) }</span>
+                                <span>{ format!("quota failover {}", event.quota_failover_count) }</span>
+                            </div>
                         </div>
                         <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-3")}>
                             <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Credit" }</div>
@@ -3486,6 +3644,49 @@ pub fn admin_llm_gateway_page() -> Html {
                             }
                         </div>
                     </div>
+
+                    if let Some(routing_diagnostics_for_copy) = routing_diagnostics_for_copy {
+                        <div class={classes!("mt-4")}>
+                            <div class={classes!("mb-2", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Routing Diagnostics" }</div>
+                                <button
+                                    class={classes!("btn-terminal")}
+                                    onclick={{
+                                        let on_copy = on_copy.clone();
+                                        let routing_diagnostics_for_copy = routing_diagnostics_for_copy.clone();
+                                        Callback::from(move |_| on_copy.emit(("Routing Diagnostics".to_string(), routing_diagnostics_for_copy.clone())))
+                                    }}
+                                >
+                                    { "复制 Routing Diagnostics" }
+                                </button>
+                            </div>
+                            if !routing_diagnostics_summary_rows.is_empty() {
+                                <div class={classes!("mb-3", "grid", "gap-2", "sm:grid-cols-2", "lg:grid-cols-4")}>
+                                    { for routing_diagnostics_summary_rows.iter().map(|(label, value)| html! {
+                                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2")}>
+                                            <div class={classes!("text-[11px]", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ label.clone() }</div>
+                                            <div class={classes!("mt-1", "font-mono", "text-xs", "text-[var(--text)]", "break-all")}>{ value.clone() }</div>
+                                        </div>
+                                    }) }
+                                </div>
+                            }
+                            <pre class={classes!(
+                                "max-h-[42vh]",
+                                "overflow-x-auto",
+                                "overflow-y-auto",
+                                "rounded-lg",
+                                "bg-slate-950",
+                                "p-3",
+                                "text-xs",
+                                "leading-6",
+                                "text-lime-100",
+                                "whitespace-pre-wrap",
+                                "break-words"
+                            )}>
+                                { routing_diagnostics_for_copy }
+                            </pre>
+                        </div>
+                    }
 
                     <div class={classes!("mt-4")}>
                         <div class={classes!("mb-2", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
@@ -5258,6 +5459,14 @@ pub fn admin_llm_gateway_page() -> Html {
                                         let header_preview = "按需加载".to_string();
                                         let account_label = event.account_name.clone().unwrap_or_else(|| "legacy auth".to_string());
                                         let last_message_preview = usage_last_message_table_preview(event);
+                                        let other_latency_ms = event.other_latency_ms.or_else(|| {
+                                            compute_other_latency_ms(
+                                                event.latency_ms,
+                                                event.routing_wait_ms,
+                                                event.upstream_headers_ms,
+                                                event.post_headers_body_ms,
+                                            )
+                                        });
                                         html! {
                                             <tr class={classes!("border-t", "border-[var(--border)]", "align-top")}>
                                                 <td class={classes!("py-3", "pr-3", "whitespace-nowrap")}>{ format_ms(event.created_at) }</td>
@@ -5299,6 +5508,19 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     <span class={classes!("inline-flex", "rounded-full", "border", "border-violet-500/20", "bg-violet-500/10", "px-2.5", "py-1", "text-xs", "font-semibold", "text-violet-700", "dark:text-violet-200")}>
                                                         { format_latency_ms(event.latency_ms) }
                                                     </span>
+                                                    <div class={classes!("mt-2", "grid", "gap-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
+                                                        <span>{ format!("route {}", format_optional_latency_ms(event.routing_wait_ms)) }</span>
+                                                        <span>{ format!("upstream headers {}", format_optional_latency_ms(event.upstream_headers_ms)) }</span>
+                                                        <span>{ format!("post-headers body {}", format_optional_latency_ms(event.post_headers_body_ms)) }</span>
+                                                        <span>{ format!("request body {}", format_optional_bytes(event.request_body_bytes)) }</span>
+                                                        <span>{ format!("body read {}", format_optional_latency_ms(event.request_body_read_ms)) }</span>
+                                                        <span>{ format!("json parse {}", format_optional_latency_ms(event.request_json_parse_ms)) }</span>
+                                                        <span>{ format!("pre-handler {}", format_optional_latency_ms(event.pre_handler_ms)) }</span>
+                                                        <span>{ format!("first SSE {}", format_optional_latency_ms(event.first_sse_write_ms)) }</span>
+                                                        <span>{ format!("stream finish {}", format_optional_latency_ms(event.stream_finish_ms)) }</span>
+                                                        <span>{ format!("other {}", format_optional_latency_ms(other_latency_ms)) }</span>
+                                                        <span>{ format!("quota failover {}", event.quota_failover_count) }</span>
+                                                    </div>
                                                 </td>
                                                 <td class={classes!("py-3", "pr-3", "min-w-[14rem]")}>
                                                     <div class={classes!("flex", "items-center", "gap-2")}>

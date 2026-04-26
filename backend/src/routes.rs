@@ -338,6 +338,16 @@ pub fn create_router(state: AppState) -> Router {
             post(gpt2api_rs::check_admin_proxy_config),
         )
         .route(
+            "/admin/gpt2api-rs/account-groups",
+            get(gpt2api_rs::list_admin_account_groups)
+                .post(gpt2api_rs::create_admin_account_group),
+        )
+        .route(
+            "/admin/gpt2api-rs/account-groups/:group_id",
+            patch(gpt2api_rs::update_admin_account_group)
+                .delete(gpt2api_rs::delete_admin_account_group),
+        )
+        .route(
             "/admin/gpt2api-rs/accounts/import",
             post(gpt2api_rs::import_admin_accounts),
         )
@@ -362,8 +372,24 @@ pub fn create_router(state: AppState) -> Router {
             post(gpt2api_rs::rotate_admin_key),
         )
         .route(
+            "/admin/gpt2api-rs/account-contribution-requests",
+            get(gpt2api_rs::list_admin_account_contribution_requests),
+        )
+        .route(
+            "/admin/gpt2api-rs/account-contribution-requests/:request_id/approve",
+            post(gpt2api_rs::approve_and_issue_account_contribution_request),
+        )
+        .route(
+            "/admin/gpt2api-rs/account-contribution-requests/:request_id/reject",
+            post(gpt2api_rs::reject_account_contribution_request),
+        )
+        .route(
             "/admin/gpt2api-rs/usage",
             get(gpt2api_rs::list_admin_usage),
+        )
+        .route(
+            "/admin/gpt2api-rs/usage/events",
+            get(gpt2api_rs::list_admin_usage_events),
         )
         .route(
             "/admin/gpt2api-rs/images/generations",
@@ -384,6 +410,10 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/api/gpt2api/auth/verify",
             post(gpt2api_rs::post_public_auth_verify),
+        )
+        .route(
+            "/api/gpt2api/account-contribution-requests/submit",
+            post(gpt2api_rs::submit_public_account_contribution_request),
         )
         .route(
             "/api/gpt2api/images/generations",

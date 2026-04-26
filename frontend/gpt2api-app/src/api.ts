@@ -1,14 +1,20 @@
 import type {
   AdminQueueResponse,
   ImageSubmissionResult,
+  ImageSize,
   ProductKey,
   SessionDetail,
   SessionRecord,
   ShareResponse,
   TaskResponse,
+  UsageEventsResponse,
 } from "./types";
 
 const API_BASE = "/api/gpt2api";
+
+interface RequestOptions {
+  signal?: AbortSignal;
+}
 
 export function authHeaders(key: string): HeadersInit {
   return {
@@ -40,19 +46,37 @@ export async function verifyKey(key: string): Promise<ProductKey> {
   return value.key;
 }
 
-export function listSessions(key: string, query = "") {
-  return fetchJson<{ items: SessionRecord[] }>(`/sessions?limit=80${query}`, key);
+export function listSessions(key: string, query = "", options: RequestOptions = {}) {
+  return fetchJson<{ items: SessionRecord[] }>(`/sessions?limit=80${query}`, key, {
+    signal: options.signal,
+  });
 }
 
-export function createSession(key: string, title = "New chat") {
+export function createSession(key: string, title = "New image session") {
   return fetchJson<{ session: SessionRecord }>("/sessions", key, {
     method: "POST",
     body: JSON.stringify({ title }),
   });
 }
 
-export function getSession(key: string, sessionId: string) {
-  return fetchJson<SessionDetail>(`/sessions/${encodeURIComponent(sessionId)}`, key);
+export function getSession(key: string, sessionId: string, options: RequestOptions = {}) {
+  return fetchJson<SessionDetail>(`/sessions/${encodeURIComponent(sessionId)}`, key, {
+    signal: options.signal,
+  });
+}
+
+export function patchSession(key: string, sessionId: string, patch: { title?: string; status?: string }) {
+  return fetchJson<SessionDetail>(`/sessions/${encodeURIComponent(sessionId)}`, key, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function deleteSession(key: string, sessionId: string) {
+  return fetchJson<{ deleted: boolean; id: string }>(`/sessions/${encodeURIComponent(sessionId)}`, key, {
+    method: "DELETE",
+    body: "{}",
+  });
 }
 
 export function submitTextMessage(key: string, sessionId: string, text: string, model: string) {
@@ -68,10 +92,11 @@ export function submitImageMessage(
   prompt: string,
   model: string,
   n: number,
+  size: ImageSize,
 ) {
   return fetchJson<ImageSubmissionResult>(`/sessions/${encodeURIComponent(sessionId)}/messages`, key, {
     method: "POST",
-    body: JSON.stringify({ kind: "image_generation", prompt, model, n }),
+    body: JSON.stringify({ kind: "image_generation", prompt, model, n, size }),
   });
 }
 
@@ -81,12 +106,14 @@ export async function submitEditMessage(
   prompt: string,
   model: string,
   n: number,
+  size: ImageSize,
   file: File,
 ) {
   const form = new FormData();
   form.set("prompt", prompt);
   form.set("model", model);
   form.set("n", String(n));
+  form.set("size", size);
   form.set("image", file);
   const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/messages/edit`, {
     method: "POST",
@@ -106,13 +133,20 @@ export function cancelTask(key: string, taskId: string) {
   });
 }
 
-export function getTask(key: string, taskId: string) {
-  return fetchJson<TaskResponse>(`/tasks/${encodeURIComponent(taskId)}`, key);
+export function getTask(key: string, taskId: string, options: RequestOptions = {}) {
+  return fetchJson<TaskResponse>(`/tasks/${encodeURIComponent(taskId)}`, key, {
+    signal: options.signal,
+  });
 }
 
-export async function fetchArtifactBlob(key: string, artifactId: string): Promise<Blob> {
+export async function fetchArtifactBlob(
+  key: string,
+  artifactId: string,
+  options: RequestOptions = {},
+): Promise<Blob> {
   const response = await fetch(`${API_BASE}/artifacts/${encodeURIComponent(artifactId)}`, {
     headers: { authorization: `Bearer ${key}` },
+    signal: options.signal,
   });
   if (!response.ok) {
     throw new Error(await response.text());
@@ -127,6 +161,12 @@ export function updateNotification(key: string, email: string, enabled: boolean)
   });
 }
 
+export function fetchMyUsageEvents(key: string, offset = 0, limit = 50, query = "") {
+  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  if (query.trim()) params.set("q", query.trim());
+  return fetchJson<UsageEventsResponse>(`/me/usage/events?${params.toString()}`, key);
+}
+
 export function adminSessions(key: string, params: URLSearchParams) {
   return fetchJson<{ items: SessionRecord[] }>(`/admin/sessions?${params.toString()}`, key);
 }
@@ -135,10 +175,15 @@ export function adminQueue(key: string) {
   return fetchJson<AdminQueueResponse>("/admin/queue", key);
 }
 
-export function patchAdminQueue(key: string, globalImageConcurrency: number) {
-  return fetchJson<{ config: { global_image_concurrency: number } }>("/admin/queue/config", key, {
+export function patchAdminQueue(key: string, globalImageConcurrency: number, imageTaskTimeoutSeconds: number) {
+  return fetchJson<{
+    config: { global_image_concurrency: number; image_task_timeout_seconds: number };
+  }>("/admin/queue/config", key, {
     method: "PATCH",
-    body: JSON.stringify({ global_image_concurrency: globalImageConcurrency }),
+    body: JSON.stringify({
+      global_image_concurrency: globalImageConcurrency,
+      image_task_timeout_seconds: imageTaskTimeoutSeconds,
+    }),
   });
 }
 
@@ -163,9 +208,11 @@ export function patchAdminKey(key: string, keyId: string, patch: Partial<Product
 export async function openSessionEventStream(
   sessionId: string,
   key: string,
+  options: RequestOptions = {},
 ): Promise<ReadableStream<Uint8Array>> {
   const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/events`, {
     headers: { authorization: `Bearer ${key}` },
+    signal: options.signal,
   });
   if (!response.ok || !response.body) {
     throw new Error(`event stream failed: HTTP ${response.status}`);

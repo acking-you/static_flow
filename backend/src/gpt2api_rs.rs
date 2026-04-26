@@ -17,9 +17,21 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use static_flow_shared::llm_gateway_store::{
+    now_ms, Gpt2ApiAccountContributionRequestRecord, NewGpt2ApiAccountContributionRequestInput,
+    LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED, LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED,
+    LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING, LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED,
+};
 
 use crate::{
-    handlers::{ensure_admin_access, ErrorResponse},
+    email::{
+        build_gpt2api_login_url, normalize_frontend_page_url_input, normalize_requester_email_input,
+    },
+    handlers::{ensure_admin_access, generate_task_id, AdminTaskActionRequest, ErrorResponse},
+    public_submit_guard::{
+        build_client_fingerprint, build_submit_rate_limit_key, enforce_public_submit_rate_limit,
+        extract_client_ip,
+    },
     state::AppState,
 };
 
@@ -27,6 +39,11 @@ const DEFAULT_CONFIG_PATH: &str = "conf/gpt2api-rs.json";
 const DEFAULT_TIMEOUT_SECONDS: u64 = 60;
 const MAX_TIMEOUT_SECONDS: u64 = 300;
 const MAX_PUBLIC_PROXY_BODY_BYTES: usize = 64 * 1024 * 1024;
+const MAX_PUBLIC_GPT2API_CONTRIBUTION_MESSAGE_CHARS: usize = 4000;
+const MAX_PUBLIC_GPT2API_CONTRIBUTION_LABEL_CHARS: usize = 80;
+const MAX_PUBLIC_GPT2API_CONTRIBUTION_GITHUB_ID_CHARS: usize = 39;
+const MAX_PUBLIC_GPT2API_SESSION_JSON_BYTES: usize = 256 * 1024;
+const GPT2API_CONTRIBUTION_KEY_QUOTA_TOTAL_CALLS: i64 = 100_000_000_000;
 
 type HandlerResult<T> = Result<T, (StatusCode, Json<ErrorResponse>)>;
 
@@ -67,17 +84,121 @@ pub struct UsageLimitQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UsageEventsQuery {
+    #[serde(default)]
+    pub key_id: Option<String>,
+    #[serde(default)]
+    pub q: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u64>,
+    #[serde(default)]
+    pub offset: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct AdminImageEditRequest {
     pub prompt: String,
     #[serde(default = "default_image_model")]
     pub model: String,
     #[serde(default = "default_image_count")]
     pub n: usize,
+    #[serde(default = "default_image_size")]
+    pub size: String,
     pub image_base64: String,
     #[serde(default)]
     pub file_name: Option<String>,
     #[serde(default)]
     pub mime_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SubmitGpt2ApiAccountContributionRequest {
+    pub account_name: String,
+    #[serde(default)]
+    pub access_token: Option<String>,
+    #[serde(default)]
+    pub session_json: Option<String>,
+    pub requester_email: String,
+    pub contributor_message: String,
+    #[serde(default)]
+    pub github_id: Option<String>,
+    #[serde(default)]
+    pub frontend_page_url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SubmitGpt2ApiAccountContributionRequestResponse {
+    pub request_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminGpt2ApiAccountContributionRequestView {
+    pub request_id: String,
+    pub account_name: String,
+    pub access_token: Option<String>,
+    pub session_json: Option<String>,
+    pub requester_email: String,
+    pub contributor_message: String,
+    pub github_id: Option<String>,
+    pub frontend_page_url: Option<String>,
+    pub status: String,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub admin_note: Option<String>,
+    pub failure_reason: Option<String>,
+    pub imported_account_name: Option<String>,
+    pub issued_key_id: Option<String>,
+    pub issued_key_name: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub processed_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminGpt2ApiAccountContributionRequestsResponse {
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+    pub requests: Vec<AdminGpt2ApiAccountContributionRequestView>,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct AdminGpt2ApiAccountContributionRequestQuery {
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+}
+
+impl From<&Gpt2ApiAccountContributionRequestRecord> for AdminGpt2ApiAccountContributionRequestView {
+    fn from(value: &Gpt2ApiAccountContributionRequestRecord) -> Self {
+        Self {
+            request_id: value.request_id.clone(),
+            account_name: value.account_name.clone(),
+            access_token: value.access_token.clone(),
+            session_json: value.session_json.clone(),
+            requester_email: value.requester_email.clone(),
+            contributor_message: value.contributor_message.clone(),
+            github_id: value.github_id.clone(),
+            frontend_page_url: value.frontend_page_url.clone(),
+            status: value.status.clone(),
+            client_ip: value.client_ip.clone(),
+            ip_region: value.ip_region.clone(),
+            admin_note: value.admin_note.clone(),
+            failure_reason: value.failure_reason.clone(),
+            imported_account_name: value.imported_account_name.clone(),
+            issued_key_id: value.issued_key_id.clone(),
+            issued_key_name: value.issued_key_name.clone(),
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+            processed_at: value.processed_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +296,292 @@ pub async fn get_admin_status(
         );
     }
     Ok(Json(payload))
+}
+
+pub async fn submit_public_account_contribution_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SubmitGpt2ApiAccountContributionRequest>,
+) -> HandlerResult<Json<SubmitGpt2ApiAccountContributionRequestResponse>> {
+    ensure_gpt2api_admin_online(&state).await?;
+
+    let account_name = normalize_gpt2api_contribution_label(&request.account_name)
+        .map_err(|err| bad_request(format!("invalid account_name: {err}")))?;
+    let access_token = normalize_optional_gpt2api_secret(request.access_token.as_deref());
+    let session_json = normalize_optional_gpt2api_secret(request.session_json.as_deref());
+    if access_token.is_none() && session_json.is_none() {
+        return Err(bad_request("access_token or session_json is required"));
+    }
+    if let Some(session_json) = session_json.as_deref() {
+        if session_json.len() > MAX_PUBLIC_GPT2API_SESSION_JSON_BYTES {
+            return Err(bad_request("session_json is too large"));
+        }
+    }
+    let requester_email = normalize_requester_email_input(Some(request.requester_email))
+        .map_err(|err| bad_request(format!("invalid requester_email: {err}")))?
+        .ok_or_else(|| bad_request("requester_email is required"))?;
+    let contributor_message = request.contributor_message.trim();
+    if contributor_message.is_empty() {
+        return Err(bad_request("contributor_message is required"));
+    }
+    if contributor_message.chars().count() > MAX_PUBLIC_GPT2API_CONTRIBUTION_MESSAGE_CHARS {
+        return Err(bad_request("contributor_message is too long"));
+    }
+    let github_id = normalize_optional_gpt2api_github_id(request.github_id)
+        .map_err(|err| bad_request(format!("invalid github_id: {err}")))?;
+    let frontend_page_url = normalize_frontend_page_url_input(request.frontend_page_url)
+        .map_err(|err| bad_request(format!("invalid frontend_page_url: {err}")))?;
+
+    let client_ip = extract_client_ip(&headers);
+    let fingerprint = build_client_fingerprint(&headers);
+    let rate_limit_key = build_submit_rate_limit_key(&headers, &fingerprint);
+    enforce_public_submit_rate_limit(
+        state.llm_gateway_public_submit_guard.as_ref(),
+        &rate_limit_key,
+        now_ms(),
+        60,
+        "gpt2api public account contribution",
+    )?;
+
+    let request_id = generate_task_id("gptacct");
+    let ip_region = state.geoip.resolve_region(&client_ip).await;
+    let record = state
+        .llm_gateway_store
+        .create_gpt2api_account_contribution_request(NewGpt2ApiAccountContributionRequestInput {
+            request_id: request_id.clone(),
+            account_name,
+            access_token,
+            session_json,
+            requester_email,
+            contributor_message: contributor_message.to_string(),
+            github_id,
+            frontend_page_url,
+            fingerprint,
+            client_ip,
+            ip_region,
+        })
+        .await
+        .map_err(internal_error)?;
+
+    if let Some(notifier) = state.email_notifier.clone() {
+        let record_for_email = record.clone();
+        tokio::spawn(async move {
+            if let Err(err) = notifier
+                .send_admin_new_gpt2api_account_contribution_request_notification(&record_for_email)
+                .await
+            {
+                tracing::warn!(
+                    "failed to send admin notification email for gpt2api account contribution {}: \
+                     {}",
+                    record_for_email.request_id,
+                    err
+                );
+            }
+        });
+    }
+
+    Ok(Json(SubmitGpt2ApiAccountContributionRequestResponse {
+        request_id,
+        status: LLM_GATEWAY_TOKEN_REQUEST_STATUS_PENDING.to_string(),
+    }))
+}
+
+pub async fn list_admin_account_contribution_requests(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminGpt2ApiAccountContributionRequestQuery>,
+) -> HandlerResult<Json<AdminGpt2ApiAccountContributionRequestsResponse>> {
+    ensure_admin_access(&state, &headers)?;
+    let limit = query.limit.unwrap_or(25).clamp(1, 100);
+    let offset = query.offset.unwrap_or(0);
+    let total = state
+        .llm_gateway_store
+        .count_gpt2api_account_contribution_requests(query.status.as_deref())
+        .await
+        .map_err(internal_error)?;
+    if total == 0 || offset >= total {
+        return Ok(Json(AdminGpt2ApiAccountContributionRequestsResponse {
+            total,
+            offset,
+            limit,
+            has_more: false,
+            requests: vec![],
+            generated_at: now_ms(),
+        }));
+    }
+    let requests = state
+        .llm_gateway_store
+        .list_gpt2api_account_contribution_requests_page(query.status.as_deref(), limit, offset)
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(AdminGpt2ApiAccountContributionRequestsResponse {
+        total,
+        offset,
+        limit,
+        has_more: offset.saturating_add(requests.len()) < total,
+        requests: requests
+            .iter()
+            .map(AdminGpt2ApiAccountContributionRequestView::from)
+            .collect(),
+        generated_at: now_ms(),
+    }))
+}
+
+pub async fn approve_and_issue_account_contribution_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(request_id): AxumPath<String>,
+    Json(request): Json<AdminTaskActionRequest>,
+) -> HandlerResult<Json<AdminGpt2ApiAccountContributionRequestView>> {
+    ensure_admin_access(&state, &headers)?;
+
+    let mut contribution_request = state
+        .llm_gateway_store
+        .get_gpt2api_account_contribution_request(&request_id)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| not_found("gpt2api account contribution request not found"))?;
+
+    match contribution_request.status.as_str() {
+        LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED | LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED => {
+            return Err(conflict_error("gpt2api account contribution request is finalized"));
+        },
+        _ => {},
+    }
+
+    let Some(notifier) = state.email_notifier.clone() else {
+        mark_gpt2api_contribution_failed(
+            &state,
+            &mut contribution_request,
+            "email notifier is not configured".to_string(),
+        )
+        .await?;
+        return Err(internal_error("email notifier is not configured"));
+    };
+
+    let access_token = resolve_gpt2api_contribution_access_token(&contribution_request)
+        .map_err(|err| bad_request(format!("invalid contributed credential: {err}")))?;
+    let imported_account_name = if let Some(name) = contribution_request
+        .imported_account_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+    {
+        name
+    } else {
+        let payload = import_gpt2api_contribution_account(&state, &contribution_request).await?;
+        let account_name = find_gpt2api_account_name_for_access_token(&payload, &access_token)
+            .ok_or_else(|| {
+                internal_error("gpt2api-rs import response did not include the contributed account")
+            })?;
+        contribution_request.imported_account_name = Some(account_name.clone());
+        account_name
+    };
+
+    let (key_id, key_name, api_key) = if let Some(existing_key_id) =
+        contribution_request.issued_key_id.as_deref()
+    {
+        load_gpt2api_key_secret(&state, existing_key_id).await?
+    } else {
+        create_bound_gpt2api_contribution_key(&state, &contribution_request, &imported_account_name)
+            .await?
+    };
+
+    let login_url = contribution_request
+        .frontend_page_url
+        .as_deref()
+        .and_then(|url| build_gpt2api_login_url(url).ok())
+        .or_else(|| {
+            env::var("SITE_BASE_URL")
+                .ok()
+                .map(|base| format!("{}/gpt2api/login", base.trim_end_matches('/')))
+        })
+        .unwrap_or_else(|| "/gpt2api/login".to_string());
+
+    let now = now_ms();
+    contribution_request.admin_note = request.admin_note.clone();
+    contribution_request.failure_reason = None;
+    contribution_request.imported_account_name = Some(imported_account_name);
+    contribution_request.issued_key_id = Some(key_id.clone());
+    contribution_request.issued_key_name = Some(key_name.clone());
+    contribution_request.updated_at = now;
+    contribution_request.processed_at = Some(now);
+    let mut issued_request = contribution_request.clone();
+    issued_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED.to_string();
+
+    match notifier
+        .send_user_gpt2api_account_contribution_issued_notification(
+            &issued_request,
+            &key_id,
+            &key_name,
+            &api_key,
+            &login_url,
+        )
+        .await
+    {
+        Ok(()) => {
+            contribution_request = issued_request;
+            state
+                .llm_gateway_store
+                .upsert_gpt2api_account_contribution_request(&contribution_request)
+                .await
+                .map_err(internal_error)?;
+            Ok(Json(AdminGpt2ApiAccountContributionRequestView::from(&contribution_request)))
+        },
+        Err(err) => {
+            mark_gpt2api_contribution_failed(&state, &mut contribution_request, err.to_string())
+                .await?;
+            Err(internal_error("failed to send gpt2api contribution email"))
+        },
+    }
+}
+
+pub async fn reject_account_contribution_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(request_id): AxumPath<String>,
+    Json(request): Json<AdminTaskActionRequest>,
+) -> HandlerResult<Json<AdminGpt2ApiAccountContributionRequestView>> {
+    ensure_admin_access(&state, &headers)?;
+    let mut contribution_request = state
+        .llm_gateway_store
+        .get_gpt2api_account_contribution_request(&request_id)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| not_found("gpt2api account contribution request not found"))?;
+
+    if contribution_request.status == LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED {
+        return Err(conflict_error(
+            "issued gpt2api account contribution request cannot be rejected",
+        ));
+    }
+    if contribution_request.status == LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED {
+        return Err(conflict_error("gpt2api account contribution request is already rejected"));
+    }
+
+    if let Some(key_id) = contribution_request.issued_key_id.as_deref() {
+        delete_gpt2api_key_if_present(&state, key_id).await?;
+    }
+    if contribution_request.imported_account_name.is_some() {
+        if let Ok(access_token) = resolve_gpt2api_contribution_access_token(&contribution_request) {
+            delete_gpt2api_account_if_present(&state, &access_token).await?;
+        }
+    }
+
+    let now = now_ms();
+    contribution_request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_REJECTED.to_string();
+    contribution_request.admin_note = request.admin_note.clone();
+    contribution_request.failure_reason = None;
+    contribution_request.updated_at = now;
+    contribution_request.processed_at = Some(now);
+    state
+        .llm_gateway_store
+        .upsert_gpt2api_account_contribution_request(&contribution_request)
+        .await
+        .map_err(internal_error)?;
+
+    Ok(Json(AdminGpt2ApiAccountContributionRequestView::from(&contribution_request)))
 }
 
 pub async fn get_public_version(
@@ -322,6 +729,74 @@ pub async fn check_admin_proxy_config(
         &format!("/admin/proxy-configs/{proxy_id}/check"),
         None,
         Some(Value::Object(serde_json::Map::new())),
+    )
+    .await
+}
+
+pub async fn list_admin_account_groups(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> HandlerResult<Json<Value>> {
+    ensure_admin_access(&state, &headers)?;
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::GET,
+        "/admin/account-groups",
+        None,
+        None,
+    )
+    .await
+}
+
+pub async fn create_admin_account_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<Value>,
+) -> HandlerResult<Json<Value>> {
+    ensure_admin_access(&state, &headers)?;
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::POST,
+        "/admin/account-groups",
+        None,
+        Some(request),
+    )
+    .await
+}
+
+pub async fn update_admin_account_group(
+    AxumPath(group_id): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<Value>,
+) -> HandlerResult<Json<Value>> {
+    ensure_admin_access(&state, &headers)?;
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::PATCH,
+        &format!("/admin/account-groups/{group_id}"),
+        None,
+        Some(request),
+    )
+    .await
+}
+
+pub async fn delete_admin_account_group(
+    AxumPath(group_id): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> HandlerResult<Json<Value>> {
+    ensure_admin_access(&state, &headers)?;
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::DELETE,
+        &format!("/admin/account-groups/{group_id}"),
+        None,
+        None,
     )
     .await
 }
@@ -497,6 +972,36 @@ pub async fn list_admin_usage(
     .await
 }
 
+pub async fn list_admin_usage_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<UsageEventsQuery>,
+) -> HandlerResult<Json<Value>> {
+    ensure_admin_access(&state, &headers)?;
+    let mut params = Vec::new();
+    if let Some(key_id) = query.key_id.filter(|value| !value.trim().is_empty()) {
+        params.push(("key_id", key_id));
+    }
+    if let Some(q) = query.q.filter(|value| !value.trim().is_empty()) {
+        params.push(("q", q));
+    }
+    if let Some(limit) = query.limit {
+        params.push(("limit", limit.to_string()));
+    }
+    if let Some(offset) = query.offset {
+        params.push(("offset", offset.to_string()));
+    }
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::GET,
+        "/admin/usage/events",
+        Some(&params),
+        None,
+    )
+    .await
+}
+
 pub async fn post_image_generation(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -544,6 +1049,7 @@ pub async fn post_image_edit(
         .text("prompt", request.prompt.trim().to_string())
         .text("model", request.model.trim().to_string())
         .text("n", request.n.to_string())
+        .text("size", request.size.trim().to_string())
         .part(
             "image",
             reqwest::multipart::Part::bytes(image_bytes)
@@ -869,6 +1375,269 @@ async fn decode_json_response(response: reqwest::Response) -> HandlerResult<Json
     Err(decode_error_response(status, bytes))
 }
 
+async fn ensure_gpt2api_admin_online(state: &AppState) -> HandlerResult<()> {
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::GET,
+        "/admin/status",
+        None,
+        None,
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn import_gpt2api_contribution_account(
+    state: &AppState,
+    request: &Gpt2ApiAccountContributionRequestRecord,
+) -> HandlerResult<Value> {
+    let body = json!({
+        "access_tokens": request
+            .access_token
+            .as_ref()
+            .map(|token| vec![token.clone()])
+            .unwrap_or_default(),
+        "session_jsons": request
+            .session_json
+            .as_ref()
+            .map(|session_json| vec![session_json.clone()])
+            .unwrap_or_default(),
+    });
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::POST,
+        "/admin/accounts/import",
+        None,
+        Some(body),
+    )
+    .await
+    .map(|payload| payload.0)
+}
+
+fn find_gpt2api_account_name_for_access_token(
+    payload: &Value,
+    access_token: &str,
+) -> Option<String> {
+    payload
+        .get("items")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|item| {
+            item.get("access_token")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                == Some(access_token)
+        })
+        .and_then(|item| item.get("name").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+async fn create_bound_gpt2api_contribution_key(
+    state: &AppState,
+    request: &Gpt2ApiAccountContributionRequestRecord,
+    account_name: &str,
+) -> HandlerResult<(String, String, String)> {
+    let key_name = normalize_gpt2api_key_name(&format!("contrib-{}", request.request_id));
+    let body = json!({
+        "name": key_name,
+        "quota_total_calls": GPT2API_CONTRIBUTION_KEY_QUOTA_TOTAL_CALLS,
+        "status": "active",
+        "route_strategy": "fixed",
+        "fixed_account_name": account_name,
+        "role": "user",
+        "notification_email": request.requester_email,
+        "notification_enabled": true,
+    });
+    let payload = proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::POST,
+        "/admin/keys",
+        None,
+        Some(body),
+    )
+    .await?
+    .0;
+    extract_gpt2api_key_secret_tuple(&payload)
+}
+
+async fn load_gpt2api_key_secret(
+    state: &AppState,
+    key_id: &str,
+) -> HandlerResult<(String, String, String)> {
+    let payload = proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::GET,
+        "/admin/keys",
+        None,
+        None,
+    )
+    .await?
+    .0;
+    let Some(keys) = payload.as_array() else {
+        return Err(internal_error("gpt2api-rs keys response is not an array"));
+    };
+    let Some(key) = keys
+        .iter()
+        .find(|item| item.get("id").and_then(Value::as_str).map(str::trim) == Some(key_id))
+    else {
+        return Err(not_found("gpt2api contribution key not found"));
+    };
+    extract_gpt2api_key_secret_tuple(key)
+}
+
+fn extract_gpt2api_key_secret_tuple(payload: &Value) -> HandlerResult<(String, String, String)> {
+    let id = payload
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| internal_error("gpt2api-rs key response missing id"))?
+        .to_string();
+    let name = payload
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| internal_error("gpt2api-rs key response missing name"))?
+        .to_string();
+    let secret = payload
+        .get("secret_plaintext")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| internal_error("gpt2api-rs key response missing plaintext secret"))?
+        .to_string();
+    Ok((id, name, secret))
+}
+
+async fn delete_gpt2api_key_if_present(state: &AppState, key_id: &str) -> HandlerResult<()> {
+    let path = format!("/admin/keys/{key_id}");
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::DELETE,
+        &path,
+        None,
+        None,
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn delete_gpt2api_account_if_present(
+    state: &AppState,
+    access_token: &str,
+) -> HandlerResult<()> {
+    proxy_json_request(
+        state.gpt2api_rs.as_ref(),
+        TokenScope::Admin,
+        Method::DELETE,
+        "/admin/accounts",
+        None,
+        Some(json!({ "access_tokens": [access_token] })),
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn mark_gpt2api_contribution_failed(
+    state: &AppState,
+    request: &mut Gpt2ApiAccountContributionRequestRecord,
+    reason: String,
+) -> HandlerResult<()> {
+    request.status = LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED.to_string();
+    request.failure_reason = Some(reason);
+    request.updated_at = now_ms();
+    request.processed_at = Some(now_ms());
+    state
+        .llm_gateway_store
+        .upsert_gpt2api_account_contribution_request(request)
+        .await
+        .map_err(internal_error)
+}
+
+fn resolve_gpt2api_contribution_access_token(
+    request: &Gpt2ApiAccountContributionRequestRecord,
+) -> Result<String> {
+    if let Some(token) = request
+        .access_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(token.to_string());
+    }
+    let session_json = request
+        .session_json
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("access_token or session_json is required")?;
+    let value: Value = serde_json::from_str(session_json).context("invalid session_json")?;
+    value
+        .get("accessToken")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .context("session_json missing accessToken")
+}
+
+fn normalize_gpt2api_contribution_label(raw: &str) -> Result<String> {
+    let label = raw.trim();
+    if label.is_empty() {
+        anyhow::bail!("account_name is required");
+    }
+    if label.chars().count() > MAX_PUBLIC_GPT2API_CONTRIBUTION_LABEL_CHARS {
+        anyhow::bail!("account_name is too long");
+    }
+    if label.chars().any(char::is_control) {
+        anyhow::bail!("account_name cannot contain control characters");
+    }
+    Ok(label.to_string())
+}
+
+fn normalize_optional_gpt2api_secret(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn normalize_optional_gpt2api_github_id(value: Option<String>) -> Result<Option<String>> {
+    let Some(trimmed) = value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+    else {
+        return Ok(None);
+    };
+    if trimmed.chars().count() > MAX_PUBLIC_GPT2API_CONTRIBUTION_GITHUB_ID_CHARS {
+        anyhow::bail!("github_id is too long");
+    }
+    if trimmed.starts_with('-') || trimmed.ends_with('-') {
+        anyhow::bail!("github_id cannot start or end with `-`");
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+    {
+        anyhow::bail!("github_id may contain only ASCII letters, digits, or `-`");
+    }
+    Ok(Some(trimmed))
+}
+
+fn normalize_gpt2api_key_name(raw: &str) -> String {
+    raw.chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' { ch } else { '-' })
+        .collect()
+}
+
 fn decode_error_response(
     status: StatusCode,
     bytes: bytes::Bytes,
@@ -974,11 +1743,15 @@ fn default_timeout_seconds() -> u64 {
 }
 
 fn default_image_model() -> String {
-    "gpt-image-1".to_string()
+    "gpt-image-2".to_string()
 }
 
 const fn default_image_count() -> usize {
     1
+}
+
+fn default_image_size() -> String {
+    "1024x1024".to_string()
 }
 
 fn resolve_config_path() -> PathBuf {
@@ -1037,6 +1810,14 @@ fn bad_request(err: impl std::fmt::Display) -> (StatusCode, Json<ErrorResponse>)
 fn bad_gateway(err: impl std::fmt::Display) -> (StatusCode, Json<ErrorResponse>) {
     tracing::error!("gpt2api-rs upstream error: {err}");
     error_response(StatusCode::BAD_GATEWAY, "gpt2api-rs service is unavailable".to_string())
+}
+
+fn not_found(message: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
+    error_response(StatusCode::NOT_FOUND, message)
+}
+
+fn conflict_error(message: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
+    error_response(StatusCode::CONFLICT, message)
 }
 
 fn internal_error(err: impl std::fmt::Display) -> (StatusCode, Json<ErrorResponse>) {

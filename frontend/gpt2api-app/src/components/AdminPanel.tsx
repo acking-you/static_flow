@@ -22,6 +22,7 @@ export function AdminPanel({ apiKey, role }: AdminPanelProps) {
   const [keys, setKeys] = useState<ProductKey[]>([]);
   const [query, setQuery] = useState("");
   const [concurrency, setConcurrency] = useState(1);
+  const [taskTimeoutSeconds, setTaskTimeoutSeconds] = useState(900);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -51,6 +52,7 @@ export function AdminPanel({ apiKey, role }: AdminPanelProps) {
         const value = await adminQueue(apiKey);
         setQueue(value);
         setConcurrency(value.config.global_image_concurrency);
+        setTaskTimeoutSeconds(value.config.image_task_timeout_seconds);
       }
       if (tab === "keys") {
         setKeys(await adminKeys(apiKey));
@@ -63,7 +65,7 @@ export function AdminPanel({ apiKey, role }: AdminPanelProps) {
   async function saveQueue() {
     setError("");
     try {
-      await patchAdminQueue(apiKey, concurrency);
+      await patchAdminQueue(apiKey, concurrency, taskTimeoutSeconds);
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -108,6 +110,10 @@ export function AdminPanel({ apiKey, role }: AdminPanelProps) {
           <label className="setting-row">
             <span><SlidersHorizontal size={15} /> Global concurrency</span>
             <input type="number" min={1} max={16} value={concurrency} onChange={(event) => setConcurrency(Number(event.target.value))} />
+          </label>
+          <label className="setting-row">
+            <span><SlidersHorizontal size={15} /> Task timeout</span>
+            <input type="number" min={60} max={7200} step={60} value={taskTimeoutSeconds} onChange={(event) => setTaskTimeoutSeconds(Number(event.target.value))} />
           </label>
           <button className="secondary-button" onClick={() => void saveQueue()}><Save size={15} /> Save</button>
           <div className="queue-columns">

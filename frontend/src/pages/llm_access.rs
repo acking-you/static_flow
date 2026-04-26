@@ -9,13 +9,14 @@ use crate::{
     api::{
         fetch_llm_gateway_access, fetch_llm_gateway_account_contributions,
         fetch_llm_gateway_sponsors, fetch_llm_gateway_status, fetch_llm_gateway_support_config,
+        submit_gpt2api_account_contribution_request,
         submit_llm_gateway_account_contribution_request, submit_llm_gateway_sponsor_request,
         submit_llm_gateway_token_request, LlmGatewayAccessResponse,
         LlmGatewayPublicAccountStatusView, LlmGatewayPublicKeyView,
         LlmGatewayRateLimitStatusResponse, LlmGatewayRateLimitWindowView,
         LlmGatewaySupportConfigView, PublicLlmGatewayAccountContributionView,
-        PublicLlmGatewaySponsorView, SubmitLlmGatewayAccountContributionInput,
-        SubmitLlmGatewaySponsorInput, API_BASE,
+        PublicLlmGatewaySponsorView, SubmitGpt2ApiAccountContributionInput,
+        SubmitLlmGatewayAccountContributionInput, SubmitLlmGatewaySponsorInput, API_BASE,
     },
     pages::llm_access_shared::{
         format_ms, format_number_i64, format_number_u64, format_percent, format_reset_hint,
@@ -100,6 +101,7 @@ enum ActiveModal {
     None,
     TokenWish,
     AccountContribution,
+    GptAccountContribution,
     Sponsor,
 }
 
@@ -339,6 +341,15 @@ pub fn llm_access_page() -> Html {
     let contribution_github_id = use_state(String::new);
     let contribution_submitting = use_state(|| false);
     let contribution_feedback = use_state(|| None::<(String, bool)>);
+    // GPT image account contribution form
+    let gpt_contribution_account_name = use_state(String::new);
+    let gpt_contribution_access_token = use_state(String::new);
+    let gpt_contribution_session_json = use_state(String::new);
+    let gpt_contribution_email = use_state(String::new);
+    let gpt_contribution_message = use_state(String::new);
+    let gpt_contribution_github_id = use_state(String::new);
+    let gpt_contribution_submitting = use_state(|| false);
+    let gpt_contribution_feedback = use_state(|| None::<(String, bool)>);
     // Sponsors
     let sponsors = use_state(Vec::<PublicLlmGatewaySponsorView>::new);
     let sponsor_error = use_state(|| None::<String>);
@@ -735,6 +746,80 @@ pub fn llm_access_page() -> Html {
                     Err(err) => contribution_feedback.set(Some((err, true))),
                 }
                 contribution_submitting.set(false);
+            });
+        })
+    };
+
+    let on_submit_gpt_account_contribution = {
+        let gpt_contribution_account_name = gpt_contribution_account_name.clone();
+        let gpt_contribution_access_token = gpt_contribution_access_token.clone();
+        let gpt_contribution_session_json = gpt_contribution_session_json.clone();
+        let gpt_contribution_email = gpt_contribution_email.clone();
+        let gpt_contribution_message = gpt_contribution_message.clone();
+        let gpt_contribution_github_id = gpt_contribution_github_id.clone();
+        let gpt_contribution_submitting = gpt_contribution_submitting.clone();
+        let gpt_contribution_feedback = gpt_contribution_feedback.clone();
+        let active_modal = active_modal.clone();
+        Callback::from(move |event: SubmitEvent| {
+            event.prevent_default();
+            let account_name = (*gpt_contribution_account_name).trim().to_string();
+            let access_token = (*gpt_contribution_access_token).trim().to_string();
+            let session_json = (*gpt_contribution_session_json).trim().to_string();
+            let email = (*gpt_contribution_email).trim().to_string();
+            let message = (*gpt_contribution_message).trim().to_string();
+            let github_id = (*gpt_contribution_github_id).trim().to_string();
+            if account_name.is_empty()
+                || (access_token.is_empty() && session_json.is_empty())
+                || email.is_empty()
+                || message.is_empty()
+            {
+                gpt_contribution_feedback.set(Some((
+                    "显示名、access token 或 session JSON、邮箱和留言都必须填写".to_string(),
+                    true,
+                )));
+                return;
+            }
+            let frontend_page_url = web_sys::window().and_then(|w| w.location().href().ok());
+            let gpt_contribution_account_name = gpt_contribution_account_name.clone();
+            let gpt_contribution_access_token = gpt_contribution_access_token.clone();
+            let gpt_contribution_session_json = gpt_contribution_session_json.clone();
+            let gpt_contribution_email = gpt_contribution_email.clone();
+            let gpt_contribution_message = gpt_contribution_message.clone();
+            let gpt_contribution_github_id = gpt_contribution_github_id.clone();
+            let gpt_contribution_submitting = gpt_contribution_submitting.clone();
+            let gpt_contribution_feedback = gpt_contribution_feedback.clone();
+            let active_modal = active_modal.clone();
+            gpt_contribution_submitting.set(true);
+            gpt_contribution_feedback.set(None);
+            wasm_bindgen_futures::spawn_local(async move {
+                let input = SubmitGpt2ApiAccountContributionInput {
+                    account_name,
+                    access_token: (!access_token.is_empty()).then_some(access_token),
+                    session_json: (!session_json.is_empty()).then_some(session_json),
+                    requester_email: email,
+                    contributor_message: message,
+                    github_id: (!github_id.is_empty()).then_some(github_id),
+                    frontend_page_url,
+                };
+                match submit_gpt2api_account_contribution_request(&input).await {
+                    Ok(_) => {
+                        gpt_contribution_account_name.set(String::new());
+                        gpt_contribution_access_token.set(String::new());
+                        gpt_contribution_session_json.set(String::new());
+                        gpt_contribution_email.set(String::new());
+                        gpt_contribution_message.set(String::new());
+                        gpt_contribution_github_id.set(String::new());
+                        gpt_contribution_feedback.set(Some((
+                            "GPT 账号贡献已提交，审核通过后会把 /gpt2api/login 可用的 key \
+                             发到你的邮箱。"
+                                .to_string(),
+                            false,
+                        )));
+                        active_modal.set(ActiveModal::None);
+                    },
+                    Err(err) => gpt_contribution_feedback.set(Some((err, true))),
+                }
+                gpt_contribution_submitting.set(false);
             });
         })
     };
@@ -1244,6 +1329,17 @@ pub fn llm_access_page() -> Html {
                                 class={classes!("btn-terminal")}
                                 onclick={{
                                     let active_modal = active_modal.clone();
+                                    Callback::from(move |_| active_modal.set(ActiveModal::GptAccountContribution))
+                                }}
+                            >
+                                <i class="fas fa-image"></i>
+                                { "贡献 GPT" }
+                            </button>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal")}
+                                onclick={{
+                                    let active_modal = active_modal.clone();
                                     Callback::from(move |_| active_modal.set(ActiveModal::Sponsor))
                                 }}
                             >
@@ -1689,6 +1785,82 @@ pub fn llm_access_page() -> Html {
                                     </button>
                                 </div>
                                 if let Some((msg, is_err)) = (*contribution_feedback).clone() {
+                                    if is_err {
+                                        <div class={classes!("rounded-lg", "border", "border-red-400/35", "bg-red-500/8", "px-3", "py-2", "font-mono", "text-xs", "text-red-700", "dark:text-red-200")}>{ msg }</div>
+                                    }
+                                }
+                            </form>
+                        </div>
+                    </div>
+                }
+
+                // --- Modal: GPT Account Contribution ---
+                if *active_modal == ActiveModal::GptAccountContribution {
+                    <div
+                        class={classes!("fixed", "inset-0", "z-[100]", "flex", "items-center", "justify-center", "bg-black/60", "backdrop-blur-sm", "p-4", "overflow-y-auto")}
+                        role="dialog" aria-modal="true"
+                        onclick={{ let m = active_modal.clone(); Callback::from(move |_: MouseEvent| m.set(ActiveModal::None)) }}
+                    >
+                        <div
+                            class={classes!("w-full", "max-w-lg", "my-8", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-6", "shadow-[0_20px_60px_rgba(0,0,0,0.3)]", "llm-modal-enter")}
+                            onclick={Callback::from(|e: MouseEvent| e.stop_propagation())}
+                        >
+                            <div class={classes!("flex", "items-center", "justify-between", "gap-3")}>
+                                <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "贡献 GPT" }</h2>
+                                <button type="button" class={classes!("btn-terminal")}
+                                    onclick={{ let m = active_modal.clone(); Callback::from(move |_| m.set(ActiveModal::None)) }}>
+                                    <i class="fas fa-xmark"></i>
+                                </button>
+                            </div>
+                            <p class={classes!("mt-2", "m-0", "font-mono", "text-xs", "text-[var(--muted)]")}>
+                                { "贡献 GPT 生图账号到 gpt2api-rs 池里；服务离线时提交会直接失败，审核通过后会发一把绑定账号和邮箱的 key。" }
+                            </p>
+                            <form class={classes!("mt-4", "grid", "gap-3")} onsubmit={on_submit_gpt_account_contribution}>
+                                <div class={classes!("grid", "gap-3", "sm:grid-cols-2")}>
+                                    <label class={classes!("text-sm")}>
+                                        <span class={classes!("font-mono", "text-xs", "text-[var(--muted)]")}>{ "显示名" }</span>
+                                        <input type="text" placeholder="my-gpt-image-account" class={ic}
+                                            value={(*gpt_contribution_account_name).clone()} required=true
+                                            oninput={{ let s = gpt_contribution_account_name.clone(); Callback::from(move |e: InputEvent| { if let Some(t) = e.target_dyn_into::<HtmlInputElement>() { s.set(t.value()); } }) }} />
+                                    </label>
+                                    <label class={classes!("text-sm")}>
+                                        <span class={classes!("font-mono", "text-xs", "text-[var(--muted)]")}>{ "邮箱" }</span>
+                                        <input type="email" placeholder="you@example.com" class={ic}
+                                            value={(*gpt_contribution_email).clone()} required=true
+                                            oninput={{ let s = gpt_contribution_email.clone(); Callback::from(move |e: InputEvent| { if let Some(t) = e.target_dyn_into::<HtmlInputElement>() { s.set(t.value()); } }) }} />
+                                    </label>
+                                </div>
+                                <label class={classes!("text-sm")}>
+                                    <span class={classes!("font-mono", "text-xs", "text-[var(--muted)]")}>{ "access_token" }</span>
+                                    <textarea rows="3" class={ic_mono_xs}
+                                        value={(*gpt_contribution_access_token).clone()}
+                                        oninput={{ let s = gpt_contribution_access_token.clone(); Callback::from(move |e: InputEvent| { if let Some(t) = e.target_dyn_into::<HtmlTextAreaElement>() { s.set(t.value()); } }) }} />
+                                </label>
+                                <label class={classes!("text-sm")}>
+                                    <span class={classes!("font-mono", "text-xs", "text-[var(--muted)]")}>{ "session JSON（可选，和 access_token 二选一）" }</span>
+                                    <textarea rows="4" placeholder="{\"accessToken\":\"...\",\"sessionToken\":\"...\"}" class={ic_mono_xs}
+                                        value={(*gpt_contribution_session_json).clone()}
+                                        oninput={{ let s = gpt_contribution_session_json.clone(); Callback::from(move |e: InputEvent| { if let Some(t) = e.target_dyn_into::<HtmlTextAreaElement>() { s.set(t.value()); } }) }} />
+                                </label>
+                                <label class={classes!("text-sm")}>
+                                    <span class={classes!("font-mono", "text-xs", "text-[var(--muted)]")}>{ "GitHub ID（可选）" }</span>
+                                    <input type="text" placeholder="ackingliu" class={ic}
+                                        value={(*gpt_contribution_github_id).clone()}
+                                        oninput={{ let s = gpt_contribution_github_id.clone(); Callback::from(move |e: InputEvent| { if let Some(t) = e.target_dyn_into::<HtmlInputElement>() { s.set(t.value()); } }) }} />
+                                </label>
+                                <label class={classes!("text-sm")}>
+                                    <span class={classes!("font-mono", "text-xs", "text-[var(--muted)]")}>{ "留言" }</span>
+                                    <textarea rows="3" placeholder="为什么愿意贡献这个 GPT 生图账号" class={ic_mono_xs}
+                                        value={(*gpt_contribution_message).clone()} required=true
+                                        oninput={{ let s = gpt_contribution_message.clone(); Callback::from(move |e: InputEvent| { if let Some(t) = e.target_dyn_into::<HtmlTextAreaElement>() { s.set(t.value()); } }) }} />
+                                </label>
+                                <div class={classes!("flex", "justify-end")}>
+                                    <button type="submit" class={classes!("btn-terminal", "btn-terminal-primary")} disabled={*gpt_contribution_submitting}>
+                                        <i class={classes!("fas", if *gpt_contribution_submitting { "fa-spinner animate-spin" } else { "fa-image" })}></i>
+                                        { if *gpt_contribution_submitting { "提交中..." } else { "提交" } }
+                                    </button>
+                                </div>
+                                if let Some((msg, is_err)) = (*gpt_contribution_feedback).clone() {
                                     if is_err {
                                         <div class={classes!("rounded-lg", "border", "border-red-400/35", "bg-red-500/8", "px-3", "py-2", "font-mono", "text-xs", "text-red-700", "dark:text-red-200")}>{ msg }</div>
                                     }

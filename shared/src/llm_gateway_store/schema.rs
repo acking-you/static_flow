@@ -17,10 +17,11 @@ use lancedb::{
 };
 
 use super::types::{
-    LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE, LLM_GATEWAY_ACCOUNT_GROUPS_TABLE,
-    LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_PROXY_BINDINGS_TABLE, LLM_GATEWAY_PROXY_CONFIGS_TABLE,
-    LLM_GATEWAY_RUNTIME_CONFIG_TABLE, LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
-    LLM_GATEWAY_TOKEN_REQUESTS_TABLE, LLM_GATEWAY_USAGE_EVENTS_TABLE,
+    GPT2API_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE, LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
+    LLM_GATEWAY_ACCOUNT_GROUPS_TABLE, LLM_GATEWAY_KEYS_TABLE, LLM_GATEWAY_PROXY_BINDINGS_TABLE,
+    LLM_GATEWAY_PROXY_CONFIGS_TABLE, LLM_GATEWAY_RUNTIME_CONFIG_TABLE,
+    LLM_GATEWAY_SPONSOR_REQUESTS_TABLE, LLM_GATEWAY_TOKEN_REQUESTS_TABLE,
+    LLM_GATEWAY_USAGE_EVENTS_TABLE,
 };
 use crate::lance_schema_encoding::{compressed_utf8_field, low_cardinality_utf8_field};
 #[cfg(test)]
@@ -98,6 +99,17 @@ pub fn llm_gateway_usage_events_schema() -> Arc<Schema> {
         low_cardinality_utf8_field("request_method", true),
         low_cardinality_utf8_field("request_url", true),
         Field::new("latency_ms", DataType::Int32, true),
+        Field::new("routing_wait_ms", DataType::UInt32, true),
+        Field::new("upstream_headers_ms", DataType::UInt32, true),
+        Field::new("post_headers_body_ms", DataType::UInt32, true),
+        Field::new("request_body_bytes", DataType::UInt64, true),
+        Field::new("request_body_read_ms", DataType::UInt32, true),
+        Field::new("request_json_parse_ms", DataType::UInt32, true),
+        Field::new("pre_handler_ms", DataType::UInt32, true),
+        Field::new("first_sse_write_ms", DataType::UInt32, true),
+        Field::new("stream_finish_ms", DataType::UInt32, true),
+        Field::new("quota_failover_count", DataType::UInt32, true),
+        compressed_utf8_field("routing_diagnostics_json", true),
         low_cardinality_utf8_field("endpoint", false),
         low_cardinality_utf8_field("model", true),
         Field::new("status_code", DataType::Int32, false),
@@ -232,6 +244,32 @@ pub fn llm_gateway_account_contribution_requests_schema() -> Arc<Schema> {
     ]))
 }
 
+/// Canonical schema for public gpt2api-rs account contribution submissions.
+pub fn gpt2api_account_contribution_requests_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("request_id", DataType::Utf8, false),
+        Field::new("account_name", DataType::Utf8, false),
+        Field::new("access_token", DataType::Utf8, true),
+        Field::new("session_json", DataType::Utf8, true),
+        Field::new("requester_email", DataType::Utf8, false),
+        Field::new("contributor_message", DataType::Utf8, false),
+        Field::new("github_id", DataType::Utf8, true),
+        Field::new("frontend_page_url", DataType::Utf8, true),
+        Field::new("status", DataType::Utf8, false),
+        Field::new("fingerprint", DataType::Utf8, false),
+        Field::new("client_ip", DataType::Utf8, false),
+        Field::new("ip_region", DataType::Utf8, false),
+        Field::new("admin_note", DataType::Utf8, true),
+        Field::new("failure_reason", DataType::Utf8, true),
+        Field::new("imported_account_name", DataType::Utf8, true),
+        Field::new("issued_key_id", DataType::Utf8, true),
+        Field::new("issued_key_name", DataType::Utf8, true),
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("updated_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("processed_at", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+    ]))
+}
+
 /// Canonical schema for public sponsor submissions.
 pub fn llm_gateway_sponsor_requests_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
@@ -330,6 +368,17 @@ pub async fn ensure_usage_events_table(db: &Connection) -> Result<Table> {
     ensure_nullable_utf8_column(&table, "request_method").await?;
     ensure_nullable_utf8_column(&table, "request_url").await?;
     ensure_nullable_i32_column(&table, "latency_ms").await?;
+    ensure_nullable_u32_column(&table, "routing_wait_ms").await?;
+    ensure_nullable_u32_column(&table, "upstream_headers_ms").await?;
+    ensure_nullable_u32_column(&table, "post_headers_body_ms").await?;
+    ensure_nullable_u64_column(&table, "request_body_bytes").await?;
+    ensure_nullable_u32_column(&table, "request_body_read_ms").await?;
+    ensure_nullable_u32_column(&table, "request_json_parse_ms").await?;
+    ensure_nullable_u32_column(&table, "pre_handler_ms").await?;
+    ensure_nullable_u32_column(&table, "first_sse_write_ms").await?;
+    ensure_nullable_u32_column(&table, "stream_finish_ms").await?;
+    ensure_nullable_u32_column(&table, "quota_failover_count").await?;
+    ensure_nullable_utf8_column(&table, "routing_diagnostics_json").await?;
     ensure_nullable_utf8_column(&table, "client_ip").await?;
     ensure_nullable_utf8_column(&table, "ip_region").await?;
     ensure_nullable_utf8_column(&table, "request_headers_json").await?;
@@ -467,6 +516,36 @@ pub async fn ensure_account_contribution_requests_table(db: &Connection) -> Resu
     Ok(table)
 }
 
+/// Ensure the gpt2api-rs account-contribution queue table exists.
+pub async fn ensure_gpt2api_account_contribution_requests_table(db: &Connection) -> Result<Table> {
+    let table = ensure_table(
+        db,
+        GPT2API_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
+        gpt2api_account_contribution_requests_schema(),
+        &[
+            ("new_table_enable_stable_row_ids", "true"),
+            ("new_table_enable_v2_manifest_paths", "true"),
+        ],
+    )
+    .await?;
+    ensure_nullable_utf8_column(&table, "access_token").await?;
+    ensure_nullable_utf8_column(&table, "session_json").await?;
+    ensure_nullable_utf8_column(&table, "github_id").await?;
+    ensure_nullable_utf8_column(&table, "frontend_page_url").await?;
+    ensure_nullable_utf8_column(&table, "admin_note").await?;
+    ensure_nullable_utf8_column(&table, "failure_reason").await?;
+    ensure_nullable_utf8_column(&table, "imported_account_name").await?;
+    ensure_nullable_utf8_column(&table, "issued_key_id").await?;
+    ensure_nullable_utf8_column(&table, "issued_key_name").await?;
+    ensure_nullable_ts_column(&table, "processed_at").await?;
+    ensure_scalar_index(&table, "request_id").await?;
+    ensure_scalar_index(&table, "account_name").await?;
+    ensure_scalar_index(&table, "requester_email").await?;
+    ensure_scalar_index(&table, "status").await?;
+    ensure_scalar_index(&table, "created_at").await?;
+    Ok(table)
+}
+
 /// Ensure the sponsor-request queue table exists.
 pub async fn ensure_sponsor_requests_table(db: &Connection) -> Result<Table> {
     let table = ensure_table(
@@ -569,6 +648,28 @@ async fn ensure_nullable_i32_column(table: &Table, column: &str) -> Result<()> {
             NewColumnTransform::AllNulls(Arc::new(Schema::new(vec![Field::new(
                 column,
                 DataType::Int32,
+                true,
+            )]))),
+            None,
+        )
+        .await
+        .with_context(|| format!("failed to add `{column}` to `{}`", table.name()))?;
+    Ok(())
+}
+
+/// Adds a nullable UInt32 column to an existing table without rewriting old
+/// rows.
+async fn ensure_nullable_u32_column(table: &Table, column: &str) -> Result<()> {
+    let schema = table.schema().await?;
+    if schema.field_with_name(column).is_ok() {
+        return Ok(());
+    }
+    tracing::info!(table = %table.name(), column, "Adding nullable UInt32 column to LLM gateway table");
+    table
+        .add_columns(
+            NewColumnTransform::AllNulls(Arc::new(Schema::new(vec![Field::new(
+                column,
+                DataType::UInt32,
                 true,
             )]))),
             None,
@@ -764,7 +865,7 @@ pub fn account_group_columns() -> [&'static str; 6] {
 }
 
 /// Ordered projection used when reading usage-event rows back from LanceDB.
-pub fn usage_event_columns() -> [&'static str; 26] {
+pub fn usage_event_columns() -> [&'static str; 37] {
     [
         "id",
         "key_id",
@@ -774,6 +875,17 @@ pub fn usage_event_columns() -> [&'static str; 26] {
         "request_method",
         "request_url",
         "latency_ms",
+        "routing_wait_ms",
+        "upstream_headers_ms",
+        "post_headers_body_ms",
+        "request_body_bytes",
+        "request_body_read_ms",
+        "request_json_parse_ms",
+        "pre_handler_ms",
+        "first_sse_write_ms",
+        "stream_finish_ms",
+        "quota_failover_count",
+        "routing_diagnostics_json",
         "endpoint",
         "model",
         "status_code",
@@ -796,7 +908,7 @@ pub fn usage_event_columns() -> [&'static str; 26] {
 }
 
 /// Ordered projection used when reading lightweight usage-event summaries.
-pub fn usage_event_summary_columns() -> [&'static str; 22] {
+pub fn usage_event_summary_columns() -> [&'static str; 33] {
     [
         "id",
         "key_id",
@@ -806,6 +918,17 @@ pub fn usage_event_summary_columns() -> [&'static str; 22] {
         "request_method",
         "request_url",
         "latency_ms",
+        "routing_wait_ms",
+        "upstream_headers_ms",
+        "post_headers_body_ms",
+        "request_body_bytes",
+        "request_body_read_ms",
+        "request_json_parse_ms",
+        "pre_handler_ms",
+        "first_sse_write_ms",
+        "stream_finish_ms",
+        "quota_failover_count",
+        "routing_diagnostics_json",
         "endpoint",
         "model",
         "status_code",
@@ -825,7 +948,7 @@ pub fn usage_event_summary_columns() -> [&'static str; 22] {
 
 /// Ordered projection used when rebuilding compact usage-event rows while
 /// preserving headers but skipping large request bodies.
-pub fn usage_event_rebuild_columns() -> [&'static str; 23] {
+pub fn usage_event_rebuild_columns() -> [&'static str; 34] {
     [
         "id",
         "key_id",
@@ -835,6 +958,17 @@ pub fn usage_event_rebuild_columns() -> [&'static str; 23] {
         "request_method",
         "request_url",
         "latency_ms",
+        "routing_wait_ms",
+        "upstream_headers_ms",
+        "post_headers_body_ms",
+        "request_body_bytes",
+        "request_body_read_ms",
+        "request_json_parse_ms",
+        "pre_handler_ms",
+        "first_sse_write_ms",
+        "stream_finish_ms",
+        "quota_failover_count",
+        "routing_diagnostics_json",
         "endpoint",
         "model",
         "status_code",
@@ -923,6 +1057,33 @@ pub fn account_contribution_request_columns() -> [&'static str; 22] {
     ]
 }
 
+/// Ordered projection used when reading gpt2api account-contribution rows back
+/// from LanceDB.
+pub fn gpt2api_account_contribution_request_columns() -> [&'static str; 20] {
+    [
+        "request_id",
+        "account_name",
+        "access_token",
+        "session_json",
+        "requester_email",
+        "contributor_message",
+        "github_id",
+        "frontend_page_url",
+        "status",
+        "fingerprint",
+        "client_ip",
+        "ip_region",
+        "admin_note",
+        "failure_reason",
+        "imported_account_name",
+        "issued_key_id",
+        "issued_key_name",
+        "created_at",
+        "updated_at",
+        "processed_at",
+    ]
+}
+
 /// Ordered projection used when reading sponsor-request rows back from LanceDB.
 pub fn sponsor_request_columns() -> [&'static str; 16] {
     [
@@ -966,6 +1127,7 @@ mod tests {
         let expected_level = HEAVY_TEXT_COMPRESSION_LEVEL.to_string();
 
         for column in [
+            "routing_diagnostics_json",
             "request_headers_json",
             "last_message_content",
             "client_request_body_json",
@@ -992,6 +1154,47 @@ mod tests {
                 "{column} should pin a zstd compression level",
             );
         }
+    }
+
+    #[test]
+    fn usage_event_routing_metric_columns_use_compact_non_negative_types() {
+        let schema = llm_gateway_usage_events_schema();
+        for column in [
+            "routing_wait_ms",
+            "upstream_headers_ms",
+            "post_headers_body_ms",
+            "request_body_read_ms",
+            "request_json_parse_ms",
+            "pre_handler_ms",
+            "first_sse_write_ms",
+            "stream_finish_ms",
+            "quota_failover_count",
+        ] {
+            let field = schema
+                .field_with_name(column)
+                .expect("usage-event routing metric column exists");
+            assert_eq!(
+                field.data_type(),
+                &arrow_schema::DataType::UInt32,
+                "{column} should use compact unsigned storage"
+            );
+        }
+        assert_eq!(
+            schema
+                .field_with_name("request_body_bytes")
+                .expect("usage-event request body byte metric exists")
+                .data_type(),
+            &arrow_schema::DataType::UInt64,
+            "request_body_bytes should preserve byte counts without lossy narrowing"
+        );
+        assert!(
+            schema.field_with_name("upstream_response_ms").is_err(),
+            "storage schema should use the semantically precise upstream_headers_ms name"
+        );
+        assert!(
+            schema.field_with_name("upstream_body_ms").is_err(),
+            "storage schema should use the semantically precise post_headers_body_ms name"
+        );
     }
 
     #[test]

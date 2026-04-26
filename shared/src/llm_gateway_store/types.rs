@@ -19,6 +19,8 @@ pub const LLM_GATEWAY_TOKEN_REQUESTS_TABLE: &str = "llm_gateway_token_requests";
 pub const LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE: &str =
     "llm_gateway_account_contribution_requests";
 pub const LLM_GATEWAY_SPONSOR_REQUESTS_TABLE: &str = "llm_gateway_sponsor_requests";
+pub const GPT2API_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE: &str =
+    "gpt2api_account_contribution_requests";
 
 pub const LLM_GATEWAY_TABLE_NAMES: &[&str] = &[
     LLM_GATEWAY_KEYS_TABLE,
@@ -30,6 +32,7 @@ pub const LLM_GATEWAY_TABLE_NAMES: &[&str] = &[
     LLM_GATEWAY_TOKEN_REQUESTS_TABLE,
     LLM_GATEWAY_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
     LLM_GATEWAY_SPONSOR_REQUESTS_TABLE,
+    GPT2API_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
 ];
 
 pub const LLM_GATEWAY_KEY_STATUS_ACTIVE: &str = "active";
@@ -285,6 +288,17 @@ pub struct LlmGatewayUsageEventRecord {
     pub request_method: String,
     pub request_url: String,
     pub latency_ms: i32,
+    pub routing_wait_ms: Option<i32>,
+    pub upstream_headers_ms: Option<i32>,
+    pub post_headers_body_ms: Option<i32>,
+    pub request_body_bytes: Option<u64>,
+    pub request_body_read_ms: Option<i32>,
+    pub request_json_parse_ms: Option<i32>,
+    pub pre_handler_ms: Option<i32>,
+    pub first_sse_write_ms: Option<i32>,
+    pub stream_finish_ms: Option<i32>,
+    pub quota_failover_count: u64,
+    pub routing_diagnostics_json: Option<String>,
     pub endpoint: String,
     pub model: Option<String>,
     pub status_code: i32,
@@ -332,6 +346,17 @@ pub struct LlmGatewayUsageEventSummaryRecord {
     pub request_method: String,
     pub request_url: String,
     pub latency_ms: i32,
+    pub routing_wait_ms: Option<i32>,
+    pub upstream_headers_ms: Option<i32>,
+    pub post_headers_body_ms: Option<i32>,
+    pub request_body_bytes: Option<u64>,
+    pub request_body_read_ms: Option<i32>,
+    pub request_json_parse_ms: Option<i32>,
+    pub pre_handler_ms: Option<i32>,
+    pub first_sse_write_ms: Option<i32>,
+    pub stream_finish_ms: Option<i32>,
+    pub quota_failover_count: u64,
+    pub routing_diagnostics_json: Option<String>,
     pub endpoint: String,
     pub model: Option<String>,
     pub status_code: i32,
@@ -456,6 +481,47 @@ pub struct LlmGatewayAccountContributionRequestRecord {
     pub id_token: String,
     pub access_token: String,
     pub refresh_token: String,
+    pub requester_email: String,
+    pub contributor_message: String,
+    pub github_id: Option<String>,
+    pub frontend_page_url: Option<String>,
+    pub status: String,
+    pub fingerprint: String,
+    pub client_ip: String,
+    pub ip_region: String,
+    pub admin_note: Option<String>,
+    pub failure_reason: Option<String>,
+    pub imported_account_name: Option<String>,
+    pub issued_key_id: Option<String>,
+    pub issued_key_name: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub processed_at: Option<i64>,
+}
+
+/// Input payload used to create one public gpt2api-rs account contribution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewGpt2ApiAccountContributionRequestInput {
+    pub request_id: String,
+    pub account_name: String,
+    pub access_token: Option<String>,
+    pub session_json: Option<String>,
+    pub requester_email: String,
+    pub contributor_message: String,
+    pub github_id: Option<String>,
+    pub frontend_page_url: Option<String>,
+    pub fingerprint: String,
+    pub client_ip: String,
+    pub ip_region: String,
+}
+
+/// Persisted gpt2api-rs account-contribution queue row.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Gpt2ApiAccountContributionRequestRecord {
+    pub request_id: String,
+    pub account_name: String,
+    pub access_token: Option<String>,
+    pub session_json: Option<String>,
     pub requester_email: String,
     pub contributor_message: String,
     pub github_id: Option<String>,

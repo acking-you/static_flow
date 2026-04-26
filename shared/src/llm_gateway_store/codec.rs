@@ -9,15 +9,16 @@ use anyhow::{Context, Result};
 use arrow_array::{
     builder::{
         BooleanBuilder, Float64Builder, Int32Builder, Int64Builder, StringBuilder,
-        TimestampMillisecondBuilder, UInt64Builder,
+        TimestampMillisecondBuilder, UInt32Builder, UInt64Builder,
     },
     Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
-    TimestampMillisecondArray, UInt64Array,
+    TimestampMillisecondArray, UInt32Array, UInt64Array,
 };
 
 use super::{
     kiro_cache_policy::default_kiro_cache_policy_json,
     schema::{
+        gpt2api_account_contribution_requests_schema,
         llm_gateway_account_contribution_requests_schema, llm_gateway_account_groups_schema,
         llm_gateway_keys_schema, llm_gateway_proxy_bindings_schema,
         llm_gateway_proxy_configs_schema, llm_gateway_runtime_config_schema,
@@ -26,9 +27,10 @@ use super::{
     },
     types::{
         compute_billable_tokens, default_kiro_billable_model_multipliers_json,
-        default_kiro_cache_kmodels_json, LlmGatewayAccountContributionRequestRecord,
-        LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayProxyBindingRecord,
-        LlmGatewayProxyConfigRecord, LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord,
+        default_kiro_cache_kmodels_json, Gpt2ApiAccountContributionRequestRecord,
+        LlmGatewayAccountContributionRequestRecord, LlmGatewayAccountGroupRecord,
+        LlmGatewayKeyRecord, LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord,
+        LlmGatewayRuntimeConfigRecord, LlmGatewaySponsorRequestRecord,
         LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
         LlmGatewayUsageEventSummaryRecord, DEFAULT_CODEX_CLIENT_VERSION,
         DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
@@ -189,6 +191,17 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
     let mut request_method = StringBuilder::new();
     let mut request_url = StringBuilder::new();
     let mut latency_ms = Int32Builder::new();
+    let mut routing_wait_ms = UInt32Builder::new();
+    let mut upstream_headers_ms = UInt32Builder::new();
+    let mut post_headers_body_ms = UInt32Builder::new();
+    let mut request_body_bytes = UInt64Builder::new();
+    let mut request_body_read_ms = UInt32Builder::new();
+    let mut request_json_parse_ms = UInt32Builder::new();
+    let mut pre_handler_ms = UInt32Builder::new();
+    let mut first_sse_write_ms = UInt32Builder::new();
+    let mut stream_finish_ms = UInt32Builder::new();
+    let mut quota_failover_count = UInt32Builder::new();
+    let mut routing_diagnostics_json = StringBuilder::new();
     let mut endpoint = StringBuilder::new();
     let mut model = StringBuilder::new();
     let mut status_code = Int32Builder::new();
@@ -217,6 +230,21 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
         request_method.append_value(&record.request_method);
         request_url.append_value(&record.request_url);
         latency_ms.append_value(record.latency_ms);
+        append_optional_ms_u32(&mut routing_wait_ms, record.routing_wait_ms);
+        append_optional_ms_u32(&mut upstream_headers_ms, record.upstream_headers_ms);
+        append_optional_ms_u32(&mut post_headers_body_ms, record.post_headers_body_ms);
+        append_optional_u64(&mut request_body_bytes, record.request_body_bytes);
+        append_optional_ms_u32(&mut request_body_read_ms, record.request_body_read_ms);
+        append_optional_ms_u32(&mut request_json_parse_ms, record.request_json_parse_ms);
+        append_optional_ms_u32(&mut pre_handler_ms, record.pre_handler_ms);
+        append_optional_ms_u32(&mut first_sse_write_ms, record.first_sse_write_ms);
+        append_optional_ms_u32(&mut stream_finish_ms, record.stream_finish_ms);
+        quota_failover_count
+            .append_value(record.quota_failover_count.min(u64::from(u32::MAX)) as u32);
+        append_optional_str(
+            &mut routing_diagnostics_json,
+            record.routing_diagnostics_json.as_deref(),
+        );
         endpoint.append_value(&record.endpoint);
         append_optional_str(&mut model, record.model.as_deref());
         status_code.append_value(record.status_code);
@@ -252,6 +280,17 @@ pub fn build_usage_events_batch(records: &[LlmGatewayUsageEventRecord]) -> Resul
         Arc::new(request_method.finish()),
         Arc::new(request_url.finish()),
         Arc::new(latency_ms.finish()),
+        Arc::new(routing_wait_ms.finish()),
+        Arc::new(upstream_headers_ms.finish()),
+        Arc::new(post_headers_body_ms.finish()),
+        Arc::new(request_body_bytes.finish()),
+        Arc::new(request_body_read_ms.finish()),
+        Arc::new(request_json_parse_ms.finish()),
+        Arc::new(pre_handler_ms.finish()),
+        Arc::new(first_sse_write_ms.finish()),
+        Arc::new(stream_finish_ms.finish()),
+        Arc::new(quota_failover_count.finish()),
+        Arc::new(routing_diagnostics_json.finish()),
         Arc::new(endpoint.finish()),
         Arc::new(model.finish()),
         Arc::new(status_code.finish()),
@@ -614,6 +653,79 @@ pub fn build_account_contribution_requests_batch(
     .context("failed to build llm gateway account contribution requests batch")
 }
 
+pub fn build_gpt2api_account_contribution_requests_batch(
+    records: &[Gpt2ApiAccountContributionRequestRecord],
+) -> Result<RecordBatch> {
+    let schema = gpt2api_account_contribution_requests_schema();
+    let mut request_id = StringBuilder::new();
+    let mut account_name = StringBuilder::new();
+    let mut access_token = StringBuilder::new();
+    let mut session_json = StringBuilder::new();
+    let mut requester_email = StringBuilder::new();
+    let mut contributor_message = StringBuilder::new();
+    let mut github_id = StringBuilder::new();
+    let mut frontend_page_url = StringBuilder::new();
+    let mut status = StringBuilder::new();
+    let mut fingerprint = StringBuilder::new();
+    let mut client_ip = StringBuilder::new();
+    let mut ip_region = StringBuilder::new();
+    let mut admin_note = StringBuilder::new();
+    let mut failure_reason = StringBuilder::new();
+    let mut imported_account_name = StringBuilder::new();
+    let mut issued_key_id = StringBuilder::new();
+    let mut issued_key_name = StringBuilder::new();
+    let mut created_at = TimestampMillisecondBuilder::new();
+    let mut updated_at = TimestampMillisecondBuilder::new();
+    let mut processed_at = TimestampMillisecondBuilder::new();
+
+    for record in records {
+        request_id.append_value(&record.request_id);
+        account_name.append_value(&record.account_name);
+        append_optional_str(&mut access_token, record.access_token.as_deref());
+        append_optional_str(&mut session_json, record.session_json.as_deref());
+        requester_email.append_value(&record.requester_email);
+        contributor_message.append_value(&record.contributor_message);
+        append_optional_str(&mut github_id, record.github_id.as_deref());
+        append_optional_str(&mut frontend_page_url, record.frontend_page_url.as_deref());
+        status.append_value(&record.status);
+        fingerprint.append_value(&record.fingerprint);
+        client_ip.append_value(&record.client_ip);
+        ip_region.append_value(&record.ip_region);
+        append_optional_str(&mut admin_note, record.admin_note.as_deref());
+        append_optional_str(&mut failure_reason, record.failure_reason.as_deref());
+        append_optional_str(&mut imported_account_name, record.imported_account_name.as_deref());
+        append_optional_str(&mut issued_key_id, record.issued_key_id.as_deref());
+        append_optional_str(&mut issued_key_name, record.issued_key_name.as_deref());
+        created_at.append_value(record.created_at);
+        updated_at.append_value(record.updated_at);
+        append_optional_ts(&mut processed_at, record.processed_at);
+    }
+
+    RecordBatch::try_new(schema, vec![
+        Arc::new(request_id.finish()) as ArrayRef,
+        Arc::new(account_name.finish()),
+        Arc::new(access_token.finish()),
+        Arc::new(session_json.finish()),
+        Arc::new(requester_email.finish()),
+        Arc::new(contributor_message.finish()),
+        Arc::new(github_id.finish()),
+        Arc::new(frontend_page_url.finish()),
+        Arc::new(status.finish()),
+        Arc::new(fingerprint.finish()),
+        Arc::new(client_ip.finish()),
+        Arc::new(ip_region.finish()),
+        Arc::new(admin_note.finish()),
+        Arc::new(failure_reason.finish()),
+        Arc::new(imported_account_name.finish()),
+        Arc::new(issued_key_id.finish()),
+        Arc::new(issued_key_name.finish()),
+        Arc::new(created_at.finish()),
+        Arc::new(updated_at.finish()),
+        Arc::new(processed_at.finish()),
+    ])
+    .context("failed to build gpt2api account contribution requests batch")
+}
+
 pub fn build_sponsor_requests_batch(
     records: &[LlmGatewaySponsorRequestRecord],
 ) -> Result<RecordBatch> {
@@ -911,6 +1023,39 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
         let latency_ms = batch
             .column_by_name("latency_ms")
             .and_then(|column| column.as_any().downcast_ref::<Int32Array>());
+        let routing_wait_ms = batch
+            .column_by_name("routing_wait_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let upstream_headers_ms = batch
+            .column_by_name("upstream_headers_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let post_headers_body_ms = batch
+            .column_by_name("post_headers_body_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let request_body_bytes = batch
+            .column_by_name("request_body_bytes")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let request_body_read_ms = batch
+            .column_by_name("request_body_read_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let request_json_parse_ms = batch
+            .column_by_name("request_json_parse_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let pre_handler_ms = batch
+            .column_by_name("pre_handler_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let first_sse_write_ms = batch
+            .column_by_name("first_sse_write_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let stream_finish_ms = batch
+            .column_by_name("stream_finish_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let quota_failover_count = batch
+            .column_by_name("quota_failover_count")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let routing_diagnostics_json = batch
+            .column_by_name("routing_diagnostics_json")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
         let endpoint = required_str_col(batch, "endpoint")?;
         let model = optional_str_col(batch, "model")?;
         let status_code = required_i32_col(batch, "status_code")?;
@@ -970,6 +1115,38 @@ pub fn batches_to_usage_events(batches: &[RecordBatch]) -> Result<Vec<LlmGateway
                 latency_ms: latency_ms
                     .and_then(|column| value_i32_opt(column, idx))
                     .unwrap_or_default(),
+                routing_wait_ms: routing_wait_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                upstream_headers_ms: upstream_headers_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                post_headers_body_ms: post_headers_body_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                request_body_bytes: request_body_bytes
+                    .and_then(|column| value_u64_opt(column, idx)),
+                request_body_read_ms: request_body_read_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                request_json_parse_ms: request_json_parse_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                pre_handler_ms: pre_handler_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                first_sse_write_ms: first_sse_write_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                stream_finish_ms: stream_finish_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                quota_failover_count: quota_failover_count
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u64::from)
+                    .unwrap_or_default(),
+                routing_diagnostics_json: routing_diagnostics_json
+                    .and_then(|column| value_string_opt(column, idx)),
                 endpoint: endpoint.value(idx).to_string(),
                 model: value_string_opt(model, idx),
                 status_code: status_code.value(idx),
@@ -1034,6 +1211,39 @@ pub fn batches_to_usage_event_summaries(
         let latency_ms = batch
             .column_by_name("latency_ms")
             .and_then(|column| column.as_any().downcast_ref::<Int32Array>());
+        let routing_wait_ms = batch
+            .column_by_name("routing_wait_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let upstream_headers_ms = batch
+            .column_by_name("upstream_headers_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let post_headers_body_ms = batch
+            .column_by_name("post_headers_body_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let request_body_bytes = batch
+            .column_by_name("request_body_bytes")
+            .and_then(|column| column.as_any().downcast_ref::<UInt64Array>());
+        let request_body_read_ms = batch
+            .column_by_name("request_body_read_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let request_json_parse_ms = batch
+            .column_by_name("request_json_parse_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let pre_handler_ms = batch
+            .column_by_name("pre_handler_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let first_sse_write_ms = batch
+            .column_by_name("first_sse_write_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let stream_finish_ms = batch
+            .column_by_name("stream_finish_ms")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let quota_failover_count = batch
+            .column_by_name("quota_failover_count")
+            .and_then(|column| column.as_any().downcast_ref::<UInt32Array>());
+        let routing_diagnostics_json = batch
+            .column_by_name("routing_diagnostics_json")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
         let endpoint = required_str_col(batch, "endpoint")?;
         let model = optional_str_col(batch, "model")?;
         let status_code = required_i32_col(batch, "status_code")?;
@@ -1081,6 +1291,38 @@ pub fn batches_to_usage_event_summaries(
                 latency_ms: latency_ms
                     .and_then(|column| value_i32_opt(column, idx))
                     .unwrap_or_default(),
+                routing_wait_ms: routing_wait_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                upstream_headers_ms: upstream_headers_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                post_headers_body_ms: post_headers_body_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                request_body_bytes: request_body_bytes
+                    .and_then(|column| value_u64_opt(column, idx)),
+                request_body_read_ms: request_body_read_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                request_json_parse_ms: request_json_parse_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                pre_handler_ms: pre_handler_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                first_sse_write_ms: first_sse_write_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                stream_finish_ms: stream_finish_ms
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u32_ms_to_i32),
+                quota_failover_count: quota_failover_count
+                    .and_then(|column| value_u32_opt(column, idx))
+                    .map(u64::from)
+                    .unwrap_or_default(),
+                routing_diagnostics_json: routing_diagnostics_json
+                    .and_then(|column| value_string_opt(column, idx)),
                 endpoint: endpoint.value(idx).to_string(),
                 model: value_string_opt(model, idx),
                 status_code: status_code.value(idx),
@@ -1469,6 +1711,79 @@ pub fn batches_to_account_contribution_requests(
     Ok(rows)
 }
 
+pub fn batches_to_gpt2api_account_contribution_requests(
+    batches: &[RecordBatch],
+) -> Result<Vec<Gpt2ApiAccountContributionRequestRecord>> {
+    let mut rows = Vec::with_capacity(total_rows(batches));
+    for batch in batches {
+        let request_id = required_str_col(batch, "request_id")?;
+        let account_name = required_str_col(batch, "account_name")?;
+        let access_token = batch
+            .column_by_name("access_token")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let session_json = batch
+            .column_by_name("session_json")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let requester_email = required_str_col(batch, "requester_email")?;
+        let contributor_message = required_str_col(batch, "contributor_message")?;
+        let github_id = batch
+            .column_by_name("github_id")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let frontend_page_url = batch
+            .column_by_name("frontend_page_url")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let status = required_str_col(batch, "status")?;
+        let fingerprint = required_str_col(batch, "fingerprint")?;
+        let client_ip = required_str_col(batch, "client_ip")?;
+        let ip_region = required_str_col(batch, "ip_region")?;
+        let admin_note = batch
+            .column_by_name("admin_note")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let failure_reason = batch
+            .column_by_name("failure_reason")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let imported_account_name = batch
+            .column_by_name("imported_account_name")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let issued_key_id = batch
+            .column_by_name("issued_key_id")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let issued_key_name = batch
+            .column_by_name("issued_key_name")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>());
+        let created_at = required_ts_col(batch, "created_at")?;
+        let updated_at = required_ts_col(batch, "updated_at")?;
+        let processed_at = optional_ts_col(batch, "processed_at")?;
+
+        for idx in 0..batch.num_rows() {
+            rows.push(Gpt2ApiAccountContributionRequestRecord {
+                request_id: request_id.value(idx).to_string(),
+                account_name: account_name.value(idx).to_string(),
+                access_token: access_token.and_then(|col| value_string_opt(col, idx)),
+                session_json: session_json.and_then(|col| value_string_opt(col, idx)),
+                requester_email: requester_email.value(idx).to_string(),
+                contributor_message: contributor_message.value(idx).to_string(),
+                github_id: github_id.and_then(|col| value_string_opt(col, idx)),
+                frontend_page_url: frontend_page_url.and_then(|col| value_string_opt(col, idx)),
+                status: status.value(idx).to_string(),
+                fingerprint: fingerprint.value(idx).to_string(),
+                client_ip: client_ip.value(idx).to_string(),
+                ip_region: ip_region.value(idx).to_string(),
+                admin_note: admin_note.and_then(|col| value_string_opt(col, idx)),
+                failure_reason: failure_reason.and_then(|col| value_string_opt(col, idx)),
+                imported_account_name: imported_account_name
+                    .and_then(|col| value_string_opt(col, idx)),
+                issued_key_id: issued_key_id.and_then(|col| value_string_opt(col, idx)),
+                issued_key_name: issued_key_name.and_then(|col| value_string_opt(col, idx)),
+                created_at: created_at.value(idx),
+                updated_at: updated_at.value(idx),
+                processed_at: value_ts_opt(processed_at, idx),
+            });
+        }
+    }
+    Ok(rows)
+}
+
 pub fn batches_to_sponsor_requests(
     batches: &[RecordBatch],
 ) -> Result<Vec<LlmGatewaySponsorRequestRecord>> {
@@ -1603,6 +1918,18 @@ fn value_u64_opt(array: &UInt64Array, idx: usize) -> Option<u64> {
     }
 }
 
+fn value_u32_opt(array: &UInt32Array, idx: usize) -> Option<u32> {
+    if array.is_null(idx) {
+        None
+    } else {
+        Some(array.value(idx))
+    }
+}
+
+fn u32_ms_to_i32(value: u32) -> i32 {
+    value.min(i32::MAX as u32) as i32
+}
+
 fn value_i32_opt(array: &Int32Array, idx: usize) -> Option<i32> {
     if array.is_null(idx) {
         None
@@ -1652,6 +1979,13 @@ fn append_optional_ts(builder: &mut TimestampMillisecondBuilder, value: Option<i
 fn append_optional_f64(builder: &mut Float64Builder, value: Option<f64>) {
     match value {
         Some(value) => builder.append_value(value),
+        None => builder.append_null(),
+    }
+}
+
+fn append_optional_ms_u32(builder: &mut UInt32Builder, value: Option<i32>) {
+    match value {
+        Some(value) => builder.append_value(value.max(0) as u32),
         None => builder.append_null(),
     }
 }
