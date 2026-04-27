@@ -17,7 +17,9 @@ import {
   deleteSession,
   fetchMyUsageEvents,
   fetchArtifactBlob,
+  fetchArtifactThumbnailBlob,
   fetchSharedArtifactBlob,
+  fetchSharedArtifactThumbnailBlob,
   getSession,
   getShare,
   getTask,
@@ -50,6 +52,15 @@ import type {
 
 const STORAGE_KEY = "gpt2api.product.key";
 
+interface ImageLightboxState {
+  artifactId: string;
+  previewUrl: string;
+  originalUrl?: string;
+  caption: string;
+  downloadName: string;
+  loading: boolean;
+}
+
 export default function App() {
   const shareToken = shareTokenFromPath();
   const [apiKey, setApiKey] = useState(() => localStorage.getItem(STORAGE_KEY) || "");
@@ -66,10 +77,12 @@ export default function App() {
   const [streamState, setStreamState] = useState<"idle" | "live" | "reconnecting">("idle");
   const [events, setEvents] = useState<Record<string, TaskEventRecord[]>>({});
   const [queues, setQueues] = useState<Record<string, QueueSnapshot>>({});
-  const [artifactUrls, setArtifactUrls] = useState<Record<string, string>>({});
-  const [lightbox, setLightbox] = useState<{ url: string; caption: string; downloadName: string } | null>(null);
+  const [thumbnailUrls, setThumbnailUrls] = useState<Record<string, string>>({});
+  const [originalUrls, setOriginalUrls] = useState<Record<string, string>>({});
+  const [originalLoading, setOriginalLoading] = useState<Record<string, boolean>>({});
+  const [lightbox, setLightbox] = useState<ImageLightboxState | null>(null);
   const [share, setShare] = useState<ShareResponse | null>(null);
-  const [shareUrls, setShareUrls] = useState<Record<string, string>>({});
+  const [shareThumbnailUrls, setShareThumbnailUrls] = useState<Record<string, string>>({});
   const [usageOpen, setUsageOpen] = useState(false);
   const [usageData, setUsageData] = useState<UsageEventsResponse | null>(null);
   const [usageQuery, setUsageQuery] = useState("");
@@ -172,12 +185,12 @@ export default function App() {
     if (!apiKey || !detail) return;
     const controller = new AbortController();
     const sessionId = detail.session.id;
-    const pending = detail.artifacts.filter((artifact) => !artifactUrls[artifact.id]);
+    const pending = detail.artifacts.filter((artifact) => !thumbnailUrls[artifact.id]);
     for (const artifact of pending) {
-      void fetchArtifactBlob(apiKey, artifact.id, { signal: controller.signal })
+      void fetchArtifactThumbnailBlob(apiKey, artifact.id, { signal: controller.signal })
         .then((blob) => {
           if (!controller.signal.aborted && selectedIdRef.current === sessionId) {
-            setArtifactUrls((current) => ({ ...current, [artifact.id]: URL.createObjectURL(blob) }));
+            setThumbnailUrls((current) => ({ ...current, [artifact.id]: URL.createObjectURL(blob) }));
           }
         })
         .catch(() => undefined);
@@ -192,7 +205,7 @@ export default function App() {
         .catch(() => undefined);
     }
     return () => controller.abort();
-  }, [apiKey, detail]);
+  }, [apiKey, detail, thumbnailUrls]);
 
   async function bootstrap(key: string) {
     setBusy(true);
@@ -408,14 +421,48 @@ export default function App() {
       const value = await getShare(token);
       setShare(value);
       for (const artifact of value.artifacts) {
-        const blob = await fetchSharedArtifactBlob(token, artifact.id);
-        setShareUrls((current) => ({ ...current, [artifact.id]: URL.createObjectURL(blob) }));
+        const blob = await fetchSharedArtifactThumbnailBlob(token, artifact.id);
+        setShareThumbnailUrls((current) => ({ ...current, [artifact.id]: URL.createObjectURL(blob) }));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
+  }
+
+  function openOriginalPreview(artifact: ImageArtifactRecord) {
+    const caption = artifact.revised_prompt || "Generated image";
+    const downloadName = downloadNameForArtifact(artifact);
+    const previewUrl = thumbnailUrls[artifact.id] || originalUrls[artifact.id] || "";
+    const existingOriginal = originalUrls[artifact.id];
+    setLightbox({
+      artifactId: artifact.id,
+      previewUrl,
+      originalUrl: existingOriginal,
+      caption,
+      downloadName,
+      loading: !existingOriginal,
+    });
+    if (existingOriginal || originalLoading[artifact.id]) return;
+    setOriginalLoading((current) => ({ ...current, [artifact.id]: true }));
+    void fetchArtifactBlob(apiKey, artifact.id)
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        setOriginalUrls((current) => ({ ...current, [artifact.id]: url }));
+        setLightbox((current) =>
+          current?.artifactId === artifact.id ? { ...current, originalUrl: url, loading: false } : current,
+        );
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : String(err));
+        setLightbox((current) =>
+          current?.artifactId === artifact.id ? { ...current, loading: false } : current,
+        );
+      })
+      .finally(() => {
+        setOriginalLoading((current) => ({ ...current, [artifact.id]: false }));
+      });
   }
 
   function logout() {
@@ -429,7 +476,15 @@ export default function App() {
   }
 
   if (shareToken) {
-    return <ShareView share={share} urls={shareUrls} error={error} busy={busy} />;
+    return (
+      <ShareView
+        share={share}
+        token={shareToken}
+        thumbnailUrls={shareThumbnailUrls}
+        error={error}
+        busy={busy}
+      />
+    );
   }
 
   if (!keyInfo) {
@@ -483,10 +538,11 @@ export default function App() {
           detail={detail}
           loading={detailLoading}
           hasSelection={Boolean(selectedId)}
-          artifactUrls={artifactUrls}
+          thumbnailUrls={thumbnailUrls}
+          originalLoading={originalLoading}
           queues={queues}
           events={events}
-          onPreview={(url, caption, downloadName) => setLightbox({ url, caption, downloadName })}
+          onPreview={openOriginalPreview}
           onCancel={(taskId) => void cancelTask(apiKey, taskId).then(() => refreshDetail(selectedId))}
         />
         <Composer
@@ -513,9 +569,11 @@ export default function App() {
       )}
       {lightbox && (
         <ImageLightbox
-          url={lightbox.url}
+          previewUrl={lightbox.previewUrl}
+          originalUrl={lightbox.originalUrl}
           caption={lightbox.caption}
           downloadName={lightbox.downloadName}
+          loading={lightbox.loading}
           onClose={() => setLightbox(null)}
         />
       )}
@@ -527,7 +585,8 @@ function MessageStream({
   detail,
   loading,
   hasSelection,
-  artifactUrls,
+  thumbnailUrls,
+  originalLoading,
   queues,
   events,
   onPreview,
@@ -536,10 +595,11 @@ function MessageStream({
   detail: SessionDetail | null;
   loading: boolean;
   hasSelection: boolean;
-  artifactUrls: Record<string, string>;
+  thumbnailUrls: Record<string, string>;
+  originalLoading: Record<string, boolean>;
   queues: Record<string, QueueSnapshot>;
   events: Record<string, TaskEventRecord[]>;
-  onPreview: (url: string, caption: string, downloadName: string) => void;
+  onPreview: (artifact: ImageArtifactRecord) => void;
   onCancel: (taskId: string) => void;
 }) {
   const streamRef = useRef<HTMLDivElement>(null);
@@ -586,11 +646,12 @@ function MessageStream({
                 <div className="artifact-grid">
                   {artifacts.map((artifact) => (
                     <figure key={artifact.id}>
-                      {artifactUrls[artifact.id] ? (
+                      {thumbnailUrls[artifact.id] ? (
                         <GeneratedImage
                           artifact={artifact}
-                          url={artifactUrls[artifact.id]}
-                          onPreview={onPreview}
+                          thumbnailUrl={thumbnailUrls[artifact.id]}
+                          originalLoading={Boolean(originalLoading[artifact.id])}
+                          onPreview={() => onPreview(artifact)}
                         />
                       ) : (
                         <ImageLoadingPlaceholder />
@@ -610,29 +671,36 @@ function MessageStream({
 
 function GeneratedImage({
   artifact,
-  url,
+  thumbnailUrl,
+  originalLoading,
   onPreview,
 }: {
   artifact: ImageArtifactRecord;
-  url: string;
-  onPreview: (url: string, caption: string, downloadName: string) => void;
+  thumbnailUrl: string;
+  originalLoading?: boolean;
+  onPreview: () => void;
 }) {
   const [loaded, setLoaded] = useState(false);
   const caption = artifact.revised_prompt || "Generated image";
-  const name = downloadNameForArtifact(artifact);
   return (
     <div className={`image-frame ${loaded ? "loaded" : "loading"}`}>
-      <button type="button" className="image-preview-button" onClick={() => onPreview(url, caption, name)}>
+      <button type="button" className="image-preview-button" onClick={onPreview} title="Open original image">
         {!loaded && <ImageLoadingOverlay />}
-        <img src={url} alt={caption} onLoad={() => setLoaded(true)} />
+        <img src={thumbnailUrl} alt={caption} onLoad={() => setLoaded(true)} />
+        <span className="thumbnail-badge">Thumbnail</span>
       </button>
       <div className="image-actions">
-        <button type="button" onClick={() => onPreview(url, caption, name)} title="Preview image">
-          <Expand size={15} />
+        <button
+          type="button"
+          onClick={onPreview}
+          title={originalLoading ? "Loading original image" : "Open original image"}
+        >
+          {originalLoading ? <Loader2 className="spin" size={15} /> : <Expand size={15} />}
         </button>
-        <a href={url} download={name} title="Download image">
-          <Download size={15} />
-        </a>
+      </div>
+      <div className="thumbnail-note">
+        <ImageIcon size={13} />
+        <span>Thumbnail preview. Click to load original.</span>
       </div>
     </div>
   );
@@ -646,10 +714,11 @@ function ImageLoadingPlaceholder() {
   );
 }
 
-function ImageLoadingOverlay() {
+function ImageLoadingOverlay({ label }: { label?: string }) {
   return (
     <div className="image-loading-overlay">
       <Loader2 className="spin" size={22} />
+      {label && <span>{label}</span>}
     </div>
   );
 }
@@ -820,14 +889,18 @@ function UsageEventRow({ event }: { event: UsageEventRecord }) {
 }
 
 function ImageLightbox({
-  url,
+  previewUrl,
+  originalUrl,
   caption,
   downloadName,
+  loading,
   onClose,
 }: {
-  url: string;
+  previewUrl: string;
+  originalUrl?: string;
   caption: string;
   downloadName: string;
+  loading: boolean;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -838,20 +911,35 @@ function ImageLightbox({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
+  const displayUrl = originalUrl || previewUrl;
   return (
     <div className="lightbox" role="dialog" aria-modal="true" onClick={onClose}>
       <div className="lightbox-content" onClick={(event) => event.stopPropagation()}>
         <div className="lightbox-toolbar">
           <p>{caption}</p>
-          <a href={url} download={downloadName}>
-            <Download size={16} />
-            Download
-          </a>
+          {originalUrl ? (
+            <a href={originalUrl} download={downloadName}>
+              <Download size={16} />
+              Download original
+            </a>
+          ) : (
+            <button type="button" disabled>
+              {loading && <Loader2 className="spin" size={16} />}
+              {loading ? "Preparing original" : "Original unavailable"}
+            </button>
+          )}
           <button type="button" onClick={onClose} title="Close preview">
             <X size={18} />
           </button>
         </div>
-        <img src={url} alt={caption} />
+        <div className="lightbox-image-frame">
+          {displayUrl ? (
+            <img className={originalUrl ? "" : "lightbox-preview"} src={displayUrl} alt={caption} />
+          ) : (
+            <div className="image-placeholder image-loading-surface" />
+          )}
+          {loading && <ImageLoadingOverlay label="Loading original..." />}
+        </div>
       </div>
     </div>
   );
@@ -882,15 +970,52 @@ function NotificationControl({
 
 function ShareView({
   share,
-  urls,
+  token,
+  thumbnailUrls,
   error,
   busy,
 }: {
   share: ShareResponse | null;
-  urls: Record<string, string>;
+  token: string;
+  thumbnailUrls: Record<string, string>;
   error: string;
   busy: boolean;
 }) {
+  const [originalUrls, setOriginalUrls] = useState<Record<string, string>>({});
+  const [originalLoading, setOriginalLoading] = useState<Record<string, boolean>>({});
+  const [lightbox, setLightbox] = useState<ImageLightboxState | null>(null);
+  function openSharedOriginal(artifact: ImageArtifactRecord) {
+    const caption = artifact.revised_prompt || "Shared image";
+    const downloadName = downloadNameForArtifact(artifact);
+    const previewUrl = thumbnailUrls[artifact.id] || originalUrls[artifact.id] || "";
+    const existingOriginal = originalUrls[artifact.id];
+    setLightbox({
+      artifactId: artifact.id,
+      previewUrl,
+      originalUrl: existingOriginal,
+      caption,
+      downloadName,
+      loading: !existingOriginal,
+    });
+    if (existingOriginal || originalLoading[artifact.id]) return;
+    setOriginalLoading((current) => ({ ...current, [artifact.id]: true }));
+    void fetchSharedArtifactBlob(token, artifact.id)
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        setOriginalUrls((current) => ({ ...current, [artifact.id]: url }));
+        setLightbox((current) =>
+          current?.artifactId === artifact.id ? { ...current, originalUrl: url, loading: false } : current,
+        );
+      })
+      .catch(() => {
+        setLightbox((current) =>
+          current?.artifactId === artifact.id ? { ...current, loading: false } : current,
+        );
+      })
+      .finally(() => {
+        setOriginalLoading((current) => ({ ...current, [artifact.id]: false }));
+      });
+  }
   return (
     <main className="share-view">
       {busy && <p>Loading...</p>}
@@ -903,12 +1028,31 @@ function ShareView({
           <div className="artifact-grid">
             {share.artifacts.map((artifact) => (
               <figure key={artifact.id}>
-                {urls[artifact.id] && <img src={urls[artifact.id]} alt={artifact.revised_prompt || "Shared image"} />}
+                {thumbnailUrls[artifact.id] ? (
+                  <GeneratedImage
+                    artifact={artifact}
+                    thumbnailUrl={thumbnailUrls[artifact.id]}
+                    originalLoading={Boolean(originalLoading[artifact.id])}
+                    onPreview={() => openSharedOriginal(artifact)}
+                  />
+                ) : (
+                  <ImageLoadingPlaceholder />
+                )}
                 <figcaption>{artifact.revised_prompt || share.task.model}</figcaption>
               </figure>
             ))}
           </div>
         </section>
+      )}
+      {lightbox && (
+        <ImageLightbox
+          previewUrl={lightbox.previewUrl}
+          originalUrl={lightbox.originalUrl}
+          caption={lightbox.caption}
+          downloadName={lightbox.downloadName}
+          loading={lightbox.loading}
+          onClose={() => setLightbox(null)}
+        />
       )}
     </main>
   );

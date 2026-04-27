@@ -416,6 +416,7 @@ figure img,
   overflow: hidden;
   border-radius: 8px;
   background: #dde3d7;
+  border: 1px solid rgba(15, 95, 73, 0.12);
 }
 
 .image-preview-button {
@@ -442,6 +443,35 @@ figure img,
 .image-frame:hover img {
   transform: scale(1.025);
   filter: saturate(1.04);
+}
+
+.thumbnail-badge {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  border-radius: 999px;
+  background: rgba(17, 19, 23, 0.72);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 750;
+  padding: 4px 8px;
+  backdrop-filter: blur(12px);
+}
+
+.thumbnail-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  background: #f6f8f2;
+  color: #586255;
+  font-size: 12px;
+  line-height: 1.35;
+  padding: 7px 9px;
+}
+
+.thumbnail-note span {
+  min-width: 0;
 }
 
 .image-actions {
@@ -475,6 +505,11 @@ figure img,
   background: rgba(17, 19, 23, 0.72);
   color: #fff;
   backdrop-filter: blur(12px);
+}
+
+.image-actions button:disabled {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .image-placeholder {
@@ -513,10 +548,16 @@ figure img,
   inset: 0;
   z-index: 1;
   display: grid;
+  gap: 8px;
   place-items: center;
   aspect-ratio: 1;
   color: #5d665c;
   background: #dde3d7;
+}
+
+.image-loading-overlay span {
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .loading-stream {
@@ -1066,13 +1107,31 @@ button:disabled {
   text-decoration: none;
 }
 
-.lightbox-content > img {
+.lightbox-toolbar button:disabled {
+  cursor: wait;
+  opacity: 0.82;
+}
+
+.lightbox-image-frame {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  min-height: 260px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #111317;
+}
+
+.lightbox-image-frame > img {
   max-width: 100%;
   max-height: calc(94vh - 52px);
   justify-self: center;
-  border-radius: 8px;
   object-fit: contain;
-  background: #111317;
+}
+
+.lightbox-preview {
+  opacity: 0.86;
+  filter: blur(1px) saturate(0.94);
 }
 
 .top-error {

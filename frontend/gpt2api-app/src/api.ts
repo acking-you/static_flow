@@ -154,6 +154,21 @@ export async function fetchArtifactBlob(
   return await response.blob();
 }
 
+export async function fetchArtifactThumbnailBlob(
+  key: string,
+  artifactId: string,
+  options: RequestOptions = {},
+): Promise<Blob> {
+  const response = await fetch(`${API_BASE}/artifacts/${encodeURIComponent(artifactId)}/thumbnail`, {
+    headers: { authorization: `Bearer ${key}` },
+    signal: options.signal,
+  });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return await response.blob();
+}
+
 export function updateNotification(key: string, email: string, enabled: boolean) {
   return fetchJson<{ key: ProductKey }>("/me/notification", key, {
     method: "PATCH",
@@ -232,6 +247,16 @@ export function getShare(token: string) {
 export async function fetchSharedArtifactBlob(token: string, artifactId: string): Promise<Blob> {
   const response = await fetch(
     `${API_BASE}/share/${encodeURIComponent(token)}/artifacts/${encodeURIComponent(artifactId)}`,
+  );
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return await response.blob();
+}
+
+export async function fetchSharedArtifactThumbnailBlob(token: string, artifactId: string): Promise<Blob> {
+  const response = await fetch(
+    `${API_BASE}/share/${encodeURIComponent(token)}/artifacts/${encodeURIComponent(artifactId)}/thumbnail`,
   );
   if (!response.ok) {
     throw new Error(await response.text());
