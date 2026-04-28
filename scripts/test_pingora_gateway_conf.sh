@@ -49,6 +49,10 @@ assert_eq \
   "$expected_active_upstream" \
   "active_upstream"
 assert_eq \
+  "$(pingora_staticflow_conf_value "$CONF_FILE" "downstream_h2c")" \
+  "true" \
+  "downstream_h2c"
+assert_eq \
   "$(pingora_staticflow_upstream_addr "$CONF_FILE" "blue")" \
   "127.0.0.1:39080" \
   "blue upstream"
@@ -71,6 +75,10 @@ assert_eq \
   "$(printf '%s\n' "$status_output" | awk -F= '/^active_upstream=/{print $2}')" \
   "$expected_active_upstream" \
   "status active_upstream without rg"
+assert_eq \
+  "$(printf '%s\n' "$status_output" | awk -F= '/^downstream_h2c=/{print $2}')" \
+  "true" \
+  "status downstream_h2c without rg"
 assert_eq \
   "$(printf '%s\n' "$status_output" | awk -F= '/^systemd_scope=/{print $2}')" \
   "user" \

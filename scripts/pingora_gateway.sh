@@ -93,6 +93,12 @@ active_upstream_from_file() {
   pingora_staticflow_conf_value "$1" "active_upstream"
 }
 
+downstream_h2c() {
+  local value
+  value="$(pingora_staticflow_conf_value "$CONF_FILE" "downstream_h2c")"
+  echo "${value:-true}"
+}
+
 slot_addr_from_file() {
   local conf_file="$1"
   local slot="$2"
@@ -359,6 +365,7 @@ status_summary() {
   echo "green_unit=$(backend_slot_unit green)"
   echo "listen_addr=$(listen_addr)"
   echo "active_upstream=$(active_upstream)"
+  echo "downstream_h2c=$(downstream_h2c)"
   report_health || true
 }
 

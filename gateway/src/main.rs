@@ -4,7 +4,7 @@ use std::{env, fs, path::PathBuf, sync::Arc, thread};
 
 use anyhow::{anyhow, Context, Result};
 use pingora::server::{configuration::Opt, Server};
-use pingora_core::server::configuration::ServerConf;
+use pingora_core::{apps::HttpServerOptions, server::configuration::ServerConf};
 use pingora_proxy::http_proxy_service;
 use signal_hook::{consts::signal::SIGHUP, iterator::Signals};
 use static_flow_shared::runtime_logging::init_runtime_logging;
@@ -33,6 +33,7 @@ fn main() -> Result<()> {
         println!("connect_timeout_ms={}", gateway_config.connect_timeout_ms());
         println!("read_idle_timeout_ms={}", gateway_config.read_idle_timeout_ms());
         println!("write_idle_timeout_ms={}", gateway_config.write_idle_timeout_ms());
+        println!("downstream_h2c={}", gateway_config.downstream_h2c());
         println!(
             "log_root={}",
             std::env::var("STATICFLOW_LOG_DIR").unwrap_or_else(|_| "tmp/runtime-logs".to_string())
@@ -59,6 +60,7 @@ fn main() -> Result<()> {
     let connect_timeout_ms = gateway_config.connect_timeout_ms();
     let read_idle_timeout_ms = gateway_config.read_idle_timeout_ms();
     let write_idle_timeout_ms = gateway_config.write_idle_timeout_ms();
+    let downstream_h2c = gateway_config.downstream_h2c();
     let retry_count = gateway_config.retry_count();
     let gateway_config = Arc::new(GatewayConfigStore::load(&conf_path)?);
     install_reload_signal_handler(Arc::clone(&gateway_config))?;
@@ -70,6 +72,7 @@ fn main() -> Result<()> {
         connect_timeout_ms,
         read_idle_timeout_ms,
         write_idle_timeout_ms,
+        downstream_h2c,
         retry_count,
         max_proxy_tries,
         external_supervisor,
@@ -82,6 +85,12 @@ fn main() -> Result<()> {
 
     let mut proxy =
         http_proxy_service(&server.configuration, StaticFlowGateway::new(gateway_config));
+    let http_logic = proxy
+        .app_logic_mut()
+        .ok_or_else(|| anyhow!("gateway proxy service has no HTTP app logic"))?;
+    let mut http_server_options = HttpServerOptions::default();
+    http_server_options.h2c = downstream_h2c;
+    http_logic.server_options = Some(http_server_options);
     proxy.add_tcp(listen_addr.as_str());
     server.add_service(proxy);
     server.run_forever()
@@ -103,6 +112,7 @@ fn install_reload_signal_handler(config_store: Arc<GatewayConfigStore>) -> Resul
                                 connect_timeout_ms = config.connect_timeout_ms(),
                                 read_idle_timeout_ms = config.read_idle_timeout_ms(),
                                 write_idle_timeout_ms = config.write_idle_timeout_ms(),
+                                downstream_h2c = config.downstream_h2c(),
                                 retry_count = config.retry_count(),
                                 conf = %config_store.path().display(),
                                 "reloaded gateway config from disk"

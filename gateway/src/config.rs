@@ -23,6 +23,8 @@ pub struct GatewayConfig {
     request_id_header: String,
     trace_id_header: String,
     add_forwarded_headers: bool,
+    #[serde(default = "default_downstream_h2c")]
+    downstream_h2c: bool,
     upstreams: BTreeMap<String, String>,
     active_upstream: String,
     connect_timeout_ms: u64,
@@ -57,6 +59,12 @@ impl GatewayConfig {
     /// Whether `x-forwarded-*` headers should be added upstream.
     pub fn add_forwarded_headers(&self) -> bool {
         self.add_forwarded_headers
+    }
+
+    /// Whether the cleartext downstream listener should accept HTTP/2
+    /// prior-knowledge.
+    pub fn downstream_h2c(&self) -> bool {
+        self.downstream_h2c
     }
 
     /// Name of the active upstream slot.
@@ -174,6 +182,10 @@ pub fn load_gateway_config_from_str(raw: &str) -> Result<GatewayConfig> {
     Ok(config)
 }
 
+fn default_downstream_h2c() -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -203,6 +215,32 @@ staticflow:
         .expect("valid config");
         assert_eq!(cfg.active_upstream, "blue");
         assert_eq!(cfg.upstreams["green"], "127.0.0.1:39081");
+        assert!(cfg.downstream_h2c(), "h2c should be enabled by default for existing configs");
+    }
+
+    #[test]
+    fn parse_gateway_config_allows_disabling_downstream_h2c() {
+        let cfg = load_gateway_config_from_str(
+            r#"
+version: 1
+staticflow:
+  listen_addr: 127.0.0.1:39180
+  request_id_header: x-request-id
+  trace_id_header: x-trace-id
+  add_forwarded_headers: true
+  downstream_h2c: false
+  upstreams:
+    blue: 127.0.0.1:39080
+    green: 127.0.0.1:39081
+  active_upstream: blue
+  connect_timeout_ms: 3000
+  read_idle_timeout_ms: 1800000
+  write_idle_timeout_ms: 1800000
+  retry_count: 0
+"#,
+        )
+        .expect("valid config");
+        assert!(!cfg.downstream_h2c());
     }
 
     #[test]

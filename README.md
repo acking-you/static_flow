@@ -4,7 +4,7 @@
 
 [CLI Guide (ZH)](./docs/cli-user-guide.zh.md)
 
-A local-first dynamic blog system. Run backend locally, expose secure API via local Nginx + pb-mapper, and write Markdown notes plus images into LanceDB through CLI.
+A local-first dynamic blog system. Run backend locally behind the Pingora gateway, expose public HTTPS through cloud Caddy + pb-mapper, and write Markdown notes plus images into LanceDB through CLI.
 
 StaticFlow also includes a public LLM access layer on top of the content system: an OpenAI-compatible Codex gateway, an Anthropic-compatible Kiro gateway, provider-scoped upstream proxy routing, quota-managed gateway keys, and usage accounting. For the current implementation details, see [docs/llm-access-and-kiro-gateway-implementation.md](./docs/llm-access-and-kiro-gateway-implementation.md).
 
@@ -119,16 +119,68 @@ on Hugging Face's Xet-integrated transfer path.
 
 ### Mode A: Self-Hosted (Recommended)
 
-Backend serves both API and frontend static files. Exposed via pb-mapper + Caddy HTTPS.
+Backend serves both API and frontend static files. In current production,
+public HTTPS enters through cloud Caddy and pb-mapper, then lands on the local
+Pingora gateway.
 
 ```text
 Browser -> https://ackingliu.top
-        -> Caddy (TLS) -> pb-mapper tunnel -> Local backend (127.0.0.1:39080)
-                                               ├── /api/*        → API handlers
-                                               ├── /posts/:id    → SEO-injected page
-                                               ├── /sitemap.xml  → Dynamic sitemap
-                                               └── /*            → Frontend static (SPA fallback)
+        -> cloud Caddy (:443)
+        -> cloud pb-mapper-client (127.0.0.1:39080)
+        -> cloud pb-mapper-server (:7666)
+        -> local tmux `pbmapper-sf-backend`
+        -> local Pingora gateway (127.0.0.1:39180)
+        -> active backend slot (currently green, 127.0.0.1:39081)
+           ├── /api/*        → API handlers
+           ├── /posts/:id    → SEO-injected page
+           ├── /sitemap.xml  → Dynamic sitemap
+           └── /*            → Frontend static (SPA fallback)
 ```
+
+Current local production binaries supervised by tmux:
+
+| tmux session | Binary | Role | Listen / target |
+| --- | --- | --- | --- |
+| `sf-gateway` | `target/release-backend/staticflow-pingora-gateway --conf conf/pingora/staticflow-gateway.yaml` | Stable local ingress. Do not stop it during routine backend hot updates. | Listens on `127.0.0.1:39180` |
+| `sf-backend-green` | `scripts/start_backend_selfhosted.sh --port 39081` with `BACKEND_BIN=target/release-backend/static-flow-backend` | Active backend slot selected by Pingora. | Listens on `127.0.0.1:39081`; uses `DB_ROOT=/mnt/wsl/data4tb/static-flow-data` |
+| `gpt2api-rs` | `deps/gpt2api_rs/target/release/gpt2api-rs serve` | GPT2API image gateway used by StaticFlow routes/admin. | Listens on `127.0.0.1:18787` |
+| `pbmapper-sf-backend` | `~/.local/pbmapper/current/pb-mapper-server-cli ... tcp-server --key sf-backend --addr 127.0.0.1:39180` | Registers the local Pingora gateway with the cloud relay. | Connects to `ackingliu.top:7666` |
+| `pbmapper-home-ubuntu` | `~/.local/pbmapper/current/pb-mapper-server-cli ... tcp-server --key home-ubuntu --addr 127.0.0.1:22` | Registers local SSH access with the cloud relay. | Connects to `ackingliu.top:7666` |
+
+Notes:
+- `conf/pingora/staticflow-gateway.yaml` is the local gateway source of truth.
+  At the time of writing, `active_upstream: green` means `39180 -> 39081`.
+- The local Pingora listener has `downstream_h2c: true`: Caddy/pb-mapper may
+  use cleartext HTTP/2 prior-knowledge to `127.0.0.1:39180`, while ordinary
+  HTTP/1.1 clients still work through protocol fallback.
+- Cloud-side Caddy and pb-mapper remain systemd services on `ubuntu@ackingliu.top`
+  (`caddy`, `pb-mapper-server.service`, and
+  `pb-mapper-client-cli@sf-backend.service`).
+- Deployment secrets such as `MSG_HEADER_KEY` and the GPT2API admin token are
+  intentionally not documented here. Inspect live tmux/process environment only
+  when operating the deployment.
+
+Useful runtime checks:
+
+```bash
+tmux list-panes -a -F '#{session_name}|#{pane_pid}|#{pane_current_command}|#{pane_start_command}'
+ss -tlnp '( sport = :39180 or sport = :39080 or sport = :39081 or sport = :18787 )'
+readlink -f /proc/<pid>/exe
+curl --http2-prior-knowledge -o /dev/null -sS -w 'h2c=%{http_version} code=%{http_code}\n' http://127.0.0.1:39180/api/healthz
+```
+
+Cloud Caddy should prefer h2c toward the local relay endpoint and keep HTTP/1.1
+as fallback:
+
+```caddy
+reverse_proxy 127.0.0.1:39080 {
+    transport http {
+        versions h2c 1.1
+    }
+}
+```
+
+For one-off manual self-hosted starts, the scripts are:
 
 ```bash
 # 1. Build frontend (API_BASE=/api, same-origin)
@@ -229,7 +281,10 @@ path while avoiding the initial websocket fallback delay.
 
 ## Quick Start
 
-推荐的长期运行自托管部署已经切到 `systemd + Pingora gateway + blue/green backend`。完整从 clone 到启动的流程见：
+On this host, the current long-running production setup is tmux-supervised on
+the local machine, with Pingora selecting the active blue/green backend slot.
+The cloud ingress side still uses systemd-managed Caddy and pb-mapper services.
+The systemd quick-start remains useful as a reference deployment shape:
 
 - [docs/self-hosted-systemd-quick-start.zh.md](docs/self-hosted-systemd-quick-start.zh.md)
 

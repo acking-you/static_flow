@@ -55,7 +55,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-cargo build -p staticflow-pingora-gateway --profile release-backend >/dev/null
+cargo build -p staticflow-pingora-gateway --profile release-backend --jobs "${CARGO_BUILD_JOBS:-1}" >/dev/null
 [[ -x "$GATEWAY_BIN" ]] || fail "gateway binary not found: $GATEWAY_BIN"
 
 python3 -u - "$UPSTREAM_PORT_FILE" <<'PY' >/dev/null 2>&1 &
@@ -132,6 +132,7 @@ staticflow:
   request_id_header: x-request-id
   trace_id_header: x-trace-id
   add_forwarded_headers: true
+  downstream_h2c: true
   upstreams:
     blue: 127.0.0.1:$UPSTREAM_PORT
     green: 127.0.0.1:$UPSTREAM_PORT
@@ -181,6 +182,15 @@ grep -Fqi 'x-trace-id: backend-response-trace' "$RESPONSE_HEADERS" \
   || fail "gateway should preserve upstream response x-trace-id"
 grep -Fqi 'x-test-upstream: echo' "$RESPONSE_HEADERS" \
   || fail "gateway should preserve unrelated upstream response headers"
+
+H2_VERSION="$(
+  curl --http2-prior-knowledge -fsS \
+    -H 'X-Request-Id: h2-req-123' \
+    -o "$TMP_DIR/h2-response.json" \
+    -w '%{http_version}' \
+    "http://127.0.0.1:${GATEWAY_PORT}/echo"
+)"
+[[ "$H2_VERSION" == "2" ]] || fail "gateway should accept downstream h2c, got HTTP/$H2_VERSION"
 
 cleanup
 trap - EXIT INT TERM

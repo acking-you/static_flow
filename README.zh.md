@@ -2,7 +2,7 @@
 
 [CLI 使用手册](./docs/cli-user-guide.zh.md)
 
-本地优先的动态博客系统：后端在本地运行，通过本地 Nginx + pb-mapper 对外暴露 HTTPS API；文章与图片统一写入 LanceDB，由前端直接请求云端映射端点访问。
+本地优先的动态博客系统：后端在本地运行在 Pingora gateway 后面，通过云端 Caddy + pb-mapper 对外暴露 HTTPS；文章与图片统一写入 LanceDB，由前端直接请求公网同源 API。
 
 除了内容系统本身，StaticFlow 当前还内置了一套对外 `LLM Access` 能力：Codex 的 OpenAI-compatible 网关、Kiro 的 Anthropic-compatible 网关、provider 级上游代理解析、可配额度的 gateway key，以及统一的 usage 账本。实现细节见 [docs/llm-access-and-kiro-gateway-implementation.md](./docs/llm-access-and-kiro-gateway-implementation.md)。
 
@@ -97,18 +97,63 @@ git push origin main
 
 ### 模式 A：自托管（推荐）
 
-后端同时提供 API 和前端静态文件，通过 pb-mapper + Caddy 对外暴露 HTTPS。
+后端同时提供 API 和前端静态文件。当前生产链路是公网 HTTPS 先进入云端
+Caddy 和 pb-mapper，再落到本地 Pingora gateway。
 
 ```text
 浏览器 -> https://ackingliu.top
-       -> Caddy (TLS) -> pb-mapper tunnel -> 本地 backend (127.0.0.1:39080)
-                                              ├── /api/*        → API handler
-                                              ├── /posts/:id    → SEO 注入页
-                                              ├── /sitemap.xml  → 动态 sitemap
-                                              └── /*            → 前端静态文件 (SPA fallback)
+       -> 云端 Caddy (:443)
+       -> 云端 pb-mapper-client (127.0.0.1:39080)
+       -> 云端 pb-mapper-server (:7666)
+       -> 本地 tmux `pbmapper-sf-backend`
+       -> 本地 Pingora gateway (127.0.0.1:39180)
+       -> active backend slot（当前 green，127.0.0.1:39081）
+          ├── /api/*        → API handler
+          ├── /posts/:id    → SEO 注入页
+          ├── /sitemap.xml  → 动态 sitemap
+          └── /*            → 前端静态文件 (SPA fallback)
 ```
 
-启动方式：
+当前本机生产 tmux 后台运行的 binary：
+
+| tmux session | Binary | 作用 | 监听 / 目标 |
+| --- | --- | --- | --- |
+| `sf-gateway` | `target/release-backend/staticflow-pingora-gateway --conf conf/pingora/staticflow-gateway.yaml` | 本地稳定入口。日常 backend 热更新不要停它。 | 监听 `127.0.0.1:39180` |
+| `sf-backend-green` | `scripts/start_backend_selfhosted.sh --port 39081`，并设置 `BACKEND_BIN=target/release-backend/static-flow-backend` | 当前被 Pingora 选中的 backend slot。 | 监听 `127.0.0.1:39081`，使用 `DB_ROOT=/mnt/wsl/data4tb/static-flow-data` |
+| `gpt2api-rs` | `deps/gpt2api_rs/target/release/gpt2api-rs serve` | StaticFlow 路由/admin 使用的 GPT2API 图片网关。 | 监听 `127.0.0.1:18787` |
+| `pbmapper-sf-backend` | `~/.local/pbmapper/current/pb-mapper-server-cli ... tcp-server --key sf-backend --addr 127.0.0.1:39180` | 把本地 Pingora gateway 注册到云端 relay。 | 连接 `ackingliu.top:7666` |
+| `pbmapper-home-ubuntu` | `~/.local/pbmapper/current/pb-mapper-server-cli ... tcp-server --key home-ubuntu --addr 127.0.0.1:22` | 把本地 SSH 入口注册到云端 relay。 | 连接 `ackingliu.top:7666` |
+
+说明：
+- `conf/pingora/staticflow-gateway.yaml` 是本地 gateway 的事实配置源。
+  当前 `active_upstream: green` 表示 `39180 -> 39081`。
+- 本地 Pingora listener 设置了 `downstream_h2c: true`：Caddy/pb-mapper 可以用
+  cleartext HTTP/2 prior-knowledge 访问 `127.0.0.1:39180`，普通 HTTP/1.1 客户端仍会自动回退。
+- 云端 Caddy 和 pb-mapper 仍由 `ubuntu@ackingliu.top` 上的 systemd 管理：
+  `caddy`、`pb-mapper-server.service`、`pb-mapper-client-cli@sf-backend.service`。
+- `MSG_HEADER_KEY`、GPT2API admin token 这类部署密钥不写入 README；需要运维时从
+  live tmux/process environment 查看。
+
+常用运行态检查：
+
+```bash
+tmux list-panes -a -F '#{session_name}|#{pane_pid}|#{pane_current_command}|#{pane_start_command}'
+ss -tlnp '( sport = :39180 or sport = :39080 or sport = :39081 or sport = :18787 )'
+readlink -f /proc/<pid>/exe
+curl --http2-prior-knowledge -o /dev/null -sS -w 'h2c=%{http_version} code=%{http_code}\n' http://127.0.0.1:39180/api/healthz
+```
+
+云端 Caddy 到本地 relay endpoint 应优先 h2c，并保留 HTTP/1.1 回退：
+
+```caddy
+reverse_proxy 127.0.0.1:39080 {
+    transport http {
+        versions h2c 1.1
+    }
+}
+```
+
+一次性手动自托管启动方式：
 
 ```bash
 # 1. 构建前端（API_BASE=/api，同源请求）

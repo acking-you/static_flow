@@ -10,6 +10,7 @@ staticflow:
   request_id_header: x-request-id
   trace_id_header: x-trace-id
   add_forwarded_headers: true
+  downstream_h2c: true
   upstreams:
     blue: 127.0.0.1:39080
     green: 127.0.0.1:39081

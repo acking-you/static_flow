@@ -39,6 +39,7 @@ staticflow:
   request_id_header: x-request-id
   trace_id_header: x-trace-id
   add_forwarded_headers: true
+  downstream_h2c: true
   upstreams:
     blue: 127.0.0.1:39080
     green: 127.0.0.1:39081
@@ -61,6 +62,7 @@ STATUS_OUTPUT="$(
 cmp -s "$CONF_FILE" "$TEMPLATE_FILE" || fail "generated conf should match template"
 assert_contains <(printf '%s\n' "$STATUS_OUTPUT") "conf=$CONF_FILE" "status output conf path"
 assert_contains "$CONF_FILE" "active_upstream: blue" "generated conf active slot"
+assert_contains "$CONF_FILE" "downstream_h2c: true" "generated conf h2c flag"
 
 python3 - "$CONF_FILE" <<'PY'
 from pathlib import Path
