@@ -1,5 +1,8 @@
 # StaticFlow Deployment Guide (Local Nginx HTTPS + pb-mapper)
 
+> 当前生产入口已演进为“云端 Caddy + pb-mapper + 本地 Pingora gateway”的 local-first 模式。涉及 Azure/ARM64 云机、Caddy Automatic HTTPS、`MSG_HEADER_KEY`、DNS 迁移和 pb-mapper systemd 部署时，优先看：
+> `docs/cloud-ingress-relay-pbmapper-runbook.zh.md`
+
 本指南已按你的最新要求对齐：
 
 - backend 在本地机器运行（LanceDB 同机存储）
