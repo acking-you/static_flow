@@ -1,17 +1,6 @@
 //! Route ownership helpers for cloud path splitting.
 
-/// Return whether a request path is owned by the standalone `llm-access`
-/// service instead of the local StaticFlow backend.
-pub fn is_llm_access_path(path: &str) -> bool {
-    path == "/healthz"
-        || path == "/version"
-        || path.starts_with("/v1/")
-        || path.starts_with("/cc/v1/")
-        || path.starts_with("/api/llm-gateway/")
-        || path.starts_with("/api/kiro-gateway/")
-        || path.starts_with("/api/codex-gateway/")
-        || path.starts_with("/api/llm-access/")
-}
+pub use llm_access_core::routes::is_llm_access_path;
 
 #[cfg(test)]
 mod tests {
@@ -35,6 +24,13 @@ mod tests {
     fn leaves_non_llm_staticflow_paths_on_local_backend() {
         for path in ["/", "/api/articles", "/api/music/songs", "/admin/local-media"] {
             assert!(!super::is_llm_access_path(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn recognizes_admin_llm_paths() {
+        for path in ["/admin/llm-gateway/keys", "/admin/kiro-gateway/accounts"] {
+            assert!(super::is_llm_access_path(path), "{path}");
         }
     }
 }

@@ -9,6 +9,7 @@ members = [
     "media-types",
     "gateway",
     "llm-access",
+    "llm-access-core",
     "llm-access-migrations",
     "llm-access-migrator",
     "llm-access-store",

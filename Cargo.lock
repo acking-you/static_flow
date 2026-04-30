@@ -6044,9 +6044,20 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "llm-access-core",
  "llm-access-store",
  "serde",
  "tokio",
+]
+
+[[package]]
+name = "llm-access-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
