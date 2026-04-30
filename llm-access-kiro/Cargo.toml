@@ -12,6 +12,7 @@ anyhow = { workspace = true }
 base64 = "0.22.1"
 bytes = { workspace = true }
 charabia = "0.9"
+chrono = { workspace = true }
 crc = "3.3"
 llm-access-core = { path = "../llm-access-core" }
 lopdf = "0.38"
