@@ -1,5 +1,10 @@
 # Pingora LLM Routing Local Canary Implementation Plan
 
+> Status update on 2026-04-30: do not execute this plan before
+> `docs/superpowers/specs/2026-04-30-llm-access-full-parity-design.md` is
+> implemented and verified. The standalone service must be a real full-parity
+> provider target before canary routing is useful.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add reloadable local LLM canary routing to the existing Pingora gateway so selected LLM requests can go to local `llm-access` while all other traffic keeps using the active StaticFlow backend.

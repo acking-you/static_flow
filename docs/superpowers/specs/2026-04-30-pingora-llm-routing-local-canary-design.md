@@ -1,5 +1,10 @@
 # Pingora LLM Routing Local Canary Design
 
+> Status update on 2026-04-30: this design is deferred until the standalone
+> `llm-access` binary reaches full parity with the current StaticFlow LLM
+> subsystem. Routing to the current placeholder `llm-access` service would only
+> prove path splitting, not functional migration.
+
 ## Background
 
 The first `llm-access` migration target should be local validation, not cloud

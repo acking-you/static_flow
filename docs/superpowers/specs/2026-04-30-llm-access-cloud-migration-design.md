@@ -1,5 +1,11 @@
 # LLM Access Cloud Migration Design
 
+> Status update on 2026-04-30: cloud migration depends on the full-parity
+> extraction design in
+> `docs/superpowers/specs/2026-04-30-llm-access-full-parity-design.md`.
+> Do not treat the existing `llm-access` shell as deployable production
+> replacement until that parity work is complete.
+
 ## Background
 
 The immediate production problem is not only application latency. The home

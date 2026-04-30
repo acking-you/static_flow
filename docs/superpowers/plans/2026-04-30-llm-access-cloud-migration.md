@@ -1,5 +1,10 @@
 # LLM Access Cloud Migration Implementation Plan
 
+> Status update on 2026-04-30: this cloud migration plan is blocked on
+> full-parity extraction. Implement
+> `docs/superpowers/specs/2026-04-30-llm-access-full-parity-design.md` first,
+> then return to cloud deployment, JuiceFS, Caddy, and canary routing.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Move all high-frequency LLM access traffic from the home upstream path to a cloud `llm-access` service while keeping the rest of StaticFlow local.
