@@ -303,6 +303,11 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
 - `llm-access` now accepts Kiro data-plane keys from `x-api-key` as well as
   `Authorization: Bearer`, while Codex/OpenAI-compatible routes remain
   Bearer-only.
+- `llm-access` now serves Kiro local compatibility endpoints for
+  `/api/kiro-gateway/v1/models`,
+  `/api/kiro-gateway/v1/messages/count_tokens`, and
+  `/api/kiro-gateway/cc/v1/messages/count_tokens` without requiring provider
+  key authentication, matching the existing backend route contract.
 - `llm-access-kiro` now owns Kiro auth-file persistence, local Kiro CLI import,
   deterministic machine-id derivation, and token-count estimation. The backend
   keeps compatibility modules that re-export those implementations.

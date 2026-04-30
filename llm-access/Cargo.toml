@@ -12,8 +12,10 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 llm-access-core = { path = "../llm-access-core" }
+llm-access-kiro = { path = "../llm-access-kiro" }
 llm-access-store = { path = "../llm-access-store" }
 serde = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

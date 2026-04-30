@@ -6046,9 +6046,11 @@ dependencies = [
  "async-trait",
  "axum",
  "llm-access-core",
+ "llm-access-kiro",
  "llm-access-store",
  "serde",
  "tokio",
+ "tower 0.5.2",
 ]
 
 [[package]]

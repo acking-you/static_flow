@@ -16,6 +16,8 @@ use axum::{
 };
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
+pub(crate) use llm_access_kiro::anthropic::supported_model_ids;
+use llm_access_kiro::anthropic::{count_tokens_response, supported_models_response};
 use serde::de::DeserializeOwned;
 use tokio::{
     sync::{oneshot, watch},
@@ -58,10 +60,7 @@ use self::{
         SessionIdSource, SessionTracking, ToolNormalizationEvent,
     },
     stream::{build_inline_thinking_content_blocks, BufferedStreamContext, StreamContext},
-    types::{
-        CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Metadata, Model,
-        ModelsResponse, OutputConfig, Thinking,
-    },
+    types::{CountTokensRequest, ErrorResponse, MessagesRequest, Metadata, OutputConfig, Thinking},
     websearch::handle_websearch_request,
 };
 use crate::{
@@ -169,18 +168,6 @@ fn apply_provider_metrics(event_context: &mut KiroEventContext, response: &Provi
     event_context.routing_diagnostics_json = response.routing_diagnostics_json.clone();
 }
 
-const SUPPORTED_MODEL_CATALOG: [(&str, &str, i64); 10] = [
-    ("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5", 1727568000),
-    ("claude-sonnet-4-5-20250929-thinking", "Claude Sonnet 4.5 (Thinking)", 1727568000),
-    ("claude-opus-4-5-20251101", "Claude Opus 4.5", 1730419200),
-    ("claude-opus-4-5-20251101-thinking", "Claude Opus 4.5 (Thinking)", 1730419200),
-    ("claude-sonnet-4-6", "Claude Sonnet 4.6", 1770314400),
-    ("claude-sonnet-4-6-thinking", "Claude Sonnet 4.6 (Thinking)", 1770314400),
-    ("claude-opus-4-6", "Claude Opus 4.6", 1770314400),
-    ("claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)", 1770314400),
-    ("claude-haiku-4-5-20251001", "Claude Haiku 4.5", 1727740800),
-    ("claude-haiku-4-5-20251001-thinking", "Claude Haiku 4.5 (Thinking)", 1727740800),
-];
 const KIRO_UPSTREAM_LOG_PREVIEW_CHARS: usize = 8_192;
 const KIRO_STREAM_FAILURE_STATUS_CODE: i32 = 599;
 const KIRO_LAST_MESSAGE_PART_PREVIEW_CHARS: usize = 160;
@@ -1557,35 +1544,11 @@ pub async fn get_models() -> impl IntoResponse {
     Json(supported_models_response())
 }
 
-pub(crate) fn supported_model_ids() -> Vec<String> {
-    SUPPORTED_MODEL_CATALOG
-        .iter()
-        .map(|(id, _, _)| (*id).to_string())
-        .collect()
-}
-
-fn supported_models_response() -> ModelsResponse {
-    ModelsResponse {
-        object: "list".to_string(),
-        data: SUPPORTED_MODEL_CATALOG
-            .iter()
-            .map(|(id, display_name, created)| model(id, display_name, *created))
-            .collect(),
-    }
-}
-
 /// Estimates token count for the given request payload.
 pub async fn count_tokens(
     JsonExtractor(payload): JsonExtractor<CountTokensRequest>,
 ) -> impl IntoResponse {
-    Json(CountTokensResponse {
-        input_tokens: token::count_all_tokens(
-            payload.model,
-            payload.system,
-            payload.messages,
-            payload.tools,
-        ) as i32,
-    })
+    Json(count_tokens_response(payload))
 }
 
 /// Handler for `POST /v1/messages` — standard streaming mode.
@@ -3088,18 +3051,6 @@ fn create_buffered_sse_stream(
         for event in all_events {
             yield Ok(Bytes::from(event.to_sse_string()));
         }
-    }
-}
-
-fn model(id: &str, display_name: &str, created: i64) -> Model {
-    Model {
-        id: id.to_string(),
-        object: "model".to_string(),
-        created,
-        owned_by: "anthropic".to_string(),
-        display_name: display_name.to_string(),
-        model_type: "chat".to_string(),
-        max_tokens: 32_000,
     }
 }
 

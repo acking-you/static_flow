@@ -2,6 +2,8 @@
 
 /// Command-line and environment configuration.
 pub mod config;
+/// Local Kiro compatibility endpoints.
+pub mod kiro;
 /// Provider request entrypoints.
 pub mod provider;
 /// LLM-owned route classification.
@@ -50,6 +52,9 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         .route("/v1/responses", post(provider::provider_entry_handler))
         .route("/v1/models", get(provider::provider_entry_handler))
         .route("/cc/v1/messages", post(provider::provider_entry_handler))
+        .route("/api/kiro-gateway/v1/models", get(kiro::get_models))
+        .route("/api/kiro-gateway/v1/messages/count_tokens", post(kiro::count_tokens))
+        .route("/api/kiro-gateway/cc/v1/messages/count_tokens", post(kiro::count_tokens))
         .route("/api/llm-gateway/*path", any(provider::provider_entry_handler))
         .route("/api/kiro-gateway/*path", any(provider::provider_entry_handler))
         .route("/api/codex-gateway/*path", any(provider::provider_entry_handler))
@@ -92,4 +97,87 @@ async fn version() -> Json<VersionResponse> {
         service: "llm-access",
         version: env!("CARGO_PKG_VERSION"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use axum::{
+        body::{to_bytes, Body},
+        http::{header, Request, StatusCode},
+    };
+    use llm_access_core::store::{AuthenticatedKey, ControlStore};
+    use tower::util::ServiceExt;
+
+    #[derive(Default)]
+    struct EmptyStore;
+
+    #[async_trait]
+    impl ControlStore for EmptyStore {
+        async fn authenticate_bearer_secret(
+            &self,
+            _secret: &str,
+        ) -> anyhow::Result<Option<AuthenticatedKey>> {
+            Ok(None)
+        }
+
+        async fn apply_usage_rollup(
+            &self,
+            _event: &llm_access_core::usage::UsageEvent,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn test_router() -> axum::Router {
+        let runtime = crate::runtime::LlmAccessRuntime::new(Arc::new(EmptyStore));
+        super::router(runtime)
+    }
+
+    #[tokio::test]
+    async fn router_serves_kiro_models_without_provider_key() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/kiro-gateway/v1/models")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains(r#""object":"list""#));
+        assert!(body.contains("claude-sonnet-4-6"));
+    }
+
+    #[tokio::test]
+    async fn router_serves_kiro_count_tokens_without_provider_key() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/kiro-gateway/v1/messages/count_tokens")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}]}"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains(r#""input_tokens":"#));
+    }
 }
