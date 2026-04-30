@@ -215,6 +215,60 @@ CREATE TABLE IF NOT EXISTS llm_proxy_bindings (
     updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0)
 ) STRICT, WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS llm_codex_accounts (
+    account_name TEXT PRIMARY KEY,
+    account_id TEXT,
+    email TEXT,
+    status TEXT NOT NULL CHECK (status IN ('active', 'disabled', 'unavailable')),
+    auth_json TEXT NOT NULL CHECK (json_valid(auth_json)),
+    settings_json TEXT NOT NULL CHECK (json_valid(settings_json)),
+    last_refresh_at_ms INTEGER CHECK (last_refresh_at_ms IS NULL OR last_refresh_at_ms >= 0),
+    last_error TEXT,
+    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+    updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0)
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_llm_codex_accounts_status
+    ON llm_codex_accounts(status);
+
+CREATE TABLE IF NOT EXISTS llm_kiro_accounts (
+    account_name TEXT PRIMARY KEY,
+    auth_method TEXT NOT NULL,
+    account_id TEXT,
+    profile_arn TEXT,
+    user_id TEXT,
+    status TEXT NOT NULL CHECK (status IN ('active', 'disabled', 'unavailable')),
+    auth_json TEXT NOT NULL CHECK (json_valid(auth_json)),
+    max_concurrency INTEGER CHECK (max_concurrency IS NULL OR max_concurrency >= 0),
+    min_start_interval_ms INTEGER CHECK (
+        min_start_interval_ms IS NULL OR min_start_interval_ms >= 0
+    ),
+    proxy_config_id TEXT,
+    last_refresh_at_ms INTEGER CHECK (last_refresh_at_ms IS NULL OR last_refresh_at_ms >= 0),
+    last_error TEXT,
+    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+    updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0)
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_llm_kiro_accounts_status
+    ON llm_kiro_accounts(status);
+
+CREATE INDEX IF NOT EXISTS idx_llm_kiro_accounts_user_id
+    ON llm_kiro_accounts(user_id);
+
+CREATE TABLE IF NOT EXISTS llm_kiro_status_cache (
+    account_name TEXT PRIMARY KEY REFERENCES llm_kiro_accounts(account_name) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    balance_json TEXT NOT NULL CHECK (json_valid(balance_json)),
+    cache_json TEXT NOT NULL CHECK (json_valid(cache_json)),
+    refreshed_at_ms INTEGER NOT NULL CHECK (refreshed_at_ms >= 0),
+    expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= 0),
+    last_error TEXT
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_llm_kiro_status_cache_expires
+    ON llm_kiro_status_cache(expires_at_ms);
+
 CREATE TABLE IF NOT EXISTS llm_token_requests (
     request_id TEXT PRIMARY KEY,
     requester_email TEXT NOT NULL,
