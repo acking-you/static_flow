@@ -27,13 +27,14 @@ use axum::{
     Json, Router,
 };
 use config::{CliCommand, ServeConfig, StorageConfig};
-use llm_access_core::store::{PublicAccessStore, PublicStatusStore};
+use llm_access_core::store::{PublicAccessStore, PublicCommunityStore, PublicStatusStore};
 use serde::Serialize;
 
 #[derive(Clone)]
 struct HttpState {
     provider_state: provider::ProviderState,
     public_access_store: Arc<dyn PublicAccessStore>,
+    public_community_store: Arc<dyn PublicCommunityStore>,
     public_status_store: Arc<dyn PublicStatusStore>,
 }
 
@@ -64,6 +65,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
     let state = HttpState {
         provider_state,
         public_access_store: runtime.public_access_store(),
+        public_community_store: runtime.public_community_store(),
         public_status_store: runtime.public_status_store(),
     };
     Router::new()
@@ -73,6 +75,11 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         .route("/api/llm-gateway/model-catalog.json", get(public::get_llm_gateway_model_catalog))
         .route("/api/llm-gateway/status", get(public::get_llm_gateway_status))
         .route("/api/llm-gateway/support-config", get(public::get_llm_gateway_support_config))
+        .route(
+            "/api/llm-gateway/account-contributions",
+            get(public::get_llm_gateway_account_contributions),
+        )
+        .route("/api/llm-gateway/sponsors", get(public::get_llm_gateway_sponsors))
         .route(
             "/api/llm-gateway/support-assets/:file_name",
             get(public::get_llm_gateway_support_asset),
@@ -365,5 +372,45 @@ mod tests {
         assert!(body.contains(r#""sponsor_title":"Support StaticFlow""#));
         assert!(body.contains(r#""qq_group_number":"123456""#));
         assert!(body.contains(r#""alipay_qr_url":"/api/llm-gateway/support-assets/alipay_qr.png""#));
+    }
+
+    #[tokio::test]
+    async fn router_serves_llm_gateway_account_contributions_without_provider_key() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/llm-gateway/account-contributions")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains(r#""contributions":[]"#));
+    }
+
+    #[tokio::test]
+    async fn router_serves_llm_gateway_sponsors_without_provider_key() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/llm-gateway/sponsors")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains(r#""sponsors":[]"#));
     }
 }

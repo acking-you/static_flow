@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use llm_access_core::{
     store::{
         AuthenticatedKey, CodexRateLimitStatus, ControlStore, PublicAccessKey, PublicAccessStore,
-        PublicStatusStore, UsageEventSink, DEFAULT_AUTH_CACHE_TTL_SECONDS,
-        DEFAULT_CODEX_STATUS_REFRESH_SECONDS,
+        PublicAccountContribution, PublicCommunityStore, PublicSponsor, PublicStatusStore,
+        UsageEventSink, DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_STATUS_REFRESH_SECONDS,
     },
     usage::UsageEvent,
 };
@@ -128,6 +128,36 @@ impl PublicAccessStore for SqliteControlRepository {
 }
 
 #[async_trait]
+impl PublicCommunityStore for SqliteControlRepository {
+    async fn list_public_account_contributions(
+        &self,
+        limit: usize,
+    ) -> anyhow::Result<Vec<PublicAccountContribution>> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.list_public_account_contributions(limit)
+        })
+        .await
+        .context("sqlite control repository public account contributions task failed")?
+    }
+
+    async fn list_public_sponsors(&self, limit: usize) -> anyhow::Result<Vec<PublicSponsor>> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.list_public_sponsors(limit)
+        })
+        .await
+        .context("sqlite control repository public sponsors task failed")?
+    }
+}
+
+#[async_trait]
 impl PublicStatusStore for SqliteControlRepository {
     async fn codex_rate_limit_status(&self) -> anyhow::Result<CodexRateLimitStatus> {
         let inner = Arc::clone(&self.inner);
@@ -155,8 +185,8 @@ mod tests {
         provider::{ProtocolFamily, ProviderType, RouteStrategy},
         store::{
             CodexCredits, CodexPublicAccountStatus, CodexRateLimitBucket, CodexRateLimitStatus,
-            CodexRateLimitWindow, ControlStore, PublicAccessStore, PublicStatusStore,
-            UsageEventSink,
+            CodexRateLimitWindow, ControlStore, PublicAccessStore, PublicCommunityStore,
+            PublicStatusStore, UsageEventSink,
         },
         usage::{UsageEvent, UsageTiming},
     };
@@ -361,6 +391,102 @@ mod tests {
         assert_eq!(keys[0].usage_billable_tokens, 40);
         assert_eq!(keys[0].remaining_billable(), 960);
         assert_eq!(keys[0].last_used_at_ms, Some(99));
+    }
+
+    #[tokio::test]
+    async fn sqlite_repository_lists_issued_public_account_contributions() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        conn.execute(
+            "INSERT INTO llm_account_contribution_requests (
+                request_id, account_name, account_id, id_token, access_token, refresh_token,
+                requester_email, contributor_message, github_id, frontend_page_url, status,
+                fingerprint, client_ip, ip_region, admin_note, failure_reason,
+                imported_account_name, issued_key_id, issued_key_name, created_at_ms,
+                updated_at_ms, processed_at_ms
+            ) VALUES
+                (
+                    'contribution-pending', 'pending account', NULL, 'id', 'access', 'refresh',
+                    'pending@example.test', 'not visible', NULL, NULL, 'pending',
+                    'fp-pending', '127.0.0.1', 'local', NULL, NULL, NULL, NULL, NULL,
+                    100, 100, NULL
+                ),
+                (
+                    'contribution-old', 'old account', NULL, 'id', 'access', 'refresh',
+                    'old@example.test', 'old message', 'old-gh', NULL, 'issued',
+                    'fp-old', '127.0.0.1', 'local', NULL, NULL, NULL, 'key-old', 'key old',
+                    200, 300, 300
+                ),
+                (
+                    'contribution-new', 'raw account', NULL, 'id', 'access', 'refresh',
+                    'new@example.test', 'new message', 'new-gh', NULL, 'issued',
+                    'fp-new', '127.0.0.1', 'local', NULL, NULL, 'imported account',
+                    'key-new', 'key new', 400, 500, 500
+                )",
+            [],
+        )
+        .expect("insert account contribution requests");
+
+        let repo = super::SqliteControlRepository::new(conn);
+        let contributions = repo
+            .list_public_account_contributions(10)
+            .await
+            .expect("list public account contributions");
+
+        assert_eq!(contributions.len(), 2);
+        assert_eq!(contributions[0].request_id, "contribution-new");
+        assert_eq!(contributions[0].account_name, "imported account");
+        assert_eq!(contributions[0].contributor_message, "new message");
+        assert_eq!(contributions[0].github_id.as_deref(), Some("new-gh"));
+        assert_eq!(contributions[0].processed_at_ms, Some(500));
+        assert_eq!(contributions[1].request_id, "contribution-old");
+        assert_eq!(contributions[1].account_name, "old account");
+    }
+
+    #[tokio::test]
+    async fn sqlite_repository_lists_approved_public_sponsors() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        conn.execute(
+            "INSERT INTO llm_sponsor_requests (
+                request_id, requester_email, sponsor_message, display_name, github_id,
+                frontend_page_url, status, fingerprint, client_ip, ip_region, admin_note,
+                failure_reason, payment_email_sent_at_ms, created_at_ms, updated_at_ms,
+                processed_at_ms
+            ) VALUES
+                (
+                    'sponsor-submitted', 'submitted@example.test', 'not visible',
+                    'submitted', NULL, NULL, 'submitted', 'fp-submitted', '127.0.0.1',
+                    'local', NULL, NULL, NULL, 100, 100, NULL
+                ),
+                (
+                    'sponsor-old', 'old@example.test', 'old sponsor', NULL, 'old-gh',
+                    NULL, 'approved', 'fp-old', '127.0.0.1', 'local', NULL, NULL, NULL,
+                    200, 300, 300
+                ),
+                (
+                    'sponsor-new', 'new@example.test', 'new sponsor', 'New Sponsor',
+                    'new-gh', NULL, 'approved', 'fp-new', '127.0.0.1', 'local',
+                    NULL, NULL, NULL, 400, 500, 500
+                )",
+            [],
+        )
+        .expect("insert sponsor requests");
+
+        let repo = super::SqliteControlRepository::new(conn);
+        let sponsors = repo
+            .list_public_sponsors(10)
+            .await
+            .expect("list public sponsors");
+
+        assert_eq!(sponsors.len(), 2);
+        assert_eq!(sponsors[0].request_id, "sponsor-new");
+        assert_eq!(sponsors[0].display_name.as_deref(), Some("New Sponsor"));
+        assert_eq!(sponsors[0].sponsor_message, "new sponsor");
+        assert_eq!(sponsors[0].github_id.as_deref(), Some("new-gh"));
+        assert_eq!(sponsors[0].processed_at_ms, Some(500));
+        assert_eq!(sponsors[1].request_id, "sponsor-old");
+        assert_eq!(sponsors[1].display_name, None);
     }
 
     #[tokio::test]

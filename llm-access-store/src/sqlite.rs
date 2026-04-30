@@ -1,7 +1,9 @@
 //! SQLite control-plane repository for `llm-access`.
 
 use anyhow::Context;
-use llm_access_core::store::{CodexRateLimitStatus, PublicAccessKey};
+use llm_access_core::store::{
+    CodexRateLimitStatus, PublicAccessKey, PublicAccountContribution, PublicSponsor,
+};
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 
 /// SQLite-backed control-plane store.
@@ -667,6 +669,73 @@ impl SqliteControlStore {
             })?
             .collect::<Result<Vec<_>, _>>()
             .context("list public access keys")?;
+        Ok(rows)
+    }
+
+    /// List issued account contributions for the public thank-you wall.
+    pub fn list_public_account_contributions(
+        &self,
+        limit: usize,
+    ) -> anyhow::Result<Vec<PublicAccountContribution>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT
+                    request_id,
+                    COALESCE(imported_account_name, account_name),
+                    contributor_message,
+                    github_id,
+                    processed_at_ms
+                 FROM llm_account_contribution_requests
+                 WHERE status = 'issued'
+                 ORDER BY COALESCE(processed_at_ms, created_at_ms) DESC
+                 LIMIT ?1",
+            )
+            .context("prepare list public account contributions")?;
+        let rows = stmt
+            .query_map([limit.max(1) as i64], |row| {
+                Ok(PublicAccountContribution {
+                    request_id: row.get(0)?,
+                    account_name: row.get(1)?,
+                    contributor_message: row.get(2)?,
+                    github_id: row.get(3)?,
+                    processed_at_ms: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .context("list public account contributions")?;
+        Ok(rows)
+    }
+
+    /// List approved sponsors for the public thank-you wall.
+    pub fn list_public_sponsors(&self, limit: usize) -> anyhow::Result<Vec<PublicSponsor>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT
+                    request_id,
+                    display_name,
+                    sponsor_message,
+                    github_id,
+                    processed_at_ms
+                 FROM llm_sponsor_requests
+                 WHERE status = 'approved'
+                 ORDER BY COALESCE(processed_at_ms, created_at_ms) DESC
+                 LIMIT ?1",
+            )
+            .context("prepare list public sponsors")?;
+        let rows = stmt
+            .query_map([limit.max(1) as i64], |row| {
+                Ok(PublicSponsor {
+                    request_id: row.get(0)?,
+                    display_name: row.get(1)?,
+                    sponsor_message: row.get(2)?,
+                    github_id: row.get(3)?,
+                    processed_at_ms: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .context("list public sponsors")?;
         Ok(rows)
     }
 

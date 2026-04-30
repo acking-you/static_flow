@@ -7,10 +7,13 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use llm_access_core::store::PublicAccessKey;
+use llm_access_core::store::{PublicAccessKey, PublicAccountContribution, PublicSponsor};
 use serde::Serialize;
 
 use crate::HttpState;
+
+const MAX_PUBLIC_ACCOUNT_CONTRIBUTIONS: usize = 24;
+const MAX_PUBLIC_SPONSORS: usize = 36;
 
 #[derive(Debug, Serialize)]
 struct LlmGatewayAccessResponse {
@@ -48,6 +51,36 @@ struct LlmGatewaySupportConfigView {
     generated_at: i64,
 }
 
+#[derive(Debug, Serialize)]
+struct PublicLlmGatewayAccountContributionsResponse {
+    contributions: Vec<PublicLlmGatewayAccountContributionView>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicLlmGatewayAccountContributionView {
+    request_id: String,
+    account_name: String,
+    contributor_message: String,
+    github_id: Option<String>,
+    processed_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicLlmGatewaySponsorsResponse {
+    sponsors: Vec<PublicLlmGatewaySponsorView>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicLlmGatewaySponsorView {
+    request_id: String,
+    display_name: Option<String>,
+    sponsor_message: String,
+    github_id: Option<String>,
+    processed_at: Option<i64>,
+}
+
 impl From<PublicAccessKey> for LlmGatewayPublicKeyView {
     fn from(value: PublicAccessKey) -> Self {
         let remaining_billable = value.remaining_billable();
@@ -61,6 +94,30 @@ impl From<PublicAccessKey> for LlmGatewayPublicKeyView {
             usage_output_tokens: value.usage_output_tokens,
             remaining_billable,
             last_used_at: value.last_used_at_ms,
+        }
+    }
+}
+
+impl From<PublicAccountContribution> for PublicLlmGatewayAccountContributionView {
+    fn from(value: PublicAccountContribution) -> Self {
+        Self {
+            request_id: value.request_id,
+            account_name: value.account_name,
+            contributor_message: value.contributor_message,
+            github_id: value.github_id,
+            processed_at: value.processed_at_ms,
+        }
+    }
+}
+
+impl From<PublicSponsor> for PublicLlmGatewaySponsorView {
+    fn from(value: PublicSponsor) -> Self {
+        Self {
+            request_id: value.request_id,
+            display_name: value.display_name,
+            sponsor_message: value.sponsor_message,
+            github_id: value.github_id,
+            processed_at: value.processed_at_ms,
         }
     }
 }
@@ -162,6 +219,52 @@ pub(crate) async fn get_llm_gateway_status(State(state): State<HttpState>) -> Re
         Ok(status) => Json(status).into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "public status store error").into_response(),
     }
+}
+
+pub(crate) async fn get_llm_gateway_account_contributions(
+    State(state): State<HttpState>,
+) -> Response {
+    let contributions = match state
+        .public_community_store
+        .list_public_account_contributions(MAX_PUBLIC_ACCOUNT_CONTRIBUTIONS)
+        .await
+    {
+        Ok(contributions) => contributions
+            .into_iter()
+            .map(PublicLlmGatewayAccountContributionView::from)
+            .collect(),
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "public community store error")
+                .into_response()
+        },
+    };
+    Json(PublicLlmGatewayAccountContributionsResponse {
+        contributions,
+        generated_at: now_ms(),
+    })
+    .into_response()
+}
+
+pub(crate) async fn get_llm_gateway_sponsors(State(state): State<HttpState>) -> Response {
+    let sponsors = match state
+        .public_community_store
+        .list_public_sponsors(MAX_PUBLIC_SPONSORS)
+        .await
+    {
+        Ok(sponsors) => sponsors
+            .into_iter()
+            .map(PublicLlmGatewaySponsorView::from)
+            .collect(),
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "public community store error")
+                .into_response()
+        },
+    };
+    Json(PublicLlmGatewaySponsorsResponse {
+        sponsors,
+        generated_at: now_ms(),
+    })
+    .into_response()
 }
 
 pub(crate) async fn get_llm_gateway_support_config() -> Response {

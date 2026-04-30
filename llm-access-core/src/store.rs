@@ -61,6 +61,36 @@ pub struct PublicAccessKey {
     pub last_used_at_ms: Option<i64>,
 }
 
+/// Public thank-you card for an approved account contribution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicAccountContribution {
+    /// Request id.
+    pub request_id: String,
+    /// Imported account display name.
+    pub account_name: String,
+    /// Contributor-supplied message.
+    pub contributor_message: String,
+    /// Optional GitHub id.
+    pub github_id: Option<String>,
+    /// Approval/issuance timestamp.
+    pub processed_at_ms: Option<i64>,
+}
+
+/// Public thank-you card for an approved sponsor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicSponsor {
+    /// Request id.
+    pub request_id: String,
+    /// Optional display name.
+    pub display_name: Option<String>,
+    /// Sponsor-supplied message.
+    pub sponsor_message: String,
+    /// Optional GitHub id.
+    pub github_id: Option<String>,
+    /// Approval timestamp.
+    pub processed_at_ms: Option<i64>,
+}
+
 impl PublicAccessKey {
     /// Remaining billable token budget available to this key.
     pub fn remaining_billable(&self) -> i64 {
@@ -93,6 +123,20 @@ pub trait PublicAccessStore: Send + Sync {
     async fn list_public_access_keys(&self) -> anyhow::Result<Vec<PublicAccessKey>>;
 }
 
+/// Public read-only community queries used by unauthenticated compatibility
+/// endpoints.
+#[async_trait]
+pub trait PublicCommunityStore: Send + Sync {
+    /// Approved account contribution cards.
+    async fn list_public_account_contributions(
+        &self,
+        limit: usize,
+    ) -> anyhow::Result<Vec<PublicAccountContribution>>;
+
+    /// Approved sponsor cards.
+    async fn list_public_sponsors(&self, limit: usize) -> anyhow::Result<Vec<PublicSponsor>>;
+}
+
 /// Empty public-access store used by isolated unit tests.
 pub struct EmptyPublicAccessStore;
 
@@ -103,6 +147,23 @@ impl PublicAccessStore for EmptyPublicAccessStore {
     }
 
     async fn list_public_access_keys(&self) -> anyhow::Result<Vec<PublicAccessKey>> {
+        Ok(Vec::new())
+    }
+}
+
+/// Empty community store used by isolated unit tests.
+pub struct EmptyPublicCommunityStore;
+
+#[async_trait]
+impl PublicCommunityStore for EmptyPublicCommunityStore {
+    async fn list_public_account_contributions(
+        &self,
+        _limit: usize,
+    ) -> anyhow::Result<Vec<PublicAccountContribution>> {
+        Ok(Vec::new())
+    }
+
+    async fn list_public_sponsors(&self, _limit: usize) -> anyhow::Result<Vec<PublicSponsor>> {
         Ok(Vec::new())
     }
 }

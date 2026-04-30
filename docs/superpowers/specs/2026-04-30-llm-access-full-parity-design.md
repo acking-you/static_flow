@@ -330,6 +330,11 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
   `/api/llm-gateway/support-config` and
   `/api/llm-gateway/support-assets/:file_name` from the same
   `LLM_ACCESS_SUPPORT_DIR` file layout used by the current backend.
+- `llm-access` now serves the public thank-you wall endpoints
+  `/api/llm-gateway/account-contributions` and `/api/llm-gateway/sponsors`.
+  The standalone SQLite repository lists only issued account contributions and
+  approved sponsors, preserving the existing public response shape, imported
+  account-name fallback, and processed-time ordering.
 - `llm-access-kiro` now owns Kiro auth-file persistence, local Kiro CLI import,
   deterministic machine-id derivation, and token-count estimation. The backend
   keeps compatibility modules that re-export those implementations.
