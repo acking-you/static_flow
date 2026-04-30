@@ -2,14 +2,18 @@
 
 /// Command-line and environment configuration.
 pub mod config;
+/// Provider request entrypoints.
+pub mod provider;
+/// LLM-owned route classification.
+pub mod routes;
 /// Runtime startup validation.
 pub mod runtime;
+/// Usage-event helpers.
+pub mod usage;
 
 use anyhow::Context;
 use axum::{
-    http::StatusCode,
-    response::IntoResponse,
-    routing::{get, post},
+    routing::{any, get, post},
     Json, Router,
 };
 use config::{CliCommand, ServeConfig, StorageConfig};
@@ -41,8 +45,14 @@ pub fn router() -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/version", get(version))
-        .route("/v1/chat/completions", post(not_implemented))
-        .route("/v1/messages", post(not_implemented))
+        .route("/v1/chat/completions", post(provider::provider_entry))
+        .route("/v1/responses", post(provider::provider_entry))
+        .route("/v1/models", get(provider::provider_entry))
+        .route("/cc/v1/messages", post(provider::provider_entry))
+        .route("/api/llm-gateway/*path", any(provider::provider_entry))
+        .route("/api/kiro-gateway/*path", any(provider::provider_entry))
+        .route("/api/codex-gateway/*path", any(provider::provider_entry))
+        .route("/api/llm-access/*path", any(provider::provider_entry))
 }
 
 /// Run the HTTP server until interrupted.
@@ -79,8 +89,4 @@ async fn version() -> Json<VersionResponse> {
         service: "llm-access",
         version: env!("CARGO_PKG_VERSION"),
     })
-}
-
-async fn not_implemented() -> impl IntoResponse {
-    (StatusCode::NOT_IMPLEMENTED, "llm-access provider runtime is not wired yet")
 }
