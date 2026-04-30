@@ -66,7 +66,8 @@ pub async fn provider_entry_handler(
 
 /// Authenticate a provider request before handing it to provider dispatch.
 pub async fn provider_entry(state: ProviderState, request: Request<Body>) -> Response {
-    let Some(secret) = bearer_secret(request.headers()).map(str::to_owned) else {
+    let Some(secret) = presented_secret(request.headers(), request.uri().path()).map(str::to_owned)
+    else {
         return (StatusCode::UNAUTHORIZED, "missing bearer token").into_response();
     };
     let key = match state
@@ -92,6 +93,29 @@ pub async fn provider_entry(state: ProviderState, request: Request<Body>) -> Res
     }
 
     state.dispatcher.dispatch(key, request).await
+}
+
+fn presented_secret<'a>(headers: &'a HeaderMap, path: &str) -> Option<&'a str> {
+    if is_kiro_data_plane_route(path) {
+        x_api_key_secret(headers).or_else(|| bearer_secret(headers))
+    } else {
+        bearer_secret(headers)
+    }
+}
+
+fn is_kiro_data_plane_route(path: &str) -> bool {
+    provider_route_requirement(path)
+        .map(|requirement| requirement.provider_type == ProviderType::Kiro)
+        .unwrap_or(false)
+}
+
+fn x_api_key_secret(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get("x-api-key")?.to_str().ok()?.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn bearer_secret(headers: &HeaderMap) -> Option<&str> {
@@ -241,6 +265,14 @@ mod tests {
         request_with_bearer_to_path("/api/kiro-gateway/v1/messages", secret)
     }
 
+    fn request_with_x_api_key_to_path(path: &str, secret: Option<&str>) -> Request<Body> {
+        let mut builder = Request::builder().uri(path);
+        if let Some(secret) = secret {
+            builder = builder.header("x-api-key", secret);
+        }
+        builder.body(Body::empty()).expect("request")
+    }
+
     #[tokio::test]
     async fn provider_entry_rejects_missing_bearer_token() {
         let state = super::ProviderState::new(Arc::new(TestStore));
@@ -266,6 +298,39 @@ mod tests {
             super::provider_entry(state, request_with_bearer(Some("Bearer unknown-secret"))).await;
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn provider_entry_accepts_x_api_key_on_kiro_routes() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+
+        let response = super::provider_entry(
+            state,
+            request_with_x_api_key_to_path("/api/kiro-gateway/v1/messages", Some("valid-secret")),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(dispatcher.seen.lock().expect("dispatcher state").as_slice(), &[(
+            "key-1".to_string(),
+            "/api/kiro-gateway/v1/messages".to_string()
+        )]);
+    }
+
+    #[tokio::test]
+    async fn provider_entry_rejects_x_api_key_on_codex_routes() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+
+        let response = super::provider_entry(
+            state,
+            request_with_x_api_key_to_path("/v1/responses", Some("codex-secret")),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(dispatcher.seen.lock().expect("dispatcher state").is_empty());
     }
 
     #[tokio::test]

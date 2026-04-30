@@ -300,6 +300,9 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
 - `llm-access` now enforces key billable quota before dispatch. Kiro-compatible
   exhausted keys keep the existing 402 behavior, while Codex/OpenAI-compatible
   exhausted keys keep the existing 429 `quota_exceeded` behavior.
+- `llm-access` now accepts Kiro data-plane keys from `x-api-key` as well as
+  `Authorization: Bearer`, while Codex/OpenAI-compatible routes remain
+  Bearer-only.
 - `llm-access-kiro` now owns Kiro auth-file persistence, local Kiro CLI import,
   deterministic machine-id derivation, and token-count estimation. The backend
   keeps compatibility modules that re-export those implementations.
