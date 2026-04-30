@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use axum::{
     body::Body,
     extract::State,
@@ -14,14 +15,40 @@ use llm_access_core::store::{AuthenticatedKey, ControlStore};
 #[derive(Clone)]
 pub struct ProviderState {
     control_store: Arc<dyn ControlStore>,
+    dispatcher: Arc<dyn ProviderDispatcher>,
 }
 
 impl ProviderState {
     /// Create provider request state.
     pub fn new(control_store: Arc<dyn ControlStore>) -> Self {
+        Self::with_dispatcher(control_store, Arc::new(NotImplementedProviderDispatcher))
+    }
+
+    /// Create provider request state with an explicit dispatcher.
+    pub fn with_dispatcher(
+        control_store: Arc<dyn ControlStore>,
+        dispatcher: Arc<dyn ProviderDispatcher>,
+    ) -> Self {
         Self {
             control_store,
+            dispatcher,
         }
+    }
+}
+
+/// Provider runtime dispatch after key authentication succeeds.
+#[async_trait]
+pub trait ProviderDispatcher: Send + Sync {
+    /// Dispatch an authenticated request to the selected provider runtime.
+    async fn dispatch(&self, key: AuthenticatedKey, request: Request<Body>) -> Response;
+}
+
+struct NotImplementedProviderDispatcher;
+
+#[async_trait]
+impl ProviderDispatcher for NotImplementedProviderDispatcher {
+    async fn dispatch(&self, _key: AuthenticatedKey, _request: Request<Body>) -> Response {
+        (StatusCode::NOT_IMPLEMENTED, "provider dispatch is not wired").into_response()
     }
 }
 
@@ -54,7 +81,7 @@ pub async fn provider_entry(state: ProviderState, request: Request<Body>) -> Res
         return (StatusCode::FORBIDDEN, "llm key is not active").into_response();
     }
 
-    (StatusCode::NOT_IMPLEMENTED, "provider dispatch is not wired").into_response()
+    state.dispatcher.dispatch(key, request).await
 }
 
 fn bearer_secret(headers: &HeaderMap) -> Option<&str> {
@@ -77,14 +104,17 @@ fn is_active_key(key: &AuthenticatedKey) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
     use axum::{
         body::Body,
         http::{header, Request, StatusCode},
+        response::{IntoResponse, Response},
     };
     use llm_access_core::store::{AuthenticatedKey, ControlStore};
+
+    use super::ProviderDispatcher;
 
     #[derive(Default)]
     struct TestStore;
@@ -136,6 +166,22 @@ mod tests {
             _event: &llm_access_core::usage::UsageEvent,
         ) -> anyhow::Result<()> {
             Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct CapturingDispatcher {
+        seen: Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait]
+    impl ProviderDispatcher for CapturingDispatcher {
+        async fn dispatch(&self, key: AuthenticatedKey, request: Request<Body>) -> Response {
+            self.seen
+                .lock()
+                .expect("dispatcher state")
+                .push((key.key_id, request.uri().path().to_string()));
+            (StatusCode::ACCEPTED, "dispatched").into_response()
         }
     }
 
@@ -211,5 +257,20 @@ mod tests {
         .await;
 
         assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn provider_entry_dispatches_authenticated_active_requests() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+
+        let response =
+            super::provider_entry(state, request_with_bearer(Some("Bearer valid-secret"))).await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(dispatcher.seen.lock().expect("dispatcher state").as_slice(), &[(
+            "key-1".to_string(),
+            "/api/kiro-gateway/v1/messages".to_string()
+        )]);
     }
 }

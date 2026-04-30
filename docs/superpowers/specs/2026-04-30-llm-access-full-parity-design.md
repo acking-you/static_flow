@@ -289,6 +289,10 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
   authenticates provider requests by bearer secret before dispatch. Missing,
   malformed, unknown, and non-active keys are rejected before any provider
   runtime is selected.
+- `llm-access` now has an explicit provider dispatch boundary after bearer
+  authentication. The default dispatcher preserves the current 501 behavior,
+  while tests can inject a dispatcher and prove active keys reach the provider
+  runtime seam with the authenticated key and original request.
 - `llm-access-kiro` now owns Kiro auth-file persistence, local Kiro CLI import,
   deterministic machine-id derivation, and token-count estimation. The backend
   keeps compatibility modules that re-export those implementations.

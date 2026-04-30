@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 axum = { workspace = true }
 llm-access-core = { path = "../llm-access-core" }
 llm-access-store = { path = "../llm-access-store" }
@@ -16,4 +17,3 @@ serde = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
-async-trait = { workspace = true }
