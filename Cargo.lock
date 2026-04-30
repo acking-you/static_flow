@@ -6065,10 +6065,12 @@ name = "llm-access-kiro"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "bytes",
  "charabia",
  "crc",
  "llm-access-core",
+ "lopdf",
  "lru 0.12.5",
  "parking_lot",
  "serde",
@@ -6077,6 +6079,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tracing",
+ "uuid",
  "xxhash-rust",
 ]
 

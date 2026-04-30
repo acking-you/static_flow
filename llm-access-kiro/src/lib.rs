@@ -5,6 +5,12 @@
     reason = "Extracted Kiro modules preserve the existing backend runtime surface during \
               migration."
 )]
+pub mod anthropic;
+#[allow(
+    missing_docs,
+    reason = "Extracted Kiro modules preserve the existing backend runtime surface during \
+              migration."
+)]
 pub mod billable_multipliers;
 #[allow(
     missing_docs,
