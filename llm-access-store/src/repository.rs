@@ -6,10 +6,11 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use llm_access_core::{
     store::{
-        AdminAccountGroup, AdminAccountGroupPatch, AdminAccountGroupStore, AdminConfigStore,
-        AdminKey, AdminKeyPatch, AdminKeyStore, AdminProxyBinding, AdminProxyConfig,
-        AdminProxyConfigPatch, AdminProxyStore, AdminRuntimeConfig, AuthenticatedKey,
-        CodexRateLimitStatus, ControlStore, NewAdminAccountGroup, NewAdminKey, NewAdminProxyConfig,
+        AdminAccountGroup, AdminAccountGroupPatch, AdminAccountGroupStore, AdminCodexAccount,
+        AdminCodexAccountPatch, AdminCodexAccountStore, AdminConfigStore, AdminKey, AdminKeyPatch,
+        AdminKeyStore, AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch, AdminProxyStore,
+        AdminRuntimeConfig, AuthenticatedKey, CodexRateLimitStatus, ControlStore,
+        NewAdminAccountGroup, NewAdminCodexAccount, NewAdminKey, NewAdminProxyConfig,
         NewPublicAccountContributionRequest, NewPublicSponsorRequest, NewPublicTokenRequest,
         PublicAccessKey, PublicAccessStore, PublicAccountContribution, PublicCommunityStore,
         PublicSponsor, PublicStatusStore, PublicSubmissionStore, PublicUsageLookupKey,
@@ -318,6 +319,86 @@ impl AdminProxyStore for SqliteControlRepository {
 }
 
 #[async_trait]
+impl AdminCodexAccountStore for SqliteControlRepository {
+    async fn list_admin_codex_accounts(&self) -> anyhow::Result<Vec<AdminCodexAccount>> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.list_admin_codex_accounts()
+        })
+        .await
+        .context("sqlite control repository codex account list task failed")?
+    }
+
+    async fn create_admin_codex_account(
+        &self,
+        account: NewAdminCodexAccount,
+    ) -> anyhow::Result<AdminCodexAccount> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.create_admin_codex_account(&account)
+        })
+        .await
+        .context("sqlite control repository codex account create task failed")?
+    }
+
+    async fn patch_admin_codex_account(
+        &self,
+        name: &str,
+        patch: AdminCodexAccountPatch,
+    ) -> anyhow::Result<Option<AdminCodexAccount>> {
+        let name = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.patch_admin_codex_account(&name, &patch)
+        })
+        .await
+        .context("sqlite control repository codex account patch task failed")?
+    }
+
+    async fn delete_admin_codex_account(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<AdminCodexAccount>> {
+        let name = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.delete_admin_codex_account(&name)
+        })
+        .await
+        .context("sqlite control repository codex account delete task failed")?
+    }
+
+    async fn refresh_admin_codex_account(
+        &self,
+        name: &str,
+        refreshed_at_ms: i64,
+    ) -> anyhow::Result<Option<AdminCodexAccount>> {
+        let name = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.refresh_admin_codex_account(&name, refreshed_at_ms)
+        })
+        .await
+        .context("sqlite control repository codex account refresh task failed")?
+    }
+}
+
+#[async_trait]
 impl ControlStore for SqliteControlRepository {
     async fn authenticate_bearer_secret(
         &self,
@@ -521,12 +602,13 @@ mod tests {
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType, RouteStrategy},
         store::{
-            AdminAccountGroupPatch, AdminAccountGroupStore, AdminConfigStore, AdminKeyPatch,
-            AdminKeyStore, AdminProxyConfigPatch, AdminProxyStore, CodexCredits,
-            CodexPublicAccountStatus, CodexRateLimitBucket, CodexRateLimitStatus,
-            CodexRateLimitWindow, ControlStore, NewAdminAccountGroup, NewAdminKey,
-            NewAdminProxyConfig, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
-            PublicUsageStore, UsageEventSink,
+            AdminAccountGroupPatch, AdminAccountGroupStore, AdminCodexAccountPatch,
+            AdminCodexAccountStore, AdminConfigStore, AdminKeyPatch, AdminKeyStore,
+            AdminProxyConfigPatch, AdminProxyStore, CodexCredits, CodexPublicAccountStatus,
+            CodexRateLimitBucket, CodexRateLimitStatus, CodexRateLimitWindow, ControlStore,
+            NewAdminAccountGroup, NewAdminCodexAccount, NewAdminKey, NewAdminProxyConfig,
+            PublicAccessStore, PublicCommunityStore, PublicStatusStore, PublicUsageStore,
+            UsageEventSink,
         },
         usage::{UsageEvent, UsageTiming},
     };
@@ -801,6 +883,75 @@ mod tests {
             .expect("delete account group")
             .expect("group exists");
         assert_eq!(deleted_group.id, "llm-group-test");
+    }
+
+    #[tokio::test]
+    async fn sqlite_repository_manages_admin_codex_account_lifecycle() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlRepository::new(conn);
+
+        let account = repo
+            .create_admin_codex_account(NewAdminCodexAccount {
+                name: "codex_primary".to_string(),
+                account_id: Some("acct-1".to_string()),
+                auth_json: serde_json::json!({
+                    "id_token": "id",
+                    "access_token": "access",
+                    "refresh_token": "refresh",
+                    "account_id": "acct-1",
+                })
+                .to_string(),
+                map_gpt53_codex_to_spark: false,
+                created_at_ms: 100,
+            })
+            .await
+            .expect("create codex account");
+        assert_eq!(account.name, "codex_primary");
+        assert_eq!(account.status, "active");
+        assert_eq!(account.proxy_mode, "inherit");
+
+        let accounts = repo
+            .list_admin_codex_accounts()
+            .await
+            .expect("list codex accounts");
+        assert_eq!(accounts.len(), 1);
+
+        let patched = repo
+            .patch_admin_codex_account("codex_primary", AdminCodexAccountPatch {
+                map_gpt53_codex_to_spark: Some(true),
+                proxy_mode: Some("none".to_string()),
+                request_max_concurrency: Some(Some(2)),
+                request_min_start_interval_ms: Some(Some(50)),
+                updated_at_ms: 200,
+                ..AdminCodexAccountPatch::default()
+            })
+            .await
+            .expect("patch codex account")
+            .expect("account exists");
+        assert!(patched.map_gpt53_codex_to_spark);
+        assert_eq!(patched.proxy_mode, "none");
+        assert_eq!(patched.request_max_concurrency, Some(2));
+        assert_eq!(patched.request_min_start_interval_ms, Some(50));
+
+        let refreshed = repo
+            .refresh_admin_codex_account("codex_primary", 300)
+            .await
+            .expect("refresh codex account")
+            .expect("account exists");
+        assert_eq!(refreshed.last_refresh, Some(300));
+
+        let deleted = repo
+            .delete_admin_codex_account("codex_primary")
+            .await
+            .expect("delete codex account")
+            .expect("account exists");
+        assert_eq!(deleted.name, "codex_primary");
+        assert!(repo
+            .list_admin_codex_accounts()
+            .await
+            .expect("list codex accounts")
+            .is_empty());
     }
 
     #[tokio::test]

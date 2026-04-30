@@ -9,10 +9,10 @@ use axum::{
     Json,
 };
 use llm_access_core::store::{
-    self as core_store, AdminAccountGroupPatch, AdminKeyPatch, AdminProxyConfigPatch,
-    AdminRuntimeConfig, NewAdminAccountGroup, NewAdminKey, NewAdminProxyConfig,
-    UpdateAdminRuntimeConfig, KEY_STATUS_ACTIVE, KEY_STATUS_DISABLED,
-    KIRO_PREFIX_CACHE_MODE_FORMULA, PROVIDER_CODEX, PROVIDER_KIRO,
+    self as core_store, AdminAccountGroupPatch, AdminCodexAccountPatch, AdminKeyPatch,
+    AdminProxyConfigPatch, AdminRuntimeConfig, NewAdminAccountGroup, NewAdminCodexAccount,
+    NewAdminKey, NewAdminProxyConfig, UpdateAdminRuntimeConfig, KEY_STATUS_ACTIVE,
+    KEY_STATUS_DISABLED, KIRO_PREFIX_CACHE_MODE_FORMULA, PROVIDER_CODEX, PROVIDER_KIRO,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -73,6 +73,12 @@ struct AdminProxyConfigsResponse {
 #[derive(Debug, Serialize)]
 struct AdminProxyBindingsResponse {
     bindings: Vec<core_store::AdminProxyBinding>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminAccountsResponse {
+    accounts: Vec<core_store::AdminCodexAccount>,
     generated_at: i64,
 }
 
@@ -160,6 +166,39 @@ pub(crate) struct PatchLlmGatewayProxyConfigRequest {
 pub(crate) struct UpdateLlmGatewayProxyBindingRequest {
     #[serde(default)]
     proxy_config_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ImportLlmGatewayAccountRequest {
+    name: String,
+    tokens: ImportLlmGatewayAccountTokens,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ImportLlmGatewayAccountTokens {
+    id_token: String,
+    access_token: String,
+    refresh_token: String,
+    #[serde(default)]
+    account_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PatchLlmGatewayAccountRequest {
+    #[serde(default)]
+    proxy_mode: Option<String>,
+    #[serde(default)]
+    proxy_config_id: Option<String>,
+    #[serde(default)]
+    map_gpt53_codex_to_spark: Option<bool>,
+    #[serde(default)]
+    request_max_concurrency: Option<u64>,
+    #[serde(default)]
+    request_min_start_interval_ms: Option<u64>,
+    #[serde(default)]
+    request_max_concurrency_unlimited: bool,
+    #[serde(default)]
+    request_min_start_interval_ms_unlimited: bool,
 }
 
 #[derive(Debug)]
@@ -643,6 +682,173 @@ pub(crate) async fn update_llm_gateway_proxy_binding(
     {
         Ok(binding) => Json(binding).into_response(),
         Err(_) => internal_error("Failed to update llm gateway proxy binding").into_response(),
+    }
+}
+
+pub(crate) async fn list_llm_gateway_accounts(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state
+        .admin_codex_account_store
+        .list_admin_codex_accounts()
+        .await
+    {
+        Ok(accounts) => Json(AdminAccountsResponse {
+            accounts,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to list llm gateway accounts").into_response(),
+    }
+}
+
+pub(crate) async fn import_llm_gateway_account(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<ImportLlmGatewayAccountRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_account_name(&request.name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    let id_token = request.tokens.id_token.trim().to_string();
+    let access_token = request.tokens.access_token.trim().to_string();
+    let refresh_token = request.tokens.refresh_token.trim().to_string();
+    if access_token.is_empty() {
+        return bad_request("access_token is required").into_response();
+    }
+    if refresh_token.is_empty() {
+        return bad_request("refresh_token is required").into_response();
+    }
+    if id_token.is_empty() {
+        return bad_request("id_token is required").into_response();
+    }
+    let account_id = normalize_optional_string_option(request.tokens.account_id.as_deref());
+    let auth_json = match serde_json::to_string(&serde_json::json!({
+        "id_token": id_token,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "account_id": account_id,
+    })) {
+        Ok(value) => value,
+        Err(_) => return internal_error("Failed to encode account auth").into_response(),
+    };
+    let account = NewAdminCodexAccount {
+        name,
+        account_id,
+        auth_json,
+        map_gpt53_codex_to_spark: false,
+        created_at_ms: now_ms(),
+    };
+    match state
+        .admin_codex_account_store
+        .create_admin_codex_account(account)
+        .await
+    {
+        Ok(account) => Json(account).into_response(),
+        Err(_) => internal_error("Failed to import llm gateway account").into_response(),
+    }
+}
+
+pub(crate) async fn patch_llm_gateway_account(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(request): Json<PatchLlmGatewayAccountRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_account_name(&name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    let patch = match normalize_account_patch(request) {
+        Ok(patch) => patch,
+        Err(response) => return response.into_response(),
+    };
+    if let Some(Some(proxy_id)) = patch.proxy_config_id.as_ref() {
+        let proxy = match state
+            .admin_proxy_store
+            .get_admin_proxy_config(proxy_id)
+            .await
+        {
+            Ok(Some(proxy)) => proxy,
+            Ok(None) => return not_found("LLM gateway proxy config not found").into_response(),
+            Err(_) => {
+                return internal_error("Failed to load llm gateway proxy config").into_response()
+            },
+        };
+        if proxy.status != KEY_STATUS_ACTIVE {
+            return bad_request("proxy config must be active before account binding")
+                .into_response();
+        }
+    }
+    match state
+        .admin_codex_account_store
+        .patch_admin_codex_account(&name, patch)
+        .await
+    {
+        Ok(Some(account)) => Json(account).into_response(),
+        Ok(None) => not_found("LLM gateway account not found").into_response(),
+        Err(_) => internal_error("Failed to update llm gateway account").into_response(),
+    }
+}
+
+pub(crate) async fn delete_llm_gateway_account(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_account_name(&name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    match state
+        .admin_codex_account_store
+        .delete_admin_codex_account(&name)
+        .await
+    {
+        Ok(Some(account)) => Json(DeleteResponse {
+            deleted: true,
+            id: account.name,
+        })
+        .into_response(),
+        Ok(None) => not_found("LLM gateway account not found").into_response(),
+        Err(_) => internal_error("Failed to delete llm gateway account").into_response(),
+    }
+}
+
+pub(crate) async fn refresh_llm_gateway_account(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_account_name(&name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    match state
+        .admin_codex_account_store
+        .refresh_admin_codex_account(&name, now_ms())
+        .await
+    {
+        Ok(Some(account)) => Json(account).into_response(),
+        Ok(None) => not_found("LLM gateway account not found").into_response(),
+        Err(_) => internal_error("Failed to refresh llm gateway account").into_response(),
     }
 }
 
@@ -1148,6 +1354,58 @@ fn normalize_proxy_config_patch(
         status,
         updated_at_ms: now_ms(),
     })
+}
+
+fn normalize_account_patch(
+    request: PatchLlmGatewayAccountRequest,
+) -> Result<AdminCodexAccountPatch, AdminHttpError> {
+    let proxy_mode = request
+        .proxy_mode
+        .as_deref()
+        .map(normalize_proxy_mode)
+        .transpose()?;
+    let proxy_config_id = request
+        .proxy_config_id
+        .as_deref()
+        .map(|value| normalize_optional_string_option(Some(value)));
+    if matches!(proxy_mode.as_deref(), Some("fixed"))
+        && proxy_config_id
+            .as_ref()
+            .and_then(|value| value.as_ref())
+            .is_none()
+    {
+        return Err(bad_request("fixed proxy_mode requires proxy_config_id"));
+    }
+    let request_max_concurrency = if request.request_max_concurrency_unlimited {
+        Some(None)
+    } else {
+        request.request_max_concurrency.map(Some)
+    };
+    let request_min_start_interval_ms = if request.request_min_start_interval_ms_unlimited {
+        Some(None)
+    } else {
+        request.request_min_start_interval_ms.map(Some)
+    };
+    validate_codex_request_limit_inputs(
+        request_max_concurrency.flatten(),
+        request_min_start_interval_ms.flatten(),
+    )?;
+    Ok(AdminCodexAccountPatch {
+        map_gpt53_codex_to_spark: request.map_gpt53_codex_to_spark,
+        proxy_mode,
+        proxy_config_id,
+        request_max_concurrency,
+        request_min_start_interval_ms,
+        updated_at_ms: now_ms(),
+    })
+}
+
+fn normalize_proxy_mode(raw: &str) -> Result<String, AdminHttpError> {
+    let trimmed = raw.trim();
+    match trimmed {
+        "inherit" | "fixed" | "none" => Ok(trimmed.to_string()),
+        _ => Err(bad_request("proxy_mode must be `inherit`, `fixed`, or `none`")),
+    }
 }
 
 fn validate_codex_request_limit_inputs(

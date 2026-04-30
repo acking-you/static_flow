@@ -515,6 +515,79 @@ pub struct AdminProxyBinding {
     pub error_message: Option<String>,
 }
 
+/// Admin-facing Codex account summary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdminCodexAccount {
+    /// Account display name.
+    pub name: String,
+    /// Runtime status.
+    pub status: String,
+    /// Upstream account id.
+    pub account_id: Option<String>,
+    /// Upstream plan type, when known.
+    pub plan_type: Option<String>,
+    /// Primary rate-limit remaining percentage, when known.
+    pub primary_remaining_percent: Option<f64>,
+    /// Secondary rate-limit remaining percentage, when known.
+    pub secondary_remaining_percent: Option<f64>,
+    /// Whether GPT-5.3 Codex is mapped to Spark for this account.
+    pub map_gpt53_codex_to_spark: bool,
+    /// Per-account request concurrency cap.
+    pub request_max_concurrency: Option<u64>,
+    /// Per-account request pacing interval.
+    pub request_min_start_interval_ms: Option<u64>,
+    /// Proxy selection mode.
+    pub proxy_mode: String,
+    /// Fixed proxy config id when proxy mode is fixed.
+    pub proxy_config_id: Option<String>,
+    /// Effective proxy source.
+    pub effective_proxy_source: String,
+    /// Effective proxy URL.
+    pub effective_proxy_url: Option<String>,
+    /// Effective proxy config name.
+    pub effective_proxy_config_name: Option<String>,
+    /// Last auth refresh timestamp.
+    pub last_refresh: Option<i64>,
+    /// Last usage refresh attempt timestamp.
+    pub last_usage_checked_at: Option<i64>,
+    /// Last successful usage refresh timestamp.
+    pub last_usage_success_at: Option<i64>,
+    /// Last usage refresh error.
+    pub usage_error_message: Option<String>,
+}
+
+/// New imported Codex account row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAdminCodexAccount {
+    /// Account display name.
+    pub name: String,
+    /// Upstream account id.
+    pub account_id: Option<String>,
+    /// Persisted auth JSON.
+    pub auth_json: String,
+    /// Whether GPT-5.3 Codex is mapped to Spark for this account.
+    pub map_gpt53_codex_to_spark: bool,
+    /// Creation timestamp.
+    pub created_at_ms: i64,
+}
+
+/// Patch for one Codex account.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdminCodexAccountPatch {
+    /// New GPT-5.3 Codex Spark mapping toggle.
+    pub map_gpt53_codex_to_spark: Option<bool>,
+    /// New proxy selection mode.
+    pub proxy_mode: Option<String>,
+    /// New proxy config id.
+    pub proxy_config_id: Option<Option<String>>,
+    /// New per-account request concurrency cap.
+    pub request_max_concurrency: Option<Option<u64>>,
+    /// New per-account request pacing interval.
+    pub request_min_start_interval_ms: Option<Option<u64>>,
+    /// Patch timestamp.
+    pub updated_at_ms: i64,
+}
+
 /// Key state used on the hot request path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthenticatedKey {
@@ -899,6 +972,39 @@ pub trait AdminProxyStore: Send + Sync {
     ) -> anyhow::Result<AdminProxyBinding>;
 }
 
+/// Admin Codex account management queries used by the current frontend.
+#[async_trait]
+pub trait AdminCodexAccountStore: Send + Sync {
+    /// List all imported Codex accounts.
+    async fn list_admin_codex_accounts(&self) -> anyhow::Result<Vec<AdminCodexAccount>>;
+
+    /// Import one Codex account.
+    async fn create_admin_codex_account(
+        &self,
+        account: NewAdminCodexAccount,
+    ) -> anyhow::Result<AdminCodexAccount>;
+
+    /// Patch one Codex account.
+    async fn patch_admin_codex_account(
+        &self,
+        name: &str,
+        patch: AdminCodexAccountPatch,
+    ) -> anyhow::Result<Option<AdminCodexAccount>>;
+
+    /// Delete one Codex account.
+    async fn delete_admin_codex_account(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<AdminCodexAccount>>;
+
+    /// Mark one Codex account as refreshed and return its latest summary.
+    async fn refresh_admin_codex_account(
+        &self,
+        name: &str,
+        refreshed_at_ms: i64,
+    ) -> anyhow::Result<Option<AdminCodexAccount>>;
+}
+
 /// Empty public-access store used by isolated unit tests.
 pub struct EmptyPublicAccessStore;
 
@@ -1147,6 +1253,65 @@ impl AdminProxyStore for EmptyAdminProxyStore {
         _proxy_config_id: Option<String>,
     ) -> anyhow::Result<AdminProxyBinding> {
         Ok(default_proxy_binding(provider_type))
+    }
+}
+
+/// Empty admin Codex account store used by isolated unit tests.
+pub struct EmptyAdminCodexAccountStore;
+
+#[async_trait]
+impl AdminCodexAccountStore for EmptyAdminCodexAccountStore {
+    async fn list_admin_codex_accounts(&self) -> anyhow::Result<Vec<AdminCodexAccount>> {
+        Ok(Vec::new())
+    }
+
+    async fn create_admin_codex_account(
+        &self,
+        account: NewAdminCodexAccount,
+    ) -> anyhow::Result<AdminCodexAccount> {
+        Ok(AdminCodexAccount {
+            name: account.name,
+            status: KEY_STATUS_ACTIVE.to_string(),
+            account_id: account.account_id,
+            plan_type: None,
+            primary_remaining_percent: None,
+            secondary_remaining_percent: None,
+            map_gpt53_codex_to_spark: account.map_gpt53_codex_to_spark,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            proxy_mode: "inherit".to_string(),
+            proxy_config_id: None,
+            effective_proxy_source: "none".to_string(),
+            effective_proxy_url: None,
+            effective_proxy_config_name: None,
+            last_refresh: Some(account.created_at_ms),
+            last_usage_checked_at: None,
+            last_usage_success_at: None,
+            usage_error_message: None,
+        })
+    }
+
+    async fn patch_admin_codex_account(
+        &self,
+        _name: &str,
+        _patch: AdminCodexAccountPatch,
+    ) -> anyhow::Result<Option<AdminCodexAccount>> {
+        Ok(None)
+    }
+
+    async fn delete_admin_codex_account(
+        &self,
+        _name: &str,
+    ) -> anyhow::Result<Option<AdminCodexAccount>> {
+        Ok(None)
+    }
+
+    async fn refresh_admin_codex_account(
+        &self,
+        _name: &str,
+        _refreshed_at_ms: i64,
+    ) -> anyhow::Result<Option<AdminCodexAccount>> {
+        Ok(None)
     }
 }
 

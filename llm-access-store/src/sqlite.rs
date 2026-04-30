@@ -2,14 +2,16 @@
 
 use anyhow::Context;
 use llm_access_core::store::{
-    self as core_store, AdminAccountGroup, AdminAccountGroupPatch, AdminKey, AdminKeyPatch,
-    AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch, AdminRuntimeConfig,
-    CodexRateLimitStatus, NewAdminAccountGroup, NewAdminKey, NewAdminProxyConfig,
-    NewPublicAccountContributionRequest, NewPublicSponsorRequest, NewPublicTokenRequest,
-    PublicAccessKey, PublicAccountContribution, PublicSponsor, PublicUsageLookupKey,
-    PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED, PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
+    self as core_store, AdminAccountGroup, AdminAccountGroupPatch, AdminCodexAccount,
+    AdminCodexAccountPatch, AdminKey, AdminKeyPatch, AdminProxyBinding, AdminProxyConfig,
+    AdminProxyConfigPatch, AdminRuntimeConfig, CodexRateLimitStatus, NewAdminAccountGroup,
+    NewAdminCodexAccount, NewAdminKey, NewAdminProxyConfig, NewPublicAccountContributionRequest,
+    NewPublicSponsorRequest, NewPublicTokenRequest, PublicAccessKey, PublicAccountContribution,
+    PublicSponsor, PublicUsageLookupKey, PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED,
+    PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
 };
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
 /// SQLite-backed control-plane store.
 pub struct SqliteControlStore {
@@ -224,6 +226,28 @@ pub struct KiroAccountRecord {
     pub created_at_ms: i64,
     /// Update timestamp.
     pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+struct CodexAccountSettings {
+    map_gpt53_codex_to_spark: bool,
+    proxy_mode: String,
+    proxy_config_id: Option<String>,
+    request_max_concurrency: Option<u64>,
+    request_min_start_interval_ms: Option<u64>,
+}
+
+impl Default for CodexAccountSettings {
+    fn default() -> Self {
+        Self {
+            map_gpt53_codex_to_spark: false,
+            proxy_mode: "inherit".to_string(),
+            proxy_config_id: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+        }
+    }
 }
 
 fn now_ms() -> i64 {
@@ -897,6 +921,178 @@ impl SqliteControlStore {
             binding_updated_at: Some(updated_at_ms),
             error_message: None,
         })
+    }
+
+    /// List imported Codex accounts for the admin UI.
+    pub fn list_admin_codex_accounts(&self) -> anyhow::Result<Vec<AdminCodexAccount>> {
+        let records = self.list_codex_accounts()?;
+        records
+            .iter()
+            .map(|record| self.admin_codex_account_from_record(record))
+            .collect()
+    }
+
+    /// Import one Codex account.
+    pub fn create_admin_codex_account(
+        &self,
+        account: &NewAdminCodexAccount,
+    ) -> anyhow::Result<AdminCodexAccount> {
+        let settings = CodexAccountSettings {
+            map_gpt53_codex_to_spark: account.map_gpt53_codex_to_spark,
+            ..CodexAccountSettings::default()
+        };
+        let record = CodexAccountRecord {
+            account_name: account.name.clone(),
+            account_id: account.account_id.clone(),
+            email: None,
+            status: core_store::KEY_STATUS_ACTIVE.to_string(),
+            auth_json: account.auth_json.clone(),
+            settings_json: serde_json::to_string(&settings).context("serialize codex settings")?,
+            last_refresh_at_ms: Some(account.created_at_ms),
+            last_error: None,
+            created_at_ms: account.created_at_ms,
+            updated_at_ms: account.created_at_ms,
+        };
+        self.upsert_codex_account(&record)?;
+        self.get_codex_account(&account.name)?
+            .map(|record| self.admin_codex_account_from_record(&record))
+            .transpose()?
+            .context("created codex account disappeared")
+    }
+
+    /// Patch one imported Codex account.
+    pub fn patch_admin_codex_account(
+        &self,
+        name: &str,
+        patch: &AdminCodexAccountPatch,
+    ) -> anyhow::Result<Option<AdminCodexAccount>> {
+        let Some(mut record) = self.get_codex_account(name)? else {
+            return Ok(None);
+        };
+        let mut settings = decode_codex_account_settings(&record.settings_json)?;
+        if let Some(value) = patch.map_gpt53_codex_to_spark {
+            settings.map_gpt53_codex_to_spark = value;
+        }
+        if let Some(value) = patch.proxy_mode.as_ref() {
+            settings.proxy_mode = value.clone();
+        }
+        if let Some(value) = patch.proxy_config_id.as_ref() {
+            settings.proxy_config_id = value.clone();
+        }
+        if let Some(value) = patch.request_max_concurrency {
+            settings.request_max_concurrency = value;
+        }
+        if let Some(value) = patch.request_min_start_interval_ms {
+            settings.request_min_start_interval_ms = value;
+        }
+        record.settings_json =
+            serde_json::to_string(&settings).context("serialize codex settings")?;
+        record.updated_at_ms = patch.updated_at_ms;
+        self.upsert_codex_account(&record)?;
+        Ok(Some(self.admin_codex_account_from_record(&record)?))
+    }
+
+    /// Delete one imported Codex account.
+    pub fn delete_admin_codex_account(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<AdminCodexAccount>> {
+        let Some(record) = self.get_codex_account(name)? else {
+            return Ok(None);
+        };
+        self.conn
+            .execute("DELETE FROM llm_codex_accounts WHERE account_name = ?1", [name])
+            .context("delete admin codex account")?;
+        Ok(Some(self.admin_codex_account_from_record(&record)?))
+    }
+
+    /// Mark one Codex account as refreshed.
+    pub fn refresh_admin_codex_account(
+        &self,
+        name: &str,
+        refreshed_at_ms: i64,
+    ) -> anyhow::Result<Option<AdminCodexAccount>> {
+        let Some(mut record) = self.get_codex_account(name)? else {
+            return Ok(None);
+        };
+        record.last_refresh_at_ms = Some(refreshed_at_ms);
+        record.last_error = None;
+        record.updated_at_ms = refreshed_at_ms;
+        self.upsert_codex_account(&record)?;
+        Ok(Some(self.admin_codex_account_from_record(&record)?))
+    }
+
+    fn get_codex_account(&self, name: &str) -> anyhow::Result<Option<CodexAccountRecord>> {
+        self.conn
+            .query_row(
+                "SELECT
+                    account_name, account_id, email, status, auth_json, settings_json,
+                    last_refresh_at_ms, last_error, created_at_ms, updated_at_ms
+                 FROM llm_codex_accounts
+                 WHERE account_name = ?1",
+                [name],
+                decode_codex_account,
+            )
+            .optional()
+            .context("load codex account")
+    }
+
+    fn admin_codex_account_from_record(
+        &self,
+        record: &CodexAccountRecord,
+    ) -> anyhow::Result<AdminCodexAccount> {
+        let settings = decode_codex_account_settings(&record.settings_json)?;
+        let (effective_proxy_source, effective_proxy_url, effective_proxy_config_name) =
+            self.resolve_codex_account_proxy_view(&settings)?;
+        Ok(AdminCodexAccount {
+            name: record.account_name.clone(),
+            status: record.status.clone(),
+            account_id: record.account_id.clone(),
+            plan_type: None,
+            primary_remaining_percent: None,
+            secondary_remaining_percent: None,
+            map_gpt53_codex_to_spark: settings.map_gpt53_codex_to_spark,
+            request_max_concurrency: settings.request_max_concurrency,
+            request_min_start_interval_ms: settings.request_min_start_interval_ms,
+            proxy_mode: settings.proxy_mode,
+            proxy_config_id: settings.proxy_config_id,
+            effective_proxy_source,
+            effective_proxy_url,
+            effective_proxy_config_name,
+            last_refresh: record.last_refresh_at_ms,
+            last_usage_checked_at: None,
+            last_usage_success_at: None,
+            usage_error_message: record.last_error.clone(),
+        })
+    }
+
+    fn resolve_codex_account_proxy_view(
+        &self,
+        settings: &CodexAccountSettings,
+    ) -> anyhow::Result<(String, Option<String>, Option<String>)> {
+        match settings.proxy_mode.as_str() {
+            "none" => Ok(("none".to_string(), None, None)),
+            "fixed" => {
+                let Some(proxy_id) = settings.proxy_config_id.as_deref() else {
+                    return Ok(("invalid".to_string(), None, None));
+                };
+                match self.get_admin_proxy_config(proxy_id)? {
+                    Some(proxy) if proxy.status == core_store::KEY_STATUS_ACTIVE => {
+                        Ok(("fixed".to_string(), Some(proxy.proxy_url), Some(proxy.name)))
+                    },
+                    Some(proxy) => Ok(("invalid".to_string(), None, Some(proxy.name))),
+                    None => Ok(("invalid".to_string(), None, None)),
+                }
+            },
+            _ => {
+                let binding = self.load_admin_proxy_binding(core_store::PROVIDER_CODEX)?;
+                Ok((
+                    binding.effective_source,
+                    binding.effective_proxy_url,
+                    binding.effective_proxy_config_name,
+                ))
+            },
+        }
     }
 
     /// Add one accepted usage event to the hot-path key rollup counters.
@@ -1671,6 +1867,10 @@ fn decode_admin_proxy_config(row: &rusqlite::Row<'_>) -> rusqlite::Result<AdminP
 
 fn decode_optional_json<T: serde::de::DeserializeOwned>(value: Option<&str>) -> Option<T> {
     value.and_then(|raw| serde_json::from_str(raw).ok())
+}
+
+fn decode_codex_account_settings(value: &str) -> anyhow::Result<CodexAccountSettings> {
+    serde_json::from_str(value).context("decode codex account settings")
 }
 
 fn decode_codex_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<CodexAccountRecord> {

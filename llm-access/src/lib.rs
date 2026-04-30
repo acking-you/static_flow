@@ -30,8 +30,9 @@ use axum::{
 };
 use config::{CliCommand, ServeConfig, StorageConfig};
 use llm_access_core::store::{
-    AdminAccountGroupStore, AdminConfigStore, AdminKeyStore, AdminProxyStore, PublicAccessStore,
-    PublicCommunityStore, PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
+    AdminAccountGroupStore, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,
+    AdminProxyStore, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
+    PublicSubmissionStore, PublicUsageStore,
 };
 use serde::Serialize;
 
@@ -42,6 +43,7 @@ struct HttpState {
     admin_key_store: Arc<dyn AdminKeyStore>,
     admin_account_group_store: Arc<dyn AdminAccountGroupStore>,
     admin_proxy_store: Arc<dyn AdminProxyStore>,
+    admin_codex_account_store: Arc<dyn AdminCodexAccountStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
@@ -80,6 +82,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         admin_key_store: runtime.admin_key_store(),
         admin_account_group_store: runtime.admin_account_group_store(),
         admin_proxy_store: runtime.admin_proxy_store(),
+        admin_codex_account_store: runtime.admin_codex_account_store(),
         public_access_store: runtime.public_access_store(),
         public_community_store: runtime.public_community_store(),
         public_usage_store: runtime.public_usage_store(),
@@ -126,6 +129,19 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         .route(
             "/admin/llm-gateway/proxy-bindings/:provider_type",
             post(admin::update_llm_gateway_proxy_binding),
+        )
+        .route(
+            "/admin/llm-gateway/accounts",
+            get(admin::list_llm_gateway_accounts).post(admin::import_llm_gateway_account),
+        )
+        .route(
+            "/admin/llm-gateway/accounts/:name",
+            axum::routing::patch(admin::patch_llm_gateway_account)
+                .delete(admin::delete_llm_gateway_account),
+        )
+        .route(
+            "/admin/llm-gateway/accounts/:name/refresh",
+            post(admin::refresh_llm_gateway_account),
         )
         .route("/api/llm-gateway/access", get(public::get_llm_gateway_access))
         .route("/api/llm-gateway/model-catalog.json", get(public::get_llm_gateway_model_catalog))
@@ -856,6 +872,63 @@ mod tests {
         assert!(bindings
             .iter()
             .any(|binding| binding["provider_type"] == "kiro"));
+    }
+
+    #[tokio::test]
+    async fn router_serves_admin_llm_gateway_accounts_for_local_request() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/llm-gateway/accounts")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(value["accounts"].as_array().expect("accounts array").len(), 0);
+    }
+
+    #[tokio::test]
+    async fn router_imports_admin_llm_gateway_account_for_local_request() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/llm-gateway/accounts")
+                    .header(header::HOST, "localhost")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{
+                            "name": "codex_primary",
+                            "tokens": {
+                                "id_token": "id",
+                                "access_token": "access",
+                                "refresh_token": "refresh",
+                                "account_id": "acct-1"
+                            }
+                        }"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(value["name"], "codex_primary");
+        assert_eq!(value["status"], "active");
+        assert_eq!(value["account_id"], "acct-1");
+        assert_eq!(value["proxy_mode"], "inherit");
     }
 
     #[tokio::test]
