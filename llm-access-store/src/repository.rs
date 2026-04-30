@@ -319,6 +319,20 @@ impl AdminProxyStore for SqliteControlRepository {
         .await
         .context("sqlite control repository proxy binding update task failed")?
     }
+
+    async fn import_legacy_kiro_proxy_configs(
+        &self,
+    ) -> anyhow::Result<llm_access_core::store::AdminLegacyKiroProxyMigration> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.import_legacy_kiro_proxy_configs()
+        })
+        .await
+        .context("sqlite control repository legacy kiro proxy import task failed")?
+    }
 }
 
 #[async_trait]

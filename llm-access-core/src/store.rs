@@ -607,6 +607,17 @@ pub struct AuthenticatedKey {
     pub billable_tokens_used: i64,
 }
 
+/// Resolved proxy settings for one upstream provider request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderProxyConfig {
+    /// Proxy URL accepted by `reqwest::Proxy`.
+    pub proxy_url: String,
+    /// Optional proxy username.
+    pub proxy_username: Option<String>,
+    /// Optional proxy password.
+    pub proxy_password: Option<String>,
+}
+
 /// Resolved Codex account selected for one provider request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCodexRoute {
@@ -625,6 +636,8 @@ pub struct ProviderCodexRoute {
     /// Minimum interval between request starts configured on the selected
     /// account.
     pub account_request_min_start_interval_ms: Option<u64>,
+    /// Resolved proxy settings for this upstream request.
+    pub proxy: Option<ProviderProxyConfig>,
 }
 
 /// Resolved Kiro account selected for one provider request.
@@ -667,6 +680,8 @@ pub struct ProviderKiroRoute {
     /// Minimum interval between request starts configured on the selected
     /// account.
     pub account_request_min_start_interval_ms: Option<u64>,
+    /// Resolved proxy settings for this upstream request.
+    pub proxy: Option<ProviderProxyConfig>,
 }
 
 impl AuthenticatedKey {
@@ -1059,6 +1074,18 @@ pub struct UsageChartPoint {
     pub tokens: u64,
 }
 
+/// Result of migrating legacy embedded Kiro proxy fields into shared proxy
+/// configs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminLegacyKiroProxyMigration {
+    /// Proxy configs created during migration.
+    pub created_configs: Vec<AdminProxyConfig>,
+    /// Existing proxy configs reused by matching legacy tuples.
+    pub reused_configs: Vec<AdminProxyConfig>,
+    /// Kiro account names updated by migration.
+    pub migrated_account_names: Vec<String>,
+}
+
 impl PublicAccessKey {
     /// Remaining billable token budget available to this key.
     pub fn remaining_billable(&self) -> i64 {
@@ -1284,6 +1311,11 @@ pub trait AdminProxyStore: Send + Sync {
         provider_type: &str,
         proxy_config_id: Option<String>,
     ) -> anyhow::Result<AdminProxyBinding>;
+
+    /// Import legacy embedded Kiro proxy fields into shared proxy configs.
+    async fn import_legacy_kiro_proxy_configs(
+        &self,
+    ) -> anyhow::Result<AdminLegacyKiroProxyMigration>;
 }
 
 /// Admin Codex account management queries used by the current frontend.
@@ -1716,6 +1748,16 @@ impl AdminProxyStore for EmptyAdminProxyStore {
         _proxy_config_id: Option<String>,
     ) -> anyhow::Result<AdminProxyBinding> {
         Ok(default_proxy_binding(provider_type))
+    }
+
+    async fn import_legacy_kiro_proxy_configs(
+        &self,
+    ) -> anyhow::Result<AdminLegacyKiroProxyMigration> {
+        Ok(AdminLegacyKiroProxyMigration {
+            created_configs: Vec::new(),
+            reused_configs: Vec::new(),
+            migrated_account_names: Vec::new(),
+        })
     }
 }
 

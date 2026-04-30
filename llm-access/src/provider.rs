@@ -29,7 +29,9 @@ use llm_access_codex::{
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType},
     routes::provider_route_requirement,
-    store::{AuthenticatedKey, ControlStore, ProviderKiroRoute, ProviderRouteStore},
+    store::{
+        AuthenticatedKey, ControlStore, ProviderKiroRoute, ProviderProxyConfig, ProviderRouteStore,
+    },
     usage::{UsageEvent, UsageTiming},
 };
 use llm_access_kiro::{
@@ -322,7 +324,13 @@ async fn dispatch_codex_proxy(
         },
     )
     .await;
-    let client = reqwest::Client::new();
+    let client = match provider_client(route.proxy.as_ref()) {
+        Ok(client) => client,
+        Err(_) => {
+            return (StatusCode::SERVICE_UNAVAILABLE, "failed to build upstream HTTP client")
+                .into_response()
+        },
+    };
     let mut upstream = client
         .request(method, upstream_url)
         .bearer_auth(access_token)
@@ -742,7 +750,17 @@ async fn dispatch_kiro_proxy(
         },
     )
     .await;
-    let response = match reqwest::Client::new()
+    let client = match provider_client(route.proxy.as_ref()) {
+        Ok(client) => client,
+        Err(_) => {
+            return kiro_json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "api_error",
+                "failed to build upstream HTTP client",
+            )
+        },
+    };
+    let response = match client
         .post(upstream_url)
         .bearer_auth(access_token)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -1204,6 +1222,19 @@ fn kiro_access_token_from_auth_json(auth_json: &str) -> Option<String> {
         .map(str::trim)
         .filter(|token| !token.is_empty())
         .map(ToString::to_string)
+}
+
+fn provider_client(proxy: Option<&ProviderProxyConfig>) -> anyhow::Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder();
+    if let Some(proxy_config) = proxy {
+        let mut proxy = reqwest::Proxy::all(&proxy_config.proxy_url)?;
+        if let Some(username) = proxy_config.proxy_username.as_deref() {
+            proxy =
+                proxy.basic_auth(username, proxy_config.proxy_password.as_deref().unwrap_or(""));
+        }
+        builder = builder.proxy(proxy);
+    }
+    Ok(builder.build()?)
 }
 
 fn kiro_json_error(status: StatusCode, error_type: &str, message: &str) -> Response {
@@ -2079,6 +2110,7 @@ mod tests {
                 request_min_start_interval_ms: None,
                 account_request_max_concurrency: None,
                 account_request_min_start_interval_ms: None,
+                proxy: None,
             },
             kiro_route: static_kiro_route(),
         })
@@ -2094,6 +2126,7 @@ mod tests {
                 request_min_start_interval_ms: None,
                 account_request_max_concurrency: None,
                 account_request_min_start_interval_ms: None,
+                proxy: None,
             },
             kiro_route: static_kiro_route(),
         })
@@ -2120,6 +2153,7 @@ mod tests {
             request_min_start_interval_ms: None,
             account_request_max_concurrency: None,
             account_request_min_start_interval_ms: None,
+            proxy: None,
         }
     }
 

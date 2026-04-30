@@ -869,19 +869,26 @@ pub(crate) async fn check_llm_gateway_proxy_config(
 }
 
 pub(crate) async fn import_legacy_kiro_proxy_configs(
-    State(_state): State<HttpState>,
+    State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Response {
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    Json(AdminLegacyKiroProxyMigrationResponse {
-        created_configs: Vec::new(),
-        reused_configs: Vec::new(),
-        migrated_account_names: Vec::new(),
-        generated_at: now_ms(),
-    })
-    .into_response()
+    match state
+        .admin_proxy_store
+        .import_legacy_kiro_proxy_configs()
+        .await
+    {
+        Ok(result) => Json(AdminLegacyKiroProxyMigrationResponse {
+            created_configs: result.created_configs,
+            reused_configs: result.reused_configs,
+            migrated_account_names: result.migrated_account_names,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to import legacy Kiro proxy configs").into_response(),
+    }
 }
 
 pub(crate) async fn list_llm_gateway_usage_events(

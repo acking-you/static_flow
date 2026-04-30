@@ -1,17 +1,19 @@
 //! SQLite control-plane repository for `llm-access`.
 
+use std::collections::BTreeMap;
+
 use anyhow::Context;
 use llm_access_core::store::{
     self as core_store, AdminAccountContributionRequest, AdminAccountContributionRequestsPage,
     AdminAccountGroup, AdminAccountGroupPatch, AdminCodexAccount, AdminCodexAccountPatch, AdminKey,
-    AdminKeyPatch, AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch,
-    AdminReviewQueueAction, AdminReviewQueueQuery, AdminRuntimeConfig, AdminSponsorRequest,
-    AdminSponsorRequestsPage, AdminTokenRequest, AdminTokenRequestsPage, AuthenticatedKey,
-    CodexRateLimitStatus, NewAdminAccountGroup, NewAdminCodexAccount, NewAdminKey,
-    NewAdminProxyConfig, NewPublicAccountContributionRequest, NewPublicSponsorRequest,
-    NewPublicTokenRequest, ProviderCodexRoute, PublicAccessKey, PublicAccountContribution,
-    PublicSponsor, PublicUsageLookupKey, PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED,
-    PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
+    AdminKeyPatch, AdminLegacyKiroProxyMigration, AdminProxyBinding, AdminProxyConfig,
+    AdminProxyConfigPatch, AdminReviewQueueAction, AdminReviewQueueQuery, AdminRuntimeConfig,
+    AdminSponsorRequest, AdminSponsorRequestsPage, AdminTokenRequest, AdminTokenRequestsPage,
+    AuthenticatedKey, CodexRateLimitStatus, NewAdminAccountGroup, NewAdminCodexAccount,
+    NewAdminKey, NewAdminProxyConfig, NewPublicAccountContributionRequest, NewPublicSponsorRequest,
+    NewPublicTokenRequest, ProviderCodexRoute, ProviderProxyConfig, PublicAccessKey,
+    PublicAccountContribution, PublicSponsor, PublicUsageLookupKey,
+    PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED, PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
 };
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -568,6 +570,11 @@ impl SqliteControlStore {
             return Ok(None);
         }
         let settings = decode_codex_account_settings(&record.settings_json)?;
+        let proxy = self.resolve_provider_proxy_config(
+            core_store::PROVIDER_CODEX,
+            &settings.proxy_mode,
+            settings.proxy_config_id.as_deref(),
+        )?;
         Ok(Some(ProviderCodexRoute {
             account_name: record.account_name,
             auth_json: record.auth_json,
@@ -582,6 +589,7 @@ impl SqliteControlStore {
                 .and_then(non_negative_i64_to_u64),
             account_request_max_concurrency: settings.request_max_concurrency,
             account_request_min_start_interval_ms: settings.request_min_start_interval_ms,
+            proxy,
         }))
     }
 
@@ -639,6 +647,12 @@ impl SqliteControlStore {
             .kiro_billable_model_multipliers_override_json
             .clone()
             .unwrap_or_else(|| runtime_config.kiro_billable_model_multipliers_json.clone());
+        let proxy_mode = if record.proxy_config_id.is_some() { "fixed" } else { "inherit" };
+        let proxy = self.resolve_provider_proxy_config(
+            core_store::PROVIDER_KIRO,
+            proxy_mode,
+            record.proxy_config_id.as_deref(),
+        )?;
         Ok(Some(core_store::ProviderKiroRoute {
             account_name: record.account_name,
             auth_json: record.auth_json,
@@ -674,6 +688,7 @@ impl SqliteControlStore {
             account_request_min_start_interval_ms: record
                 .min_start_interval_ms
                 .and_then(non_negative_i64_to_u64),
+            proxy,
         }))
     }
 
@@ -1013,6 +1028,106 @@ impl SqliteControlStore {
         self.load_admin_proxy_binding(provider_type)
     }
 
+    /// Import legacy proxy fields embedded in Kiro auth JSON into shared proxy
+    /// configs.
+    pub fn import_legacy_kiro_proxy_configs(
+        &self,
+    ) -> anyhow::Result<AdminLegacyKiroProxyMigration> {
+        let mut tuples_to_accounts =
+            BTreeMap::<(String, Option<String>, Option<String>), Vec<KiroAccountRecord>>::new();
+        for account in self.list_kiro_accounts()? {
+            let auth_json = serde_json::from_str::<serde_json::Value>(&account.auth_json)
+                .context("parse kiro auth json for legacy proxy migration")?;
+            let Some(proxy_url) = legacy_proxy_json_string(&auth_json, &["proxyUrl", "proxy_url"])
+            else {
+                continue;
+            };
+            let proxy_username =
+                legacy_proxy_json_string(&auth_json, &["proxyUsername", "proxy_username"]);
+            let proxy_password =
+                legacy_proxy_json_string(&auth_json, &["proxyPassword", "proxy_password"]);
+            tuples_to_accounts
+                .entry((proxy_url, proxy_username, proxy_password))
+                .or_default()
+                .push(account);
+        }
+
+        if tuples_to_accounts.is_empty() {
+            return Ok(AdminLegacyKiroProxyMigration {
+                created_configs: Vec::new(),
+                reused_configs: Vec::new(),
+                migrated_account_names: Vec::new(),
+            });
+        }
+
+        let mut existing_by_tuple =
+            BTreeMap::<(String, Option<String>, Option<String>), AdminProxyConfig>::new();
+        for proxy in self.list_admin_proxy_configs()? {
+            existing_by_tuple.insert(
+                (
+                    proxy.proxy_url.clone(),
+                    proxy.proxy_username.clone(),
+                    proxy.proxy_password.clone(),
+                ),
+                proxy,
+            );
+        }
+
+        let mut created_configs = Vec::new();
+        let mut reused_configs = Vec::new();
+        let mut migrated_account_names = Vec::new();
+        for (index, (tuple, mut accounts)) in tuples_to_accounts.into_iter().enumerate() {
+            let proxy = if let Some(proxy) = existing_by_tuple.get(&tuple).cloned() {
+                reused_configs.push(proxy.clone());
+                proxy
+            } else {
+                let now = now_ms();
+                let proxy = NewAdminProxyConfig {
+                    id: self.generate_legacy_proxy_id(index)?,
+                    name: format!("legacy-kiro-{}", index + 1),
+                    proxy_url: tuple.0.clone(),
+                    proxy_username: tuple.1.clone(),
+                    proxy_password: tuple.2.clone(),
+                    created_at_ms: now,
+                };
+                let created = self.create_admin_proxy_config(&proxy)?;
+                existing_by_tuple.insert(tuple.clone(), created.clone());
+                created_configs.push(created.clone());
+                created
+            };
+
+            accounts.sort_by_cached_key(|account| account.account_name.to_ascii_lowercase());
+            for mut account in accounts {
+                account.proxy_config_id = Some(proxy.id.clone());
+                account.updated_at_ms = now_ms();
+                account.auth_json = clear_legacy_kiro_proxy_json(&account.auth_json, &proxy.id)?;
+                self.upsert_kiro_account(&account)?;
+                migrated_account_names.push(account.account_name);
+            }
+        }
+        migrated_account_names.sort();
+        migrated_account_names.dedup();
+        Ok(AdminLegacyKiroProxyMigration {
+            created_configs,
+            reused_configs,
+            migrated_account_names,
+        })
+    }
+
+    fn generate_legacy_proxy_id(&self, index: usize) -> anyhow::Result<String> {
+        let base = format!("llm-proxy-legacy-{}-{}", now_ms(), index + 1);
+        if self.get_admin_proxy_config(&base)?.is_none() {
+            return Ok(base);
+        }
+        for suffix in 1..1000 {
+            let id = format!("{base}-{suffix}");
+            if self.get_admin_proxy_config(&id)?.is_none() {
+                return Ok(id);
+            }
+        }
+        anyhow::bail!("failed to allocate legacy proxy config id")
+    }
+
     fn load_admin_proxy_binding(&self, provider_type: &str) -> anyhow::Result<AdminProxyBinding> {
         let binding = self
             .conn
@@ -1081,6 +1196,43 @@ impl SqliteControlStore {
             binding_updated_at: Some(updated_at_ms),
             error_message: None,
         })
+    }
+
+    fn resolve_provider_proxy_config(
+        &self,
+        provider_type: &str,
+        proxy_mode: &str,
+        proxy_config_id: Option<&str>,
+    ) -> anyhow::Result<Option<ProviderProxyConfig>> {
+        match proxy_mode {
+            "none" | "direct" => Ok(None),
+            "fixed" => {
+                let Some(proxy_id) = proxy_config_id else {
+                    anyhow::bail!("fixed proxy mode requires proxy_config_id");
+                };
+                let Some(proxy) = self.get_admin_proxy_config(proxy_id)? else {
+                    anyhow::bail!("fixed proxy config `{proxy_id}` is missing");
+                };
+                if proxy.status != core_store::KEY_STATUS_ACTIVE {
+                    anyhow::bail!("fixed proxy config `{}` is disabled", proxy.name);
+                }
+                Ok(Some(provider_proxy_from_admin_proxy(proxy)))
+            },
+            _ => {
+                let binding = self.load_admin_proxy_binding(provider_type)?;
+                if let Some(message) = binding.error_message {
+                    anyhow::bail!("provider proxy binding is invalid: {message}");
+                }
+                match binding.effective_proxy_url {
+                    Some(proxy_url) => Ok(Some(ProviderProxyConfig {
+                        proxy_url,
+                        proxy_username: binding.effective_proxy_username,
+                        proxy_password: binding.effective_proxy_password,
+                    })),
+                    None => Ok(None),
+                }
+            },
+        }
     }
 
     /// List imported Codex accounts for the admin UI.
@@ -2751,6 +2903,46 @@ fn non_negative_i64_to_u64(value: i64) -> Option<u64> {
     u64::try_from(value.max(0)).ok()
 }
 
+fn provider_proxy_from_admin_proxy(proxy: AdminProxyConfig) -> ProviderProxyConfig {
+    ProviderProxyConfig {
+        proxy_url: proxy.proxy_url,
+        proxy_username: proxy.proxy_username,
+        proxy_password: proxy.proxy_password,
+    }
+}
+
+fn legacy_proxy_json_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .filter_map(|key| value.get(*key))
+        .find_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn clear_legacy_kiro_proxy_json(auth_json: &str, proxy_config_id: &str) -> anyhow::Result<String> {
+    let mut value = serde_json::from_str::<serde_json::Value>(auth_json)
+        .context("parse kiro auth json for legacy proxy cleanup")?;
+    if let Some(object) = value.as_object_mut() {
+        for key in [
+            "proxyUrl",
+            "proxy_url",
+            "proxyUsername",
+            "proxy_username",
+            "proxyPassword",
+            "proxy_password",
+        ] {
+            object.remove(key);
+        }
+        object.insert("proxyMode".to_string(), serde_json::Value::String("fixed".to_string()));
+        object.insert(
+            "proxyConfigId".to_string(),
+            serde_json::Value::String(proxy_config_id.to_string()),
+        );
+    }
+    serde_json::to_string(&value).context("serialize kiro auth json after proxy cleanup")
+}
+
 fn decode_codex_account_settings(value: &str) -> anyhow::Result<CodexAccountSettings> {
     serde_json::from_str(value).context("decode codex account settings")
 }
@@ -3611,12 +3803,21 @@ mod tests {
             created_at_ms: 100,
         })
         .expect("create codex account");
+        repo.create_admin_proxy_config(&llm_access_core::store::NewAdminProxyConfig {
+            id: "proxy-codex-route".to_string(),
+            name: "codex proxy".to_string(),
+            proxy_url: "http://127.0.0.1:9010".to_string(),
+            proxy_username: Some("codex-user".to_string()),
+            proxy_password: Some("codex-pass".to_string()),
+            created_at_ms: 105,
+        })
+        .expect("create codex proxy");
         repo.patch_admin_codex_account(
             "codex-route",
             &llm_access_core::store::AdminCodexAccountPatch {
                 map_gpt53_codex_to_spark: None,
-                proxy_mode: None,
-                proxy_config_id: None,
+                proxy_mode: Some("fixed".to_string()),
+                proxy_config_id: Some(Some("proxy-codex-route".to_string())),
                 request_max_concurrency: Some(Some(3)),
                 request_min_start_interval_ms: Some(Some(75)),
                 updated_at_ms: 110,
@@ -3678,6 +3879,9 @@ mod tests {
         assert_eq!(route.request_min_start_interval_ms, Some(50));
         assert_eq!(route.account_request_max_concurrency, Some(3));
         assert_eq!(route.account_request_min_start_interval_ms, Some(75));
+        let proxy = route.proxy.expect("codex proxy");
+        assert_eq!(proxy.proxy_url, "http://127.0.0.1:9010");
+        assert_eq!(proxy.proxy_username.as_deref(), Some("codex-user"));
     }
 
     #[test]
@@ -3686,6 +3890,15 @@ mod tests {
         crate::initialize_sqlite_target(&conn).expect("init schema");
         let repo = super::SqliteControlStore::new(conn);
 
+        repo.create_admin_proxy_config(&llm_access_core::store::NewAdminProxyConfig {
+            id: "proxy-kiro-route".to_string(),
+            name: "kiro proxy".to_string(),
+            proxy_url: "socks5h://127.0.0.1:9011".to_string(),
+            proxy_username: None,
+            proxy_password: None,
+            created_at_ms: 20,
+        })
+        .expect("create kiro proxy");
         repo.upsert_kiro_account(&super::KiroAccountRecord {
             account_name: "kiro-route".to_string(),
             auth_method: "idc".to_string(),
@@ -3696,7 +3909,7 @@ mod tests {
             auth_json: r#"{"accessToken":"access-route","apiRegion":"us-west-2"}"#.to_string(),
             max_concurrency: Some(1),
             min_start_interval_ms: Some(100),
-            proxy_config_id: None,
+            proxy_config_id: Some("proxy-kiro-route".to_string()),
             last_refresh_at_ms: Some(200),
             last_error: None,
             created_at_ms: 30,
@@ -3782,6 +3995,60 @@ mod tests {
         assert_eq!(route.request_min_start_interval_ms, Some(50));
         assert_eq!(route.account_request_max_concurrency, Some(1));
         assert_eq!(route.account_request_min_start_interval_ms, Some(100));
+        let proxy = route.proxy.expect("kiro proxy");
+        assert_eq!(proxy.proxy_url, "socks5h://127.0.0.1:9011");
+    }
+
+    #[test]
+    fn legacy_kiro_proxy_import_creates_shared_proxy_and_updates_accounts() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlStore::new(conn);
+
+        repo.upsert_kiro_account(&super::KiroAccountRecord {
+            account_name: "kiro-legacy".to_string(),
+            auth_method: "idc".to_string(),
+            account_id: Some("kiro-account".to_string()),
+            profile_arn: Some("arn:aws:kiro:test".to_string()),
+            user_id: Some("user-1".to_string()),
+            status: "active".to_string(),
+            auth_json: r#"{
+                "accessToken":"access-route",
+                "apiRegion":"us-west-2",
+                "proxyUrl":"http://127.0.0.1:9020",
+                "proxyUsername":"legacy-user",
+                "proxyPassword":"legacy-pass"
+            }"#
+            .to_string(),
+            max_concurrency: Some(1),
+            min_start_interval_ms: Some(100),
+            proxy_config_id: None,
+            last_refresh_at_ms: Some(200),
+            last_error: None,
+            created_at_ms: 30,
+            updated_at_ms: 40,
+        })
+        .expect("upsert legacy kiro account");
+
+        let result = repo
+            .import_legacy_kiro_proxy_configs()
+            .expect("import legacy proxies");
+        assert_eq!(result.created_configs.len(), 1);
+        assert_eq!(result.reused_configs.len(), 0);
+        assert_eq!(result.migrated_account_names, vec!["kiro-legacy"]);
+        let proxy = &result.created_configs[0];
+        assert_eq!(proxy.proxy_url, "http://127.0.0.1:9020");
+        assert_eq!(proxy.proxy_username.as_deref(), Some("legacy-user"));
+        let account = repo
+            .get_kiro_account("kiro-legacy")
+            .expect("load migrated account")
+            .expect("account exists");
+        assert_eq!(account.proxy_config_id.as_deref(), Some(proxy.id.as_str()));
+        let auth_json =
+            serde_json::from_str::<serde_json::Value>(&account.auth_json).expect("auth json");
+        assert!(auth_json.get("proxyUrl").is_none());
+        assert_eq!(auth_json["proxyMode"], "fixed");
+        assert_eq!(auth_json["proxyConfigId"], proxy.id);
     }
 
     #[test]
