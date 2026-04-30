@@ -5,8 +5,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context};
 use llm_access_core::store::{
     ControlStore, EmptyPublicAccessStore, EmptyPublicCommunityStore, EmptyPublicStatusStore,
-    EmptyPublicSubmissionStore, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
-    PublicSubmissionStore,
+    EmptyPublicSubmissionStore, EmptyPublicUsageStore, PublicAccessStore, PublicCommunityStore,
+    PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
 };
 use llm_access_store::repository::SqliteControlRepository;
 
@@ -18,6 +18,7 @@ pub struct LlmAccessRuntime {
     control_store: Arc<dyn ControlStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
+    public_usage_store: Arc<dyn PublicUsageStore>,
     public_submission_store: Arc<dyn PublicSubmissionStore>,
     public_status_store: Arc<dyn PublicStatusStore>,
 }
@@ -29,6 +30,7 @@ impl LlmAccessRuntime {
             control_store,
             Arc::new(EmptyPublicAccessStore),
             Arc::new(EmptyPublicCommunityStore),
+            Arc::new(EmptyPublicUsageStore),
             Arc::new(EmptyPublicSubmissionStore),
             Arc::new(EmptyPublicStatusStore),
         )
@@ -39,6 +41,7 @@ impl LlmAccessRuntime {
         control_store: Arc<dyn ControlStore>,
         public_access_store: Arc<dyn PublicAccessStore>,
         public_community_store: Arc<dyn PublicCommunityStore>,
+        public_usage_store: Arc<dyn PublicUsageStore>,
         public_submission_store: Arc<dyn PublicSubmissionStore>,
         public_status_store: Arc<dyn PublicStatusStore>,
     ) -> Self {
@@ -46,6 +49,7 @@ impl LlmAccessRuntime {
             control_store,
             public_access_store,
             public_community_store,
+            public_usage_store,
             public_submission_store,
             public_status_store,
         }
@@ -58,12 +62,14 @@ impl LlmAccessRuntime {
         let control_store: Arc<dyn ControlStore> = repository.clone();
         let public_access_store: Arc<dyn PublicAccessStore> = repository.clone();
         let public_community_store: Arc<dyn PublicCommunityStore> = repository.clone();
+        let public_usage_store: Arc<dyn PublicUsageStore> = repository.clone();
         let public_submission_store: Arc<dyn PublicSubmissionStore> = repository.clone();
         let public_status_store: Arc<dyn PublicStatusStore> = repository;
         Ok(Self::with_stores(
             control_store,
             public_access_store,
             public_community_store,
+            public_usage_store,
             public_submission_store,
             public_status_store,
         ))
@@ -82,6 +88,11 @@ impl LlmAccessRuntime {
     /// Public community store used by unauthenticated compatibility endpoints.
     pub fn public_community_store(&self) -> Arc<dyn PublicCommunityStore> {
         Arc::clone(&self.public_community_store)
+    }
+
+    /// Public usage store used by unauthenticated compatibility endpoints.
+    pub fn public_usage_store(&self) -> Arc<dyn PublicUsageStore> {
+        Arc::clone(&self.public_usage_store)
     }
 
     /// Public submission store used by unauthenticated compatibility endpoints.

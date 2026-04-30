@@ -4,7 +4,8 @@ use anyhow::Context;
 use llm_access_core::store::{
     CodexRateLimitStatus, NewPublicAccountContributionRequest, NewPublicSponsorRequest,
     NewPublicTokenRequest, PublicAccessKey, PublicAccountContribution, PublicSponsor,
-    PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED, PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
+    PublicUsageLookupKey, PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED,
+    PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
 };
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 
@@ -672,6 +673,57 @@ impl SqliteControlStore {
             .collect::<Result<Vec<_>, _>>()
             .context("list public access keys")?;
         Ok(rows)
+    }
+
+    /// Load one usage-lookup key by presented secret hash.
+    pub fn get_public_usage_key_by_hash(
+        &self,
+        key_hash: &str,
+    ) -> anyhow::Result<Option<PublicUsageLookupKey>> {
+        self.conn
+            .query_row(
+                "SELECT
+                    k.key_id,
+                    k.name,
+                    k.provider_type,
+                    k.status,
+                    k.public_visible,
+                    k.quota_billable_limit,
+                    COALESCE(u.input_uncached_tokens, 0),
+                    COALESCE(u.input_cached_tokens, 0),
+                    COALESCE(u.output_tokens, 0),
+                    COALESCE(u.billable_tokens, 0),
+                    COALESCE(u.credit_total, '0'),
+                    COALESCE(u.credit_missing_events, 0),
+                    u.last_used_at_ms
+                 FROM llm_keys k
+                 LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
+                 WHERE k.key_hash = ?1",
+                [key_hash],
+                |row| {
+                    let credit_total_raw: String = row.get(10)?;
+                    let usage_credit_total = credit_total_raw.parse::<f64>().map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(10, Type::Text, Box::new(err))
+                    })?;
+                    Ok(PublicUsageLookupKey {
+                        key_id: row.get(0)?,
+                        key_name: row.get(1)?,
+                        provider_type: row.get(2)?,
+                        status: row.get(3)?,
+                        public_visible: row.get::<_, i64>(4)? != 0,
+                        quota_billable_limit: row.get::<_, i64>(5)? as u64,
+                        usage_input_uncached_tokens: row.get::<_, i64>(6)? as u64,
+                        usage_input_cached_tokens: row.get::<_, i64>(7)? as u64,
+                        usage_output_tokens: row.get::<_, i64>(8)? as u64,
+                        usage_billable_tokens: row.get::<_, i64>(9)? as u64,
+                        usage_credit_total,
+                        usage_credit_missing_events: row.get::<_, i64>(11)? as u64,
+                        last_used_at_ms: row.get(12)?,
+                    })
+                },
+            )
+            .optional()
+            .context("load public usage key by hash")
     }
 
     /// List issued account contributions for the public thank-you wall.

@@ -65,6 +65,37 @@ pub struct PublicAccessKey {
     pub last_used_at_ms: Option<i64>,
 }
 
+/// Public usage lookup key and current rollup state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PublicUsageLookupKey {
+    /// Key id.
+    pub key_id: String,
+    /// Key display name.
+    pub key_name: String,
+    /// Provider type.
+    pub provider_type: String,
+    /// Key status.
+    pub status: String,
+    /// Whether this key is public-visible.
+    pub public_visible: bool,
+    /// Billable quota limit.
+    pub quota_billable_limit: u64,
+    /// Accumulated uncached input tokens.
+    pub usage_input_uncached_tokens: u64,
+    /// Accumulated cached input tokens.
+    pub usage_input_cached_tokens: u64,
+    /// Accumulated output tokens.
+    pub usage_output_tokens: u64,
+    /// Accumulated billable tokens.
+    pub usage_billable_tokens: u64,
+    /// Accumulated credit usage.
+    pub usage_credit_total: f64,
+    /// Number of events missing credit usage.
+    pub usage_credit_missing_events: u64,
+    /// Last usage timestamp.
+    pub last_used_at_ms: Option<i64>,
+}
+
 /// Public thank-you card for an approved account contribution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicAccountContribution {
@@ -185,6 +216,15 @@ impl PublicAccessKey {
     }
 }
 
+impl PublicUsageLookupKey {
+    /// Remaining billable token budget available to this key.
+    pub fn remaining_billable(&self) -> i64 {
+        let limit = i64::try_from(self.quota_billable_limit).unwrap_or(i64::MAX);
+        let used = i64::try_from(self.usage_billable_tokens).unwrap_or(i64::MAX);
+        limit.saturating_sub(used)
+    }
+}
+
 /// Control-plane queries used by request handlers.
 #[async_trait]
 pub trait ControlStore: Send + Sync {
@@ -220,6 +260,16 @@ pub trait PublicCommunityStore: Send + Sync {
 
     /// Approved sponsor cards.
     async fn list_public_sponsors(&self, limit: usize) -> anyhow::Result<Vec<PublicSponsor>>;
+}
+
+/// Public usage lookup queries used by unauthenticated compatibility endpoints.
+#[async_trait]
+pub trait PublicUsageStore: Send + Sync {
+    /// Load one key by its presented plaintext secret for public usage lookup.
+    async fn get_public_usage_key_by_secret(
+        &self,
+        secret: &str,
+    ) -> anyhow::Result<Option<PublicUsageLookupKey>>;
 }
 
 /// Public write queries used by unauthenticated compatibility endpoints.
@@ -272,6 +322,19 @@ impl PublicCommunityStore for EmptyPublicCommunityStore {
 
     async fn list_public_sponsors(&self, _limit: usize) -> anyhow::Result<Vec<PublicSponsor>> {
         Ok(Vec::new())
+    }
+}
+
+/// Empty public usage store used by isolated unit tests.
+pub struct EmptyPublicUsageStore;
+
+#[async_trait]
+impl PublicUsageStore for EmptyPublicUsageStore {
+    async fn get_public_usage_key_by_secret(
+        &self,
+        _secret: &str,
+    ) -> anyhow::Result<Option<PublicUsageLookupKey>> {
+        Ok(None)
     }
 }
 

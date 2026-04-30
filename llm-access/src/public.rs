@@ -3,17 +3,23 @@
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
-use llm_access_core::store::{PublicAccessKey, PublicAccountContribution, PublicSponsor};
-use serde::Serialize;
+use llm_access_core::store::{
+    PublicAccessKey, PublicAccountContribution, PublicSponsor, PublicUsageLookupKey,
+};
+use serde::{Deserialize, Serialize};
 
 use crate::HttpState;
 
 const MAX_PUBLIC_ACCOUNT_CONTRIBUTIONS: usize = 24;
 const MAX_PUBLIC_SPONSORS: usize = 36;
+const PUBLIC_USAGE_LOOKUP_DEFAULT_LIMIT: usize = 50;
+const PUBLIC_USAGE_LOOKUP_MAX_LIMIT: usize = 200;
+const PUBLIC_USAGE_LOOKUP_CHART_BUCKETS: usize = 24;
+const PUBLIC_USAGE_LOOKUP_BUCKET_MS: i64 = 60 * 60 * 1000;
 
 #[derive(Debug, Serialize)]
 struct LlmGatewayAccessResponse {
@@ -49,6 +55,88 @@ struct LlmGatewaySupportConfigView {
     wechat_qr_url: String,
     qq_group_qr_url: Option<String>,
     generated_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PublicLlmGatewayUsageLookupRequest {
+    api_key: String,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    offset: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicLlmGatewayUsageLookupResponse {
+    key: PublicLlmGatewayUsageKeyView,
+    chart_points: Vec<PublicLlmGatewayUsageChartPointView>,
+    total: usize,
+    offset: usize,
+    limit: usize,
+    has_more: bool,
+    events: Vec<PublicLlmGatewayUsageEventView>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicLlmGatewayUsageKeyView {
+    name: String,
+    provider_type: String,
+    quota_billable_limit: u64,
+    usage_input_uncached_tokens: u64,
+    usage_input_cached_tokens: u64,
+    usage_output_tokens: u64,
+    usage_billable_tokens: u64,
+    usage_credit_total: f64,
+    usage_credit_missing_events: u64,
+    remaining_billable: i64,
+    last_used_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicLlmGatewayUsageChartPointView {
+    bucket_start_ms: i64,
+    tokens: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct PublicLlmGatewayUsageEventView {
+    id: String,
+    key_name: String,
+    account_name: Option<String>,
+    request_method: String,
+    request_url: String,
+    latency_ms: i32,
+    routing_wait_ms: Option<i32>,
+    upstream_headers_ms: Option<i32>,
+    post_headers_body_ms: Option<i32>,
+    request_body_bytes: Option<u64>,
+    request_body_read_ms: Option<i32>,
+    request_json_parse_ms: Option<i32>,
+    pre_handler_ms: Option<i32>,
+    first_sse_write_ms: Option<i32>,
+    stream_finish_ms: Option<i32>,
+    other_latency_ms: Option<i32>,
+    quota_failover_count: u64,
+    endpoint: String,
+    model: Option<String>,
+    status_code: i32,
+    input_uncached_tokens: u64,
+    input_cached_tokens: u64,
+    output_tokens: u64,
+    billable_tokens: u64,
+    usage_missing: bool,
+    credit_usage: Option<f64>,
+    credit_usage_missing: bool,
+    client_ip: String,
+    ip_region: String,
+    created_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct ErrorResponse {
+    error: String,
+    code: u16,
 }
 
 #[derive(Debug, Serialize)]
@@ -118,6 +206,25 @@ impl From<PublicSponsor> for PublicLlmGatewaySponsorView {
             sponsor_message: value.sponsor_message,
             github_id: value.github_id,
             processed_at: value.processed_at_ms,
+        }
+    }
+}
+
+impl From<PublicUsageLookupKey> for PublicLlmGatewayUsageKeyView {
+    fn from(value: PublicUsageLookupKey) -> Self {
+        let remaining_billable = value.remaining_billable();
+        Self {
+            name: value.key_name,
+            provider_type: value.provider_type,
+            quota_billable_limit: value.quota_billable_limit,
+            usage_input_uncached_tokens: value.usage_input_uncached_tokens,
+            usage_input_cached_tokens: value.usage_input_cached_tokens,
+            usage_output_tokens: value.usage_output_tokens,
+            usage_billable_tokens: value.usage_billable_tokens,
+            usage_credit_total: value.usage_credit_total,
+            usage_credit_missing_events: value.usage_credit_missing_events,
+            remaining_billable,
+            last_used_at: value.last_used_at_ms,
         }
     }
 }
@@ -219,6 +326,46 @@ pub(crate) async fn get_llm_gateway_status(State(state): State<HttpState>) -> Re
         Ok(status) => Json(status).into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "public status store error").into_response(),
     }
+}
+
+pub(crate) async fn post_llm_gateway_public_usage_query(
+    State(state): State<HttpState>,
+    Json(request): Json<PublicLlmGatewayUsageLookupRequest>,
+) -> Response {
+    let presented_key = request.api_key.trim();
+    if presented_key.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "api_key is required");
+    }
+    let key = match state
+        .public_usage_store
+        .get_public_usage_key_by_secret(presented_key)
+        .await
+    {
+        Ok(Some(key)) if key.status == "active" => key,
+        Ok(_) => return public_usage_lookup_not_found(),
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "public usage store error"),
+    };
+    let now = now_ms();
+    let offset = request.offset.unwrap_or(0);
+    let limit = request
+        .limit
+        .unwrap_or(PUBLIC_USAGE_LOOKUP_DEFAULT_LIMIT)
+        .clamp(1, PUBLIC_USAGE_LOOKUP_MAX_LIMIT);
+    let mut response = Json(PublicLlmGatewayUsageLookupResponse {
+        key: PublicLlmGatewayUsageKeyView::from(key),
+        chart_points: build_public_usage_chart_points(now),
+        total: 0,
+        offset,
+        limit,
+        has_more: false,
+        events: Vec::new(),
+        generated_at: now,
+    })
+    .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 pub(crate) async fn get_llm_gateway_account_contributions(
@@ -336,6 +483,41 @@ pub(crate) async fn get_kiro_gateway_access(
         generated_at: now_ms(),
     })
     .into_response()
+}
+
+fn public_usage_lookup_not_found() -> Response {
+    json_error(StatusCode::NOT_FOUND, "queryable key not found")
+}
+
+fn json_error(status: StatusCode, message: &str) -> Response {
+    (
+        status,
+        Json(ErrorResponse {
+            error: message.to_string(),
+            code: status.as_u16(),
+        }),
+    )
+        .into_response()
+}
+
+fn build_public_usage_chart_points(now_ms: i64) -> Vec<PublicLlmGatewayUsageChartPointView> {
+    let start_ms = public_usage_chart_window_start(now_ms);
+    (0..PUBLIC_USAGE_LOOKUP_CHART_BUCKETS)
+        .map(|index| PublicLlmGatewayUsageChartPointView {
+            bucket_start_ms: start_ms
+                .saturating_add((index as i64).saturating_mul(PUBLIC_USAGE_LOOKUP_BUCKET_MS)),
+            tokens: 0,
+        })
+        .collect()
+}
+
+fn public_usage_chart_window_start(now_ms: i64) -> i64 {
+    let current_bucket_start =
+        now_ms.div_euclid(PUBLIC_USAGE_LOOKUP_BUCKET_MS) * PUBLIC_USAGE_LOOKUP_BUCKET_MS;
+    current_bucket_start.saturating_sub(
+        (PUBLIC_USAGE_LOOKUP_CHART_BUCKETS.saturating_sub(1) as i64)
+            .saturating_mul(PUBLIC_USAGE_LOOKUP_BUCKET_MS),
+    )
 }
 
 fn external_origin(headers: &HeaderMap) -> Option<String> {

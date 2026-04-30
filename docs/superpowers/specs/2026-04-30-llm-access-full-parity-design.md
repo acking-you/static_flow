@@ -321,6 +321,13 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
   compatibility endpoint. The response comes from a persisted SQLite Codex
   public status snapshot when present, and otherwise exposes the same `loading`
   empty-cache shape used by the existing backend before its refresh task warms.
+- `llm-access` now owns the `/api/llm-gateway/public-usage/query` route instead
+  of letting it fall through to provider authentication. It validates the
+  presented key secret against SQLite by hash, allows private active keys to be
+  queried by secret, returns the existing public key/rollup response shape, and
+  fails missing or non-active keys as `queryable key not found`. DuckDB-backed
+  event listing and non-zero chart aggregation remain the next analytics-reader
+  step.
 - `llm-access` now serves authenticated Codex/OpenAI model-list requests for
   `/v1/models`, `/api/llm-gateway/v1/models`, and
   `/api/codex-gateway/v1/models` from the standalone default Codex catalog.

@@ -9,8 +9,8 @@ use llm_access_core::{
         AuthenticatedKey, CodexRateLimitStatus, ControlStore, NewPublicAccountContributionRequest,
         NewPublicSponsorRequest, NewPublicTokenRequest, PublicAccessKey, PublicAccessStore,
         PublicAccountContribution, PublicCommunityStore, PublicSponsor, PublicStatusStore,
-        PublicSubmissionStore, UsageEventSink, DEFAULT_AUTH_CACHE_TTL_SECONDS,
-        DEFAULT_CODEX_STATUS_REFRESH_SECONDS,
+        PublicSubmissionStore, PublicUsageLookupKey, PublicUsageStore, UsageEventSink,
+        DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_STATUS_REFRESH_SECONDS,
     },
     usage::UsageEvent,
 };
@@ -160,6 +160,25 @@ impl PublicCommunityStore for SqliteControlRepository {
 }
 
 #[async_trait]
+impl PublicUsageStore for SqliteControlRepository {
+    async fn get_public_usage_key_by_secret(
+        &self,
+        secret: &str,
+    ) -> anyhow::Result<Option<PublicUsageLookupKey>> {
+        let key_hash = hash_bearer_secret(secret);
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.get_public_usage_key_by_hash(&key_hash)
+        })
+        .await
+        .context("sqlite control repository public usage key task failed")?
+    }
+}
+
+#[async_trait]
 impl PublicSubmissionStore for SqliteControlRepository {
     async fn create_public_token_request(
         &self,
@@ -236,7 +255,7 @@ mod tests {
         store::{
             CodexCredits, CodexPublicAccountStatus, CodexRateLimitBucket, CodexRateLimitStatus,
             CodexRateLimitWindow, ControlStore, PublicAccessStore, PublicCommunityStore,
-            PublicStatusStore, UsageEventSink,
+            PublicStatusStore, PublicUsageStore, UsageEventSink,
         },
         usage::{UsageEvent, UsageTiming},
     };
@@ -441,6 +460,50 @@ mod tests {
         assert_eq!(keys[0].usage_billable_tokens, 40);
         assert_eq!(keys[0].remaining_billable(), 960);
         assert_eq!(keys[0].last_used_at_ms, Some(99));
+    }
+
+    #[tokio::test]
+    async fn sqlite_repository_loads_public_usage_key_by_secret() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let secret = "sk-public-usage";
+        let key_hash = super::hash_bearer_secret(secret);
+        conn.execute(
+            "INSERT INTO llm_keys (
+                key_id, name, secret, key_hash, status, provider_type, protocol_family,
+                public_visible, quota_billable_limit, created_at_ms, updated_at_ms
+            ) VALUES (
+                'key-public-usage', 'usage key', ?1, ?2, 'active', 'codex',
+                'openai', 0, 1000, 10, 10
+            )",
+            rusqlite::params![secret, key_hash],
+        )
+        .expect("insert key");
+        conn.execute(
+            "INSERT INTO llm_key_usage_rollups (
+                key_id, input_uncached_tokens, input_cached_tokens, output_tokens,
+                billable_tokens, credit_total, credit_missing_events, last_used_at_ms,
+                updated_at_ms
+            ) VALUES ('key-public-usage', 10, 20, 30, 40, '1.25', 2, 99, 99)",
+            [],
+        )
+        .expect("insert rollup");
+
+        let repo = super::SqliteControlRepository::new(conn);
+        let key = repo
+            .get_public_usage_key_by_secret(secret)
+            .await
+            .expect("lookup key")
+            .expect("key exists");
+
+        assert_eq!(key.key_id, "key-public-usage");
+        assert_eq!(key.provider_type, "codex");
+        assert_eq!(key.status, "active");
+        assert!(!key.public_visible);
+        assert_eq!(key.usage_billable_tokens, 40);
+        assert_eq!(key.usage_credit_total, 1.25);
+        assert_eq!(key.usage_credit_missing_events, 2);
+        assert_eq!(key.remaining_billable(), 960);
     }
 
     #[tokio::test]

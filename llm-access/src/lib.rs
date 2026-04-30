@@ -30,6 +30,7 @@ use axum::{
 use config::{CliCommand, ServeConfig, StorageConfig};
 use llm_access_core::store::{
     PublicAccessStore, PublicCommunityStore, PublicStatusStore, PublicSubmissionStore,
+    PublicUsageStore,
 };
 use serde::Serialize;
 
@@ -38,6 +39,7 @@ struct HttpState {
     provider_state: provider::ProviderState,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
+    public_usage_store: Arc<dyn PublicUsageStore>,
     public_submission_store: Arc<dyn PublicSubmissionStore>,
     public_submit_guard: Arc<submission::PublicSubmitGuard>,
     public_status_store: Arc<dyn PublicStatusStore>,
@@ -71,6 +73,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         provider_state,
         public_access_store: runtime.public_access_store(),
         public_community_store: runtime.public_community_store(),
+        public_usage_store: runtime.public_usage_store(),
         public_submission_store: runtime.public_submission_store(),
         public_submit_guard: Arc::new(submission::PublicSubmitGuard::default()),
         public_status_store: runtime.public_status_store(),
@@ -81,6 +84,10 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         .route("/api/llm-gateway/access", get(public::get_llm_gateway_access))
         .route("/api/llm-gateway/model-catalog.json", get(public::get_llm_gateway_model_catalog))
         .route("/api/llm-gateway/status", get(public::get_llm_gateway_status))
+        .route(
+            "/api/llm-gateway/public-usage/query",
+            post(public::post_llm_gateway_public_usage_query),
+        )
         .route("/api/llm-gateway/support-config", get(public::get_llm_gateway_support_config))
         .route(
             "/api/llm-gateway/account-contributions",
@@ -462,6 +469,28 @@ mod tests {
         let body = String::from_utf8(body.to_vec()).expect("utf8 body");
         assert!(body.contains(r#""request_id":"llmwish-"#));
         assert!(body.contains(r#""status":"pending""#));
+    }
+
+    #[tokio::test]
+    async fn router_handles_llm_gateway_public_usage_query_without_provider_key() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/llm-gateway/public-usage/query")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"api_key":"missing"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains("queryable key not found"));
     }
 
     #[tokio::test]
