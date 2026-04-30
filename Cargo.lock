@@ -6061,6 +6061,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "llm-access-kiro"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "charabia",
+ "crc",
+ "llm-access-core",
+ "lru 0.12.5",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "llm-access-migrations"
 version = "0.1.0"
 dependencies = [
@@ -9792,6 +9812,7 @@ dependencies = [
  "futures-util",
  "hex",
  "lettre",
+ "llm-access-kiro",
  "lopdf",
  "lru 0.12.5",
  "maxminddb",

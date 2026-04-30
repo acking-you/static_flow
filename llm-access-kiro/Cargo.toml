@@ -1,0 +1,27 @@
+[package]
+name = "llm-access-kiro"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+bytes = { workspace = true }
+charabia = "0.9"
+crc = "3.3"
+llm-access-core = { path = "../llm-access-core" }
+lru = "0.12"
+parking_lot = "0.12"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
