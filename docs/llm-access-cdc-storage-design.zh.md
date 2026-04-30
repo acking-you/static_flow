@@ -80,10 +80,20 @@ flusher 重试时把同一批事件重复 append 到 LanceDB。key/config/reques
 DuckDB Rust runtime 是 feature-gated：
 
 - 默认：不编译 DuckDB C++ 本体
-- `duckdb-runtime`：使用系统 `libduckdb`
-- `duckdb-bundled`：编译 bundled DuckDB，仅适合构建机或明确允许的环境
+- `duckdb-prebuilt`：推荐的 release 构建路径。仓库 `.cargo/config.toml`
+  默认设置 `DUCKDB_DOWNLOAD_LIB=1`，让 `libduckdb-sys` 自动下载 DuckDB
+  GitHub Releases 上的预编译 `libduckdb`，不在本机编译 DuckDB C++。
+- `duckdb-runtime`：底层 DuckDB runtime feature；可配合 `DUCKDB_LIB_DIR`
+  使用已有系统库，或在本仓库默认配置下自动下载预编译库。
+- `duckdb-bundled`：编译 bundled DuckDB 源码，仅适合构建机或明确允许的环境。
 
 这避免在当前生产宿主机上反复编译 DuckDB C++，降低挤占 live backend 内存的风险。
+
+推荐 release 构建命令：
+
+```bash
+CARGO_BUILD_JOBS=1 cargo build -p llm-access --release --features duckdb-prebuilt --jobs 1
+```
 
 ## 当前工具入口
 

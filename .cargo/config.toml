@@ -1,0 +1,4 @@
+[env]
+# `libduckdb-sys` downloads pre-built DuckDB release binaries on its non-bundled
+# path when this is set. Keep `force = false` so explicit caller env wins.
+DUCKDB_DOWNLOAD_LIB = { value = "1", force = false }

@@ -9,6 +9,10 @@ workspace = true
 
 [features]
 default = []
+# Preferred release path: use libduckdb-sys' non-bundled build script path.
+# The workspace Cargo config sets DUCKDB_DOWNLOAD_LIB=1 so libduckdb is fetched
+# from DuckDB GitHub releases instead of compiling DuckDB C++ locally.
+duckdb-prebuilt = ["duckdb-runtime"]
 duckdb-bundled = ["duckdb-runtime", "duckdb/bundled"]
 duckdb-runtime = ["dep:duckdb"]
 
