@@ -142,13 +142,54 @@ fn read_source_events(
 fn apply_event(conn: &Connection, event: &SourceOutboxEvent) -> Result<()> {
     match (event.entity.as_str(), event.op.as_str()) {
         ("key", "upsert") => apply_key_upsert(conn, event),
-        ("key", "delete") => conn
-            .execute("DELETE FROM llm_keys WHERE key_id = ?1", [&event.primary_key])
-            .map(|_| ())
-            .context("failed to delete replayed key"),
+        ("key", "delete") => delete_by_id(conn, "llm_keys", "key_id", &event.primary_key),
+        ("runtime_config", "upsert") => apply_runtime_config_upsert(conn, event),
+        ("account_group", "upsert") => apply_account_group_upsert(conn, event),
+        ("account_group", "delete") => {
+            delete_by_id(conn, "llm_account_groups", "group_id", &event.primary_key)
+        },
+        ("proxy_config", "upsert") => apply_proxy_config_upsert(conn, event),
+        ("proxy_config", "delete") => {
+            delete_by_id(conn, "llm_proxy_configs", "proxy_config_id", &event.primary_key)
+        },
+        ("proxy_binding", "upsert") => apply_proxy_binding_upsert(conn, event),
+        ("proxy_binding", "delete") => {
+            delete_by_id(conn, "llm_proxy_bindings", "provider_type", &event.primary_key)
+        },
+        ("token_request", "upsert") => apply_token_request_upsert(conn, event),
+        ("account_contribution_request", "upsert") => {
+            apply_account_contribution_request_upsert(conn, event)
+        },
+        ("gpt2api_account_contribution_request", "upsert") => {
+            apply_gpt2api_account_contribution_request_upsert(conn, event)
+        },
+        ("sponsor_request", "upsert") => apply_sponsor_request_upsert(conn, event),
+        ("sponsor_request", "delete") => {
+            delete_by_id(conn, "llm_sponsor_requests", "request_id", &event.primary_key)
+        },
         ("usage_event", "append") => Ok(()),
         (entity, op) => bail!("unsupported replay event entity={entity} op={op}"),
     }
+}
+
+fn delete_by_id(conn: &Connection, table: &str, column: &str, value: &str) -> Result<()> {
+    let sql = match (table, column) {
+        ("llm_keys", "key_id") => "DELETE FROM llm_keys WHERE key_id = ?1",
+        ("llm_account_groups", "group_id") => "DELETE FROM llm_account_groups WHERE group_id = ?1",
+        ("llm_proxy_configs", "proxy_config_id") => {
+            "DELETE FROM llm_proxy_configs WHERE proxy_config_id = ?1"
+        },
+        ("llm_proxy_bindings", "provider_type") => {
+            "DELETE FROM llm_proxy_bindings WHERE provider_type = ?1"
+        },
+        ("llm_sponsor_requests", "request_id") => {
+            "DELETE FROM llm_sponsor_requests WHERE request_id = ?1"
+        },
+        _ => bail!("unsupported delete target table={table} column={column}"),
+    };
+    conn.execute(sql, [value])
+        .map(|_| ())
+        .context("failed to delete replayed row")
 }
 
 fn apply_key_upsert(conn: &Connection, event: &SourceOutboxEvent) -> Result<()> {
@@ -262,6 +303,421 @@ fn apply_key_upsert(conn: &Connection, event: &SourceOutboxEvent) -> Result<()> 
     Ok(())
 }
 
+fn apply_runtime_config_upsert(conn: &Connection, event: &SourceOutboxEvent) -> Result<()> {
+    let payload: Value =
+        serde_json::from_str(&event.payload_json).context("invalid runtime_config payload")?;
+    conn.execute(
+        "INSERT INTO llm_runtime_config (
+            id, auth_cache_ttl_seconds, max_request_body_bytes,
+            account_failure_retry_limit, codex_client_version,
+            kiro_channel_max_concurrency, kiro_channel_min_start_interval_ms,
+            codex_status_refresh_min_interval_seconds,
+            codex_status_refresh_max_interval_seconds,
+            codex_status_account_jitter_max_seconds,
+            kiro_status_refresh_min_interval_seconds,
+            kiro_status_refresh_max_interval_seconds,
+            kiro_status_account_jitter_max_seconds,
+            usage_event_flush_batch_size,
+            usage_event_flush_interval_seconds,
+            usage_event_flush_max_buffer_bytes,
+            usage_event_maintenance_enabled,
+            usage_event_maintenance_interval_seconds,
+            usage_event_detail_retention_days,
+            kiro_cache_kmodels_json,
+            kiro_billable_model_multipliers_json,
+            kiro_cache_policy_json,
+            kiro_prefix_cache_mode,
+            kiro_prefix_cache_max_tokens,
+            kiro_prefix_cache_entry_ttl_seconds,
+            kiro_conversation_anchor_max_entries,
+            kiro_conversation_anchor_ttl_seconds,
+            updated_at_ms
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+            ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26,
+            ?27, ?28
+        )
+        ON CONFLICT(id) DO UPDATE SET
+            auth_cache_ttl_seconds = excluded.auth_cache_ttl_seconds,
+            max_request_body_bytes = excluded.max_request_body_bytes,
+            account_failure_retry_limit = excluded.account_failure_retry_limit,
+            codex_client_version = excluded.codex_client_version,
+            kiro_channel_max_concurrency = excluded.kiro_channel_max_concurrency,
+            kiro_channel_min_start_interval_ms =
+                excluded.kiro_channel_min_start_interval_ms,
+            codex_status_refresh_min_interval_seconds =
+                excluded.codex_status_refresh_min_interval_seconds,
+            codex_status_refresh_max_interval_seconds =
+                excluded.codex_status_refresh_max_interval_seconds,
+            codex_status_account_jitter_max_seconds =
+                excluded.codex_status_account_jitter_max_seconds,
+            kiro_status_refresh_min_interval_seconds =
+                excluded.kiro_status_refresh_min_interval_seconds,
+            kiro_status_refresh_max_interval_seconds =
+                excluded.kiro_status_refresh_max_interval_seconds,
+            kiro_status_account_jitter_max_seconds =
+                excluded.kiro_status_account_jitter_max_seconds,
+            usage_event_flush_batch_size = excluded.usage_event_flush_batch_size,
+            usage_event_flush_interval_seconds =
+                excluded.usage_event_flush_interval_seconds,
+            usage_event_flush_max_buffer_bytes =
+                excluded.usage_event_flush_max_buffer_bytes,
+            usage_event_maintenance_enabled =
+                excluded.usage_event_maintenance_enabled,
+            usage_event_maintenance_interval_seconds =
+                excluded.usage_event_maintenance_interval_seconds,
+            usage_event_detail_retention_days =
+                excluded.usage_event_detail_retention_days,
+            kiro_cache_kmodels_json = excluded.kiro_cache_kmodels_json,
+            kiro_billable_model_multipliers_json =
+                excluded.kiro_billable_model_multipliers_json,
+            kiro_cache_policy_json = excluded.kiro_cache_policy_json,
+            kiro_prefix_cache_mode = excluded.kiro_prefix_cache_mode,
+            kiro_prefix_cache_max_tokens = excluded.kiro_prefix_cache_max_tokens,
+            kiro_prefix_cache_entry_ttl_seconds =
+                excluded.kiro_prefix_cache_entry_ttl_seconds,
+            kiro_conversation_anchor_max_entries =
+                excluded.kiro_conversation_anchor_max_entries,
+            kiro_conversation_anchor_ttl_seconds =
+                excluded.kiro_conversation_anchor_ttl_seconds,
+            updated_at_ms = excluded.updated_at_ms",
+        params![
+            string_field(&payload, "id")?,
+            u64_field(&payload, "auth_cache_ttl_seconds")?,
+            u64_field(&payload, "max_request_body_bytes")?,
+            u64_field(&payload, "account_failure_retry_limit")?,
+            string_field(&payload, "codex_client_version")?,
+            u64_field(&payload, "kiro_channel_max_concurrency")?,
+            u64_field(&payload, "kiro_channel_min_start_interval_ms")?,
+            u64_field(&payload, "codex_status_refresh_min_interval_seconds")?,
+            u64_field(&payload, "codex_status_refresh_max_interval_seconds")?,
+            u64_field(&payload, "codex_status_account_jitter_max_seconds")?,
+            u64_field(&payload, "kiro_status_refresh_min_interval_seconds")?,
+            u64_field(&payload, "kiro_status_refresh_max_interval_seconds")?,
+            u64_field(&payload, "kiro_status_account_jitter_max_seconds")?,
+            u64_field(&payload, "usage_event_flush_batch_size")?,
+            u64_field(&payload, "usage_event_flush_interval_seconds")?,
+            u64_field(&payload, "usage_event_flush_max_buffer_bytes")?,
+            bool_int_field(&payload, "usage_event_maintenance_enabled")?,
+            u64_field(&payload, "usage_event_maintenance_interval_seconds")?,
+            i64_field(&payload, "usage_event_detail_retention_days")?,
+            string_field(&payload, "kiro_cache_kmodels_json")?,
+            string_field(&payload, "kiro_billable_model_multipliers_json")?,
+            string_field(&payload, "kiro_cache_policy_json")?,
+            string_field(&payload, "kiro_prefix_cache_mode")?,
+            u64_field(&payload, "kiro_prefix_cache_max_tokens")?,
+            u64_field(&payload, "kiro_prefix_cache_entry_ttl_seconds")?,
+            u64_field(&payload, "kiro_conversation_anchor_max_entries")?,
+            u64_field(&payload, "kiro_conversation_anchor_ttl_seconds")?,
+            i64_field(&payload, "updated_at")?,
+        ],
+    )
+    .context("failed to upsert replayed runtime config")?;
+    Ok(())
+}
+
+fn apply_account_group_upsert(conn: &Connection, event: &SourceOutboxEvent) -> Result<()> {
+    let payload: Value =
+        serde_json::from_str(&event.payload_json).context("invalid account_group payload")?;
+    conn.execute(
+        "INSERT INTO llm_account_groups (
+            group_id, provider_type, name, account_names_json, created_at_ms, updated_at_ms
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        ON CONFLICT(group_id) DO UPDATE SET
+            provider_type = excluded.provider_type,
+            name = excluded.name,
+            account_names_json = excluded.account_names_json,
+            created_at_ms = excluded.created_at_ms,
+            updated_at_ms = excluded.updated_at_ms",
+        params![
+            string_field(&payload, "id")?,
+            string_field(&payload, "provider_type")?,
+            string_field(&payload, "name")?,
+            json_text_field(&payload, "account_names")?,
+            i64_field(&payload, "created_at")?,
+            i64_field(&payload, "updated_at")?,
+        ],
+    )
+    .context("failed to upsert replayed account group")?;
+    Ok(())
+}
+
+fn apply_proxy_config_upsert(conn: &Connection, event: &SourceOutboxEvent) -> Result<()> {
+    let payload: Value =
+        serde_json::from_str(&event.payload_json).context("invalid proxy_config payload")?;
+    conn.execute(
+        "INSERT INTO llm_proxy_configs (
+            proxy_config_id, name, proxy_url, proxy_username, proxy_password,
+            status, created_at_ms, updated_at_ms
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        ON CONFLICT(proxy_config_id) DO UPDATE SET
+            name = excluded.name,
+            proxy_url = excluded.proxy_url,
+            proxy_username = excluded.proxy_username,
+            proxy_password = excluded.proxy_password,
+            status = excluded.status,
+            created_at_ms = excluded.created_at_ms,
+            updated_at_ms = excluded.updated_at_ms",
+        params![
+            string_field(&payload, "id")?,
+            string_field(&payload, "name")?,
+            string_field(&payload, "proxy_url")?,
+            optional_string_field(&payload, "proxy_username")?,
+            optional_string_field(&payload, "proxy_password")?,
+            string_field(&payload, "status")?,
+            i64_field(&payload, "created_at")?,
+            i64_field(&payload, "updated_at")?,
+        ],
+    )
+    .context("failed to upsert replayed proxy config")?;
+    Ok(())
+}
+
+fn apply_proxy_binding_upsert(conn: &Connection, event: &SourceOutboxEvent) -> Result<()> {
+    let payload: Value =
+        serde_json::from_str(&event.payload_json).context("invalid proxy_binding payload")?;
+    conn.execute(
+        "INSERT INTO llm_proxy_bindings (
+            provider_type, proxy_config_id, updated_at_ms
+        ) VALUES (?1, ?2, ?3)
+        ON CONFLICT(provider_type) DO UPDATE SET
+            proxy_config_id = excluded.proxy_config_id,
+            updated_at_ms = excluded.updated_at_ms",
+        params![
+            string_field(&payload, "provider_type")?,
+            string_field(&payload, "proxy_config_id")?,
+            i64_field(&payload, "updated_at")?,
+        ],
+    )
+    .context("failed to upsert replayed proxy binding")?;
+    Ok(())
+}
+
+fn apply_token_request_upsert(conn: &Connection, event: &SourceOutboxEvent) -> Result<()> {
+    let payload: Value =
+        serde_json::from_str(&event.payload_json).context("invalid token_request payload")?;
+    conn.execute(
+        "INSERT INTO llm_token_requests (
+            request_id, requester_email, requested_quota_billable_limit, request_reason,
+            frontend_page_url, status, fingerprint, client_ip, ip_region, admin_note,
+            failure_reason, issued_key_id, issued_key_name, created_at_ms, updated_at_ms,
+            processed_at_ms
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+        ON CONFLICT(request_id) DO UPDATE SET
+            requester_email = excluded.requester_email,
+            requested_quota_billable_limit = excluded.requested_quota_billable_limit,
+            request_reason = excluded.request_reason,
+            frontend_page_url = excluded.frontend_page_url,
+            status = excluded.status,
+            fingerprint = excluded.fingerprint,
+            client_ip = excluded.client_ip,
+            ip_region = excluded.ip_region,
+            admin_note = excluded.admin_note,
+            failure_reason = excluded.failure_reason,
+            issued_key_id = excluded.issued_key_id,
+            issued_key_name = excluded.issued_key_name,
+            created_at_ms = excluded.created_at_ms,
+            updated_at_ms = excluded.updated_at_ms,
+            processed_at_ms = excluded.processed_at_ms",
+        params![
+            string_field(&payload, "request_id")?,
+            string_field(&payload, "requester_email")?,
+            u64_field(&payload, "requested_quota_billable_limit")?,
+            string_field(&payload, "request_reason")?,
+            optional_string_field(&payload, "frontend_page_url")?,
+            string_field(&payload, "status")?,
+            string_field(&payload, "fingerprint")?,
+            string_field(&payload, "client_ip")?,
+            string_field(&payload, "ip_region")?,
+            optional_string_field(&payload, "admin_note")?,
+            optional_string_field(&payload, "failure_reason")?,
+            optional_string_field(&payload, "issued_key_id")?,
+            optional_string_field(&payload, "issued_key_name")?,
+            i64_field(&payload, "created_at")?,
+            i64_field(&payload, "updated_at")?,
+            optional_i64_field(&payload, "processed_at")?,
+        ],
+    )
+    .context("failed to upsert replayed token request")?;
+    Ok(())
+}
+
+fn apply_account_contribution_request_upsert(
+    conn: &Connection,
+    event: &SourceOutboxEvent,
+) -> Result<()> {
+    let payload: Value = serde_json::from_str(&event.payload_json)
+        .context("invalid account_contribution_request payload")?;
+    conn.execute(
+        "INSERT INTO llm_account_contribution_requests (
+            request_id, account_name, account_id, id_token, access_token, refresh_token,
+            requester_email, contributor_message, github_id, frontend_page_url, status,
+            fingerprint, client_ip, ip_region, admin_note, failure_reason,
+            imported_account_name, issued_key_id, issued_key_name, created_at_ms,
+            updated_at_ms, processed_at_ms
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, \
+         ?19, ?20, ?21, ?22)
+        ON CONFLICT(request_id) DO UPDATE SET
+            account_name = excluded.account_name,
+            account_id = excluded.account_id,
+            id_token = excluded.id_token,
+            access_token = excluded.access_token,
+            refresh_token = excluded.refresh_token,
+            requester_email = excluded.requester_email,
+            contributor_message = excluded.contributor_message,
+            github_id = excluded.github_id,
+            frontend_page_url = excluded.frontend_page_url,
+            status = excluded.status,
+            fingerprint = excluded.fingerprint,
+            client_ip = excluded.client_ip,
+            ip_region = excluded.ip_region,
+            admin_note = excluded.admin_note,
+            failure_reason = excluded.failure_reason,
+            imported_account_name = excluded.imported_account_name,
+            issued_key_id = excluded.issued_key_id,
+            issued_key_name = excluded.issued_key_name,
+            created_at_ms = excluded.created_at_ms,
+            updated_at_ms = excluded.updated_at_ms,
+            processed_at_ms = excluded.processed_at_ms",
+        params![
+            string_field(&payload, "request_id")?,
+            string_field(&payload, "account_name")?,
+            optional_string_field(&payload, "account_id")?,
+            string_field(&payload, "id_token")?,
+            string_field(&payload, "access_token")?,
+            string_field(&payload, "refresh_token")?,
+            string_field(&payload, "requester_email")?,
+            string_field(&payload, "contributor_message")?,
+            optional_string_field(&payload, "github_id")?,
+            optional_string_field(&payload, "frontend_page_url")?,
+            string_field(&payload, "status")?,
+            string_field(&payload, "fingerprint")?,
+            string_field(&payload, "client_ip")?,
+            string_field(&payload, "ip_region")?,
+            optional_string_field(&payload, "admin_note")?,
+            optional_string_field(&payload, "failure_reason")?,
+            optional_string_field(&payload, "imported_account_name")?,
+            optional_string_field(&payload, "issued_key_id")?,
+            optional_string_field(&payload, "issued_key_name")?,
+            i64_field(&payload, "created_at")?,
+            i64_field(&payload, "updated_at")?,
+            optional_i64_field(&payload, "processed_at")?,
+        ],
+    )
+    .context("failed to upsert replayed account contribution request")?;
+    Ok(())
+}
+
+fn apply_gpt2api_account_contribution_request_upsert(
+    conn: &Connection,
+    event: &SourceOutboxEvent,
+) -> Result<()> {
+    let payload: Value = serde_json::from_str(&event.payload_json)
+        .context("invalid gpt2api_account_contribution_request payload")?;
+    conn.execute(
+        "INSERT INTO gpt2api_account_contribution_requests (
+            request_id, account_name, access_token, session_json, requester_email,
+            contributor_message, github_id, frontend_page_url, status, fingerprint,
+            client_ip, ip_region, admin_note, failure_reason, imported_account_name,
+            issued_key_id, issued_key_name, created_at_ms, updated_at_ms, processed_at_ms
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, \
+         ?19, ?20)
+        ON CONFLICT(request_id) DO UPDATE SET
+            account_name = excluded.account_name,
+            access_token = excluded.access_token,
+            session_json = excluded.session_json,
+            requester_email = excluded.requester_email,
+            contributor_message = excluded.contributor_message,
+            github_id = excluded.github_id,
+            frontend_page_url = excluded.frontend_page_url,
+            status = excluded.status,
+            fingerprint = excluded.fingerprint,
+            client_ip = excluded.client_ip,
+            ip_region = excluded.ip_region,
+            admin_note = excluded.admin_note,
+            failure_reason = excluded.failure_reason,
+            imported_account_name = excluded.imported_account_name,
+            issued_key_id = excluded.issued_key_id,
+            issued_key_name = excluded.issued_key_name,
+            created_at_ms = excluded.created_at_ms,
+            updated_at_ms = excluded.updated_at_ms,
+            processed_at_ms = excluded.processed_at_ms",
+        params![
+            string_field(&payload, "request_id")?,
+            string_field(&payload, "account_name")?,
+            optional_string_field(&payload, "access_token")?,
+            optional_string_field(&payload, "session_json")?,
+            string_field(&payload, "requester_email")?,
+            string_field(&payload, "contributor_message")?,
+            optional_string_field(&payload, "github_id")?,
+            optional_string_field(&payload, "frontend_page_url")?,
+            string_field(&payload, "status")?,
+            string_field(&payload, "fingerprint")?,
+            string_field(&payload, "client_ip")?,
+            string_field(&payload, "ip_region")?,
+            optional_string_field(&payload, "admin_note")?,
+            optional_string_field(&payload, "failure_reason")?,
+            optional_string_field(&payload, "imported_account_name")?,
+            optional_string_field(&payload, "issued_key_id")?,
+            optional_string_field(&payload, "issued_key_name")?,
+            i64_field(&payload, "created_at")?,
+            i64_field(&payload, "updated_at")?,
+            optional_i64_field(&payload, "processed_at")?,
+        ],
+    )
+    .context("failed to upsert replayed gpt2api account contribution request")?;
+    Ok(())
+}
+
+fn apply_sponsor_request_upsert(conn: &Connection, event: &SourceOutboxEvent) -> Result<()> {
+    let payload: Value =
+        serde_json::from_str(&event.payload_json).context("invalid sponsor_request payload")?;
+    conn.execute(
+        "INSERT INTO llm_sponsor_requests (
+            request_id, requester_email, sponsor_message, display_name, github_id,
+            frontend_page_url, status, fingerprint, client_ip, ip_region, admin_note,
+            failure_reason, payment_email_sent_at_ms, created_at_ms, updated_at_ms,
+            processed_at_ms
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+        ON CONFLICT(request_id) DO UPDATE SET
+            requester_email = excluded.requester_email,
+            sponsor_message = excluded.sponsor_message,
+            display_name = excluded.display_name,
+            github_id = excluded.github_id,
+            frontend_page_url = excluded.frontend_page_url,
+            status = excluded.status,
+            fingerprint = excluded.fingerprint,
+            client_ip = excluded.client_ip,
+            ip_region = excluded.ip_region,
+            admin_note = excluded.admin_note,
+            failure_reason = excluded.failure_reason,
+            payment_email_sent_at_ms = excluded.payment_email_sent_at_ms,
+            created_at_ms = excluded.created_at_ms,
+            updated_at_ms = excluded.updated_at_ms,
+            processed_at_ms = excluded.processed_at_ms",
+        params![
+            string_field(&payload, "request_id")?,
+            string_field(&payload, "requester_email")?,
+            string_field(&payload, "sponsor_message")?,
+            optional_string_field(&payload, "display_name")?,
+            optional_string_field(&payload, "github_id")?,
+            optional_string_field(&payload, "frontend_page_url")?,
+            string_field(&payload, "status")?,
+            string_field(&payload, "fingerprint")?,
+            string_field(&payload, "client_ip")?,
+            string_field(&payload, "ip_region")?,
+            optional_string_field(&payload, "admin_note")?,
+            optional_string_field(&payload, "failure_reason")?,
+            optional_i64_field(&payload, "payment_email_sent_at")?,
+            i64_field(&payload, "created_at")?,
+            i64_field(&payload, "updated_at")?,
+            optional_i64_field(&payload, "processed_at")?,
+        ],
+    )
+    .context("failed to upsert replayed sponsor request")?;
+    Ok(())
+}
+
 fn value_field<'a>(payload: &'a Value, field: &str) -> Result<&'a Value> {
     payload
         .get(field)
@@ -343,6 +799,11 @@ fn optional_json_field(payload: &Value, field: &str) -> Result<Option<String>> {
     }
 }
 
+fn json_text_field(payload: &Value, field: &str) -> Result<String> {
+    serde_json::to_string(value_field(payload, field)?)
+        .with_context(|| format!("failed to encode payload field `{field}` as JSON"))
+}
+
 #[cfg(test)]
 mod tests {
     fn source_outbox() -> rusqlite::Connection {
@@ -381,6 +842,90 @@ mod tests {
             rusqlite::params![event_id, entity, op, primary_key, payload_json],
         )
         .expect("insert source event");
+    }
+
+    #[test]
+    fn replays_runtime_config_and_account_group_events() {
+        let source = source_outbox();
+        let target = rusqlite::Connection::open_in_memory().expect("open target");
+        llm_access_store::initialize_sqlite_target(&target).expect("initialize target");
+        insert_source_event(
+            &source,
+            "event-runtime-config-upsert",
+            "runtime_config",
+            "upsert",
+            "default",
+            r#"{
+                "id":"default",
+                "auth_cache_ttl_seconds":60,
+                "max_request_body_bytes":1048576,
+                "account_failure_retry_limit":3,
+                "codex_client_version":"0.124.0",
+                "kiro_channel_max_concurrency":4,
+                "kiro_channel_min_start_interval_ms":100,
+                "codex_status_refresh_min_interval_seconds":240,
+                "codex_status_refresh_max_interval_seconds":300,
+                "codex_status_account_jitter_max_seconds":10,
+                "kiro_status_refresh_min_interval_seconds":240,
+                "kiro_status_refresh_max_interval_seconds":300,
+                "kiro_status_account_jitter_max_seconds":10,
+                "usage_event_flush_batch_size":32,
+                "usage_event_flush_interval_seconds":5,
+                "usage_event_flush_max_buffer_bytes":1048576,
+                "usage_event_maintenance_enabled":true,
+                "usage_event_maintenance_interval_seconds":3600,
+                "usage_event_detail_retention_days":30,
+                "kiro_cache_kmodels_json":"[]",
+                "kiro_billable_model_multipliers_json":"{}",
+                "kiro_cache_policy_json":"{}",
+                "kiro_prefix_cache_mode":"formula",
+                "kiro_prefix_cache_max_tokens":100000,
+                "kiro_prefix_cache_entry_ttl_seconds":3600,
+                "kiro_conversation_anchor_max_entries":1024,
+                "kiro_conversation_anchor_ttl_seconds":3600,
+                "updated_at":100
+            }"#,
+        );
+        insert_source_event(
+            &source,
+            "event-account-group-upsert",
+            "account_group",
+            "upsert",
+            "group-a",
+            r#"{
+                "id":"group-a",
+                "provider_type":"kiro",
+                "name":"Group A",
+                "account_names":["a","b"],
+                "created_at":10,
+                "updated_at":200
+            }"#,
+        );
+
+        let stats =
+            super::replay_source_outbox_to_sqlite_target(&source, &target, &super::ReplayOptions {
+                consumer_name: "test-consumer",
+                max_events: 10,
+            })
+            .expect("replay source outbox");
+
+        assert_eq!(stats.applied_events, 2);
+        let codex_client_version: String = target
+            .query_row(
+                "SELECT codex_client_version FROM llm_runtime_config WHERE id = 'default'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read runtime config");
+        let account_names_json: String = target
+            .query_row(
+                "SELECT account_names_json FROM llm_account_groups WHERE group_id = 'group-a'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read account group");
+        assert_eq!(codex_client_version, "0.124.0");
+        assert_eq!(account_names_json, r#"["a","b"]"#);
     }
 
     #[test]
