@@ -317,6 +317,10 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
   the standalone service. `llm-access-codex` owns the default public Codex
   catalog construction and injects the embedded base instructions through the
   same normalization path used by imported upstream catalogs.
+- `llm-access` now serves `/api/llm-gateway/status` as an unauthenticated
+  compatibility endpoint. The response comes from a persisted SQLite Codex
+  public status snapshot when present, and otherwise exposes the same `loading`
+  empty-cache shape used by the existing backend before its refresh task warms.
 - `llm-access-kiro` now owns Kiro auth-file persistence, local Kiro CLI import,
   deterministic machine-id derivation, and token-count estimation. The backend
   keeps compatibility modules that re-export those implementations.

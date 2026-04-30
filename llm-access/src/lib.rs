@@ -26,13 +26,14 @@ use axum::{
     Json, Router,
 };
 use config::{CliCommand, ServeConfig, StorageConfig};
-use llm_access_core::store::PublicAccessStore;
+use llm_access_core::store::{PublicAccessStore, PublicStatusStore};
 use serde::Serialize;
 
 #[derive(Clone)]
 struct HttpState {
     provider_state: provider::ProviderState,
     public_access_store: Arc<dyn PublicAccessStore>,
+    public_status_store: Arc<dyn PublicStatusStore>,
 }
 
 /// Run `llm-access` from process arguments.
@@ -62,12 +63,14 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
     let state = HttpState {
         provider_state,
         public_access_store: runtime.public_access_store(),
+        public_status_store: runtime.public_status_store(),
     };
     Router::new()
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/api/llm-gateway/access", get(public::get_llm_gateway_access))
         .route("/api/llm-gateway/model-catalog.json", get(public::get_llm_gateway_model_catalog))
+        .route("/api/llm-gateway/status", get(public::get_llm_gateway_status))
         .route("/api/kiro-gateway/access", get(public::get_kiro_gateway_access))
         .route("/v1/chat/completions", post(provider_entry_handler))
         .route("/v1/responses", post(provider_entry_handler))
@@ -283,5 +286,27 @@ mod tests {
         assert!(body.contains(r#""models":["#));
         assert!(body.contains(r#""slug":"gpt-5.5""#));
         assert!(body.contains(r#""base_instructions":"#));
+    }
+
+    #[tokio::test]
+    async fn router_serves_llm_gateway_status_without_provider_key() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/llm-gateway/status")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains(r#""status":"loading""#));
+        assert!(body.contains(r#""accounts":[]"#));
+        assert!(body.contains(r#""buckets":[]"#));
     }
 }

@@ -1,7 +1,7 @@
 //! SQLite control-plane repository for `llm-access`.
 
 use anyhow::Context;
-use llm_access_core::store::PublicAccessKey;
+use llm_access_core::store::{CodexRateLimitStatus, PublicAccessKey};
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 
 /// SQLite-backed control-plane store.
@@ -588,6 +588,46 @@ impl SqliteControlStore {
             )
             .optional()
             .context("load runtime config")
+    }
+
+    /// Insert or update the cached Codex public rate-limit snapshot.
+    pub fn upsert_codex_rate_limit_status(
+        &self,
+        snapshot: &CodexRateLimitStatus,
+        updated_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        let snapshot_json =
+            serde_json::to_string(snapshot).context("serialize codex rate-limit snapshot")?;
+        self.conn
+            .execute(
+                "INSERT INTO llm_codex_status_cache (id, snapshot_json, updated_at_ms)
+                 VALUES ('default', ?1, ?2)
+                 ON CONFLICT(id) DO UPDATE SET
+                    snapshot_json = excluded.snapshot_json,
+                    updated_at_ms = excluded.updated_at_ms",
+                params![snapshot_json, updated_at_ms],
+            )
+            .context("upsert codex rate-limit status snapshot")?;
+        Ok(())
+    }
+
+    /// Load the cached Codex public rate-limit snapshot, if present.
+    pub fn get_codex_rate_limit_status(&self) -> anyhow::Result<Option<CodexRateLimitStatus>> {
+        let snapshot_json = self
+            .conn
+            .query_row(
+                "SELECT snapshot_json FROM llm_codex_status_cache WHERE id = 'default'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .context("load codex rate-limit status snapshot")?;
+        snapshot_json
+            .map(|json| {
+                serde_json::from_str::<CodexRateLimitStatus>(&json)
+                    .context("decode codex rate-limit status snapshot")
+            })
+            .transpose()
     }
 
     /// List active public keys with accumulated rollup counters.

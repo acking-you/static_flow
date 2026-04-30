@@ -144,6 +144,13 @@ pub(crate) async fn get_llm_gateway_model_catalog() -> Response {
         })
 }
 
+pub(crate) async fn get_llm_gateway_status(State(state): State<HttpState>) -> Response {
+    match state.public_status_store.codex_rate_limit_status().await {
+        Ok(status) => Json(status).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "public status store error").into_response(),
+    }
+}
+
 pub(crate) async fn get_kiro_gateway_access(
     State(state): State<HttpState>,
     headers: HeaderMap,

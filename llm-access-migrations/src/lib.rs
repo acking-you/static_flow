@@ -13,11 +13,18 @@ pub struct SqlMigration {
     pub sql: &'static str,
 }
 
-const SQLITE_MIGRATIONS: &[SqlMigration] = &[SqlMigration {
-    version: 1,
-    name: "init",
-    sql: include_str!("../migrations/sqlite/0001_init.sql"),
-}];
+const SQLITE_MIGRATIONS: &[SqlMigration] = &[
+    SqlMigration {
+        version: 1,
+        name: "init",
+        sql: include_str!("../migrations/sqlite/0001_init.sql"),
+    },
+    SqlMigration {
+        version: 2,
+        name: "codex_status_cache",
+        sql: include_str!("../migrations/sqlite/0002_codex_status_cache.sql"),
+    },
+];
 
 const DUCKDB_MIGRATIONS: &[SqlMigration] = &[SqlMigration {
     version: 1,
@@ -100,12 +107,17 @@ mod tests {
     fn sqlite_migrations_are_file_backed_and_versioned() {
         let migrations = super::sqlite_migrations();
 
-        assert_eq!(migrations.len(), 1);
+        assert_eq!(migrations.len(), 2);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(migrations[0].name, "init");
         assert!(migrations[0]
             .sql
             .contains("CREATE TABLE IF NOT EXISTS llm_keys"));
+        assert_eq!(migrations[1].version, 2);
+        assert_eq!(migrations[1].name, "codex_status_cache");
+        assert!(migrations[1]
+            .sql
+            .contains("CREATE TABLE IF NOT EXISTS llm_codex_status_cache"));
     }
 
     #[test]
@@ -118,6 +130,6 @@ mod tests {
         let applied_count: i64 = conn
             .query_row("SELECT count(*) FROM llm_access_schema_migrations", [], |row| row.get(0))
             .expect("count migrations");
-        assert_eq!(applied_count, 1);
+        assert_eq!(applied_count, 2);
     }
 }
