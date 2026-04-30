@@ -6,9 +6,11 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use llm_access_core::{
     store::{
-        AuthenticatedKey, CodexRateLimitStatus, ControlStore, PublicAccessKey, PublicAccessStore,
+        AuthenticatedKey, CodexRateLimitStatus, ControlStore, NewPublicAccountContributionRequest,
+        NewPublicSponsorRequest, NewPublicTokenRequest, PublicAccessKey, PublicAccessStore,
         PublicAccountContribution, PublicCommunityStore, PublicSponsor, PublicStatusStore,
-        UsageEventSink, DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_STATUS_REFRESH_SECONDS,
+        PublicSubmissionStore, UsageEventSink, DEFAULT_AUTH_CACHE_TTL_SECONDS,
+        DEFAULT_CODEX_STATUS_REFRESH_SECONDS,
     },
     usage::UsageEvent,
 };
@@ -154,6 +156,54 @@ impl PublicCommunityStore for SqliteControlRepository {
         })
         .await
         .context("sqlite control repository public sponsors task failed")?
+    }
+}
+
+#[async_trait]
+impl PublicSubmissionStore for SqliteControlRepository {
+    async fn create_public_token_request(
+        &self,
+        request: NewPublicTokenRequest,
+    ) -> anyhow::Result<()> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.create_public_token_request(&request)
+        })
+        .await
+        .context("sqlite control repository public token request task failed")?
+    }
+
+    async fn create_public_account_contribution_request(
+        &self,
+        request: NewPublicAccountContributionRequest,
+    ) -> anyhow::Result<()> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.create_public_account_contribution_request(&request)
+        })
+        .await
+        .context("sqlite control repository public account contribution task failed")?
+    }
+
+    async fn create_public_sponsor_request(
+        &self,
+        request: NewPublicSponsorRequest,
+    ) -> anyhow::Result<()> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.create_public_sponsor_request(&request)
+        })
+        .await
+        .context("sqlite control repository public sponsor request task failed")?
     }
 }
 

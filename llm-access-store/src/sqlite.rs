@@ -2,7 +2,9 @@
 
 use anyhow::Context;
 use llm_access_core::store::{
-    CodexRateLimitStatus, PublicAccessKey, PublicAccountContribution, PublicSponsor,
+    CodexRateLimitStatus, NewPublicAccountContributionRequest, NewPublicSponsorRequest,
+    NewPublicTokenRequest, PublicAccessKey, PublicAccountContribution, PublicSponsor,
+    PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED, PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
 };
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 
@@ -739,6 +741,111 @@ impl SqliteControlStore {
         Ok(rows)
     }
 
+    /// Insert one public token request.
+    pub fn create_public_token_request(
+        &self,
+        request: &NewPublicTokenRequest,
+    ) -> anyhow::Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO llm_token_requests (
+                    request_id, requester_email, requested_quota_billable_limit, request_reason,
+                    frontend_page_url, status, fingerprint, client_ip, ip_region, admin_note,
+                    failure_reason, issued_key_id, issued_key_name, created_at_ms,
+                    updated_at_ms, processed_at_ms
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, NULL, NULL, ?10, ?10, NULL
+                )",
+                params![
+                    &request.request_id,
+                    &request.requester_email,
+                    request.requested_quota_billable_limit as i64,
+                    &request.request_reason,
+                    &request.frontend_page_url,
+                    PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
+                    &request.fingerprint,
+                    &request.client_ip,
+                    &request.ip_region,
+                    request.created_at_ms,
+                ],
+            )
+            .context("create public token request")?;
+        Ok(())
+    }
+
+    /// Insert one public account contribution request.
+    pub fn create_public_account_contribution_request(
+        &self,
+        request: &NewPublicAccountContributionRequest,
+    ) -> anyhow::Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO llm_account_contribution_requests (
+                    request_id, account_name, account_id, id_token, access_token, refresh_token,
+                    requester_email, contributor_message, github_id, frontend_page_url, status,
+                    fingerprint, client_ip, ip_region, admin_note, failure_reason,
+                    imported_account_name, issued_key_id, issued_key_name, created_at_ms,
+                    updated_at_ms, processed_at_ms
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                    NULL, NULL, NULL, NULL, NULL, ?15, ?15, NULL
+                )",
+                params![
+                    &request.request_id,
+                    &request.account_name,
+                    &request.account_id,
+                    &request.id_token,
+                    &request.access_token,
+                    &request.refresh_token,
+                    &request.requester_email,
+                    &request.contributor_message,
+                    &request.github_id,
+                    &request.frontend_page_url,
+                    PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
+                    &request.fingerprint,
+                    &request.client_ip,
+                    &request.ip_region,
+                    request.created_at_ms,
+                ],
+            )
+            .context("create public account contribution request")?;
+        Ok(())
+    }
+
+    /// Insert one public sponsor request.
+    pub fn create_public_sponsor_request(
+        &self,
+        request: &NewPublicSponsorRequest,
+    ) -> anyhow::Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO llm_sponsor_requests (
+                    request_id, requester_email, sponsor_message, display_name, github_id,
+                    frontend_page_url, status, fingerprint, client_ip, ip_region, admin_note,
+                    failure_reason, payment_email_sent_at_ms, created_at_ms, updated_at_ms,
+                    processed_at_ms
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, NULL, ?12, ?12, NULL
+                )",
+                params![
+                    &request.request_id,
+                    &request.requester_email,
+                    &request.sponsor_message,
+                    &request.display_name,
+                    &request.github_id,
+                    &request.frontend_page_url,
+                    PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED,
+                    &request.fingerprint,
+                    &request.client_ip,
+                    &request.ip_region,
+                    "email notifier is not configured",
+                    request.created_at_ms,
+                ],
+            )
+            .context("create public sponsor request")?;
+        Ok(())
+    }
+
     /// Insert or update a Codex account row.
     pub fn upsert_codex_account(&self, record: &CodexAccountRecord) -> anyhow::Result<()> {
         self.conn
@@ -1278,6 +1385,90 @@ mod tests {
         assert_eq!(loaded.rollup.credit_total, 1.75);
         assert_eq!(loaded.rollup.credit_missing_events, 2);
         assert_eq!(loaded.rollup.last_used_at_ms, Some(500));
+    }
+
+    #[test]
+    fn public_submission_repository_persists_request_rows() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlStore::new(conn);
+
+        repo.create_public_token_request(&llm_access_core::store::NewPublicTokenRequest {
+            request_id: "llmwish-test".to_string(),
+            requester_email: "user@example.com".to_string(),
+            requested_quota_billable_limit: 1000,
+            request_reason: "please issue a key".to_string(),
+            frontend_page_url: Some("https://example.test/llm-access".to_string()),
+            fingerprint: "fingerprint".to_string(),
+            client_ip: "198.51.100.10".to_string(),
+            ip_region: "unknown".to_string(),
+            created_at_ms: 100,
+        })
+        .expect("create token request");
+        repo.create_public_account_contribution_request(
+            &llm_access_core::store::NewPublicAccountContributionRequest {
+                request_id: "llmacct-test".to_string(),
+                account_name: "account_a".to_string(),
+                account_id: Some("acct-1".to_string()),
+                id_token: "id".to_string(),
+                access_token: "access".to_string(),
+                refresh_token: "refresh".to_string(),
+                requester_email: "user@example.com".to_string(),
+                contributor_message: "shared for tests".to_string(),
+                github_id: Some("acking-you".to_string()),
+                frontend_page_url: None,
+                fingerprint: "fingerprint".to_string(),
+                client_ip: "198.51.100.11".to_string(),
+                ip_region: "unknown".to_string(),
+                created_at_ms: 200,
+            },
+        )
+        .expect("create account contribution request");
+        repo.create_public_sponsor_request(&llm_access_core::store::NewPublicSponsorRequest {
+            request_id: "llmsponsor-test".to_string(),
+            requester_email: "user@example.com".to_string(),
+            sponsor_message: "thanks".to_string(),
+            display_name: Some("Sponsor".to_string()),
+            github_id: Some("acking-you".to_string()),
+            frontend_page_url: None,
+            fingerprint: "fingerprint".to_string(),
+            client_ip: "198.51.100.12".to_string(),
+            ip_region: "unknown".to_string(),
+            created_at_ms: 300,
+        })
+        .expect("create sponsor request");
+
+        let token_status: String = repo
+            .conn
+            .query_row(
+                "SELECT status FROM llm_token_requests WHERE request_id = 'llmwish-test'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("load token request status");
+        let account_status: String = repo
+            .conn
+            .query_row(
+                "SELECT status FROM llm_account_contribution_requests
+                 WHERE request_id = 'llmacct-test'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("load account contribution status");
+        let (sponsor_status, sponsor_failure): (String, Option<String>) = repo
+            .conn
+            .query_row(
+                "SELECT status, failure_reason FROM llm_sponsor_requests
+                 WHERE request_id = 'llmsponsor-test'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("load sponsor request status");
+
+        assert_eq!(token_status, "pending");
+        assert_eq!(account_status, "pending");
+        assert_eq!(sponsor_status, "submitted");
+        assert_eq!(sponsor_failure.as_deref(), Some("email notifier is not configured"));
     }
 
     #[test]

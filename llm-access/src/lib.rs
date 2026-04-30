@@ -11,6 +11,7 @@ mod public;
 pub mod routes;
 /// Runtime startup validation.
 pub mod runtime;
+mod submission;
 mod support;
 /// Usage-event helpers.
 pub mod usage;
@@ -27,7 +28,9 @@ use axum::{
     Json, Router,
 };
 use config::{CliCommand, ServeConfig, StorageConfig};
-use llm_access_core::store::{PublicAccessStore, PublicCommunityStore, PublicStatusStore};
+use llm_access_core::store::{
+    PublicAccessStore, PublicCommunityStore, PublicStatusStore, PublicSubmissionStore,
+};
 use serde::Serialize;
 
 #[derive(Clone)]
@@ -35,6 +38,8 @@ struct HttpState {
     provider_state: provider::ProviderState,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
+    public_submission_store: Arc<dyn PublicSubmissionStore>,
+    public_submit_guard: Arc<submission::PublicSubmitGuard>,
     public_status_store: Arc<dyn PublicStatusStore>,
 }
 
@@ -66,6 +71,8 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         provider_state,
         public_access_store: runtime.public_access_store(),
         public_community_store: runtime.public_community_store(),
+        public_submission_store: runtime.public_submission_store(),
+        public_submit_guard: Arc::new(submission::PublicSubmitGuard::default()),
         public_status_store: runtime.public_status_store(),
     };
     Router::new()
@@ -80,6 +87,18 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
             get(public::get_llm_gateway_account_contributions),
         )
         .route("/api/llm-gateway/sponsors", get(public::get_llm_gateway_sponsors))
+        .route(
+            "/api/llm-gateway/token-requests/submit",
+            post(submission::submit_public_token_request),
+        )
+        .route(
+            "/api/llm-gateway/account-contribution-requests/submit",
+            post(submission::submit_public_account_contribution_request),
+        )
+        .route(
+            "/api/llm-gateway/sponsor-requests/submit",
+            post(submission::submit_public_sponsor_request),
+        )
         .route(
             "/api/llm-gateway/support-assets/:file_name",
             get(public::get_llm_gateway_support_asset),
@@ -412,5 +431,105 @@ mod tests {
             .expect("body");
         let body = String::from_utf8(body.to_vec()).expect("utf8 body");
         assert!(body.contains(r#""sponsors":[]"#));
+    }
+
+    #[tokio::test]
+    async fn router_accepts_llm_gateway_token_request_without_provider_key() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/llm-gateway/token-requests/submit")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("x-real-ip", "198.51.100.10")
+                    .body(Body::from(
+                        r#"{
+                            "requested_quota_billable_limit": 1000,
+                            "request_reason": "please issue a test key",
+                            "requester_email": "user@example.com",
+                            "frontend_page_url": "https://example.test/llm-access"
+                        }"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains(r#""request_id":"llmwish-"#));
+        assert!(body.contains(r#""status":"pending""#));
+    }
+
+    #[tokio::test]
+    async fn router_accepts_llm_gateway_account_contribution_without_provider_key() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/llm-gateway/account-contribution-requests/submit")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("x-real-ip", "198.51.100.11")
+                    .body(Body::from(
+                        r#"{
+                            "account_name": "contributed_account",
+                            "account_id": "acct-1",
+                            "id_token": "id-token",
+                            "access_token": "access-token",
+                            "refresh_token": "refresh-token",
+                            "requester_email": "user@example.com",
+                            "contributor_message": "shared for testing",
+                            "github_id": "acking-you",
+                            "frontend_page_url": "https://example.test/llm-access"
+                        }"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains(r#""request_id":"llmacct-"#));
+        assert!(body.contains(r#""status":"pending""#));
+    }
+
+    #[tokio::test]
+    async fn router_accepts_llm_gateway_sponsor_request_without_provider_key() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/llm-gateway/sponsor-requests/submit")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("x-real-ip", "198.51.100.12")
+                    .body(Body::from(
+                        r#"{
+                            "requester_email": "user@example.com",
+                            "sponsor_message": "thanks",
+                            "display_name": "Example Sponsor",
+                            "github_id": "acking-you",
+                            "frontend_page_url": "https://example.test/llm-access"
+                        }"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains(r#""request_id":"llmsponsor-"#));
+        assert!(body.contains(r#""status":"submitted""#));
+        assert!(body.contains(r#""payment_email_sent":false"#));
     }
 }

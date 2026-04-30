@@ -6045,14 +6045,17 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "lettre",
  "llm-access-codex",
  "llm-access-core",
  "llm-access-kiro",
  "llm-access-store",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tower 0.5.2",
+ "url",
 ]
 
 [[package]]

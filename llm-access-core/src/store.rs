@@ -10,6 +10,10 @@ pub const DEFAULT_AUTH_CACHE_TTL_SECONDS: u64 = 60;
 /// Default Codex status refresh interval used before runtime config is
 /// imported.
 pub const DEFAULT_CODEX_STATUS_REFRESH_SECONDS: u64 = 300;
+/// Pending status used by public token/account contribution requests.
+pub const PUBLIC_TOKEN_REQUEST_STATUS_PENDING: &str = "pending";
+/// Submitted status used by public sponsor requests before payment email.
+pub const PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED: &str = "submitted";
 
 /// Key state used on the hot request path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +95,87 @@ pub struct PublicSponsor {
     pub processed_at_ms: Option<i64>,
 }
 
+/// New public token request after input normalization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewPublicTokenRequest {
+    /// Stable request id.
+    pub request_id: String,
+    /// Requester email address.
+    pub requester_email: String,
+    /// Requested billable quota.
+    pub requested_quota_billable_limit: u64,
+    /// Requester explanation.
+    pub request_reason: String,
+    /// Optional frontend page URL.
+    pub frontend_page_url: Option<String>,
+    /// Normalized client fingerprint.
+    pub fingerprint: String,
+    /// Normalized client IP.
+    pub client_ip: String,
+    /// Client IP region when known.
+    pub ip_region: String,
+    /// Creation timestamp.
+    pub created_at_ms: i64,
+}
+
+/// New public Codex account contribution request after input normalization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewPublicAccountContributionRequest {
+    /// Stable request id.
+    pub request_id: String,
+    /// Proposed account display name.
+    pub account_name: String,
+    /// Optional upstream account id.
+    pub account_id: Option<String>,
+    /// Upstream id token.
+    pub id_token: String,
+    /// Upstream access token.
+    pub access_token: String,
+    /// Upstream refresh token.
+    pub refresh_token: String,
+    /// Requester email address.
+    pub requester_email: String,
+    /// Contributor message.
+    pub contributor_message: String,
+    /// Optional GitHub id.
+    pub github_id: Option<String>,
+    /// Optional frontend page URL.
+    pub frontend_page_url: Option<String>,
+    /// Normalized client fingerprint.
+    pub fingerprint: String,
+    /// Normalized client IP.
+    pub client_ip: String,
+    /// Client IP region when known.
+    pub ip_region: String,
+    /// Creation timestamp.
+    pub created_at_ms: i64,
+}
+
+/// New public sponsor request after input normalization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewPublicSponsorRequest {
+    /// Stable request id.
+    pub request_id: String,
+    /// Requester email address.
+    pub requester_email: String,
+    /// Sponsor message.
+    pub sponsor_message: String,
+    /// Optional display name.
+    pub display_name: Option<String>,
+    /// Optional GitHub id.
+    pub github_id: Option<String>,
+    /// Optional frontend page URL.
+    pub frontend_page_url: Option<String>,
+    /// Normalized client fingerprint.
+    pub fingerprint: String,
+    /// Normalized client IP.
+    pub client_ip: String,
+    /// Client IP region when known.
+    pub ip_region: String,
+    /// Creation timestamp.
+    pub created_at_ms: i64,
+}
+
 impl PublicAccessKey {
     /// Remaining billable token budget available to this key.
     pub fn remaining_billable(&self) -> i64 {
@@ -137,6 +222,28 @@ pub trait PublicCommunityStore: Send + Sync {
     async fn list_public_sponsors(&self, limit: usize) -> anyhow::Result<Vec<PublicSponsor>>;
 }
 
+/// Public write queries used by unauthenticated compatibility endpoints.
+#[async_trait]
+pub trait PublicSubmissionStore: Send + Sync {
+    /// Persist one public token request.
+    async fn create_public_token_request(
+        &self,
+        request: NewPublicTokenRequest,
+    ) -> anyhow::Result<()>;
+
+    /// Persist one public account contribution request.
+    async fn create_public_account_contribution_request(
+        &self,
+        request: NewPublicAccountContributionRequest,
+    ) -> anyhow::Result<()>;
+
+    /// Persist one public sponsor request.
+    async fn create_public_sponsor_request(
+        &self,
+        request: NewPublicSponsorRequest,
+    ) -> anyhow::Result<()>;
+}
+
 /// Empty public-access store used by isolated unit tests.
 pub struct EmptyPublicAccessStore;
 
@@ -165,6 +272,33 @@ impl PublicCommunityStore for EmptyPublicCommunityStore {
 
     async fn list_public_sponsors(&self, _limit: usize) -> anyhow::Result<Vec<PublicSponsor>> {
         Ok(Vec::new())
+    }
+}
+
+/// Empty public submission store used by isolated unit tests.
+pub struct EmptyPublicSubmissionStore;
+
+#[async_trait]
+impl PublicSubmissionStore for EmptyPublicSubmissionStore {
+    async fn create_public_token_request(
+        &self,
+        _request: NewPublicTokenRequest,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn create_public_account_contribution_request(
+        &self,
+        _request: NewPublicAccountContributionRequest,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn create_public_sponsor_request(
+        &self,
+        _request: NewPublicSponsorRequest,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 

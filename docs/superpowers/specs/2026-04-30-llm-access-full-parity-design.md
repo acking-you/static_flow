@@ -335,6 +335,15 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
   The standalone SQLite repository lists only issued account contributions and
   approved sponsors, preserving the existing public response shape, imported
   account-name fallback, and processed-time ordering.
+- `llm-access` now accepts the public submission endpoints
+  `/api/llm-gateway/token-requests/submit`,
+  `/api/llm-gateway/account-contribution-requests/submit`, and
+  `/api/llm-gateway/sponsor-requests/submit`. The handlers normalize and
+  validate inputs using the existing backend limits, apply the same per-client
+  public submit rate-limit rule, and persist pending/submitted rows into the
+  standalone SQLite control plane. Sponsor payment email remains an explicit
+  runtime dependency to wire later; the current standalone path records the
+  same no-email-notifier state as the backend does when email is unavailable.
 - `llm-access-kiro` now owns Kiro auth-file persistence, local Kiro CLI import,
   deterministic machine-id derivation, and token-count estimation. The backend
   keeps compatibility modules that re-export those implementations.
