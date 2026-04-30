@@ -1,5 +1,7 @@
 //! Migration helpers for moving StaticFlow LLM gateway data into llm-access.
 
+pub mod snapshot;
+
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection};
 use serde_json::Value;

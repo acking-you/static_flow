@@ -6064,7 +6064,9 @@ dependencies = [
  "anyhow",
  "llm-access-store",
  "rusqlite",
+ "serde",
  "serde_json",
+ "static-flow-shared",
 ]
 
 [[package]]
