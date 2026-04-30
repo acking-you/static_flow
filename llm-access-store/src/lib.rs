@@ -1,5 +1,8 @@
 //! Storage bootstrap helpers for the standalone LLM access service.
 
+/// SQLite control-plane repository.
+pub mod sqlite;
+
 use std::path::Path;
 
 use anyhow::Context;
