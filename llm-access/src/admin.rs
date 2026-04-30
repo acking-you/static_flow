@@ -3,16 +3,17 @@
 use std::{collections::BTreeMap, net::IpAddr};
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use llm_access_core::store::{
     self as core_store, AdminAccountGroupPatch, AdminCodexAccountPatch, AdminKeyPatch,
-    AdminProxyConfigPatch, AdminRuntimeConfig, NewAdminAccountGroup, NewAdminCodexAccount,
-    NewAdminKey, NewAdminProxyConfig, UpdateAdminRuntimeConfig, KEY_STATUS_ACTIVE,
-    KEY_STATUS_DISABLED, KIRO_PREFIX_CACHE_MODE_FORMULA, PROVIDER_CODEX, PROVIDER_KIRO,
+    AdminProxyConfigPatch, AdminReviewQueueAction, AdminRuntimeConfig, NewAdminAccountGroup,
+    NewAdminCodexAccount, NewAdminKey, NewAdminProxyConfig, UpdateAdminRuntimeConfig,
+    KEY_STATUS_ACTIVE, KEY_STATUS_DISABLED, KIRO_PREFIX_CACHE_MODE_FORMULA, PROVIDER_CODEX,
+    PROVIDER_KIRO,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -37,6 +38,8 @@ const MIN_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 1_024;
 const MAX_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY: u64 = 1_024;
 const MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS: u64 = 300_000;
+const DEFAULT_ADMIN_REVIEW_QUEUE_LIMIT: usize = 50;
+const MAX_ADMIN_REVIEW_QUEUE_LIMIT: usize = 200;
 const BAND_CONTIGUITY_TOLERANCE: f64 = 1e-12;
 
 #[derive(Debug, Serialize)]
@@ -80,6 +83,52 @@ struct AdminProxyBindingsResponse {
 struct AdminAccountsResponse {
     accounts: Vec<core_store::AdminCodexAccount>,
     generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminTokenRequestsResponse {
+    total: usize,
+    offset: usize,
+    limit: usize,
+    has_more: bool,
+    requests: Vec<core_store::AdminTokenRequest>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminAccountContributionRequestsResponse {
+    total: usize,
+    offset: usize,
+    limit: usize,
+    has_more: bool,
+    requests: Vec<core_store::AdminAccountContributionRequest>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminSponsorRequestsResponse {
+    total: usize,
+    offset: usize,
+    limit: usize,
+    has_more: bool,
+    requests: Vec<core_store::AdminSponsorRequest>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ListReviewQueueRequest {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ReviewQueueActionRequest {
+    #[serde(default)]
+    admin_note: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -852,6 +901,362 @@ pub(crate) async fn refresh_llm_gateway_account(
     }
 }
 
+pub(crate) async fn list_llm_gateway_token_requests(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(request): Query<ListReviewQueueRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let query = normalize_review_queue_query(request);
+    match state
+        .admin_review_queue_store
+        .list_admin_token_requests(query)
+        .await
+    {
+        Ok(page) => Json(AdminTokenRequestsResponse {
+            total: page.total,
+            offset: page.offset,
+            limit: page.limit,
+            has_more: page.has_more,
+            requests: page.requests,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to list llm gateway token requests").into_response(),
+    }
+}
+
+pub(crate) async fn list_llm_gateway_account_contribution_requests(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(request): Query<ListReviewQueueRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let query = normalize_review_queue_query(request);
+    match state
+        .admin_review_queue_store
+        .list_admin_account_contribution_requests(query)
+        .await
+    {
+        Ok(page) => Json(AdminAccountContributionRequestsResponse {
+            total: page.total,
+            offset: page.offset,
+            limit: page.limit,
+            has_more: page.has_more,
+            requests: page.requests,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to list llm gateway account contribution requests")
+            .into_response(),
+    }
+}
+
+pub(crate) async fn list_llm_gateway_sponsor_requests(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(request): Query<ListReviewQueueRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let query = normalize_review_queue_query(request);
+    match state
+        .admin_review_queue_store
+        .list_admin_sponsor_requests(query)
+        .await
+    {
+        Ok(page) => Json(AdminSponsorRequestsResponse {
+            total: page.total,
+            offset: page.offset,
+            limit: page.limit,
+            has_more: page.has_more,
+            requests: page.requests,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to list llm gateway sponsor requests").into_response(),
+    }
+}
+
+pub(crate) async fn approve_and_issue_llm_gateway_token_request(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+    Json(request): Json<ReviewQueueActionRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let current = match state
+        .admin_review_queue_store
+        .get_admin_token_request(&request_id)
+        .await
+    {
+        Ok(Some(request)) => request,
+        Ok(None) => return not_found("LLM gateway token request not found").into_response(),
+        Err(_) => {
+            return internal_error("Failed to load llm gateway token request").into_response()
+        },
+    };
+    if matches!(current.status.as_str(), "issued" | "rejected") {
+        return conflict("LLM gateway token request is finalized").into_response();
+    }
+    let key = if current.issued_key_id.is_none() {
+        let secret = generate_secret();
+        Some(NewAdminKey {
+            id: generate_id("llm-key"),
+            name: normalize_name(&format!("wish-{}", current.request_id))
+                .unwrap_or_else(|_| format!("wish-{}", current.request_id)),
+            key_hash: sha256_hex(secret.as_bytes()),
+            secret,
+            public_visible: false,
+            quota_billable_limit: current.requested_quota_billable_limit,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            created_at_ms: now_ms(),
+        })
+    } else {
+        None
+    };
+    match state
+        .admin_review_queue_store
+        .issue_admin_token_request(&request_id, key, review_queue_action(request))
+        .await
+    {
+        Ok(Some(request)) => Json(request).into_response(),
+        Ok(None) => not_found("LLM gateway token request not found").into_response(),
+        Err(_) => internal_error("Failed to issue llm gateway token request").into_response(),
+    }
+}
+
+pub(crate) async fn reject_llm_gateway_token_request(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+    Json(request): Json<ReviewQueueActionRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let current = match state
+        .admin_review_queue_store
+        .get_admin_token_request(&request_id)
+        .await
+    {
+        Ok(Some(request)) => request,
+        Ok(None) => return not_found("LLM gateway token request not found").into_response(),
+        Err(_) => {
+            return internal_error("Failed to load llm gateway token request").into_response()
+        },
+    };
+    if current.status == "issued" {
+        return conflict("Issued LLM gateway token request cannot be rejected").into_response();
+    }
+    if current.status == "rejected" {
+        return conflict("LLM gateway token request is already rejected").into_response();
+    }
+    match state
+        .admin_review_queue_store
+        .reject_admin_token_request(&request_id, review_queue_action(request))
+        .await
+    {
+        Ok(Some(request)) => Json(request).into_response(),
+        Ok(None) => not_found("LLM gateway token request not found").into_response(),
+        Err(_) => internal_error("Failed to reject llm gateway token request").into_response(),
+    }
+}
+
+pub(crate) async fn approve_and_issue_llm_gateway_account_contribution_request(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+    Json(request): Json<ReviewQueueActionRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let current = match state
+        .admin_review_queue_store
+        .get_admin_account_contribution_request(&request_id)
+        .await
+    {
+        Ok(Some(request)) => request,
+        Ok(None) => {
+            return not_found("LLM gateway account contribution request not found").into_response()
+        },
+        Err(_) => {
+            return internal_error("Failed to load llm gateway account contribution request")
+                .into_response()
+        },
+    };
+    if matches!(current.status.as_str(), "issued" | "rejected") {
+        return conflict("LLM gateway account contribution request is finalized").into_response();
+    }
+    let action = review_queue_action(request);
+    let imported_account_name = current
+        .imported_account_name
+        .clone()
+        .unwrap_or_else(|| current.account_name.clone());
+    let account = if current.imported_account_name.is_none() {
+        let auth_json = match serde_json::to_string(&serde_json::json!({
+            "id_token": current.id_token,
+            "access_token": current.access_token,
+            "refresh_token": current.refresh_token,
+            "account_id": current.account_id,
+        })) {
+            Ok(value) => value,
+            Err(_) => return internal_error("Failed to encode account auth").into_response(),
+        };
+        Some(NewAdminCodexAccount {
+            name: imported_account_name.clone(),
+            account_id: current.account_id.clone(),
+            auth_json,
+            map_gpt53_codex_to_spark: false,
+            created_at_ms: action.updated_at_ms,
+        })
+    } else {
+        None
+    };
+    let (account_group, key) = if current.issued_key_id.is_none() {
+        let group_id = generate_id("llm-group");
+        let name = format!("contrib-{}", current.request_id);
+        let secret = generate_secret();
+        (
+            Some(NewAdminAccountGroup {
+                id: group_id,
+                provider_type: PROVIDER_CODEX.to_string(),
+                name: name.clone(),
+                account_names: vec![imported_account_name],
+                created_at_ms: action.updated_at_ms,
+            }),
+            Some(NewAdminKey {
+                id: generate_id("llm-key"),
+                name,
+                key_hash: sha256_hex(secret.as_bytes()),
+                secret,
+                public_visible: false,
+                quota_billable_limit: 100_000_000_000,
+                request_max_concurrency: None,
+                request_min_start_interval_ms: None,
+                created_at_ms: action.updated_at_ms,
+            }),
+        )
+    } else {
+        (None, None)
+    };
+    match state
+        .admin_review_queue_store
+        .issue_admin_account_contribution_request(&request_id, account, account_group, key, action)
+        .await
+    {
+        Ok(Some(request)) => Json(request).into_response(),
+        Ok(None) => not_found("LLM gateway account contribution request not found").into_response(),
+        Err(_) => internal_error("Failed to issue llm gateway account contribution request")
+            .into_response(),
+    }
+}
+
+pub(crate) async fn reject_llm_gateway_account_contribution_request(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+    Json(request): Json<ReviewQueueActionRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let current = match state
+        .admin_review_queue_store
+        .get_admin_account_contribution_request(&request_id)
+        .await
+    {
+        Ok(Some(request)) => request,
+        Ok(None) => {
+            return not_found("LLM gateway account contribution request not found").into_response()
+        },
+        Err(_) => {
+            return internal_error("Failed to load llm gateway account contribution request")
+                .into_response()
+        },
+    };
+    if current.status == "issued" {
+        return conflict("Issued LLM gateway account contribution request cannot be rejected")
+            .into_response();
+    }
+    if current.status == "rejected" {
+        return conflict("LLM gateway account contribution request is already rejected")
+            .into_response();
+    }
+    match state
+        .admin_review_queue_store
+        .reject_admin_account_contribution_request(&request_id, review_queue_action(request))
+        .await
+    {
+        Ok(Some(request)) => Json(request).into_response(),
+        Ok(None) => not_found("LLM gateway account contribution request not found").into_response(),
+        Err(_) => internal_error("Failed to reject llm gateway account contribution request")
+            .into_response(),
+    }
+}
+
+pub(crate) async fn approve_llm_gateway_sponsor_request(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+    Json(request): Json<ReviewQueueActionRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let current = match state
+        .admin_review_queue_store
+        .get_admin_sponsor_request(&request_id)
+        .await
+    {
+        Ok(Some(request)) => request,
+        Ok(None) => return not_found("LLM gateway sponsor request not found").into_response(),
+        Err(_) => {
+            return internal_error("Failed to load llm gateway sponsor request").into_response()
+        },
+    };
+    if current.status == "approved" {
+        return conflict("LLM gateway sponsor request is already approved").into_response();
+    }
+    match state
+        .admin_review_queue_store
+        .approve_admin_sponsor_request(&request_id, review_queue_action(request))
+        .await
+    {
+        Ok(Some(request)) => Json(request).into_response(),
+        Ok(None) => not_found("LLM gateway sponsor request not found").into_response(),
+        Err(_) => internal_error("Failed to approve llm gateway sponsor request").into_response(),
+    }
+}
+
+pub(crate) async fn delete_llm_gateway_sponsor_request(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state
+        .admin_review_queue_store
+        .delete_admin_sponsor_request(&request_id)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("LLM gateway sponsor request not found").into_response(),
+        Err(_) => internal_error("Failed to delete llm gateway sponsor request").into_response(),
+    }
+}
+
 fn apply_runtime_config_update(
     current: AdminRuntimeConfig,
     request: UpdateAdminRuntimeConfig,
@@ -1104,6 +1509,28 @@ fn normalize_codex_client_version(raw: &str) -> Option<String> {
         return None;
     }
     Some(trimmed.to_string())
+}
+
+fn normalize_review_queue_query(
+    request: ListReviewQueueRequest,
+) -> core_store::AdminReviewQueueQuery {
+    core_store::AdminReviewQueueQuery {
+        status: request
+            .status
+            .and_then(|status| normalize_optional_string(&status)),
+        limit: request
+            .limit
+            .unwrap_or(DEFAULT_ADMIN_REVIEW_QUEUE_LIMIT)
+            .clamp(1, MAX_ADMIN_REVIEW_QUEUE_LIMIT),
+        offset: request.offset.unwrap_or(0),
+    }
+}
+
+fn review_queue_action(request: ReviewQueueActionRequest) -> AdminReviewQueueAction {
+    AdminReviewQueueAction {
+        admin_note: normalize_optional_string_option(request.admin_note.as_deref()),
+        updated_at_ms: now_ms(),
+    }
 }
 
 fn validate_range(field: &str, value: u64, min: u64, max: u64) -> Result<(), AdminHttpError> {

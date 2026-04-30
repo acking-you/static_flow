@@ -2,11 +2,14 @@
 
 use anyhow::Context;
 use llm_access_core::store::{
-    self as core_store, AdminAccountGroup, AdminAccountGroupPatch, AdminCodexAccount,
-    AdminCodexAccountPatch, AdminKey, AdminKeyPatch, AdminProxyBinding, AdminProxyConfig,
-    AdminProxyConfigPatch, AdminRuntimeConfig, CodexRateLimitStatus, NewAdminAccountGroup,
-    NewAdminCodexAccount, NewAdminKey, NewAdminProxyConfig, NewPublicAccountContributionRequest,
-    NewPublicSponsorRequest, NewPublicTokenRequest, PublicAccessKey, PublicAccountContribution,
+    self as core_store, AdminAccountContributionRequest, AdminAccountContributionRequestsPage,
+    AdminAccountGroup, AdminAccountGroupPatch, AdminCodexAccount, AdminCodexAccountPatch, AdminKey,
+    AdminKeyPatch, AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch,
+    AdminReviewQueueAction, AdminReviewQueueQuery, AdminRuntimeConfig, AdminSponsorRequest,
+    AdminSponsorRequestsPage, AdminTokenRequest, AdminTokenRequestsPage, AuthenticatedKey,
+    CodexRateLimitStatus, NewAdminAccountGroup, NewAdminCodexAccount, NewAdminKey,
+    NewAdminProxyConfig, NewPublicAccountContributionRequest, NewPublicSponsorRequest,
+    NewPublicTokenRequest, ProviderCodexRoute, PublicAccessKey, PublicAccountContribution,
     PublicSponsor, PublicUsageLookupKey, PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED,
     PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
 };
@@ -255,6 +258,21 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
         .unwrap_or(0)
+}
+
+fn count_review_rows(
+    conn: &Connection,
+    count_all_sql: &str,
+    count_status_sql: &str,
+    status: Option<&str>,
+) -> anyhow::Result<usize> {
+    let count: i64 = if let Some(status) = status {
+        conn.query_row(count_status_sql, [status], |row| row.get(0))
+    } else {
+        conn.query_row(count_all_sql, [], |row| row.get(0))
+    }
+    .context("count review rows")?;
+    Ok(count.max(0) as usize)
 }
 
 impl SqliteControlStore {
@@ -515,6 +533,46 @@ impl SqliteControlStore {
         self.get_key(&key.id)?
             .map(|bundle| admin_key_from_bundle(&bundle))
             .context("created admin key disappeared")
+    }
+
+    /// Resolve the Codex account route for one authenticated key.
+    pub fn resolve_provider_codex_route(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+        let Some(bundle) = self.get_key(&key.key_id)? else {
+            return Ok(None);
+        };
+        if bundle.key.provider_type != core_store::PROVIDER_CODEX {
+            return Ok(None);
+        }
+
+        let account_name = if let Some(name) = bundle.route.fixed_account_name.clone() {
+            Some(name)
+        } else if let Some(group_id) = bundle.route.account_group_id.as_deref() {
+            self.get_admin_account_group(group_id)?
+                .and_then(|group| group.account_names.into_iter().next())
+        } else {
+            self.list_codex_accounts()?
+                .into_iter()
+                .find(|record| record.status == core_store::KEY_STATUS_ACTIVE)
+                .map(|record| record.account_name)
+        };
+        let Some(account_name) = account_name else {
+            return Ok(None);
+        };
+        let Some(record) = self.get_codex_account(&account_name)? else {
+            return Ok(None);
+        };
+        if record.status != core_store::KEY_STATUS_ACTIVE {
+            return Ok(None);
+        }
+        let settings = decode_codex_account_settings(&record.settings_json)?;
+        Ok(Some(ProviderCodexRoute {
+            account_name: record.account_name,
+            auth_json: record.auth_json,
+            map_gpt53_codex_to_spark: settings.map_gpt53_codex_to_spark,
+        }))
     }
 
     /// Patch one admin-managed key.
@@ -1503,6 +1561,698 @@ impl SqliteControlStore {
         Ok(rows)
     }
 
+    /// List token requests for admin review.
+    pub fn list_admin_token_requests(
+        &self,
+        query: &AdminReviewQueueQuery,
+    ) -> anyhow::Result<AdminTokenRequestsPage> {
+        let total = self.count_admin_token_requests(query.status.as_deref())?;
+        if total == 0 || query.offset >= total {
+            return Ok(AdminTokenRequestsPage {
+                total,
+                offset: query.offset,
+                limit: query.limit,
+                has_more: false,
+                requests: Vec::new(),
+            });
+        }
+        let requests = if let Some(status) = query.status.as_deref() {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT
+                        request_id, requester_email, requested_quota_billable_limit,
+                        request_reason, frontend_page_url, status, client_ip, ip_region,
+                        admin_note, failure_reason, issued_key_id, issued_key_name,
+                        created_at_ms, updated_at_ms, processed_at_ms
+                     FROM llm_token_requests
+                     WHERE status = ?1
+                     ORDER BY created_at_ms DESC, request_id DESC
+                     LIMIT ?2 OFFSET ?3",
+                )
+                .context("prepare list admin token requests by status")?;
+            let rows = stmt
+                .query_map(params![status, query.limit as i64, query.offset as i64], |row| {
+                    Ok(AdminTokenRequest {
+                        request_id: row.get(0)?,
+                        requester_email: row.get(1)?,
+                        requested_quota_billable_limit: row.get::<_, i64>(2)? as u64,
+                        request_reason: row.get(3)?,
+                        frontend_page_url: row.get(4)?,
+                        status: row.get(5)?,
+                        client_ip: row.get(6)?,
+                        ip_region: row.get(7)?,
+                        admin_note: row.get(8)?,
+                        failure_reason: row.get(9)?,
+                        issued_key_id: row.get(10)?,
+                        issued_key_name: row.get(11)?,
+                        created_at: row.get(12)?,
+                        updated_at: row.get(13)?,
+                        processed_at: row.get(14)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()
+                .context("list admin token requests by status")?;
+            rows
+        } else {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT
+                        request_id, requester_email, requested_quota_billable_limit,
+                        request_reason, frontend_page_url, status, client_ip, ip_region,
+                        admin_note, failure_reason, issued_key_id, issued_key_name,
+                        created_at_ms, updated_at_ms, processed_at_ms
+                     FROM llm_token_requests
+                     ORDER BY created_at_ms DESC, request_id DESC
+                     LIMIT ?1 OFFSET ?2",
+                )
+                .context("prepare list admin token requests")?;
+            let rows = stmt
+                .query_map(params![query.limit as i64, query.offset as i64], |row| {
+                    Ok(AdminTokenRequest {
+                        request_id: row.get(0)?,
+                        requester_email: row.get(1)?,
+                        requested_quota_billable_limit: row.get::<_, i64>(2)? as u64,
+                        request_reason: row.get(3)?,
+                        frontend_page_url: row.get(4)?,
+                        status: row.get(5)?,
+                        client_ip: row.get(6)?,
+                        ip_region: row.get(7)?,
+                        admin_note: row.get(8)?,
+                        failure_reason: row.get(9)?,
+                        issued_key_id: row.get(10)?,
+                        issued_key_name: row.get(11)?,
+                        created_at: row.get(12)?,
+                        updated_at: row.get(13)?,
+                        processed_at: row.get(14)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()
+                .context("list admin token requests")?;
+            rows
+        };
+        Ok(AdminTokenRequestsPage {
+            total,
+            offset: query.offset,
+            limit: query.limit,
+            has_more: query.offset.saturating_add(requests.len()) < total,
+            requests,
+        })
+    }
+
+    /// List account contribution requests for admin review.
+    pub fn list_admin_account_contribution_requests(
+        &self,
+        query: &AdminReviewQueueQuery,
+    ) -> anyhow::Result<AdminAccountContributionRequestsPage> {
+        let total = self.count_admin_account_contribution_requests(query.status.as_deref())?;
+        if total == 0 || query.offset >= total {
+            return Ok(AdminAccountContributionRequestsPage {
+                total,
+                offset: query.offset,
+                limit: query.limit,
+                has_more: false,
+                requests: Vec::new(),
+            });
+        }
+        let requests = if let Some(status) = query.status.as_deref() {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT
+                        request_id, account_name, account_id, id_token, access_token,
+                        refresh_token, requester_email, contributor_message, github_id,
+                        frontend_page_url, status, client_ip, ip_region, admin_note,
+                        failure_reason, imported_account_name, issued_key_id, issued_key_name,
+                        created_at_ms, updated_at_ms, processed_at_ms
+                     FROM llm_account_contribution_requests
+                     WHERE status = ?1
+                     ORDER BY created_at_ms DESC, request_id DESC
+                     LIMIT ?2 OFFSET ?3",
+                )
+                .context("prepare list admin account contribution requests by status")?;
+            let rows = stmt
+                .query_map(params![status, query.limit as i64, query.offset as i64], |row| {
+                    Ok(AdminAccountContributionRequest {
+                        request_id: row.get(0)?,
+                        account_name: row.get(1)?,
+                        account_id: row.get(2)?,
+                        id_token: row.get(3)?,
+                        access_token: row.get(4)?,
+                        refresh_token: row.get(5)?,
+                        requester_email: row.get(6)?,
+                        contributor_message: row.get(7)?,
+                        github_id: row.get(8)?,
+                        frontend_page_url: row.get(9)?,
+                        status: row.get(10)?,
+                        client_ip: row.get(11)?,
+                        ip_region: row.get(12)?,
+                        admin_note: row.get(13)?,
+                        failure_reason: row.get(14)?,
+                        imported_account_name: row.get(15)?,
+                        issued_key_id: row.get(16)?,
+                        issued_key_name: row.get(17)?,
+                        created_at: row.get(18)?,
+                        updated_at: row.get(19)?,
+                        processed_at: row.get(20)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()
+                .context("list admin account contribution requests by status")?;
+            rows
+        } else {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT
+                        request_id, account_name, account_id, id_token, access_token,
+                        refresh_token, requester_email, contributor_message, github_id,
+                        frontend_page_url, status, client_ip, ip_region, admin_note,
+                        failure_reason, imported_account_name, issued_key_id, issued_key_name,
+                        created_at_ms, updated_at_ms, processed_at_ms
+                     FROM llm_account_contribution_requests
+                     ORDER BY created_at_ms DESC, request_id DESC
+                     LIMIT ?1 OFFSET ?2",
+                )
+                .context("prepare list admin account contribution requests")?;
+            let rows = stmt
+                .query_map(params![query.limit as i64, query.offset as i64], |row| {
+                    Ok(AdminAccountContributionRequest {
+                        request_id: row.get(0)?,
+                        account_name: row.get(1)?,
+                        account_id: row.get(2)?,
+                        id_token: row.get(3)?,
+                        access_token: row.get(4)?,
+                        refresh_token: row.get(5)?,
+                        requester_email: row.get(6)?,
+                        contributor_message: row.get(7)?,
+                        github_id: row.get(8)?,
+                        frontend_page_url: row.get(9)?,
+                        status: row.get(10)?,
+                        client_ip: row.get(11)?,
+                        ip_region: row.get(12)?,
+                        admin_note: row.get(13)?,
+                        failure_reason: row.get(14)?,
+                        imported_account_name: row.get(15)?,
+                        issued_key_id: row.get(16)?,
+                        issued_key_name: row.get(17)?,
+                        created_at: row.get(18)?,
+                        updated_at: row.get(19)?,
+                        processed_at: row.get(20)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()
+                .context("list admin account contribution requests")?;
+            rows
+        };
+        Ok(AdminAccountContributionRequestsPage {
+            total,
+            offset: query.offset,
+            limit: query.limit,
+            has_more: query.offset.saturating_add(requests.len()) < total,
+            requests,
+        })
+    }
+
+    /// List sponsor requests for admin review.
+    pub fn list_admin_sponsor_requests(
+        &self,
+        query: &AdminReviewQueueQuery,
+    ) -> anyhow::Result<AdminSponsorRequestsPage> {
+        let total = self.count_admin_sponsor_requests(query.status.as_deref())?;
+        if total == 0 || query.offset >= total {
+            return Ok(AdminSponsorRequestsPage {
+                total,
+                offset: query.offset,
+                limit: query.limit,
+                has_more: false,
+                requests: Vec::new(),
+            });
+        }
+        let requests = if let Some(status) = query.status.as_deref() {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT
+                        request_id, requester_email, sponsor_message, display_name, github_id,
+                        frontend_page_url, status, client_ip, ip_region, admin_note,
+                        failure_reason, payment_email_sent_at_ms, created_at_ms, updated_at_ms,
+                        processed_at_ms
+                     FROM llm_sponsor_requests
+                     WHERE status = ?1
+                     ORDER BY created_at_ms DESC, request_id DESC
+                     LIMIT ?2 OFFSET ?3",
+                )
+                .context("prepare list admin sponsor requests by status")?;
+            let rows = stmt
+                .query_map(params![status, query.limit as i64, query.offset as i64], |row| {
+                    Ok(AdminSponsorRequest {
+                        request_id: row.get(0)?,
+                        requester_email: row.get(1)?,
+                        sponsor_message: row.get(2)?,
+                        display_name: row.get(3)?,
+                        github_id: row.get(4)?,
+                        frontend_page_url: row.get(5)?,
+                        status: row.get(6)?,
+                        client_ip: row.get(7)?,
+                        ip_region: row.get(8)?,
+                        admin_note: row.get(9)?,
+                        failure_reason: row.get(10)?,
+                        payment_email_sent_at: row.get(11)?,
+                        created_at: row.get(12)?,
+                        updated_at: row.get(13)?,
+                        processed_at: row.get(14)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()
+                .context("list admin sponsor requests by status")?;
+            rows
+        } else {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT
+                        request_id, requester_email, sponsor_message, display_name, github_id,
+                        frontend_page_url, status, client_ip, ip_region, admin_note,
+                        failure_reason, payment_email_sent_at_ms, created_at_ms, updated_at_ms,
+                        processed_at_ms
+                     FROM llm_sponsor_requests
+                     ORDER BY created_at_ms DESC, request_id DESC
+                     LIMIT ?1 OFFSET ?2",
+                )
+                .context("prepare list admin sponsor requests")?;
+            let rows = stmt
+                .query_map(params![query.limit as i64, query.offset as i64], |row| {
+                    Ok(AdminSponsorRequest {
+                        request_id: row.get(0)?,
+                        requester_email: row.get(1)?,
+                        sponsor_message: row.get(2)?,
+                        display_name: row.get(3)?,
+                        github_id: row.get(4)?,
+                        frontend_page_url: row.get(5)?,
+                        status: row.get(6)?,
+                        client_ip: row.get(7)?,
+                        ip_region: row.get(8)?,
+                        admin_note: row.get(9)?,
+                        failure_reason: row.get(10)?,
+                        payment_email_sent_at: row.get(11)?,
+                        created_at: row.get(12)?,
+                        updated_at: row.get(13)?,
+                        processed_at: row.get(14)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()
+                .context("list admin sponsor requests")?;
+            rows
+        };
+        Ok(AdminSponsorRequestsPage {
+            total,
+            offset: query.offset,
+            limit: query.limit,
+            has_more: query.offset.saturating_add(requests.len()) < total,
+            requests,
+        })
+    }
+
+    fn count_admin_token_requests(&self, status: Option<&str>) -> anyhow::Result<usize> {
+        count_review_rows(
+            &self.conn,
+            "SELECT COUNT(*) FROM llm_token_requests",
+            "SELECT COUNT(*) FROM llm_token_requests WHERE status = ?1",
+            status,
+        )
+    }
+
+    fn count_admin_account_contribution_requests(
+        &self,
+        status: Option<&str>,
+    ) -> anyhow::Result<usize> {
+        count_review_rows(
+            &self.conn,
+            "SELECT COUNT(*) FROM llm_account_contribution_requests",
+            "SELECT COUNT(*) FROM llm_account_contribution_requests WHERE status = ?1",
+            status,
+        )
+    }
+
+    fn count_admin_sponsor_requests(&self, status: Option<&str>) -> anyhow::Result<usize> {
+        count_review_rows(
+            &self.conn,
+            "SELECT COUNT(*) FROM llm_sponsor_requests",
+            "SELECT COUNT(*) FROM llm_sponsor_requests WHERE status = ?1",
+            status,
+        )
+    }
+
+    /// Issue a token request and create its key if supplied.
+    pub fn issue_admin_token_request(
+        &self,
+        request_id: &str,
+        key: Option<&NewAdminKey>,
+        action: &AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminTokenRequest>> {
+        let Some(current) = self.get_admin_token_request(request_id)? else {
+            return Ok(None);
+        };
+        let (issued_key_id, issued_key_name) = match (current.issued_key_id, key) {
+            (Some(id), _) => (Some(id), current.issued_key_name),
+            (None, Some(key)) => {
+                self.create_admin_key(key)?;
+                (Some(key.id.clone()), Some(key.name.clone()))
+            },
+            (None, None) => (None, None),
+        };
+        self.conn
+            .execute(
+                "UPDATE llm_token_requests
+                 SET status = 'issued',
+                     admin_note = ?2,
+                     failure_reason = NULL,
+                     issued_key_id = ?3,
+                     issued_key_name = ?4,
+                     updated_at_ms = ?5,
+                     processed_at_ms = ?5
+                 WHERE request_id = ?1",
+                params![
+                    request_id,
+                    &action.admin_note,
+                    &issued_key_id,
+                    &issued_key_name,
+                    action.updated_at_ms,
+                ],
+            )
+            .context("issue admin token request")?;
+        self.get_admin_token_request(request_id)
+    }
+
+    /// Reject a token request and disable any partially issued key.
+    pub fn reject_admin_token_request(
+        &self,
+        request_id: &str,
+        action: &AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminTokenRequest>> {
+        let Some(current) = self.get_admin_token_request(request_id)? else {
+            return Ok(None);
+        };
+        if let Some(key_id) = current.issued_key_id.as_deref() {
+            self.disable_admin_key_if_present(key_id, action.updated_at_ms)?;
+        }
+        self.conn
+            .execute(
+                "UPDATE llm_token_requests
+                 SET status = 'rejected',
+                     admin_note = ?2,
+                     failure_reason = NULL,
+                     updated_at_ms = ?3,
+                     processed_at_ms = ?3
+                 WHERE request_id = ?1",
+                params![request_id, &action.admin_note, action.updated_at_ms],
+            )
+            .context("reject admin token request")?;
+        self.get_admin_token_request(request_id)
+    }
+
+    /// Issue an account contribution request and create account, group, and key
+    /// rows when supplied.
+    pub fn issue_admin_account_contribution_request(
+        &self,
+        request_id: &str,
+        account: Option<&NewAdminCodexAccount>,
+        account_group: Option<&NewAdminAccountGroup>,
+        key: Option<&NewAdminKey>,
+        action: &AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminAccountContributionRequest>> {
+        let Some(current) = self.get_admin_account_contribution_request(request_id)? else {
+            return Ok(None);
+        };
+        let imported_account_name = match (current.imported_account_name, account) {
+            (Some(name), _) => Some(name),
+            (None, Some(account)) => {
+                self.create_admin_codex_account(account)?;
+                Some(account.name.clone())
+            },
+            (None, None) => None,
+        };
+        if let Some(group) = account_group {
+            self.create_admin_account_group(group)?;
+        }
+        let (issued_key_id, issued_key_name) = match (current.issued_key_id, key) {
+            (Some(id), _) => (Some(id), current.issued_key_name),
+            (None, Some(key)) => {
+                self.create_admin_key(key)?;
+                if let Some(group) = account_group {
+                    self.patch_admin_key(&key.id, &AdminKeyPatch {
+                        name: None,
+                        status: None,
+                        public_visible: None,
+                        quota_billable_limit: None,
+                        route_strategy: Some(Some("fixed".to_string())),
+                        account_group_id: Some(Some(group.id.clone())),
+                        fixed_account_name: None,
+                        auto_account_names: None,
+                        model_name_map: None,
+                        request_max_concurrency: None,
+                        request_min_start_interval_ms: None,
+                        updated_at_ms: action.updated_at_ms,
+                    })?;
+                }
+                (Some(key.id.clone()), Some(key.name.clone()))
+            },
+            (None, None) => (None, None),
+        };
+        self.conn
+            .execute(
+                "UPDATE llm_account_contribution_requests
+                 SET status = 'issued',
+                     admin_note = ?2,
+                     failure_reason = NULL,
+                     imported_account_name = ?3,
+                     issued_key_id = ?4,
+                     issued_key_name = ?5,
+                     updated_at_ms = ?6,
+                     processed_at_ms = ?6
+                 WHERE request_id = ?1",
+                params![
+                    request_id,
+                    &action.admin_note,
+                    &imported_account_name,
+                    &issued_key_id,
+                    &issued_key_name,
+                    action.updated_at_ms,
+                ],
+            )
+            .context("issue admin account contribution request")?;
+        self.get_admin_account_contribution_request(request_id)
+    }
+
+    /// Reject an account contribution request and clean up partial records.
+    pub fn reject_admin_account_contribution_request(
+        &self,
+        request_id: &str,
+        action: &AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminAccountContributionRequest>> {
+        let Some(current) = self.get_admin_account_contribution_request(request_id)? else {
+            return Ok(None);
+        };
+        if let Some(key_id) = current.issued_key_id.as_deref() {
+            self.disable_admin_key_if_present(key_id, action.updated_at_ms)?;
+        }
+        if let Some(account_name) = current.imported_account_name.as_deref() {
+            self.delete_admin_codex_account(account_name)?;
+        }
+        self.conn
+            .execute(
+                "UPDATE llm_account_contribution_requests
+                 SET status = 'rejected',
+                     admin_note = ?2,
+                     failure_reason = NULL,
+                     updated_at_ms = ?3,
+                     processed_at_ms = ?3
+                 WHERE request_id = ?1",
+                params![request_id, &action.admin_note, action.updated_at_ms],
+            )
+            .context("reject admin account contribution request")?;
+        self.get_admin_account_contribution_request(request_id)
+    }
+
+    /// Approve one sponsor request.
+    pub fn approve_admin_sponsor_request(
+        &self,
+        request_id: &str,
+        action: &AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminSponsorRequest>> {
+        if self.get_admin_sponsor_request(request_id)?.is_none() {
+            return Ok(None);
+        }
+        self.conn
+            .execute(
+                "UPDATE llm_sponsor_requests
+                 SET status = 'approved',
+                     admin_note = ?2,
+                     failure_reason = NULL,
+                     updated_at_ms = ?3,
+                     processed_at_ms = ?3
+                 WHERE request_id = ?1",
+                params![request_id, &action.admin_note, action.updated_at_ms],
+            )
+            .context("approve admin sponsor request")?;
+        self.get_admin_sponsor_request(request_id)
+    }
+
+    /// Delete one sponsor request.
+    pub fn delete_admin_sponsor_request(&self, request_id: &str) -> anyhow::Result<bool> {
+        let changed = self
+            .conn
+            .execute("DELETE FROM llm_sponsor_requests WHERE request_id = ?1", [request_id])
+            .context("delete admin sponsor request")?;
+        Ok(changed > 0)
+    }
+
+    fn disable_admin_key_if_present(&self, key_id: &str, updated_at_ms: i64) -> anyhow::Result<()> {
+        if self.get_key(key_id)?.is_some() {
+            self.patch_admin_key(key_id, &AdminKeyPatch {
+                name: None,
+                status: Some(core_store::KEY_STATUS_DISABLED.to_string()),
+                public_visible: None,
+                quota_billable_limit: None,
+                route_strategy: None,
+                account_group_id: None,
+                fixed_account_name: None,
+                auto_account_names: None,
+                model_name_map: None,
+                request_max_concurrency: None,
+                request_min_start_interval_ms: None,
+                updated_at_ms,
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Load one token request by id.
+    pub fn get_admin_token_request(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<AdminTokenRequest>> {
+        self.conn
+            .query_row(
+                "SELECT
+                    request_id, requester_email, requested_quota_billable_limit,
+                    request_reason, frontend_page_url, status, client_ip, ip_region,
+                    admin_note, failure_reason, issued_key_id, issued_key_name,
+                    created_at_ms, updated_at_ms, processed_at_ms
+                 FROM llm_token_requests
+                 WHERE request_id = ?1",
+                [request_id],
+                |row| {
+                    Ok(AdminTokenRequest {
+                        request_id: row.get(0)?,
+                        requester_email: row.get(1)?,
+                        requested_quota_billable_limit: row.get::<_, i64>(2)? as u64,
+                        request_reason: row.get(3)?,
+                        frontend_page_url: row.get(4)?,
+                        status: row.get(5)?,
+                        client_ip: row.get(6)?,
+                        ip_region: row.get(7)?,
+                        admin_note: row.get(8)?,
+                        failure_reason: row.get(9)?,
+                        issued_key_id: row.get(10)?,
+                        issued_key_name: row.get(11)?,
+                        created_at: row.get(12)?,
+                        updated_at: row.get(13)?,
+                        processed_at: row.get(14)?,
+                    })
+                },
+            )
+            .optional()
+            .context("load admin token request")
+    }
+
+    /// Load one account contribution request by id.
+    pub fn get_admin_account_contribution_request(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<AdminAccountContributionRequest>> {
+        self.conn
+            .query_row(
+                "SELECT
+                    request_id, account_name, account_id, id_token, access_token,
+                    refresh_token, requester_email, contributor_message, github_id,
+                    frontend_page_url, status, client_ip, ip_region, admin_note,
+                    failure_reason, imported_account_name, issued_key_id, issued_key_name,
+                    created_at_ms, updated_at_ms, processed_at_ms
+                 FROM llm_account_contribution_requests
+                 WHERE request_id = ?1",
+                [request_id],
+                |row| {
+                    Ok(AdminAccountContributionRequest {
+                        request_id: row.get(0)?,
+                        account_name: row.get(1)?,
+                        account_id: row.get(2)?,
+                        id_token: row.get(3)?,
+                        access_token: row.get(4)?,
+                        refresh_token: row.get(5)?,
+                        requester_email: row.get(6)?,
+                        contributor_message: row.get(7)?,
+                        github_id: row.get(8)?,
+                        frontend_page_url: row.get(9)?,
+                        status: row.get(10)?,
+                        client_ip: row.get(11)?,
+                        ip_region: row.get(12)?,
+                        admin_note: row.get(13)?,
+                        failure_reason: row.get(14)?,
+                        imported_account_name: row.get(15)?,
+                        issued_key_id: row.get(16)?,
+                        issued_key_name: row.get(17)?,
+                        created_at: row.get(18)?,
+                        updated_at: row.get(19)?,
+                        processed_at: row.get(20)?,
+                    })
+                },
+            )
+            .optional()
+            .context("load admin account contribution request")
+    }
+
+    /// Load one sponsor request by id.
+    pub fn get_admin_sponsor_request(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<AdminSponsorRequest>> {
+        self.conn
+            .query_row(
+                "SELECT
+                    request_id, requester_email, sponsor_message, display_name, github_id,
+                    frontend_page_url, status, client_ip, ip_region, admin_note,
+                    failure_reason, payment_email_sent_at_ms, created_at_ms, updated_at_ms,
+                    processed_at_ms
+                 FROM llm_sponsor_requests
+                 WHERE request_id = ?1",
+                [request_id],
+                |row| {
+                    Ok(AdminSponsorRequest {
+                        request_id: row.get(0)?,
+                        requester_email: row.get(1)?,
+                        sponsor_message: row.get(2)?,
+                        display_name: row.get(3)?,
+                        github_id: row.get(4)?,
+                        frontend_page_url: row.get(5)?,
+                        status: row.get(6)?,
+                        client_ip: row.get(7)?,
+                        ip_region: row.get(8)?,
+                        admin_note: row.get(9)?,
+                        failure_reason: row.get(10)?,
+                        payment_email_sent_at: row.get(11)?,
+                        created_at: row.get(12)?,
+                        updated_at: row.get(13)?,
+                        processed_at: row.get(14)?,
+                    })
+                },
+            )
+            .optional()
+            .context("load admin sponsor request")
+    }
+
     /// Insert one public token request.
     pub fn create_public_token_request(
         &self,
@@ -2450,6 +3200,336 @@ mod tests {
         assert_eq!(account_status, "pending");
         assert_eq!(sponsor_status, "submitted");
         assert_eq!(sponsor_failure.as_deref(), Some("email notifier is not configured"));
+    }
+
+    #[test]
+    fn admin_review_queue_repository_lists_request_rows() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlStore::new(conn);
+
+        repo.create_public_token_request(&llm_access_core::store::NewPublicTokenRequest {
+            request_id: "llmwish-old".to_string(),
+            requester_email: "old@example.com".to_string(),
+            requested_quota_billable_limit: 1000,
+            request_reason: "old request".to_string(),
+            frontend_page_url: None,
+            fingerprint: "fingerprint-old".to_string(),
+            client_ip: "198.51.100.20".to_string(),
+            ip_region: "unknown".to_string(),
+            created_at_ms: 100,
+        })
+        .expect("create old token request");
+        repo.create_public_token_request(&llm_access_core::store::NewPublicTokenRequest {
+            request_id: "llmwish-new".to_string(),
+            requester_email: "new@example.com".to_string(),
+            requested_quota_billable_limit: 2000,
+            request_reason: "new request".to_string(),
+            frontend_page_url: Some("https://example.test/llm-access".to_string()),
+            fingerprint: "fingerprint-new".to_string(),
+            client_ip: "198.51.100.21".to_string(),
+            ip_region: "unknown".to_string(),
+            created_at_ms: 200,
+        })
+        .expect("create new token request");
+        repo.conn
+            .execute(
+                "UPDATE llm_token_requests
+                 SET status = 'rejected', updated_at_ms = 300, processed_at_ms = 300
+                 WHERE request_id = 'llmwish-old'",
+                [],
+            )
+            .expect("mark old token request rejected");
+        repo.create_public_account_contribution_request(
+            &llm_access_core::store::NewPublicAccountContributionRequest {
+                request_id: "llmacct-review".to_string(),
+                account_name: "account_review".to_string(),
+                account_id: Some("acct-review".to_string()),
+                id_token: "id-token".to_string(),
+                access_token: "access-token".to_string(),
+                refresh_token: "refresh-token".to_string(),
+                requester_email: "account@example.com".to_string(),
+                contributor_message: "please import this account".to_string(),
+                github_id: Some("acking-you".to_string()),
+                frontend_page_url: None,
+                fingerprint: "fingerprint-account".to_string(),
+                client_ip: "198.51.100.22".to_string(),
+                ip_region: "unknown".to_string(),
+                created_at_ms: 300,
+            },
+        )
+        .expect("create account contribution request");
+        repo.create_public_sponsor_request(&llm_access_core::store::NewPublicSponsorRequest {
+            request_id: "llmsponsor-review".to_string(),
+            requester_email: "sponsor@example.com".to_string(),
+            sponsor_message: "thanks".to_string(),
+            display_name: Some("Sponsor".to_string()),
+            github_id: Some("acking-you".to_string()),
+            frontend_page_url: None,
+            fingerprint: "fingerprint-sponsor".to_string(),
+            client_ip: "198.51.100.23".to_string(),
+            ip_region: "unknown".to_string(),
+            created_at_ms: 400,
+        })
+        .expect("create sponsor request");
+
+        let token_page = repo
+            .list_admin_token_requests(&llm_access_core::store::AdminReviewQueueQuery {
+                status: None,
+                limit: 1,
+                offset: 0,
+            })
+            .expect("list token requests");
+        assert_eq!(token_page.total, 2);
+        assert_eq!(token_page.requests.len(), 1);
+        assert!(token_page.has_more);
+        assert_eq!(token_page.requests[0].request_id, "llmwish-new");
+        assert_eq!(token_page.requests[0].requested_quota_billable_limit, 2000);
+
+        let rejected_tokens = repo
+            .list_admin_token_requests(&llm_access_core::store::AdminReviewQueueQuery {
+                status: Some("rejected".to_string()),
+                limit: 50,
+                offset: 0,
+            })
+            .expect("list rejected token requests");
+        assert_eq!(rejected_tokens.total, 1);
+        assert_eq!(rejected_tokens.requests[0].request_id, "llmwish-old");
+        assert_eq!(rejected_tokens.requests[0].processed_at, Some(300));
+
+        let account_page = repo
+            .list_admin_account_contribution_requests(
+                &llm_access_core::store::AdminReviewQueueQuery {
+                    status: Some("pending".to_string()),
+                    limit: 50,
+                    offset: 0,
+                },
+            )
+            .expect("list account contribution requests");
+        assert_eq!(account_page.total, 1);
+        assert_eq!(account_page.requests[0].request_id, "llmacct-review");
+        assert_eq!(account_page.requests[0].access_token, "access-token");
+
+        let sponsor_page = repo
+            .list_admin_sponsor_requests(&llm_access_core::store::AdminReviewQueueQuery {
+                status: Some("submitted".to_string()),
+                limit: 50,
+                offset: 0,
+            })
+            .expect("list sponsor requests");
+        assert_eq!(sponsor_page.total, 1);
+        assert_eq!(sponsor_page.requests[0].request_id, "llmsponsor-review");
+        assert_eq!(
+            sponsor_page.requests[0].failure_reason.as_deref(),
+            Some("email notifier is not configured")
+        );
+    }
+
+    #[test]
+    fn admin_review_queue_repository_applies_request_actions() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlStore::new(conn);
+
+        repo.create_public_token_request(&llm_access_core::store::NewPublicTokenRequest {
+            request_id: "llmwish-action".to_string(),
+            requester_email: "token@example.com".to_string(),
+            requested_quota_billable_limit: 1234,
+            request_reason: "issue a token".to_string(),
+            frontend_page_url: None,
+            fingerprint: "fingerprint-token".to_string(),
+            client_ip: "198.51.100.30".to_string(),
+            ip_region: "unknown".to_string(),
+            created_at_ms: 100,
+        })
+        .expect("create token request");
+        let issued_token = repo
+            .issue_admin_token_request(
+                "llmwish-action",
+                Some(&llm_access_core::store::NewAdminKey {
+                    id: "key-token-action".to_string(),
+                    name: "wish-llmwish-action".to_string(),
+                    secret: "sfk_token_action".to_string(),
+                    key_hash: "hash-token-action".to_string(),
+                    public_visible: false,
+                    quota_billable_limit: 1234,
+                    request_max_concurrency: None,
+                    request_min_start_interval_ms: None,
+                    created_at_ms: 200,
+                }),
+                &llm_access_core::store::AdminReviewQueueAction {
+                    admin_note: Some("issued".to_string()),
+                    updated_at_ms: 200,
+                },
+            )
+            .expect("issue token request")
+            .expect("token request exists");
+        assert_eq!(issued_token.status, "issued");
+        assert_eq!(issued_token.issued_key_id.as_deref(), Some("key-token-action"));
+        assert_eq!(issued_token.processed_at, Some(200));
+        assert!(repo
+            .get_key("key-token-action")
+            .expect("load issued key")
+            .is_some());
+
+        repo.create_public_account_contribution_request(
+            &llm_access_core::store::NewPublicAccountContributionRequest {
+                request_id: "llmacct-action".to_string(),
+                account_name: "contrib_account".to_string(),
+                account_id: Some("acct-action".to_string()),
+                id_token: "id-token".to_string(),
+                access_token: "access-token".to_string(),
+                refresh_token: "refresh-token".to_string(),
+                requester_email: "account@example.com".to_string(),
+                contributor_message: "shared account".to_string(),
+                github_id: None,
+                frontend_page_url: None,
+                fingerprint: "fingerprint-account".to_string(),
+                client_ip: "198.51.100.31".to_string(),
+                ip_region: "unknown".to_string(),
+                created_at_ms: 300,
+            },
+        )
+        .expect("create account contribution request");
+        let issued_account = repo
+            .issue_admin_account_contribution_request(
+                "llmacct-action",
+                Some(&llm_access_core::store::NewAdminCodexAccount {
+                    name: "contrib_account".to_string(),
+                    account_id: Some("acct-action".to_string()),
+                    auth_json: r#"{"tokens":{"access_token":"access-token"}}"#.to_string(),
+                    map_gpt53_codex_to_spark: false,
+                    created_at_ms: 400,
+                }),
+                Some(&llm_access_core::store::NewAdminAccountGroup {
+                    id: "group-contrib-action".to_string(),
+                    provider_type: "codex".to_string(),
+                    name: "contrib-llmacct-action".to_string(),
+                    account_names: vec!["contrib_account".to_string()],
+                    created_at_ms: 400,
+                }),
+                Some(&llm_access_core::store::NewAdminKey {
+                    id: "key-contrib-action".to_string(),
+                    name: "contrib-llmacct-action".to_string(),
+                    secret: "sfk_contrib_action".to_string(),
+                    key_hash: "hash-contrib-action".to_string(),
+                    public_visible: false,
+                    quota_billable_limit: 100_000_000_000,
+                    request_max_concurrency: None,
+                    request_min_start_interval_ms: None,
+                    created_at_ms: 400,
+                }),
+                &llm_access_core::store::AdminReviewQueueAction {
+                    admin_note: None,
+                    updated_at_ms: 400,
+                },
+            )
+            .expect("issue account contribution request")
+            .expect("account contribution request exists");
+        assert_eq!(issued_account.status, "issued");
+        assert_eq!(issued_account.imported_account_name.as_deref(), Some("contrib_account"));
+        let issued_key = repo
+            .get_key("key-contrib-action")
+            .expect("load contribution key")
+            .expect("contribution key exists");
+        assert_eq!(issued_key.route.account_group_id.as_deref(), Some("group-contrib-action"));
+        assert_eq!(issued_key.route.route_strategy.as_deref(), Some("fixed"));
+
+        repo.create_public_sponsor_request(&llm_access_core::store::NewPublicSponsorRequest {
+            request_id: "llmsponsor-action".to_string(),
+            requester_email: "sponsor@example.com".to_string(),
+            sponsor_message: "thanks".to_string(),
+            display_name: Some("Sponsor".to_string()),
+            github_id: None,
+            frontend_page_url: None,
+            fingerprint: "fingerprint-sponsor".to_string(),
+            client_ip: "198.51.100.32".to_string(),
+            ip_region: "unknown".to_string(),
+            created_at_ms: 500,
+        })
+        .expect("create sponsor request");
+        let approved_sponsor = repo
+            .approve_admin_sponsor_request(
+                "llmsponsor-action",
+                &llm_access_core::store::AdminReviewQueueAction {
+                    admin_note: Some("approved".to_string()),
+                    updated_at_ms: 600,
+                },
+            )
+            .expect("approve sponsor request")
+            .expect("sponsor request exists");
+        assert_eq!(approved_sponsor.status, "approved");
+        assert_eq!(approved_sponsor.processed_at, Some(600));
+        assert!(repo
+            .delete_admin_sponsor_request("llmsponsor-action")
+            .expect("delete sponsor request"));
+    }
+
+    #[test]
+    fn provider_route_repository_resolves_codex_account_from_key_route() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlStore::new(conn);
+
+        repo.create_admin_codex_account(&llm_access_core::store::NewAdminCodexAccount {
+            name: "codex-route".to_string(),
+            account_id: Some("acct-route".to_string()),
+            auth_json: r#"{"access_token":"access-route"}"#.to_string(),
+            map_gpt53_codex_to_spark: true,
+            created_at_ms: 100,
+        })
+        .expect("create codex account");
+        repo.create_admin_account_group(&llm_access_core::store::NewAdminAccountGroup {
+            id: "group-route".to_string(),
+            provider_type: "codex".to_string(),
+            name: "route group".to_string(),
+            account_names: vec!["codex-route".to_string()],
+            created_at_ms: 100,
+        })
+        .expect("create group");
+        repo.create_admin_key(&llm_access_core::store::NewAdminKey {
+            id: "key-route".to_string(),
+            name: "route key".to_string(),
+            secret: "sfk_route".to_string(),
+            key_hash: "hash-route".to_string(),
+            public_visible: false,
+            quota_billable_limit: 1000,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            created_at_ms: 100,
+        })
+        .expect("create key");
+        repo.patch_admin_key("key-route", &llm_access_core::store::AdminKeyPatch {
+            name: None,
+            status: None,
+            public_visible: None,
+            quota_billable_limit: None,
+            route_strategy: Some(Some("fixed".to_string())),
+            account_group_id: Some(Some("group-route".to_string())),
+            fixed_account_name: None,
+            auto_account_names: None,
+            model_name_map: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            updated_at_ms: 200,
+        })
+        .expect("patch key route");
+
+        let route = repo
+            .resolve_provider_codex_route(&llm_access_core::store::AuthenticatedKey {
+                key_id: "key-route".to_string(),
+                key_name: "route key".to_string(),
+                provider_type: "codex".to_string(),
+                protocol_family: "openai".to_string(),
+                status: "active".to_string(),
+                quota_billable_limit: 1000,
+                billable_tokens_used: 0,
+            })
+            .expect("resolve route")
+            .expect("route exists");
+        assert_eq!(route.account_name, "codex-route");
+        assert_eq!(route.auth_json, r#"{"access_token":"access-route"}"#);
+        assert!(route.map_gpt53_codex_to_spark);
     }
 
     #[test]

@@ -5,11 +5,12 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context};
 use llm_access_core::store::{
     AdminAccountGroupStore, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,
-    AdminProxyStore, ControlStore, EmptyAdminAccountGroupStore, EmptyAdminCodexAccountStore,
-    EmptyAdminConfigStore, EmptyAdminKeyStore, EmptyAdminProxyStore, EmptyPublicAccessStore,
+    AdminProxyStore, AdminReviewQueueStore, ControlStore, EmptyAdminAccountGroupStore,
+    EmptyAdminCodexAccountStore, EmptyAdminConfigStore, EmptyAdminKeyStore, EmptyAdminProxyStore,
+    EmptyAdminReviewQueueStore, EmptyProviderRouteStore, EmptyPublicAccessStore,
     EmptyPublicCommunityStore, EmptyPublicStatusStore, EmptyPublicSubmissionStore,
-    EmptyPublicUsageStore, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
-    PublicSubmissionStore, PublicUsageStore,
+    EmptyPublicUsageStore, ProviderRouteStore, PublicAccessStore, PublicCommunityStore,
+    PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
 };
 use llm_access_store::repository::SqliteControlRepository;
 
@@ -19,11 +20,13 @@ use crate::config::StorageConfig;
 #[derive(Clone)]
 pub struct LlmAccessRuntime {
     control_store: Arc<dyn ControlStore>,
+    provider_route_store: Arc<dyn ProviderRouteStore>,
     admin_config_store: Arc<dyn AdminConfigStore>,
     admin_key_store: Arc<dyn AdminKeyStore>,
     admin_account_group_store: Arc<dyn AdminAccountGroupStore>,
     admin_proxy_store: Arc<dyn AdminProxyStore>,
     admin_codex_account_store: Arc<dyn AdminCodexAccountStore>,
+    admin_review_queue_store: Arc<dyn AdminReviewQueueStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
@@ -35,11 +38,13 @@ pub struct LlmAccessRuntime {
 /// standalone service grows.
 struct LlmAccessStores {
     control_store: Arc<dyn ControlStore>,
+    provider_route_store: Arc<dyn ProviderRouteStore>,
     admin_config_store: Arc<dyn AdminConfigStore>,
     admin_key_store: Arc<dyn AdminKeyStore>,
     admin_account_group_store: Arc<dyn AdminAccountGroupStore>,
     admin_proxy_store: Arc<dyn AdminProxyStore>,
     admin_codex_account_store: Arc<dyn AdminCodexAccountStore>,
+    admin_review_queue_store: Arc<dyn AdminReviewQueueStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
@@ -52,11 +57,13 @@ impl LlmAccessRuntime {
     pub fn new(control_store: Arc<dyn ControlStore>) -> Self {
         Self::with_stores(LlmAccessStores {
             control_store,
+            provider_route_store: Arc::new(EmptyProviderRouteStore),
             admin_config_store: Arc::new(EmptyAdminConfigStore),
             admin_key_store: Arc::new(EmptyAdminKeyStore),
             admin_account_group_store: Arc::new(EmptyAdminAccountGroupStore),
             admin_proxy_store: Arc::new(EmptyAdminProxyStore),
             admin_codex_account_store: Arc::new(EmptyAdminCodexAccountStore),
+            admin_review_queue_store: Arc::new(EmptyAdminReviewQueueStore),
             public_access_store: Arc::new(EmptyPublicAccessStore),
             public_community_store: Arc::new(EmptyPublicCommunityStore),
             public_usage_store: Arc::new(EmptyPublicUsageStore),
@@ -69,11 +76,13 @@ impl LlmAccessRuntime {
     fn with_stores(stores: LlmAccessStores) -> Self {
         Self {
             control_store: stores.control_store,
+            provider_route_store: stores.provider_route_store,
             admin_config_store: stores.admin_config_store,
             admin_key_store: stores.admin_key_store,
             admin_account_group_store: stores.admin_account_group_store,
             admin_proxy_store: stores.admin_proxy_store,
             admin_codex_account_store: stores.admin_codex_account_store,
+            admin_review_queue_store: stores.admin_review_queue_store,
             public_access_store: stores.public_access_store,
             public_community_store: stores.public_community_store,
             public_usage_store: stores.public_usage_store,
@@ -87,11 +96,13 @@ impl LlmAccessRuntime {
         validate_state_root(config)?;
         let repository = Arc::new(SqliteControlRepository::open_path(&config.sqlite_control)?);
         let control_store: Arc<dyn ControlStore> = repository.clone();
+        let provider_route_store: Arc<dyn ProviderRouteStore> = repository.clone();
         let admin_config_store: Arc<dyn AdminConfigStore> = repository.clone();
         let admin_key_store: Arc<dyn AdminKeyStore> = repository.clone();
         let admin_account_group_store: Arc<dyn AdminAccountGroupStore> = repository.clone();
         let admin_proxy_store: Arc<dyn AdminProxyStore> = repository.clone();
         let admin_codex_account_store: Arc<dyn AdminCodexAccountStore> = repository.clone();
+        let admin_review_queue_store: Arc<dyn AdminReviewQueueStore> = repository.clone();
         let public_access_store: Arc<dyn PublicAccessStore> = repository.clone();
         let public_community_store: Arc<dyn PublicCommunityStore> = repository.clone();
         let public_usage_store: Arc<dyn PublicUsageStore> = repository.clone();
@@ -99,11 +110,13 @@ impl LlmAccessRuntime {
         let public_status_store: Arc<dyn PublicStatusStore> = repository;
         Ok(Self::with_stores(LlmAccessStores {
             control_store,
+            provider_route_store,
             admin_config_store,
             admin_key_store,
             admin_account_group_store,
             admin_proxy_store,
             admin_codex_account_store,
+            admin_review_queue_store,
             public_access_store,
             public_community_store,
             public_usage_store,
@@ -115,6 +128,11 @@ impl LlmAccessRuntime {
     /// Shared control store used by request handlers.
     pub fn control_store(&self) -> Arc<dyn ControlStore> {
         Arc::clone(&self.control_store)
+    }
+
+    /// Provider route store used by data-plane dispatch.
+    pub fn provider_route_store(&self) -> Arc<dyn ProviderRouteStore> {
+        Arc::clone(&self.provider_route_store)
     }
 
     /// Admin config store used by local admin compatibility endpoints.
@@ -140,6 +158,11 @@ impl LlmAccessRuntime {
     /// Admin Codex account store used by local admin compatibility endpoints.
     pub fn admin_codex_account_store(&self) -> Arc<dyn AdminCodexAccountStore> {
         Arc::clone(&self.admin_codex_account_store)
+    }
+
+    /// Admin review queue store used by local admin compatibility endpoints.
+    pub fn admin_review_queue_store(&self) -> Arc<dyn AdminReviewQueueStore> {
+        Arc::clone(&self.admin_review_queue_store)
     }
 
     /// Public access store used by unauthenticated compatibility endpoints.

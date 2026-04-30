@@ -31,8 +31,8 @@ use axum::{
 use config::{CliCommand, ServeConfig, StorageConfig};
 use llm_access_core::store::{
     AdminAccountGroupStore, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,
-    AdminProxyStore, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
-    PublicSubmissionStore, PublicUsageStore,
+    AdminProxyStore, AdminReviewQueueStore, PublicAccessStore, PublicCommunityStore,
+    PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
 };
 use serde::Serialize;
 
@@ -44,6 +44,7 @@ struct HttpState {
     admin_account_group_store: Arc<dyn AdminAccountGroupStore>,
     admin_proxy_store: Arc<dyn AdminProxyStore>,
     admin_codex_account_store: Arc<dyn AdminCodexAccountStore>,
+    admin_review_queue_store: Arc<dyn AdminReviewQueueStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
@@ -75,7 +76,8 @@ pub fn bootstrap_storage(config: &StorageConfig) -> anyhow::Result<()> {
 
 /// Build the HTTP router.
 pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
-    let provider_state = provider::ProviderState::new(runtime.control_store());
+    let provider_state =
+        provider::ProviderState::new(runtime.control_store(), runtime.provider_route_store());
     let state = HttpState {
         provider_state,
         admin_config_store: runtime.admin_config_store(),
@@ -83,6 +85,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         admin_account_group_store: runtime.admin_account_group_store(),
         admin_proxy_store: runtime.admin_proxy_store(),
         admin_codex_account_store: runtime.admin_codex_account_store(),
+        admin_review_queue_store: runtime.admin_review_queue_store(),
         public_access_store: runtime.public_access_store(),
         public_community_store: runtime.public_community_store(),
         public_usage_store: runtime.public_usage_store(),
@@ -142,6 +145,36 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         .route(
             "/admin/llm-gateway/accounts/:name/refresh",
             post(admin::refresh_llm_gateway_account),
+        )
+        .route("/admin/llm-gateway/token-requests", get(admin::list_llm_gateway_token_requests))
+        .route(
+            "/admin/llm-gateway/token-requests/:request_id/approve-and-issue",
+            post(admin::approve_and_issue_llm_gateway_token_request),
+        )
+        .route(
+            "/admin/llm-gateway/token-requests/:request_id/reject",
+            post(admin::reject_llm_gateway_token_request),
+        )
+        .route(
+            "/admin/llm-gateway/account-contribution-requests",
+            get(admin::list_llm_gateway_account_contribution_requests),
+        )
+        .route(
+            "/admin/llm-gateway/account-contribution-requests/:request_id/approve-and-issue",
+            post(admin::approve_and_issue_llm_gateway_account_contribution_request),
+        )
+        .route(
+            "/admin/llm-gateway/account-contribution-requests/:request_id/reject",
+            post(admin::reject_llm_gateway_account_contribution_request),
+        )
+        .route("/admin/llm-gateway/sponsor-requests", get(admin::list_llm_gateway_sponsor_requests))
+        .route(
+            "/admin/llm-gateway/sponsor-requests/:request_id/approve",
+            post(admin::approve_llm_gateway_sponsor_request),
+        )
+        .route(
+            "/admin/llm-gateway/sponsor-requests/:request_id",
+            axum::routing::delete(admin::delete_llm_gateway_sponsor_request),
         )
         .route("/api/llm-gateway/access", get(public::get_llm_gateway_access))
         .route("/api/llm-gateway/model-catalog.json", get(public::get_llm_gateway_model_catalog))
@@ -929,6 +962,83 @@ mod tests {
         assert_eq!(value["status"], "active");
         assert_eq!(value["account_id"], "acct-1");
         assert_eq!(value["proxy_mode"], "inherit");
+    }
+
+    #[tokio::test]
+    async fn router_serves_admin_llm_gateway_review_queues_for_local_request() {
+        for (path, field) in [
+            ("/admin/llm-gateway/token-requests", "requests"),
+            ("/admin/llm-gateway/account-contribution-requests", "requests"),
+            ("/admin/llm-gateway/sponsor-requests", "requests"),
+        ] {
+            let response = test_router()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header(header::HOST, "localhost")
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            let body = to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body");
+            let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+            assert_eq!(value["total"], 0, "{path}");
+            assert_eq!(value[field].as_array().expect("requests array").len(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn router_routes_admin_llm_gateway_review_queue_actions_for_local_request() {
+        for path in [
+            "/admin/llm-gateway/token-requests/missing/approve-and-issue",
+            "/admin/llm-gateway/token-requests/missing/reject",
+            "/admin/llm-gateway/account-contribution-requests/missing/approve-and-issue",
+            "/admin/llm-gateway/account-contribution-requests/missing/reject",
+            "/admin/llm-gateway/sponsor-requests/missing/approve",
+        ] {
+            let response = test_router()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header(header::HOST, "localhost")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(r#"{"admin_note":"checked"}"#))
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+            let body = to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body");
+            let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+            assert_eq!(value["code"], 404, "{path}");
+        }
+
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/admin/llm-gateway/sponsor-requests/missing")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(value["code"], 404);
     }
 
     #[tokio::test]

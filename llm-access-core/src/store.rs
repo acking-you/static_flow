@@ -607,6 +607,17 @@ pub struct AuthenticatedKey {
     pub billable_tokens_used: i64,
 }
 
+/// Resolved Codex account selected for one provider request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderCodexRoute {
+    /// Selected account name.
+    pub account_name: String,
+    /// Persisted auth JSON for the selected account.
+    pub auth_json: String,
+    /// Whether this account maps public gpt-5.3-codex to Spark upstream.
+    pub map_gpt53_codex_to_spark: bool,
+}
+
 impl AuthenticatedKey {
     /// Remaining billable token budget available to this key.
     pub fn remaining_billable(&self) -> i64 {
@@ -780,6 +791,188 @@ pub struct NewPublicSponsorRequest {
     pub created_at_ms: i64,
 }
 
+/// Admin-facing projection of one token request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminTokenRequest {
+    /// Stable request id.
+    pub request_id: String,
+    /// Requester email address.
+    pub requester_email: String,
+    /// Requested billable quota.
+    pub requested_quota_billable_limit: u64,
+    /// Requester explanation.
+    pub request_reason: String,
+    /// Optional frontend page URL.
+    pub frontend_page_url: Option<String>,
+    /// Request status.
+    pub status: String,
+    /// Normalized client IP.
+    pub client_ip: String,
+    /// Client IP region when known.
+    pub ip_region: String,
+    /// Optional admin note.
+    pub admin_note: Option<String>,
+    /// Optional failure reason.
+    pub failure_reason: Option<String>,
+    /// Issued key id when the request has produced a key.
+    pub issued_key_id: Option<String>,
+    /// Issued key name when the request has produced a key.
+    pub issued_key_name: Option<String>,
+    /// Creation timestamp in Unix milliseconds.
+    pub created_at: i64,
+    /// Update timestamp in Unix milliseconds.
+    pub updated_at: i64,
+    /// Processing timestamp in Unix milliseconds.
+    pub processed_at: Option<i64>,
+}
+
+/// Paginated admin response for token requests.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminTokenRequestsPage {
+    /// Total rows matching the filter.
+    pub total: usize,
+    /// Page offset.
+    pub offset: usize,
+    /// Page limit.
+    pub limit: usize,
+    /// Whether a later page exists.
+    pub has_more: bool,
+    /// Current page rows.
+    pub requests: Vec<AdminTokenRequest>,
+}
+
+/// Admin-facing projection of one account contribution request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminAccountContributionRequest {
+    /// Stable request id.
+    pub request_id: String,
+    /// Proposed account display name.
+    pub account_name: String,
+    /// Optional upstream account id.
+    pub account_id: Option<String>,
+    /// Upstream id token.
+    pub id_token: String,
+    /// Upstream access token.
+    pub access_token: String,
+    /// Upstream refresh token.
+    pub refresh_token: String,
+    /// Requester email address.
+    pub requester_email: String,
+    /// Contributor message.
+    pub contributor_message: String,
+    /// Optional GitHub id.
+    pub github_id: Option<String>,
+    /// Optional frontend page URL.
+    pub frontend_page_url: Option<String>,
+    /// Request status.
+    pub status: String,
+    /// Normalized client IP.
+    pub client_ip: String,
+    /// Client IP region when known.
+    pub ip_region: String,
+    /// Optional admin note.
+    pub admin_note: Option<String>,
+    /// Optional failure reason.
+    pub failure_reason: Option<String>,
+    /// Imported account name after approval.
+    pub imported_account_name: Option<String>,
+    /// Issued key id after approval.
+    pub issued_key_id: Option<String>,
+    /// Issued key name after approval.
+    pub issued_key_name: Option<String>,
+    /// Creation timestamp in Unix milliseconds.
+    pub created_at: i64,
+    /// Update timestamp in Unix milliseconds.
+    pub updated_at: i64,
+    /// Processing timestamp in Unix milliseconds.
+    pub processed_at: Option<i64>,
+}
+
+/// Paginated admin response for account contribution requests.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminAccountContributionRequestsPage {
+    /// Total rows matching the filter.
+    pub total: usize,
+    /// Page offset.
+    pub offset: usize,
+    /// Page limit.
+    pub limit: usize,
+    /// Whether a later page exists.
+    pub has_more: bool,
+    /// Current page rows.
+    pub requests: Vec<AdminAccountContributionRequest>,
+}
+
+/// Admin-facing projection of one sponsor request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminSponsorRequest {
+    /// Stable request id.
+    pub request_id: String,
+    /// Requester email address.
+    pub requester_email: String,
+    /// Sponsor message.
+    pub sponsor_message: String,
+    /// Optional display name.
+    pub display_name: Option<String>,
+    /// Optional GitHub id.
+    pub github_id: Option<String>,
+    /// Optional frontend page URL.
+    pub frontend_page_url: Option<String>,
+    /// Request status.
+    pub status: String,
+    /// Normalized client IP.
+    pub client_ip: String,
+    /// Client IP region when known.
+    pub ip_region: String,
+    /// Optional admin note.
+    pub admin_note: Option<String>,
+    /// Optional failure reason.
+    pub failure_reason: Option<String>,
+    /// Payment email timestamp in Unix milliseconds.
+    pub payment_email_sent_at: Option<i64>,
+    /// Creation timestamp in Unix milliseconds.
+    pub created_at: i64,
+    /// Update timestamp in Unix milliseconds.
+    pub updated_at: i64,
+    /// Processing timestamp in Unix milliseconds.
+    pub processed_at: Option<i64>,
+}
+
+/// Paginated admin response for sponsor requests.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminSponsorRequestsPage {
+    /// Total rows matching the filter.
+    pub total: usize,
+    /// Page offset.
+    pub offset: usize,
+    /// Page limit.
+    pub limit: usize,
+    /// Whether a later page exists.
+    pub has_more: bool,
+    /// Current page rows.
+    pub requests: Vec<AdminSponsorRequest>,
+}
+
+/// Normalized admin review-queue pagination query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminReviewQueueQuery {
+    /// Optional status filter.
+    pub status: Option<String>,
+    /// Page limit.
+    pub limit: usize,
+    /// Page offset.
+    pub offset: usize,
+}
+
+/// Admin action metadata applied to one review queue item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminReviewQueueAction {
+    /// Optional admin note.
+    pub admin_note: Option<String>,
+    /// Update timestamp in Unix milliseconds.
+    pub updated_at_ms: i64,
+}
+
 impl PublicAccessKey {
     /// Remaining billable token budget available to this key.
     pub fn remaining_billable(&self) -> i64 {
@@ -809,6 +1002,16 @@ pub trait ControlStore: Send + Sync {
 
     /// Increment usage counters for a key after a usage event is accepted.
     async fn apply_usage_rollup(&self, event: &UsageEvent) -> anyhow::Result<()>;
+}
+
+/// Provider route/account resolution used by data-plane dispatch.
+#[async_trait]
+pub trait ProviderRouteStore: Send + Sync {
+    /// Resolve the Codex account to use for an authenticated key.
+    async fn resolve_codex_route(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<Option<ProviderCodexRoute>>;
 }
 
 /// Public read-only queries used by unauthenticated compatibility endpoints.
@@ -1005,8 +1208,105 @@ pub trait AdminCodexAccountStore: Send + Sync {
     ) -> anyhow::Result<Option<AdminCodexAccount>>;
 }
 
+/// Admin review queue queries used by the current frontend.
+#[async_trait]
+pub trait AdminReviewQueueStore: Send + Sync {
+    /// Load one token request.
+    async fn get_admin_token_request(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<AdminTokenRequest>>;
+
+    /// List token requests.
+    async fn list_admin_token_requests(
+        &self,
+        query: AdminReviewQueueQuery,
+    ) -> anyhow::Result<AdminTokenRequestsPage>;
+
+    /// Load one account contribution request.
+    async fn get_admin_account_contribution_request(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<AdminAccountContributionRequest>>;
+
+    /// List account contribution requests.
+    async fn list_admin_account_contribution_requests(
+        &self,
+        query: AdminReviewQueueQuery,
+    ) -> anyhow::Result<AdminAccountContributionRequestsPage>;
+
+    /// Load one sponsor request.
+    async fn get_admin_sponsor_request(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<AdminSponsorRequest>>;
+
+    /// List sponsor requests.
+    async fn list_admin_sponsor_requests(
+        &self,
+        query: AdminReviewQueueQuery,
+    ) -> anyhow::Result<AdminSponsorRequestsPage>;
+
+    /// Issue a token request and create the key when needed.
+    async fn issue_admin_token_request(
+        &self,
+        request_id: &str,
+        key: Option<NewAdminKey>,
+        action: AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminTokenRequest>>;
+
+    /// Reject a token request and disable any partially issued key.
+    async fn reject_admin_token_request(
+        &self,
+        request_id: &str,
+        action: AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminTokenRequest>>;
+
+    /// Issue an account contribution request and create account, group, and key
+    /// records when needed.
+    async fn issue_admin_account_contribution_request(
+        &self,
+        request_id: &str,
+        account: Option<NewAdminCodexAccount>,
+        account_group: Option<NewAdminAccountGroup>,
+        key: Option<NewAdminKey>,
+        action: AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminAccountContributionRequest>>;
+
+    /// Reject an account contribution request and disable/remove partial
+    /// records.
+    async fn reject_admin_account_contribution_request(
+        &self,
+        request_id: &str,
+        action: AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminAccountContributionRequest>>;
+
+    /// Approve one sponsor request.
+    async fn approve_admin_sponsor_request(
+        &self,
+        request_id: &str,
+        action: AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminSponsorRequest>>;
+
+    /// Delete one sponsor request from admin review/history.
+    async fn delete_admin_sponsor_request(&self, request_id: &str) -> anyhow::Result<bool>;
+}
+
 /// Empty public-access store used by isolated unit tests.
 pub struct EmptyPublicAccessStore;
+
+/// Empty provider route store used by isolated unit tests.
+pub struct EmptyProviderRouteStore;
+
+#[async_trait]
+impl ProviderRouteStore for EmptyProviderRouteStore {
+    async fn resolve_codex_route(
+        &self,
+        _key: &AuthenticatedKey,
+    ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+        Ok(None)
+    }
+}
 
 #[async_trait]
 impl PublicAccessStore for EmptyPublicAccessStore {
@@ -1312,6 +1612,120 @@ impl AdminCodexAccountStore for EmptyAdminCodexAccountStore {
         _refreshed_at_ms: i64,
     ) -> anyhow::Result<Option<AdminCodexAccount>> {
         Ok(None)
+    }
+}
+
+/// Empty admin review queue store used by isolated unit tests.
+pub struct EmptyAdminReviewQueueStore;
+
+#[async_trait]
+impl AdminReviewQueueStore for EmptyAdminReviewQueueStore {
+    async fn get_admin_token_request(
+        &self,
+        _request_id: &str,
+    ) -> anyhow::Result<Option<AdminTokenRequest>> {
+        Ok(None)
+    }
+
+    async fn list_admin_token_requests(
+        &self,
+        query: AdminReviewQueueQuery,
+    ) -> anyhow::Result<AdminTokenRequestsPage> {
+        Ok(AdminTokenRequestsPage {
+            total: 0,
+            offset: query.offset,
+            limit: query.limit,
+            has_more: false,
+            requests: Vec::new(),
+        })
+    }
+
+    async fn get_admin_account_contribution_request(
+        &self,
+        _request_id: &str,
+    ) -> anyhow::Result<Option<AdminAccountContributionRequest>> {
+        Ok(None)
+    }
+
+    async fn list_admin_account_contribution_requests(
+        &self,
+        query: AdminReviewQueueQuery,
+    ) -> anyhow::Result<AdminAccountContributionRequestsPage> {
+        Ok(AdminAccountContributionRequestsPage {
+            total: 0,
+            offset: query.offset,
+            limit: query.limit,
+            has_more: false,
+            requests: Vec::new(),
+        })
+    }
+
+    async fn get_admin_sponsor_request(
+        &self,
+        _request_id: &str,
+    ) -> anyhow::Result<Option<AdminSponsorRequest>> {
+        Ok(None)
+    }
+
+    async fn list_admin_sponsor_requests(
+        &self,
+        query: AdminReviewQueueQuery,
+    ) -> anyhow::Result<AdminSponsorRequestsPage> {
+        Ok(AdminSponsorRequestsPage {
+            total: 0,
+            offset: query.offset,
+            limit: query.limit,
+            has_more: false,
+            requests: Vec::new(),
+        })
+    }
+
+    async fn issue_admin_token_request(
+        &self,
+        _request_id: &str,
+        _key: Option<NewAdminKey>,
+        _action: AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminTokenRequest>> {
+        Ok(None)
+    }
+
+    async fn reject_admin_token_request(
+        &self,
+        _request_id: &str,
+        _action: AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminTokenRequest>> {
+        Ok(None)
+    }
+
+    async fn issue_admin_account_contribution_request(
+        &self,
+        _request_id: &str,
+        _account: Option<NewAdminCodexAccount>,
+        _account_group: Option<NewAdminAccountGroup>,
+        _key: Option<NewAdminKey>,
+        _action: AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminAccountContributionRequest>> {
+        Ok(None)
+    }
+
+    async fn reject_admin_account_contribution_request(
+        &self,
+        _request_id: &str,
+        _action: AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminAccountContributionRequest>> {
+        Ok(None)
+    }
+
+    async fn approve_admin_sponsor_request(
+        &self,
+        _request_id: &str,
+        _action: AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminSponsorRequest>> {
+        Ok(None)
+    }
+
+    async fn delete_admin_sponsor_request(&self, _request_id: &str) -> anyhow::Result<bool> {
+        Ok(false)
     }
 }
 

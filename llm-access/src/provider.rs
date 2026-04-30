@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::{
-    body::Body,
+    body::{to_bytes, Body},
     extract::State,
     http::{header, HeaderMap, Method, Request, StatusCode},
     response::{IntoResponse, Response},
@@ -12,29 +12,38 @@ use axum::{
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType},
     routes::provider_route_requirement,
-    store::{AuthenticatedKey, ControlStore},
+    store::{AuthenticatedKey, ControlStore, ProviderRouteStore},
 };
+use serde_json::Value;
+
+const MAX_PROVIDER_PROXY_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 /// Shared provider request state.
 #[derive(Clone)]
 pub struct ProviderState {
     control_store: Arc<dyn ControlStore>,
+    route_store: Arc<dyn ProviderRouteStore>,
     dispatcher: Arc<dyn ProviderDispatcher>,
 }
 
 impl ProviderState {
     /// Create provider request state.
-    pub fn new(control_store: Arc<dyn ControlStore>) -> Self {
-        Self::with_dispatcher(control_store, Arc::new(DefaultProviderDispatcher))
+    pub fn new(
+        control_store: Arc<dyn ControlStore>,
+        route_store: Arc<dyn ProviderRouteStore>,
+    ) -> Self {
+        Self::with_dispatcher(control_store, route_store, Arc::new(DefaultProviderDispatcher))
     }
 
     /// Create provider request state with an explicit dispatcher.
     pub fn with_dispatcher(
         control_store: Arc<dyn ControlStore>,
+        route_store: Arc<dyn ProviderRouteStore>,
         dispatcher: Arc<dyn ProviderDispatcher>,
     ) -> Self {
         Self {
             control_store,
+            route_store,
             dispatcher,
         }
     }
@@ -44,19 +53,103 @@ impl ProviderState {
 #[async_trait]
 pub trait ProviderDispatcher: Send + Sync {
     /// Dispatch an authenticated request to the selected provider runtime.
-    async fn dispatch(&self, key: AuthenticatedKey, request: Request<Body>) -> Response;
+    async fn dispatch(
+        &self,
+        key: AuthenticatedKey,
+        request: Request<Body>,
+        route_store: Arc<dyn ProviderRouteStore>,
+    ) -> Response;
 }
 
 struct DefaultProviderDispatcher;
 
 #[async_trait]
 impl ProviderDispatcher for DefaultProviderDispatcher {
-    async fn dispatch(&self, key: AuthenticatedKey, request: Request<Body>) -> Response {
+    async fn dispatch(
+        &self,
+        key: AuthenticatedKey,
+        request: Request<Body>,
+        route_store: Arc<dyn ProviderRouteStore>,
+    ) -> Response {
         if should_serve_local_codex_models(&key, &request) {
             return local_codex_models_response();
         }
+        if ProviderType::from_storage_str(&key.provider_type) == Some(ProviderType::Codex) {
+            return dispatch_codex_proxy(key, request, route_store).await;
+        }
         (StatusCode::NOT_IMPLEMENTED, "provider dispatch is not wired").into_response()
     }
+}
+
+async fn dispatch_codex_proxy(
+    key: AuthenticatedKey,
+    request: Request<Body>,
+    route_store: Arc<dyn ProviderRouteStore>,
+) -> Response {
+    let route = match route_store.resolve_codex_route(&key).await {
+        Ok(Some(route)) => route,
+        Ok(None) => {
+            return (StatusCode::SERVICE_UNAVAILABLE, "codex route is not configured")
+                .into_response()
+        },
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "codex route resolution failed")
+                .into_response()
+        },
+    };
+    let Some(access_token) = codex_access_token_from_auth_json(&route.auth_json) else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "codex account auth is missing access_token")
+            .into_response();
+    };
+    let upstream_path = codex_upstream_path_and_query(request.uri().path(), request.uri().query());
+    let upstream_base = std::env::var("CODEX_UPSTREAM_BASE_URL")
+        .map(|value| llm_access_codex::request::normalize_upstream_base_url(&value))
+        .unwrap_or_else(|_| "https://chatgpt.com/backend-api/codex".to_string());
+    let upstream_url = format!("{}{}", upstream_base.trim_end_matches('/'), upstream_path);
+    let method = match reqwest::Method::from_bytes(request.method().as_str().as_bytes()) {
+        Ok(method) => method,
+        Err(_) => return (StatusCode::METHOD_NOT_ALLOWED, "unsupported method").into_response(),
+    };
+    let request_headers = request.headers().clone();
+    let body = match to_bytes(request.into_body(), MAX_PROVIDER_PROXY_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(_) => return (StatusCode::BAD_REQUEST, "request body is too large").into_response(),
+    };
+    let client = reqwest::Client::new();
+    let mut upstream = client
+        .request(method, upstream_url)
+        .bearer_auth(access_token)
+        .body(body.to_vec());
+    for name in [header::CONTENT_TYPE, header::ACCEPT, header::ACCEPT_LANGUAGE, header::USER_AGENT]
+    {
+        if let Some(value) = request_headers.get(&name) {
+            upstream = upstream.header(name.as_str(), value.as_bytes());
+        }
+    }
+    let response = match upstream.send().await {
+        Ok(response) => response,
+        Err(_) => {
+            return (StatusCode::BAD_GATEWAY, "codex upstream request failed").into_response()
+        },
+    };
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .cloned();
+    let bytes = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return (StatusCode::BAD_GATEWAY, "codex upstream response read failed").into_response()
+        },
+    };
+    let mut builder = Response::builder().status(status);
+    if let Some(content_type) = content_type {
+        builder = builder.header(header::CONTENT_TYPE, content_type.as_bytes());
+    }
+    builder.body(Body::from(bytes)).unwrap_or_else(|_| {
+        (StatusCode::BAD_GATEWAY, "codex upstream response build failed").into_response()
+    })
 }
 
 /// Axum entrypoint for provider requests.
@@ -95,7 +188,10 @@ pub async fn provider_entry(state: ProviderState, request: Request<Body>) -> Res
         return quota_exhausted_response(&key);
     }
 
-    state.dispatcher.dispatch(key, request).await
+    state
+        .dispatcher
+        .dispatch(key, request, Arc::clone(&state.route_store))
+        .await
 }
 
 fn presented_secret<'a>(headers: &'a HeaderMap, path: &str) -> Option<&'a str> {
@@ -175,6 +271,33 @@ fn normalized_codex_gateway_path(path: &str) -> Option<&str> {
         .filter(|value| *value == "/v1/models")
 }
 
+fn codex_upstream_path_and_query(path: &str, query: Option<&str>) -> String {
+    let upstream_path = path
+        .strip_prefix("/api/llm-gateway")
+        .or_else(|| path.strip_prefix("/api/codex-gateway"))
+        .unwrap_or(path);
+    match query {
+        Some(query) if !query.is_empty() => format!("{upstream_path}?{query}"),
+        _ => upstream_path.to_string(),
+    }
+}
+
+fn codex_access_token_from_auth_json(auth_json: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(auth_json).ok()?;
+    value
+        .get("access_token")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("tokens")
+                .and_then(|tokens| tokens.get("access_token"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(ToString::to_string)
+}
+
 fn local_codex_models_response() -> Response {
     let body = match llm_access_codex::models::default_openai_models_response_json(now_seconds()) {
         Ok(body) => body,
@@ -212,7 +335,9 @@ mod tests {
         http::{header, Request, StatusCode},
         response::{IntoResponse, Response},
     };
-    use llm_access_core::store::{AuthenticatedKey, ControlStore};
+    use llm_access_core::store::{
+        AuthenticatedKey, ControlStore, EmptyProviderRouteStore, ProviderRouteStore,
+    };
 
     use super::ProviderDispatcher;
 
@@ -289,7 +414,12 @@ mod tests {
 
     #[async_trait]
     impl ProviderDispatcher for CapturingDispatcher {
-        async fn dispatch(&self, key: AuthenticatedKey, request: Request<Body>) -> Response {
+        async fn dispatch(
+            &self,
+            key: AuthenticatedKey,
+            request: Request<Body>,
+            _route_store: Arc<dyn ProviderRouteStore>,
+        ) -> Response {
             self.seen
                 .lock()
                 .expect("dispatcher state")
@@ -310,6 +440,18 @@ mod tests {
         request_with_bearer_to_path("/api/kiro-gateway/v1/messages", secret)
     }
 
+    fn empty_route_store() -> Arc<dyn ProviderRouteStore> {
+        Arc::new(EmptyProviderRouteStore)
+    }
+
+    fn test_state() -> super::ProviderState {
+        super::ProviderState::new(Arc::new(TestStore), empty_route_store())
+    }
+
+    fn test_state_with_dispatcher(dispatcher: Arc<dyn ProviderDispatcher>) -> super::ProviderState {
+        super::ProviderState::with_dispatcher(Arc::new(TestStore), empty_route_store(), dispatcher)
+    }
+
     fn request_with_x_api_key_to_path(path: &str, secret: Option<&str>) -> Request<Body> {
         let mut builder = Request::builder().uri(path);
         if let Some(secret) = secret {
@@ -320,7 +462,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_entry_rejects_missing_bearer_token() {
-        let state = super::ProviderState::new(Arc::new(TestStore));
+        let state = test_state();
         let response = super::provider_entry(state, request_with_bearer(None)).await;
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -328,7 +470,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_entry_rejects_malformed_bearer_token() {
-        let state = super::ProviderState::new(Arc::new(TestStore));
+        let state = test_state();
         for value in ["valid-secret", "Basic valid-secret", "Bearer "] {
             let response =
                 super::provider_entry(state.clone(), request_with_bearer(Some(value))).await;
@@ -338,7 +480,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_entry_rejects_unknown_bearer_token() {
-        let state = super::ProviderState::new(Arc::new(TestStore));
+        let state = test_state();
         let response =
             super::provider_entry(state, request_with_bearer(Some("Bearer unknown-secret"))).await;
 
@@ -348,7 +490,7 @@ mod tests {
     #[tokio::test]
     async fn provider_entry_accepts_x_api_key_on_kiro_routes() {
         let dispatcher = Arc::new(CapturingDispatcher::default());
-        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+        let state = test_state_with_dispatcher(dispatcher.clone());
 
         let response = super::provider_entry(
             state,
@@ -366,7 +508,7 @@ mod tests {
     #[tokio::test]
     async fn provider_entry_rejects_x_api_key_on_codex_routes() {
         let dispatcher = Arc::new(CapturingDispatcher::default());
-        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+        let state = test_state_with_dispatcher(dispatcher.clone());
 
         let response = super::provider_entry(
             state,
@@ -380,7 +522,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_entry_rejects_non_active_key() {
-        let state = super::ProviderState::new(Arc::new(TestStore));
+        let state = test_state();
         let response =
             super::provider_entry(state, request_with_bearer(Some("Bearer paused-secret"))).await;
 
@@ -389,7 +531,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_entry_reports_store_errors_as_server_errors() {
-        let state = super::ProviderState::new(Arc::new(FailingStore));
+        let state = super::ProviderState::new(Arc::new(FailingStore), empty_route_store());
         let response =
             super::provider_entry(state, request_with_bearer(Some("Bearer valid-secret"))).await;
 
@@ -398,7 +540,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_entry_accepts_known_bearer_token_before_dispatch() {
-        let state = super::ProviderState::new(Arc::new(TestStore));
+        let state = test_state();
         let response =
             super::provider_entry(state, request_with_bearer(Some("Bearer valid-secret"))).await;
 
@@ -407,7 +549,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_entry_handler_uses_axum_state() {
-        let state = super::ProviderState::new(Arc::new(TestStore));
+        let state = test_state();
         let response = super::provider_entry_handler(
             axum::extract::State(state),
             request_with_bearer(Some("Bearer valid-secret")),
@@ -420,7 +562,7 @@ mod tests {
     #[tokio::test]
     async fn provider_entry_rejects_kiro_key_on_codex_route_before_dispatch() {
         let dispatcher = Arc::new(CapturingDispatcher::default());
-        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+        let state = test_state_with_dispatcher(dispatcher.clone());
 
         let response = super::provider_entry(
             state,
@@ -435,7 +577,7 @@ mod tests {
     #[tokio::test]
     async fn provider_entry_rejects_codex_key_on_kiro_route_before_dispatch() {
         let dispatcher = Arc::new(CapturingDispatcher::default());
-        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+        let state = test_state_with_dispatcher(dispatcher.clone());
 
         let response = super::provider_entry(
             state,
@@ -453,7 +595,7 @@ mod tests {
     #[tokio::test]
     async fn provider_entry_rejects_exhausted_kiro_key_before_dispatch() {
         let dispatcher = Arc::new(CapturingDispatcher::default());
-        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+        let state = test_state_with_dispatcher(dispatcher.clone());
 
         let response = super::provider_entry(
             state,
@@ -471,7 +613,7 @@ mod tests {
     #[tokio::test]
     async fn provider_entry_rejects_exhausted_codex_key_before_dispatch() {
         let dispatcher = Arc::new(CapturingDispatcher::default());
-        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+        let state = test_state_with_dispatcher(dispatcher.clone());
 
         let response = super::provider_entry(
             state,
@@ -486,7 +628,7 @@ mod tests {
     #[tokio::test]
     async fn provider_entry_dispatches_authenticated_active_requests() {
         let dispatcher = Arc::new(CapturingDispatcher::default());
-        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+        let state = test_state_with_dispatcher(dispatcher.clone());
 
         let response =
             super::provider_entry(state, request_with_bearer(Some("Bearer valid-secret"))).await;
@@ -501,7 +643,7 @@ mod tests {
     #[tokio::test]
     async fn provider_entry_dispatches_codex_key_on_codex_routes() {
         let dispatcher = Arc::new(CapturingDispatcher::default());
-        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+        let state = test_state_with_dispatcher(dispatcher.clone());
 
         let response = super::provider_entry(
             state,
@@ -521,7 +663,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_entry_serves_codex_models_locally_after_auth() {
-        let state = super::ProviderState::new(Arc::new(TestStore));
+        let state = test_state();
         let request = Request::builder()
             .method("GET")
             .uri("/api/llm-gateway/v1/models")

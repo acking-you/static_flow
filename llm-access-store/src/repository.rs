@@ -6,16 +6,19 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use llm_access_core::{
     store::{
-        AdminAccountGroup, AdminAccountGroupPatch, AdminAccountGroupStore, AdminCodexAccount,
-        AdminCodexAccountPatch, AdminCodexAccountStore, AdminConfigStore, AdminKey, AdminKeyPatch,
-        AdminKeyStore, AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch, AdminProxyStore,
-        AdminRuntimeConfig, AuthenticatedKey, CodexRateLimitStatus, ControlStore,
-        NewAdminAccountGroup, NewAdminCodexAccount, NewAdminKey, NewAdminProxyConfig,
+        AdminAccountContributionRequest, AdminAccountContributionRequestsPage, AdminAccountGroup,
+        AdminAccountGroupPatch, AdminAccountGroupStore, AdminCodexAccount, AdminCodexAccountPatch,
+        AdminCodexAccountStore, AdminConfigStore, AdminKey, AdminKeyPatch, AdminKeyStore,
+        AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch, AdminProxyStore,
+        AdminReviewQueueAction, AdminReviewQueueQuery, AdminReviewQueueStore, AdminRuntimeConfig,
+        AdminSponsorRequest, AdminSponsorRequestsPage, AdminTokenRequest, AdminTokenRequestsPage,
+        AuthenticatedKey, CodexRateLimitStatus, ControlStore, NewAdminAccountGroup,
+        NewAdminCodexAccount, NewAdminKey, NewAdminProxyConfig,
         NewPublicAccountContributionRequest, NewPublicSponsorRequest, NewPublicTokenRequest,
-        PublicAccessKey, PublicAccessStore, PublicAccountContribution, PublicCommunityStore,
-        PublicSponsor, PublicStatusStore, PublicSubmissionStore, PublicUsageLookupKey,
-        PublicUsageStore, UsageEventSink, DEFAULT_AUTH_CACHE_TTL_SECONDS,
-        DEFAULT_CODEX_STATUS_REFRESH_SECONDS,
+        ProviderCodexRoute, ProviderRouteStore, PublicAccessKey, PublicAccessStore,
+        PublicAccountContribution, PublicCommunityStore, PublicSponsor, PublicStatusStore,
+        PublicSubmissionStore, PublicUsageLookupKey, PublicUsageStore, UsageEventSink,
+        DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_STATUS_REFRESH_SECONDS,
     },
     usage::UsageEvent,
 };
@@ -441,6 +444,25 @@ impl ControlStore for SqliteControlRepository {
 }
 
 #[async_trait]
+impl ProviderRouteStore for SqliteControlRepository {
+    async fn resolve_codex_route(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+        let key = key.clone();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.resolve_provider_codex_route(&key)
+        })
+        .await
+        .context("sqlite control repository provider codex route task failed")?
+    }
+}
+
+#[async_trait]
 impl UsageEventSink for SqliteControlRepository {
     async fn append_usage_event(&self, event: &UsageEvent) -> anyhow::Result<()> {
         self.apply_usage_rollup(event).await
@@ -572,6 +594,212 @@ impl PublicSubmissionStore for SqliteControlRepository {
         })
         .await
         .context("sqlite control repository public sponsor request task failed")?
+    }
+}
+
+#[async_trait]
+impl AdminReviewQueueStore for SqliteControlRepository {
+    async fn get_admin_token_request(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<AdminTokenRequest>> {
+        let request_id = request_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.get_admin_token_request(&request_id)
+        })
+        .await
+        .context("sqlite control repository admin token request read task failed")?
+    }
+
+    async fn list_admin_token_requests(
+        &self,
+        query: AdminReviewQueueQuery,
+    ) -> anyhow::Result<AdminTokenRequestsPage> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.list_admin_token_requests(&query)
+        })
+        .await
+        .context("sqlite control repository admin token requests task failed")?
+    }
+
+    async fn get_admin_account_contribution_request(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<AdminAccountContributionRequest>> {
+        let request_id = request_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.get_admin_account_contribution_request(&request_id)
+        })
+        .await
+        .context("sqlite control repository admin account contribution request read task failed")?
+    }
+
+    async fn list_admin_account_contribution_requests(
+        &self,
+        query: AdminReviewQueueQuery,
+    ) -> anyhow::Result<AdminAccountContributionRequestsPage> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.list_admin_account_contribution_requests(&query)
+        })
+        .await
+        .context("sqlite control repository admin account contribution requests task failed")?
+    }
+
+    async fn get_admin_sponsor_request(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<AdminSponsorRequest>> {
+        let request_id = request_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.get_admin_sponsor_request(&request_id)
+        })
+        .await
+        .context("sqlite control repository admin sponsor request read task failed")?
+    }
+
+    async fn list_admin_sponsor_requests(
+        &self,
+        query: AdminReviewQueueQuery,
+    ) -> anyhow::Result<AdminSponsorRequestsPage> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.list_admin_sponsor_requests(&query)
+        })
+        .await
+        .context("sqlite control repository admin sponsor requests task failed")?
+    }
+
+    async fn issue_admin_token_request(
+        &self,
+        request_id: &str,
+        key: Option<NewAdminKey>,
+        action: AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminTokenRequest>> {
+        let request_id = request_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.issue_admin_token_request(&request_id, key.as_ref(), &action)
+        })
+        .await
+        .context("sqlite control repository issue admin token request task failed")?
+    }
+
+    async fn reject_admin_token_request(
+        &self,
+        request_id: &str,
+        action: AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminTokenRequest>> {
+        let request_id = request_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.reject_admin_token_request(&request_id, &action)
+        })
+        .await
+        .context("sqlite control repository reject admin token request task failed")?
+    }
+
+    async fn issue_admin_account_contribution_request(
+        &self,
+        request_id: &str,
+        account: Option<NewAdminCodexAccount>,
+        account_group: Option<NewAdminAccountGroup>,
+        key: Option<NewAdminKey>,
+        action: AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminAccountContributionRequest>> {
+        let request_id = request_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.issue_admin_account_contribution_request(
+                &request_id,
+                account.as_ref(),
+                account_group.as_ref(),
+                key.as_ref(),
+                &action,
+            )
+        })
+        .await
+        .context("sqlite control repository issue admin account contribution request task failed")?
+    }
+
+    async fn reject_admin_account_contribution_request(
+        &self,
+        request_id: &str,
+        action: AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminAccountContributionRequest>> {
+        let request_id = request_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.reject_admin_account_contribution_request(&request_id, &action)
+        })
+        .await
+        .context(
+            "sqlite control repository reject admin account contribution request task failed",
+        )?
+    }
+
+    async fn approve_admin_sponsor_request(
+        &self,
+        request_id: &str,
+        action: AdminReviewQueueAction,
+    ) -> anyhow::Result<Option<AdminSponsorRequest>> {
+        let request_id = request_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.approve_admin_sponsor_request(&request_id, &action)
+        })
+        .await
+        .context("sqlite control repository approve admin sponsor request task failed")?
+    }
+
+    async fn delete_admin_sponsor_request(&self, request_id: &str) -> anyhow::Result<bool> {
+        let request_id = request_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.delete_admin_sponsor_request(&request_id)
+        })
+        .await
+        .context("sqlite control repository delete admin sponsor request task failed")?
     }
 }
 

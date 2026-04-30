@@ -16,6 +16,7 @@ llm-access-core = { path = "../llm-access-core" }
 llm-access-kiro = { path = "../llm-access-kiro" }
 llm-access-store = { path = "../llm-access-store" }
 lettre = { version = "0.11", default-features = false, features = ["builder"] }
+reqwest = { workspace = true, features = ["stream"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
