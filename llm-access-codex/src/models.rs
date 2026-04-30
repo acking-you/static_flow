@@ -3,7 +3,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{anyhow, Result};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::{
     instructions::codex_default_instructions, types::GatewayModelDescriptor, GPT53_CODEX_MODEL_ID,
@@ -118,6 +118,52 @@ pub fn normalize_public_model_catalog_value(
     }
     *models = chosen.into_iter().map(|(_, item)| item).collect();
     Ok(value)
+}
+
+/// Build the standalone service's default public model catalog.
+pub fn default_public_model_catalog_value() -> Result<Value> {
+    normalize_public_model_catalog_value(
+        json!({
+            "models": [
+                {
+                    "slug": "gpt-5.5",
+                    "display_name": "gpt-5.5",
+                    "visibility": "list",
+                    "supported_in_api": true
+                },
+                {
+                    "slug": "gpt-5.5-mini",
+                    "display_name": "gpt-5.5-mini",
+                    "visibility": "list",
+                    "supported_in_api": true
+                },
+                {
+                    "slug": "gpt-5.4",
+                    "display_name": "gpt-5.4",
+                    "visibility": "list",
+                    "supported_in_api": true
+                },
+                {
+                    "slug": "gpt-5.4-mini",
+                    "display_name": "gpt-5.4-mini",
+                    "visibility": "list",
+                    "supported_in_api": true
+                },
+                {
+                    "slug": "gpt-5.3-codex",
+                    "display_name": "gpt-5.3-codex",
+                    "visibility": "list",
+                    "supported_in_api": true
+                }
+            ]
+        }),
+        false,
+    )
+}
+
+/// Encode the standalone service's default public model catalog as JSON.
+pub fn default_public_model_catalog_json() -> Result<Vec<u8>> {
+    Ok(serde_json::to_vec(&default_public_model_catalog_value()?)?)
 }
 
 #[cfg(test)]
@@ -262,5 +308,22 @@ mod tests {
             .expect_err("payload without models array should fail");
 
         assert!(err.to_string().contains("models array"));
+    }
+
+    #[test]
+    fn default_public_model_catalog_injects_instructions() {
+        let value = super::default_public_model_catalog_value()
+            .expect("default model catalog should build");
+        let models = value["models"]
+            .as_array()
+            .expect("models should be an array");
+
+        assert!(models
+            .iter()
+            .any(|item| item["slug"].as_str() == Some("gpt-5.5")));
+        assert!(models.iter().all(|item| item
+            .get("base_instructions")
+            .and_then(serde_json::Value::as_str)
+            == Some(codex_default_instructions())));
     }
 }

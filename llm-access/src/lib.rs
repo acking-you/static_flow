@@ -67,6 +67,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/api/llm-gateway/access", get(public::get_llm_gateway_access))
+        .route("/api/llm-gateway/model-catalog.json", get(public::get_llm_gateway_model_catalog))
         .route("/api/kiro-gateway/access", get(public::get_kiro_gateway_access))
         .route("/v1/chat/completions", post(provider_entry_handler))
         .route("/v1/responses", post(provider_entry_handler))
@@ -253,5 +254,34 @@ mod tests {
         assert!(body.contains(r#""base_url":"https://example.test/api/llm-gateway/v1""#));
         assert!(body.contains(r#""model_catalog_path":"/api/llm-gateway/model-catalog.json""#));
         assert!(body.contains(r#""keys":[]"#));
+    }
+
+    #[tokio::test]
+    async fn router_serves_llm_gateway_model_catalog_without_provider_key() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/llm-gateway/model-catalog.json")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json; charset=utf-8")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains(r#""models":["#));
+        assert!(body.contains(r#""slug":"gpt-5.5""#));
+        assert!(body.contains(r#""base_instructions":"#));
     }
 }

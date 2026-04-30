@@ -6045,6 +6045,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "llm-access-codex",
  "llm-access-core",
  "llm-access-kiro",
  "llm-access-store",

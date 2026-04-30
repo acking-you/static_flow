@@ -313,6 +313,10 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
   standalone runtime state. The LLM access response reads active public keys
   and rollup counters from SQLite; the Kiro response preserves the current
   backend behavior of exposing an empty public account list.
+- `llm-access` now serves `/api/llm-gateway/model-catalog.json` directly from
+  the standalone service. `llm-access-codex` owns the default public Codex
+  catalog construction and injects the embedded base instructions through the
+  same normalization path used by imported upstream catalogs.
 - `llm-access-kiro` now owns Kiro auth-file persistence, local Kiro CLI import,
   deterministic machine-id derivation, and token-count estimation. The backend
   keeps compatibility modules that re-export those implementations.

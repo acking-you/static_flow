@@ -1,6 +1,7 @@
 //! Public unauthenticated compatibility endpoints.
 
 use axum::{
+    body::Body,
     extract::State,
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -121,6 +122,26 @@ pub(crate) async fn get_llm_gateway_access(
         generated_at: now_ms(),
     })
     .into_response()
+}
+
+pub(crate) async fn get_llm_gateway_model_catalog() -> Response {
+    let body = match llm_access_codex::models::default_public_model_catalog_json() {
+        Ok(body) => body,
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to build model catalog")
+                .into_response()
+        },
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(header::CONTENT_DISPOSITION, r#"inline; filename="model_catalog.json""#)
+        .body(Body::from(body))
+        .unwrap_or_else(|_| {
+            (StatusCode::INTERNAL_SERVER_ERROR, "failed to build model catalog response")
+                .into_response()
+        })
 }
 
 pub(crate) async fn get_kiro_gateway_access(

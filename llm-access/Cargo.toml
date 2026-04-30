@@ -11,6 +11,7 @@ workspace = true
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
+llm-access-codex = { path = "../llm-access-codex" }
 llm-access-core = { path = "../llm-access-core" }
 llm-access-kiro = { path = "../llm-access-kiro" }
 llm-access-store = { path = "../llm-access-store" }
