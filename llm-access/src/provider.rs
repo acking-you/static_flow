@@ -87,6 +87,9 @@ pub async fn provider_entry(state: ProviderState, request: Request<Body>) -> Res
     if !key_matches_route(&key, request.uri().path()) {
         return (StatusCode::FORBIDDEN, "llm key does not match provider route").into_response();
     }
+    if is_quota_exhausted(&key) {
+        return quota_exhausted_response(&key);
+    }
 
     state.dispatcher.dispatch(key, request).await
 }
@@ -118,6 +121,18 @@ fn key_matches_route(key: &AuthenticatedKey, path: &str) -> bool {
             == Some(requirement.protocol_family)
 }
 
+fn is_quota_exhausted(key: &AuthenticatedKey) -> bool {
+    key.remaining_billable() <= 0
+}
+
+fn quota_exhausted_response(key: &AuthenticatedKey) -> Response {
+    if ProviderType::from_storage_str(&key.provider_type) == Some(ProviderType::Kiro) {
+        (StatusCode::PAYMENT_REQUIRED, "Kiro key quota exhausted").into_response()
+    } else {
+        (StatusCode::TOO_MANY_REQUESTS, "quota_exceeded").into_response()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -145,8 +160,20 @@ mod tests {
                 "valid-secret" => ("key-1", "test-key", "kiro", "anthropic", "active"),
                 "codex-secret" => ("key-2", "codex-key", "codex", "openai", "active"),
                 "paused-secret" => ("key-1", "test-key", "kiro", "anthropic", "paused"),
+                "exhausted-kiro-secret" => {
+                    ("key-3", "exhausted-kiro-key", "kiro", "anthropic", "active")
+                },
+                "exhausted-codex-secret" => {
+                    ("key-4", "exhausted-codex-key", "codex", "openai", "active")
+                },
                 _ => return Ok(None),
             };
+            let billable_tokens_used =
+                if matches!(secret, "exhausted-kiro-secret" | "exhausted-codex-secret") {
+                    100
+                } else {
+                    0
+                };
             Ok(Some(AuthenticatedKey {
                 key_id: key_id.to_string(),
                 key_name: key_name.to_string(),
@@ -154,7 +181,7 @@ mod tests {
                 protocol_family: protocol_family.to_string(),
                 status: status.to_string(),
                 quota_billable_limit: 100,
-                billable_tokens_used: 0,
+                billable_tokens_used,
             }))
         }
 
@@ -310,6 +337,39 @@ mod tests {
         .await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(dispatcher.seen.lock().expect("dispatcher state").is_empty());
+    }
+
+    #[tokio::test]
+    async fn provider_entry_rejects_exhausted_kiro_key_before_dispatch() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+
+        let response = super::provider_entry(
+            state,
+            request_with_bearer_to_path(
+                "/api/kiro-gateway/v1/messages",
+                Some("Bearer exhausted-kiro-secret"),
+            ),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+        assert!(dispatcher.seen.lock().expect("dispatcher state").is_empty());
+    }
+
+    #[tokio::test]
+    async fn provider_entry_rejects_exhausted_codex_key_before_dispatch() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+
+        let response = super::provider_entry(
+            state,
+            request_with_bearer_to_path("/v1/responses", Some("Bearer exhausted-codex-secret")),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert!(dispatcher.seen.lock().expect("dispatcher state").is_empty());
     }
 

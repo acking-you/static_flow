@@ -23,6 +23,14 @@ pub struct AuthenticatedKey {
     pub billable_tokens_used: i64,
 }
 
+impl AuthenticatedKey {
+    /// Remaining billable token budget available to this key.
+    pub fn remaining_billable(&self) -> i64 {
+        self.quota_billable_limit
+            .saturating_sub(self.billable_tokens_used)
+    }
+}
+
 /// Control-plane queries used by request handlers.
 #[async_trait]
 pub trait ControlStore: Send + Sync {
