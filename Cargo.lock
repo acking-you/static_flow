@@ -9842,6 +9842,7 @@ dependencies = [
  "hex",
  "lettre",
  "llm-access-codex",
+ "llm-access-core",
  "llm-access-kiro",
  "lopdf",
  "lru 0.12.5",

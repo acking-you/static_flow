@@ -12,9 +12,9 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
+pub use llm_access_core::proxy::{AccountProxyMode, AccountProxySelection};
 use parking_lot::RwLock;
 use reqwest::Proxy;
-use serde::{Deserialize, Serialize};
 use static_flow_shared::llm_gateway_store::{
     now_ms, LlmGatewayProxyBindingRecord, LlmGatewayProxyConfigRecord, LlmGatewayStore,
     LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_PROVIDER_CODEX, LLM_GATEWAY_PROVIDER_KIRO,
@@ -26,58 +26,6 @@ use crate::kiro_gateway::auth_file::{
 };
 
 pub const DEFAULT_UPSTREAM_PROXY_URL: &str = "http://127.0.0.1:11111";
-
-/// Account-level proxy override mode stored alongside Codex/Kiro account
-/// settings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountProxyMode {
-    /// Reuse the existing provider-level binding or env fallback.
-    #[default]
-    Inherit,
-    /// Bypass the shared upstream proxy and connect directly.
-    Direct,
-    /// Pin this account to one reusable shared proxy config.
-    Fixed,
-}
-
-impl AccountProxyMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Inherit => "inherit",
-            Self::Direct => "direct",
-            Self::Fixed => "fixed",
-        }
-    }
-}
-
-/// Account-level proxy selection persisted on Codex/Kiro account records.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct AccountProxySelection {
-    #[serde(default)]
-    pub proxy_mode: AccountProxyMode,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proxy_config_id: Option<String>,
-}
-
-impl AccountProxySelection {
-    pub fn canonicalize(mut self) -> Self {
-        self.proxy_config_id = self
-            .proxy_config_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-        if self.proxy_mode != AccountProxyMode::Fixed {
-            self.proxy_config_id = None;
-        }
-        self
-    }
-
-    pub fn is_default(&self) -> bool {
-        self.proxy_mode == AccountProxyMode::Inherit && self.proxy_config_id.is_none()
-    }
-}
 
 /// Normalized reqwest client profile used as the cache key for pooled clients.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
