@@ -14,6 +14,7 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration, Utc};
+use llm_access_kiro::config::{KiroRuntimeConfig, KiroRuntimeConfigSource};
 use parking_lot::RwLock;
 use static_flow_shared::llm_gateway_store::LlmGatewayStore;
 use tokio::sync::Mutex;
@@ -38,6 +39,38 @@ const REFRESH_EARLY_MINUTES: i64 = 10;
 const KIRO_USAGE_AWS_SDK_VERSION: &str = "1.0.0";
 const KIRO_IDC_AWS_SDK_VERSION: &str = "3.980.0";
 const KIRO_IDC_AMZ_SDK_REQUEST: &str = "attempt=1; max=4";
+
+struct BackendKiroRuntimeConfigSource {
+    inner: Arc<RwLock<LlmGatewayRuntimeConfig>>,
+}
+
+impl BackendKiroRuntimeConfigSource {
+    fn new(inner: Arc<RwLock<LlmGatewayRuntimeConfig>>) -> Self {
+        Self {
+            inner,
+        }
+    }
+}
+
+impl KiroRuntimeConfigSource for BackendKiroRuntimeConfigSource {
+    fn snapshot(&self) -> KiroRuntimeConfig {
+        let config = self.inner.read();
+        KiroRuntimeConfig {
+            kiro_channel_max_concurrency: config.kiro_channel_max_concurrency,
+            kiro_channel_min_start_interval_ms: config.kiro_channel_min_start_interval_ms,
+            kiro_status_refresh_min_interval_seconds: config
+                .kiro_status_refresh_min_interval_seconds,
+            kiro_status_refresh_max_interval_seconds: config
+                .kiro_status_refresh_max_interval_seconds,
+            kiro_status_account_jitter_max_seconds: config.kiro_status_account_jitter_max_seconds,
+            kiro_prefix_cache_mode: config.kiro_prefix_cache_mode.clone(),
+            kiro_prefix_cache_max_tokens: config.kiro_prefix_cache_max_tokens,
+            kiro_prefix_cache_entry_ttl_seconds: config.kiro_prefix_cache_entry_ttl_seconds,
+            kiro_conversation_anchor_max_entries: config.kiro_conversation_anchor_max_entries,
+            kiro_conversation_anchor_ttl_seconds: config.kiro_conversation_anchor_ttl_seconds,
+        }
+    }
+}
 
 /// Permanent refresh-token failure returned by the upstream OAuth/OIDC
 /// endpoints. Unlike transient refresh errors, this means the stored
@@ -87,7 +120,7 @@ pub struct KiroGatewayRuntimeState {
     status_refresh_locks: Arc<RwLock<HashMap<String, Arc<Mutex<()>>>>>,
     pub(crate) request_scheduler: Arc<KiroRequestScheduler>,
     pub(crate) cache_simulator: Arc<KiroCacheSimulator>,
-    pub(crate) runtime_config: Arc<RwLock<LlmGatewayRuntimeConfig>>,
+    pub(crate) runtime_config: Arc<dyn KiroRuntimeConfigSource>,
     pub(crate) upstream_proxy_registry: Arc<UpstreamProxyRegistry>,
 }
 
@@ -99,7 +132,8 @@ impl KiroGatewayRuntimeState {
         runtime_config: Arc<RwLock<LlmGatewayRuntimeConfig>>,
         upstream_proxy_registry: Arc<UpstreamProxyRegistry>,
     ) -> Result<Self> {
-        let scheduler_defaults = runtime_config.read().clone();
+        let runtime_config_source = Arc::new(BackendKiroRuntimeConfigSource::new(runtime_config));
+        let scheduler_defaults = runtime_config_source.snapshot();
         let token_manager = Arc::new(KiroTokenManager::new(upstream_proxy_registry.clone()).await?);
         let migrated_accounts = token_manager
             .backfill_missing_scheduler_limits(
@@ -127,7 +161,7 @@ impl KiroGatewayRuntimeState {
             status_refresh_locks: Arc::new(RwLock::new(HashMap::new())),
             request_scheduler: KiroRequestScheduler::new(),
             cache_simulator: Arc::new(KiroCacheSimulator::default()),
-            runtime_config,
+            runtime_config: runtime_config_source,
             upstream_proxy_registry,
         })
     }

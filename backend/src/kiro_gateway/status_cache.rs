@@ -14,6 +14,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
+use llm_access_kiro::config::KiroRuntimeConfig;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use static_flow_shared::llm_gateway_store::now_ms;
@@ -41,7 +42,7 @@ pub(crate) enum RequestEligibilityBlockReason {
     MinimumRemainingCreditsThreshold,
 }
 
-fn next_kiro_refresh_delay(config: &crate::state::LlmGatewayRuntimeConfig) -> Duration {
+fn next_kiro_refresh_delay(config: &KiroRuntimeConfig) -> Duration {
     let min_seconds = config
         .kiro_status_refresh_min_interval_seconds
         .min(config.kiro_status_refresh_max_interval_seconds);
@@ -56,7 +57,7 @@ fn next_kiro_refresh_delay(config: &crate::state::LlmGatewayRuntimeConfig) -> Du
     Duration::from_secs(seconds)
 }
 
-fn next_kiro_account_jitter(config: &crate::state::LlmGatewayRuntimeConfig) -> Duration {
+fn next_kiro_account_jitter(config: &KiroRuntimeConfig) -> Duration {
     let max_seconds = config.kiro_status_account_jitter_max_seconds;
     if max_seconds == 0 {
         Duration::ZERO
@@ -151,7 +152,7 @@ pub(crate) fn spawn_status_refresher(
     tokio::spawn(async move {
         loop {
             let delay = {
-                let config = runtime.runtime_config.read().clone();
+                let config = runtime.runtime_config.snapshot();
                 next_kiro_refresh_delay(&config)
             };
             tokio::select! {
@@ -178,7 +179,7 @@ pub(crate) async fn refresh_cached_status(runtime: &Arc<KiroGatewayRuntimeState>
     let previous = runtime.status_cache.read().clone();
     let refresh_interval_seconds = runtime
         .runtime_config
-        .read()
+        .snapshot()
         .kiro_status_refresh_max_interval_seconds;
     let mut next = KiroStatusCacheSnapshot {
         status: STATUS_LOADING.to_string(),
@@ -190,7 +191,7 @@ pub(crate) async fn refresh_cached_status(runtime: &Arc<KiroGatewayRuntimeState>
     for (index, auth) in auths.into_iter().enumerate() {
         if index > 0 {
             let jitter = {
-                let config = runtime.runtime_config.read().clone();
+                let config = runtime.runtime_config.snapshot();
                 next_kiro_account_jitter(&config)
             };
             if !jitter.is_zero() {
@@ -303,7 +304,7 @@ async fn refresh_cached_status_for_account_locked(
     let prior = previous.accounts.get(account_name);
     let refresh_interval_seconds = runtime
         .runtime_config
-        .read()
+        .snapshot()
         .kiro_status_refresh_max_interval_seconds;
 
     let entry = if auth.disabled {
@@ -403,7 +404,7 @@ pub(crate) async fn mark_account_quota_exhausted(
     let error_message = error_message.into();
     let refresh_interval_seconds = runtime
         .runtime_config
-        .read()
+        .snapshot()
         .kiro_status_refresh_max_interval_seconds;
     let snapshot = {
         let mut snapshot = runtime.status_cache.write();
@@ -917,10 +918,10 @@ mod tests {
 
     #[test]
     fn kiro_refresh_interval_draw_uses_configured_bounds() {
-        let config = crate::state::LlmGatewayRuntimeConfig {
+        let config = KiroRuntimeConfig {
             kiro_status_refresh_min_interval_seconds: 240,
             kiro_status_refresh_max_interval_seconds: 300,
-            ..crate::state::LlmGatewayRuntimeConfig::default()
+            ..KiroRuntimeConfig::default()
         };
 
         for _ in 0..64 {

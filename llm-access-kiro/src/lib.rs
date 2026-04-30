@@ -35,6 +35,12 @@ pub mod cache_sim;
     reason = "Extracted Kiro modules preserve the existing backend runtime surface during \
               migration."
 )]
+pub mod config;
+#[allow(
+    missing_docs,
+    reason = "Extracted Kiro modules preserve the existing backend runtime surface during \
+              migration."
+)]
 pub mod local_import;
 #[allow(
     missing_docs,

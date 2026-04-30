@@ -292,6 +292,10 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
 - `llm-access-kiro` now owns Kiro auth-file persistence, local Kiro CLI import,
   deterministic machine-id derivation, and token-count estimation. The backend
   keeps compatibility modules that re-export those implementations.
+- `llm-access-kiro` now exposes the Kiro runtime config contract used by
+  scheduling, status refresh, and cache simulation. The backend adapts its
+  existing shared config into that contract instead of leaking backend state
+  types into Kiro logic.
 
 ### Store Adapter Rule
 
