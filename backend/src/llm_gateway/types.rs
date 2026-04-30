@@ -1,16 +1,14 @@
 use std::{collections::BTreeMap, time::Instant};
 
-use axum::{http::Method, response::Json};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use static_flow_shared::llm_gateway_store::{
-    compute_billable_tokens, LlmGatewayAccountContributionRequestRecord,
-    LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayProxyConfigRecord,
-    LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord, LlmGatewayUsageEventRecord,
-    LlmGatewayUsageEventSummaryRecord,
+pub(crate) use llm_access_codex::types::{
+    ChatStreamMetadata, GatewayResponseAdapter, PreparedGatewayRequest, UsageBreakdown,
 };
-
-use crate::handlers::ErrorResponse;
+use serde::{Deserialize, Serialize};
+use static_flow_shared::llm_gateway_store::{
+    LlmGatewayAccountContributionRequestRecord, LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord,
+    LlmGatewayProxyConfigRecord, LlmGatewaySponsorRequestRecord, LlmGatewayTokenRequestRecord,
+    LlmGatewayUsageEventRecord, LlmGatewayUsageEventSummaryRecord,
+};
 
 /// Public read-only payload rendered by the `/llm-access` page.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -825,48 +823,6 @@ pub struct AdminLlmGatewayUsageQuery {
     pub offset: Option<usize>,
 }
 
-/// Token usage accounting in the billing model used by the gateway.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct UsageBreakdown {
-    pub input_uncached_tokens: u64,
-    pub input_cached_tokens: u64,
-    pub output_tokens: u64,
-    pub usage_missing: bool,
-}
-
-impl UsageBreakdown {
-    pub fn billable_tokens(&self) -> u64 {
-        compute_billable_tokens(
-            self.input_uncached_tokens,
-            self.input_cached_tokens,
-            self.output_tokens,
-        )
-    }
-
-    pub fn billable_tokens_with_multiplier(&self, multiplier: u64) -> u64 {
-        self.billable_tokens().saturating_mul(multiplier.max(1))
-    }
-}
-
-/// Normalized proxy request ready to send to the upstream Codex backend.
-#[derive(Debug, Clone)]
-pub(crate) struct PreparedGatewayRequest {
-    pub original_path: String,
-    pub upstream_path: String,
-    pub method: Method,
-    pub client_request_body: axum::body::Bytes,
-    pub request_body: axum::body::Bytes,
-    pub model: Option<String>,
-    pub client_visible_model: Option<String>,
-    pub wants_stream: bool,
-    pub force_upstream_stream: bool,
-    pub content_type: String,
-    pub response_adapter: GatewayResponseAdapter,
-    pub thread_anchor: Option<String>,
-    pub tool_name_restore_map: BTreeMap<String, String>,
-    pub billable_multiplier: u64,
-}
-
 /// Request diagnostics captured before the upstream call starts.
 ///
 /// Usage accounting happens after the response completes, so the proxy stores
@@ -892,33 +848,6 @@ pub(crate) struct LlmGatewayEventContext {
     pub routing_diagnostics_json: Option<String>,
     pub upstream_headers_at: Option<Instant>,
 }
-
-/// Response adaptation mode selected by the incoming OpenAI-compatible
-/// endpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GatewayResponseAdapter {
-    Responses,
-    ChatCompletions,
-}
-
-/// Internal normalized representation of one upstream model descriptor.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct GatewayModelDescriptor {
-    pub id: String,
-    pub owned_by: &'static str,
-}
-
-/// Stream-scoped metadata needed to fill chat chunk defaults consistently.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ChatStreamMetadata {
-    pub response_id: Option<String>,
-    pub model: Option<String>,
-    pub created: Option<i64>,
-}
-
-pub(crate) type GatewayHandlerResult<T> = Result<T, (axum::http::StatusCode, Json<ErrorResponse>)>;
-pub(crate) type OpenAiChatAdaptedRequest =
-    (serde_json::Map<String, Value>, BTreeMap<String, String>);
 
 // === Account pool types ===
 

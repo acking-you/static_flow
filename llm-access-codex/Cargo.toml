@@ -1,0 +1,23 @@
+[package]
+name = "llm-access-codex"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+bytes = { workspace = true }
+eventsource-stream = "0.2"
+http = { workspace = true }
+reqwest = { workspace = true, features = ["stream", "multipart"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+url = "2.5"
+urlencoding = "2.1"
+zstd = "0.13"

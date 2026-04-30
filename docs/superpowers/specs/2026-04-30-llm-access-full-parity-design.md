@@ -270,6 +270,22 @@ Recommended crate split:
 StaticFlow backend should stop owning provider internals after extraction. It
 can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
 
+## Implementation Status
+
+- `llm-access-core` owns the route-surface and provider-neutral usage
+  contracts.
+- `llm-access-store`, `llm-access-migrations`, and `llm-access-migrator` now
+  cover the initial SQLite control plane, DuckDB usage fact schema, LanceDB
+  snapshot import, and CDC replay tables.
+- `llm-access-kiro` owns the pure Kiro scheduler, parser, wire helpers, cache
+  simulation, cache policy, billable multipliers, Anthropic conversion,
+  streaming, and web-search semantics. Backend modules re-export or delegate to
+  those implementations.
+- `llm-access-codex` owns Codex/OpenAI-compatible request normalization,
+  response/SSE adaptation, usage extraction, embedded default instructions, and
+  model catalog normalization. The StaticFlow backend keeps only transport and
+  runtime orchestration around those shared helpers.
+
 ### Store Adapter Rule
 
 Existing backend logic should be extracted behind storage traits before it is
@@ -376,4 +392,3 @@ real provider target.
 - Exact DuckDB retention and compaction schedule after production cutover.
 - Exact cutover point when LanceDB-backed LLM tables become read-only legacy
   data.
-

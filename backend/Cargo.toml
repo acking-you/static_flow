@@ -43,6 +43,7 @@ memory-stats = "1.2"
 rustc-demangle = "0.1"
 static-flow-shared = { path = "../shared" }
 static-flow-media-types = { path = "../media-types", optional = true }
+llm-access-codex = { path = "../llm-access-codex" }
 llm-access-kiro = { path = "../llm-access-kiro" }
 base64 = "0.22.1"
 bytes = "1.10"

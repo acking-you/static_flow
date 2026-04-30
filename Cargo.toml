@@ -10,6 +10,7 @@ members = [
     "gateway",
     "llm-access",
     "llm-access-core",
+    "llm-access-codex",
     "llm-access-kiro",
     "llm-access-migrations",
     "llm-access-migrator",

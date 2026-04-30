@@ -6,7 +6,6 @@
 //! so the routing layer only needs to depend on one coherent module.
 
 mod activity;
-mod instructions;
 mod models;
 mod request;
 mod response;
@@ -132,7 +131,6 @@ use crate::{
 const DEFAULT_UPSTREAM_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const DEFAULT_WIRE_ORIGINATOR: &str = "codex_cli_rs";
 const MAX_CODEX_CLIENT_VERSION_LEN: usize = 64;
-const FAST_BILLABLE_MULTIPLIER: u64 = 2;
 const MAX_RUNTIME_CACHE_TTL_SECONDS: u64 = 86_400;
 const MIN_RUNTIME_CACHE_TTL_SECONDS: u64 = 1;
 /// Hard upper bound on the configurable request body size (256 MiB).
@@ -153,7 +151,6 @@ const MIN_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 1_024;
 const MAX_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY: u64 = 1_024;
 const MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS: u64 = 300_000;
-const MAX_OPENAI_TOOL_NAME_LEN: usize = 64;
 const PUBLIC_RATE_LIMIT_REFRESH_SECONDS: u64 = 60;
 const LAST_MESSAGE_CONTENT_EXTRACT_FAILED: &str = "[extract_failed]";
 const PROXY_CONNECTIVITY_CHECK_TIMEOUT_SECONDS: u64 = 10;
@@ -170,9 +167,6 @@ const PUBLIC_USAGE_LOOKUP_MAX_LIMIT: usize = 200;
 const PUBLIC_USAGE_LOOKUP_CHART_BUCKETS: usize = 24;
 const PUBLIC_USAGE_LOOKUP_BUCKET_MS: i64 = 60 * 60 * 1000;
 const CODEX_STREAM_FAILURE_STATUS_CODE: i32 = 599;
-pub(super) const GPT53_CODEX_MODEL_ID: &str = "gpt-5.3-codex";
-pub(super) const GPT53_CODEX_SPARK_MODEL_ID: &str = "gpt-5.3-codex-spark";
-
 fn public_rate_limit_refresh_interval() -> tokio::time::Interval {
     let mut ticker = tokio::time::interval_at(
         tokio::time::Instant::now() + Duration::from_secs(PUBLIC_RATE_LIMIT_REFRESH_SECONDS),
@@ -6042,17 +6036,6 @@ fn bad_request_with_detail(
 ) -> (StatusCode, Json<ErrorResponse>) {
     tracing::warn!("{message}: {err}");
     bad_request(message)
-}
-
-/// Build a standardized 405 error payload.
-fn method_not_allowed(message: &str) -> (StatusCode, Json<ErrorResponse>) {
-    (
-        StatusCode::METHOD_NOT_ALLOWED,
-        Json(ErrorResponse {
-            error: message.to_string(),
-            code: 405,
-        }),
-    )
 }
 
 /// Build a standardized 404 error payload.
