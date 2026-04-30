@@ -1,0 +1,13 @@
+[Unit]
+Description=JuiceFS mount for llm-access state
+After=network-online.target
+Wants=network-online.target
+
+[Mount]
+What=${JUICEFS_META_URL}
+Where=/mnt/llm-access
+Type=juicefs
+Options=_netdev,allow_other,cache-dir=/var/cache/juicefs/llm-access,writeback,attr-cache=1,entry-cache=1,dir-entry-cache=1
+
+[Install]
+WantedBy=multi-user.target

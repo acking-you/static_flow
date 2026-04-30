@@ -1,0 +1,26 @@
+ackingliu.top, www.ackingliu.top {
+        @health path /_caddy_health
+        respond @health "ok" 200
+
+        @admin path /admin*
+        respond @admin "forbidden" 403
+
+        @llm_access path /v1/* /cc/v1/* /api/llm-gateway/* /api/kiro-gateway/* /api/codex-gateway/* /api/llm-access/*
+        handle @llm_access {
+                reverse_proxy 127.0.0.1:19080 {
+                        header_up X-Real-IP {remote_host}
+                        header_up X-Forwarded-For {remote_host}
+                        header_up X-Forwarded-Proto {scheme}
+                        header_up X-Forwarded-Host {host}
+                }
+        }
+
+        handle {
+                reverse_proxy 127.0.0.1:39080 {
+                        header_up X-Real-IP {remote_host}
+                        header_up X-Forwarded-For {remote_host}
+                        header_up X-Forwarded-Proto {scheme}
+                        header_up X-Forwarded-Host {host}
+                }
+        }
+}

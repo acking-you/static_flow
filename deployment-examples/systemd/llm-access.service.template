@@ -1,0 +1,22 @@
+[Unit]
+Description=StaticFlow LLM Access Service
+After=network-online.target mnt-llm\x2daccess.mount
+Wants=network-online.target
+RequiresMountsFor=/mnt/llm-access
+
+[Service]
+Type=simple
+User=llm-access
+Group=llm-access
+EnvironmentFile=/etc/llm-access/llm-access.env
+WorkingDirectory=/mnt/llm-access
+ExecStart=/usr/local/bin/llm-access serve --bind ${LLM_ACCESS_BIND_ADDR} --state-root ${LLM_ACCESS_STATE_ROOT} --sqlite-control ${LLM_ACCESS_SQLITE_CONTROL} --duckdb ${LLM_ACCESS_DUCKDB}
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/mnt/llm-access
+
+[Install]
+WantedBy=multi-user.target
