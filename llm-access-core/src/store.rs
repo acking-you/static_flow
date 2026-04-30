@@ -62,6 +62,18 @@ pub const DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS: u64 = 0;
 pub const PUBLIC_TOKEN_REQUEST_STATUS_PENDING: &str = "pending";
 /// Submitted status used by public sponsor requests before payment email.
 pub const PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED: &str = "submitted";
+/// Active managed key status.
+pub const KEY_STATUS_ACTIVE: &str = "active";
+/// Disabled managed key status.
+pub const KEY_STATUS_DISABLED: &str = "disabled";
+/// Codex provider string used by current admin key records.
+pub const PROVIDER_CODEX: &str = "codex";
+/// Kiro provider string used by current admin key records.
+pub const PROVIDER_KIRO: &str = "kiro";
+/// OpenAI-compatible protocol family.
+pub const PROTOCOL_OPENAI: &str = "openai";
+/// Anthropic-compatible protocol family.
+pub const PROTOCOL_ANTHROPIC: &str = "anthropic";
 
 /// Runtime config view shared by admin handlers and persistent stores.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -257,6 +269,129 @@ pub fn default_kiro_cache_policy_json() -> String {
         "anthropic_cache_creation_input_ratio": 0.0
     })
     .to_string()
+}
+
+/// Admin-facing projection of one managed API key.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdminKey {
+    /// Key id.
+    pub id: String,
+    /// Human-readable name.
+    pub name: String,
+    /// Plaintext secret shown in admin UI.
+    pub secret: String,
+    /// SHA-256 secret hash.
+    pub key_hash: String,
+    /// Key status.
+    pub status: String,
+    /// Provider type.
+    pub provider_type: String,
+    /// Whether the key is visible on the public access page.
+    pub public_visible: bool,
+    /// Billable quota limit.
+    pub quota_billable_limit: u64,
+    /// Accumulated uncached input tokens.
+    pub usage_input_uncached_tokens: u64,
+    /// Accumulated cached input tokens.
+    pub usage_input_cached_tokens: u64,
+    /// Accumulated output tokens.
+    pub usage_output_tokens: u64,
+    /// Accumulated credit usage.
+    pub usage_credit_total: f64,
+    /// Number of events missing credit usage.
+    pub usage_credit_missing_events: u64,
+    /// Remaining billable tokens.
+    pub remaining_billable: i64,
+    /// Last usage timestamp.
+    pub last_used_at: Option<i64>,
+    /// Creation timestamp.
+    pub created_at: i64,
+    /// Update timestamp.
+    pub updated_at: i64,
+    /// Account route strategy.
+    pub route_strategy: Option<String>,
+    /// Account group id.
+    pub account_group_id: Option<String>,
+    /// Fixed account name.
+    pub fixed_account_name: Option<String>,
+    /// Auto account names.
+    pub auto_account_names: Option<Vec<String>>,
+    /// Model name mapping.
+    pub model_name_map: Option<BTreeMap<String, String>>,
+    /// Per-key request concurrency cap.
+    pub request_max_concurrency: Option<u64>,
+    /// Per-key request pacing interval.
+    pub request_min_start_interval_ms: Option<u64>,
+    /// Whether Kiro request validation is enabled.
+    pub kiro_request_validation_enabled: bool,
+    /// Whether Kiro cache estimation is enabled.
+    pub kiro_cache_estimation_enabled: bool,
+    /// Whether Kiro zero-cache diagnostics are enabled.
+    pub kiro_zero_cache_debug_enabled: bool,
+    /// Kiro cache policy override JSON.
+    pub kiro_cache_policy_override_json: Option<String>,
+    /// Kiro billable multiplier override JSON.
+    pub kiro_billable_model_multipliers_override_json: Option<String>,
+    /// Effective Kiro cache policy JSON.
+    pub effective_kiro_cache_policy_json: String,
+    /// Whether the effective Kiro cache policy is global.
+    pub uses_global_kiro_cache_policy: bool,
+    /// Effective Kiro billable multiplier JSON.
+    pub effective_kiro_billable_model_multipliers_json: String,
+    /// Whether the effective billable multipliers are global.
+    pub uses_global_kiro_billable_model_multipliers: bool,
+}
+
+/// New admin key row after request validation and secret generation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewAdminKey {
+    /// Key id.
+    pub id: String,
+    /// Human-readable name.
+    pub name: String,
+    /// Plaintext secret.
+    pub secret: String,
+    /// SHA-256 secret hash.
+    pub key_hash: String,
+    /// Whether the key is public-visible.
+    pub public_visible: bool,
+    /// Billable quota limit.
+    pub quota_billable_limit: u64,
+    /// Per-key request concurrency cap.
+    pub request_max_concurrency: Option<u64>,
+    /// Per-key request pacing interval.
+    pub request_min_start_interval_ms: Option<u64>,
+    /// Creation timestamp.
+    pub created_at_ms: i64,
+}
+
+/// Admin key patch after request normalization.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AdminKeyPatch {
+    /// New name.
+    pub name: Option<String>,
+    /// New status.
+    pub status: Option<String>,
+    /// New public visibility.
+    pub public_visible: Option<bool>,
+    /// New quota limit.
+    pub quota_billable_limit: Option<u64>,
+    /// New route strategy.
+    pub route_strategy: Option<Option<String>>,
+    /// New account group id.
+    pub account_group_id: Option<Option<String>>,
+    /// New fixed account name.
+    pub fixed_account_name: Option<Option<String>>,
+    /// New auto account list.
+    pub auto_account_names: Option<Option<Vec<String>>>,
+    /// New model name map.
+    pub model_name_map: Option<Option<BTreeMap<String, String>>>,
+    /// New per-key request concurrency cap.
+    pub request_max_concurrency: Option<Option<u64>>,
+    /// New per-key request pacing interval.
+    pub request_min_start_interval_ms: Option<Option<u64>>,
+    /// Patch timestamp.
+    pub updated_at_ms: i64,
 }
 
 /// Key state used on the hot request path.
@@ -552,6 +687,26 @@ pub trait AdminConfigStore: Send + Sync {
     ) -> anyhow::Result<AdminRuntimeConfig>;
 }
 
+/// Admin key management queries used by the current frontend.
+#[async_trait]
+pub trait AdminKeyStore: Send + Sync {
+    /// List all managed keys.
+    async fn list_admin_keys(&self) -> anyhow::Result<Vec<AdminKey>>;
+
+    /// Create one managed key.
+    async fn create_admin_key(&self, key: NewAdminKey) -> anyhow::Result<AdminKey>;
+
+    /// Patch one managed key by id.
+    async fn patch_admin_key(
+        &self,
+        key_id: &str,
+        patch: AdminKeyPatch,
+    ) -> anyhow::Result<Option<AdminKey>>;
+
+    /// Delete one managed key by id and return the removed row.
+    async fn delete_admin_key(&self, key_id: &str) -> anyhow::Result<Option<AdminKey>>;
+}
+
 /// Empty public-access store used by isolated unit tests.
 pub struct EmptyPublicAccessStore;
 
@@ -637,6 +792,67 @@ impl AdminConfigStore for EmptyAdminConfigStore {
         config: AdminRuntimeConfig,
     ) -> anyhow::Result<AdminRuntimeConfig> {
         Ok(config)
+    }
+}
+
+/// Empty admin key store used by isolated unit tests.
+pub struct EmptyAdminKeyStore;
+
+#[async_trait]
+impl AdminKeyStore for EmptyAdminKeyStore {
+    async fn list_admin_keys(&self) -> anyhow::Result<Vec<AdminKey>> {
+        Ok(Vec::new())
+    }
+
+    async fn create_admin_key(&self, key: NewAdminKey) -> anyhow::Result<AdminKey> {
+        Ok(AdminKey {
+            id: key.id,
+            name: key.name,
+            secret: key.secret,
+            key_hash: key.key_hash,
+            status: KEY_STATUS_ACTIVE.to_string(),
+            provider_type: PROVIDER_CODEX.to_string(),
+            public_visible: key.public_visible,
+            quota_billable_limit: key.quota_billable_limit,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            remaining_billable: key.quota_billable_limit as i64,
+            last_used_at: None,
+            created_at: key.created_at_ms,
+            updated_at: key.created_at_ms,
+            route_strategy: None,
+            account_group_id: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            model_name_map: None,
+            request_max_concurrency: key.request_max_concurrency,
+            request_min_start_interval_ms: key.request_min_start_interval_ms,
+            kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
+            kiro_zero_cache_debug_enabled: false,
+            kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
+            effective_kiro_cache_policy_json: default_kiro_cache_policy_json(),
+            uses_global_kiro_cache_policy: true,
+            effective_kiro_billable_model_multipliers_json:
+                default_kiro_billable_model_multipliers_json(),
+            uses_global_kiro_billable_model_multipliers: true,
+        })
+    }
+
+    async fn patch_admin_key(
+        &self,
+        _key_id: &str,
+        _patch: AdminKeyPatch,
+    ) -> anyhow::Result<Option<AdminKey>> {
+        Ok(None)
+    }
+
+    async fn delete_admin_key(&self, _key_id: &str) -> anyhow::Result<Option<AdminKey>> {
+        Ok(None)
     }
 }
 

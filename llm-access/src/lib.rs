@@ -30,7 +30,7 @@ use axum::{
 };
 use config::{CliCommand, ServeConfig, StorageConfig};
 use llm_access_core::store::{
-    AdminConfigStore, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
+    AdminConfigStore, AdminKeyStore, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
     PublicSubmissionStore, PublicUsageStore,
 };
 use serde::Serialize;
@@ -39,6 +39,7 @@ use serde::Serialize;
 struct HttpState {
     provider_state: provider::ProviderState,
     admin_config_store: Arc<dyn AdminConfigStore>,
+    admin_key_store: Arc<dyn AdminKeyStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
@@ -74,6 +75,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
     let state = HttpState {
         provider_state,
         admin_config_store: runtime.admin_config_store(),
+        admin_key_store: runtime.admin_key_store(),
         public_access_store: runtime.public_access_store(),
         public_community_store: runtime.public_community_store(),
         public_usage_store: runtime.public_usage_store(),
@@ -87,6 +89,15 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         .route(
             "/admin/llm-gateway/config",
             get(admin::get_llm_gateway_config).post(admin::post_llm_gateway_config),
+        )
+        .route(
+            "/admin/llm-gateway/keys",
+            get(admin::list_llm_gateway_keys).post(admin::create_llm_gateway_key),
+        )
+        .route(
+            "/admin/llm-gateway/keys/:key_id",
+            axum::routing::patch(admin::patch_llm_gateway_key)
+                .delete(admin::delete_llm_gateway_key),
         )
         .route("/api/llm-gateway/access", get(public::get_llm_gateway_access))
         .route("/api/llm-gateway/model-catalog.json", get(public::get_llm_gateway_model_catalog))
@@ -577,6 +588,116 @@ mod tests {
         assert_eq!(value["max_request_body_bytes"], 2 * 1024 * 1024);
         assert_eq!(value["codex_client_version"], "0.125.0");
         assert_eq!(value["kiro_prefix_cache_mode"], "formula");
+    }
+
+    #[tokio::test]
+    async fn router_lists_admin_llm_gateway_keys_for_local_request() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/llm-gateway/keys")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(value["auth_cache_ttl_seconds"], 60);
+        assert_eq!(value["keys"].as_array().expect("keys array").len(), 0);
+    }
+
+    #[tokio::test]
+    async fn router_creates_admin_llm_gateway_key_for_local_request() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/llm-gateway/keys")
+                    .header(header::HOST, "localhost")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{
+                            "name": "external codex",
+                            "quota_billable_limit": 1000,
+                            "public_visible": true,
+                            "request_max_concurrency": 2,
+                            "request_min_start_interval_ms": 50
+                        }"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert!(value["id"].as_str().expect("id").starts_with("llm-key-"));
+        assert_eq!(value["name"], "external codex");
+        assert!(value["secret"]
+            .as_str()
+            .expect("secret")
+            .starts_with("sfk_"));
+        assert_eq!(value["status"], "active");
+        assert_eq!(value["provider_type"], "codex");
+        assert_eq!(value["public_visible"], true);
+        assert_eq!(value["quota_billable_limit"], 1000);
+        assert_eq!(value["remaining_billable"], 1000);
+        assert_eq!(value["request_max_concurrency"], 2);
+        assert_eq!(value["request_min_start_interval_ms"], 50);
+    }
+
+    #[tokio::test]
+    async fn router_routes_admin_llm_gateway_key_patch_to_store() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/admin/llm-gateway/keys/missing")
+                    .header(header::HOST, "localhost")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"name":"patched"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains("LLM gateway key not found"));
+    }
+
+    #[tokio::test]
+    async fn router_routes_admin_llm_gateway_key_delete_to_store() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/admin/llm-gateway/keys/missing")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains("LLM gateway key not found"));
     }
 
     #[tokio::test]

@@ -3,16 +3,17 @@
 use std::{collections::BTreeMap, net::IpAddr};
 
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use llm_access_core::store::{
-    self as core_store, AdminRuntimeConfig, UpdateAdminRuntimeConfig,
-    KIRO_PREFIX_CACHE_MODE_FORMULA,
+    self as core_store, AdminKeyPatch, AdminRuntimeConfig, NewAdminKey, UpdateAdminRuntimeConfig,
+    KEY_STATUS_ACTIVE, KEY_STATUS_DISABLED, KIRO_PREFIX_CACHE_MODE_FORMULA,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::HttpState;
 
@@ -32,12 +33,69 @@ const MIN_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 1;
 const MAX_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 3_600;
 const MIN_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 1_024;
 const MAX_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY: u64 = 1_024;
+const MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS: u64 = 300_000;
 const BAND_CONTIGUITY_TOLERANCE: f64 = 1e-12;
 
 #[derive(Debug, Serialize)]
 struct ErrorResponse {
     error: String,
     code: u16,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminKeysResponse {
+    keys: Vec<core_store::AdminKey>,
+    auth_cache_ttl_seconds: u64,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct DeleteResponse {
+    deleted: bool,
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateLlmGatewayKeyRequest {
+    name: String,
+    quota_billable_limit: u64,
+    #[serde(default)]
+    public_visible: bool,
+    #[serde(default)]
+    request_max_concurrency: Option<u64>,
+    #[serde(default)]
+    request_min_start_interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PatchLlmGatewayKeyRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    public_visible: Option<bool>,
+    #[serde(default)]
+    quota_billable_limit: Option<u64>,
+    #[serde(default)]
+    route_strategy: Option<String>,
+    #[serde(default)]
+    account_group_id: Option<String>,
+    #[serde(default)]
+    fixed_account_name: Option<String>,
+    #[serde(default)]
+    auto_account_names: Option<Vec<String>>,
+    #[serde(default)]
+    model_name_map: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    request_max_concurrency: Option<u64>,
+    #[serde(default)]
+    request_min_start_interval_ms: Option<u64>,
+    #[serde(default)]
+    request_max_concurrency_unlimited: bool,
+    #[serde(default)]
+    request_min_start_interval_ms_unlimited: bool,
 }
 
 #[derive(Debug)]
@@ -122,6 +180,109 @@ pub(crate) async fn post_llm_gateway_config(
     {
         Ok(config) => Json(config).into_response(),
         Err(_) => internal_error("Failed to update llm gateway config").into_response(),
+    }
+}
+
+pub(crate) async fn list_llm_gateway_keys(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let keys = match state.admin_key_store.list_admin_keys().await {
+        Ok(keys) => keys,
+        Err(_) => return internal_error("Failed to list llm gateway keys").into_response(),
+    };
+    let auth_cache_ttl_seconds = match state.admin_config_store.get_admin_runtime_config().await {
+        Ok(config) => config.auth_cache_ttl_seconds,
+        Err(_) => return internal_error("Failed to load llm gateway config").into_response(),
+    };
+    Json(AdminKeysResponse {
+        keys,
+        auth_cache_ttl_seconds,
+        generated_at: now_ms(),
+    })
+    .into_response()
+}
+
+pub(crate) async fn create_llm_gateway_key(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateLlmGatewayKeyRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_name(&request.name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    if let Err(response) =
+        validate_i64_backed_u64("quota_billable_limit", request.quota_billable_limit)
+    {
+        return response.into_response();
+    }
+    if let Err(response) = validate_codex_request_limit_inputs(
+        request.request_max_concurrency,
+        request.request_min_start_interval_ms,
+    ) {
+        return response.into_response();
+    }
+    let secret = generate_secret();
+    let key = NewAdminKey {
+        id: generate_id("llm-key"),
+        name,
+        key_hash: sha256_hex(secret.as_bytes()),
+        secret,
+        public_visible: request.public_visible,
+        quota_billable_limit: request.quota_billable_limit,
+        request_max_concurrency: request.request_max_concurrency,
+        request_min_start_interval_ms: request.request_min_start_interval_ms,
+        created_at_ms: now_ms(),
+    };
+    match state.admin_key_store.create_admin_key(key).await {
+        Ok(key) => Json(key).into_response(),
+        Err(_) => internal_error("Failed to create llm gateway key").into_response(),
+    }
+}
+
+pub(crate) async fn patch_llm_gateway_key(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(key_id): Path<String>,
+    Json(request): Json<PatchLlmGatewayKeyRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let patch = match normalize_key_patch(request) {
+        Ok(patch) => patch,
+        Err(response) => return response.into_response(),
+    };
+    match state.admin_key_store.patch_admin_key(&key_id, patch).await {
+        Ok(Some(key)) => Json(key).into_response(),
+        Ok(None) => not_found("LLM gateway key not found").into_response(),
+        Err(_) => internal_error("Failed to update llm gateway key").into_response(),
+    }
+}
+
+pub(crate) async fn delete_llm_gateway_key(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(key_id): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state.admin_key_store.delete_admin_key(&key_id).await {
+        Ok(Some(key)) => Json(DeleteResponse {
+            deleted: true,
+            id: key.id,
+        })
+        .into_response(),
+        Ok(None) => not_found("LLM gateway key not found").into_response(),
+        Err(_) => internal_error("Failed to delete llm gateway key").into_response(),
     }
 }
 
@@ -344,6 +505,27 @@ fn admin_token() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
+fn generate_id(prefix: &str) -> String {
+    format!("{prefix}-{}", uuid::Uuid::new_v4().simple())
+}
+
+fn generate_secret() -> String {
+    format!("sfk_{}", uuid::Uuid::new_v4().simple())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
 fn normalize_codex_client_version(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed.len() > MAX_CODEX_CLIENT_VERSION_LEN {
@@ -405,6 +587,141 @@ fn validate_kiro_prefix_cache_mode(mode: &str) -> Result<(), AdminHttpError> {
         Ok(())
     } else {
         Err(bad_request("kiro_prefix_cache_mode is invalid"))
+    }
+}
+
+fn normalize_key_patch(
+    request: PatchLlmGatewayKeyRequest,
+) -> Result<AdminKeyPatch, AdminHttpError> {
+    let name = match request.name.as_deref() {
+        Some(raw) => Some(normalize_name(raw)?),
+        None => None,
+    };
+    let status = match request.status.as_deref() {
+        Some(raw) => Some(normalize_status(raw)?),
+        None => None,
+    };
+    if let Some(limit) = request.quota_billable_limit {
+        validate_i64_backed_u64("quota_billable_limit", limit)?;
+    }
+    let route_strategy = match request.route_strategy.as_deref() {
+        Some(raw) => Some(normalize_route_strategy_input(raw)?),
+        None => None,
+    };
+    let account_group_id = request
+        .account_group_id
+        .as_deref()
+        .map(normalize_optional_string);
+    let fixed_account_name = request
+        .fixed_account_name
+        .as_deref()
+        .map(normalize_optional_string);
+    let auto_account_names = request.auto_account_names.map(normalize_auto_account_names);
+    let request_max_concurrency = if request.request_max_concurrency_unlimited {
+        Some(None)
+    } else {
+        request.request_max_concurrency.map(Some)
+    };
+    let request_min_start_interval_ms = if request.request_min_start_interval_ms_unlimited {
+        Some(None)
+    } else {
+        request.request_min_start_interval_ms.map(Some)
+    };
+    validate_codex_request_limit_inputs(
+        request_max_concurrency.flatten(),
+        request_min_start_interval_ms.flatten(),
+    )?;
+    Ok(AdminKeyPatch {
+        name,
+        status,
+        public_visible: request.public_visible,
+        quota_billable_limit: request.quota_billable_limit,
+        route_strategy,
+        account_group_id,
+        fixed_account_name,
+        auto_account_names,
+        model_name_map: request.model_name_map.map(Some),
+        request_max_concurrency,
+        request_min_start_interval_ms,
+        updated_at_ms: now_ms(),
+    })
+}
+
+fn normalize_name(raw: &str) -> Result<String, AdminHttpError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        Err(bad_request("name is required"))
+    } else {
+        Ok(trimmed.to_string())
+    }
+}
+
+fn normalize_status(raw: &str) -> Result<String, AdminHttpError> {
+    let trimmed = raw.trim();
+    if matches!(trimmed, KEY_STATUS_ACTIVE | KEY_STATUS_DISABLED) {
+        Ok(trimmed.to_string())
+    } else {
+        Err(bad_request("status must be `active` or `disabled`"))
+    }
+}
+
+fn normalize_route_strategy_input(raw: &str) -> Result<Option<String>, AdminHttpError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    match trimmed {
+        "auto" | "fixed" => Ok(Some(trimmed.to_string())),
+        _ => Err(bad_request("route_strategy must be `auto` or `fixed`")),
+    }
+}
+
+fn normalize_optional_string(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn normalize_auto_account_names(values: Vec<String>) -> Option<Vec<String>> {
+    let mut names = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    if names.is_empty() {
+        None
+    } else {
+        Some(names)
+    }
+}
+
+fn validate_codex_request_limit_inputs(
+    request_max_concurrency: Option<u64>,
+    request_min_start_interval_ms: Option<u64>,
+) -> Result<(), AdminHttpError> {
+    if let Some(value) = request_max_concurrency {
+        if value == 0 || value > MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY {
+            return Err(bad_request("request_max_concurrency is out of range"));
+        }
+    }
+    if let Some(value) = request_min_start_interval_ms {
+        if value > MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS {
+            return Err(bad_request("request_min_start_interval_ms is out of range"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_i64_backed_u64(field: &str, value: u64) -> Result<(), AdminHttpError> {
+    if value <= i64::MAX as u64 {
+        Ok(())
+    } else {
+        Err(bad_request(&format!("{field} is out of range")))
     }
 }
 
@@ -632,6 +949,13 @@ fn bad_request(message: &str) -> AdminHttpError {
 fn forbidden(message: &str) -> AdminHttpError {
     AdminHttpError {
         status: StatusCode::FORBIDDEN,
+        message: message.to_string(),
+    }
+}
+
+fn not_found(message: &str) -> AdminHttpError {
+    AdminHttpError {
+        status: StatusCode::NOT_FOUND,
         message: message.to_string(),
     }
 }

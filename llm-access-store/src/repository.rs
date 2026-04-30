@@ -6,7 +6,8 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use llm_access_core::{
     store::{
-        AdminConfigStore, AdminRuntimeConfig, AuthenticatedKey, CodexRateLimitStatus, ControlStore,
+        AdminConfigStore, AdminKey, AdminKeyPatch, AdminKeyStore, AdminRuntimeConfig,
+        AuthenticatedKey, CodexRateLimitStatus, ControlStore, NewAdminKey,
         NewPublicAccountContributionRequest, NewPublicSponsorRequest, NewPublicTokenRequest,
         PublicAccessKey, PublicAccessStore, PublicAccountContribution, PublicCommunityStore,
         PublicSponsor, PublicStatusStore, PublicSubmissionStore, PublicUsageLookupKey,
@@ -79,6 +80,63 @@ impl AdminConfigStore for SqliteControlRepository {
         })
         .await
         .context("sqlite control repository admin config update task failed")?
+    }
+}
+
+#[async_trait]
+impl AdminKeyStore for SqliteControlRepository {
+    async fn list_admin_keys(&self) -> anyhow::Result<Vec<AdminKey>> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.list_admin_keys()
+        })
+        .await
+        .context("sqlite control repository admin key list task failed")?
+    }
+
+    async fn create_admin_key(&self, key: NewAdminKey) -> anyhow::Result<AdminKey> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.create_admin_key(&key)
+        })
+        .await
+        .context("sqlite control repository admin key create task failed")?
+    }
+
+    async fn patch_admin_key(
+        &self,
+        key_id: &str,
+        patch: AdminKeyPatch,
+    ) -> anyhow::Result<Option<AdminKey>> {
+        let key_id = key_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.patch_admin_key(&key_id, &patch)
+        })
+        .await
+        .context("sqlite control repository admin key patch task failed")?
+    }
+
+    async fn delete_admin_key(&self, key_id: &str) -> anyhow::Result<Option<AdminKey>> {
+        let key_id = key_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.delete_admin_key(&key_id)
+        })
+        .await
+        .context("sqlite control repository admin key delete task failed")?
     }
 }
 
@@ -286,9 +344,10 @@ mod tests {
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType, RouteStrategy},
         store::{
-            AdminConfigStore, CodexCredits, CodexPublicAccountStatus, CodexRateLimitBucket,
-            CodexRateLimitStatus, CodexRateLimitWindow, ControlStore, PublicAccessStore,
-            PublicCommunityStore, PublicStatusStore, PublicUsageStore, UsageEventSink,
+            AdminConfigStore, AdminKeyPatch, AdminKeyStore, CodexCredits, CodexPublicAccountStatus,
+            CodexRateLimitBucket, CodexRateLimitStatus, CodexRateLimitWindow, ControlStore,
+            NewAdminKey, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
+            PublicUsageStore, UsageEventSink,
         },
         usage::{UsageEvent, UsageTiming},
     };
@@ -398,6 +457,73 @@ mod tests {
         assert_eq!(stored.auth_cache_ttl_seconds, 75);
         assert_eq!(stored.codex_client_version, "0.125.0");
         assert_eq!(stored.kiro_prefix_cache_mode, "formula");
+    }
+
+    #[tokio::test]
+    async fn sqlite_repository_manages_admin_key_lifecycle() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlRepository::new(conn);
+
+        let created = repo
+            .create_admin_key(NewAdminKey {
+                id: "llm-key-test".to_string(),
+                name: "test key".to_string(),
+                secret: "sfk_test".to_string(),
+                key_hash: "hash-test".to_string(),
+                public_visible: true,
+                quota_billable_limit: 1000,
+                request_max_concurrency: Some(2),
+                request_min_start_interval_ms: Some(50),
+                created_at_ms: 100,
+            })
+            .await
+            .expect("create key");
+
+        assert_eq!(created.id, "llm-key-test");
+        assert_eq!(created.status, "active");
+        assert_eq!(created.provider_type, "codex");
+        assert_eq!(created.remaining_billable, 1000);
+        assert_eq!(created.request_max_concurrency, Some(2));
+
+        let listed = repo.list_admin_keys().await.expect("list keys");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "llm-key-test");
+
+        let patched = repo
+            .patch_admin_key("llm-key-test", AdminKeyPatch {
+                name: Some("patched key".to_string()),
+                status: Some("disabled".to_string()),
+                public_visible: Some(false),
+                quota_billable_limit: Some(750),
+                route_strategy: Some(Some("auto".to_string())),
+                auto_account_names: Some(Some(vec!["codex-a".to_string(), "codex-b".to_string()])),
+                request_max_concurrency: Some(None),
+                updated_at_ms: 200,
+                ..AdminKeyPatch::default()
+            })
+            .await
+            .expect("patch key")
+            .expect("key exists");
+
+        assert_eq!(patched.name, "patched key");
+        assert_eq!(patched.status, "disabled");
+        assert!(!patched.public_visible);
+        assert_eq!(patched.quota_billable_limit, 750);
+        assert_eq!(patched.route_strategy.as_deref(), Some("auto"));
+        assert_eq!(
+            patched.auto_account_names,
+            Some(vec!["codex-a".to_string(), "codex-b".to_string()])
+        );
+        assert_eq!(patched.request_max_concurrency, None);
+
+        let deleted = repo
+            .delete_admin_key("llm-key-test")
+            .await
+            .expect("delete key")
+            .expect("key exists");
+        assert_eq!(deleted.id, "llm-key-test");
+        assert!(repo.list_admin_keys().await.expect("list keys").is_empty());
     }
 
     #[tokio::test]

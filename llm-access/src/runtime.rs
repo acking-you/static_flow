@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use llm_access_core::store::{
-    AdminConfigStore, ControlStore, EmptyAdminConfigStore, EmptyPublicAccessStore,
-    EmptyPublicCommunityStore, EmptyPublicStatusStore, EmptyPublicSubmissionStore,
-    EmptyPublicUsageStore, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
-    PublicSubmissionStore, PublicUsageStore,
+    AdminConfigStore, AdminKeyStore, ControlStore, EmptyAdminConfigStore, EmptyAdminKeyStore,
+    EmptyPublicAccessStore, EmptyPublicCommunityStore, EmptyPublicStatusStore,
+    EmptyPublicSubmissionStore, EmptyPublicUsageStore, PublicAccessStore, PublicCommunityStore,
+    PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
 };
 use llm_access_store::repository::SqliteControlRepository;
 
@@ -18,6 +18,20 @@ use crate::config::StorageConfig;
 pub struct LlmAccessRuntime {
     control_store: Arc<dyn ControlStore>,
     admin_config_store: Arc<dyn AdminConfigStore>,
+    admin_key_store: Arc<dyn AdminKeyStore>,
+    public_access_store: Arc<dyn PublicAccessStore>,
+    public_community_store: Arc<dyn PublicCommunityStore>,
+    public_usage_store: Arc<dyn PublicUsageStore>,
+    public_submission_store: Arc<dyn PublicSubmissionStore>,
+    public_status_store: Arc<dyn PublicStatusStore>,
+}
+
+/// Runtime dependency bundle used to keep construction explicit as the
+/// standalone service grows.
+struct LlmAccessStores {
+    control_store: Arc<dyn ControlStore>,
+    admin_config_store: Arc<dyn AdminConfigStore>,
+    admin_key_store: Arc<dyn AdminKeyStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
@@ -28,35 +42,29 @@ pub struct LlmAccessRuntime {
 impl LlmAccessRuntime {
     /// Create runtime dependencies from explicit storage adapters.
     pub fn new(control_store: Arc<dyn ControlStore>) -> Self {
-        Self::with_stores(
+        Self::with_stores(LlmAccessStores {
             control_store,
-            Arc::new(EmptyAdminConfigStore),
-            Arc::new(EmptyPublicAccessStore),
-            Arc::new(EmptyPublicCommunityStore),
-            Arc::new(EmptyPublicUsageStore),
-            Arc::new(EmptyPublicSubmissionStore),
-            Arc::new(EmptyPublicStatusStore),
-        )
+            admin_config_store: Arc::new(EmptyAdminConfigStore),
+            admin_key_store: Arc::new(EmptyAdminKeyStore),
+            public_access_store: Arc::new(EmptyPublicAccessStore),
+            public_community_store: Arc::new(EmptyPublicCommunityStore),
+            public_usage_store: Arc::new(EmptyPublicUsageStore),
+            public_submission_store: Arc::new(EmptyPublicSubmissionStore),
+            public_status_store: Arc::new(EmptyPublicStatusStore),
+        })
     }
 
     /// Create runtime dependencies from explicit storage adapters.
-    pub fn with_stores(
-        control_store: Arc<dyn ControlStore>,
-        admin_config_store: Arc<dyn AdminConfigStore>,
-        public_access_store: Arc<dyn PublicAccessStore>,
-        public_community_store: Arc<dyn PublicCommunityStore>,
-        public_usage_store: Arc<dyn PublicUsageStore>,
-        public_submission_store: Arc<dyn PublicSubmissionStore>,
-        public_status_store: Arc<dyn PublicStatusStore>,
-    ) -> Self {
+    fn with_stores(stores: LlmAccessStores) -> Self {
         Self {
-            control_store,
-            admin_config_store,
-            public_access_store,
-            public_community_store,
-            public_usage_store,
-            public_submission_store,
-            public_status_store,
+            control_store: stores.control_store,
+            admin_config_store: stores.admin_config_store,
+            admin_key_store: stores.admin_key_store,
+            public_access_store: stores.public_access_store,
+            public_community_store: stores.public_community_store,
+            public_usage_store: stores.public_usage_store,
+            public_submission_store: stores.public_submission_store,
+            public_status_store: stores.public_status_store,
         }
     }
 
@@ -66,20 +74,22 @@ impl LlmAccessRuntime {
         let repository = Arc::new(SqliteControlRepository::open_path(&config.sqlite_control)?);
         let control_store: Arc<dyn ControlStore> = repository.clone();
         let admin_config_store: Arc<dyn AdminConfigStore> = repository.clone();
+        let admin_key_store: Arc<dyn AdminKeyStore> = repository.clone();
         let public_access_store: Arc<dyn PublicAccessStore> = repository.clone();
         let public_community_store: Arc<dyn PublicCommunityStore> = repository.clone();
         let public_usage_store: Arc<dyn PublicUsageStore> = repository.clone();
         let public_submission_store: Arc<dyn PublicSubmissionStore> = repository.clone();
         let public_status_store: Arc<dyn PublicStatusStore> = repository;
-        Ok(Self::with_stores(
+        Ok(Self::with_stores(LlmAccessStores {
             control_store,
             admin_config_store,
+            admin_key_store,
             public_access_store,
             public_community_store,
             public_usage_store,
             public_submission_store,
             public_status_store,
-        ))
+        }))
     }
 
     /// Shared control store used by request handlers.
@@ -90,6 +100,11 @@ impl LlmAccessRuntime {
     /// Admin config store used by local admin compatibility endpoints.
     pub fn admin_config_store(&self) -> Arc<dyn AdminConfigStore> {
         Arc::clone(&self.admin_config_store)
+    }
+
+    /// Admin key store used by local admin compatibility endpoints.
+    pub fn admin_key_store(&self) -> Arc<dyn AdminKeyStore> {
+        Arc::clone(&self.admin_key_store)
     }
 
     /// Public access store used by unauthenticated compatibility endpoints.

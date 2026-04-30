@@ -2,10 +2,11 @@
 
 use anyhow::Context;
 use llm_access_core::store::{
-    self as core_store, AdminRuntimeConfig, CodexRateLimitStatus,
-    NewPublicAccountContributionRequest, NewPublicSponsorRequest, NewPublicTokenRequest,
-    PublicAccessKey, PublicAccountContribution, PublicSponsor, PublicUsageLookupKey,
-    PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED, PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
+    self as core_store, AdminKey, AdminKeyPatch, AdminRuntimeConfig, CodexRateLimitStatus,
+    NewAdminKey, NewPublicAccountContributionRequest, NewPublicSponsorRequest,
+    NewPublicTokenRequest, PublicAccessKey, PublicAccountContribution, PublicSponsor,
+    PublicUsageLookupKey, PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED,
+    PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
 };
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 
@@ -407,6 +408,155 @@ impl SqliteControlStore {
             )
             .optional()
             .context("load key bundle by hash")
+    }
+
+    /// List all admin-visible key rows with route config and usage rollup.
+    pub fn list_admin_keys(&self) -> anyhow::Result<Vec<AdminKey>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT
+                    k.key_id, k.name, k.secret, k.key_hash, k.status, k.provider_type,
+                    k.protocol_family, k.public_visible, k.quota_billable_limit,
+                    k.created_at_ms, k.updated_at_ms,
+                    r.route_strategy, r.fixed_account_name, r.auto_account_names_json,
+                    r.account_group_id, r.model_name_map_json,
+                    r.request_max_concurrency, r.request_min_start_interval_ms,
+                    r.kiro_request_validation_enabled, r.kiro_cache_estimation_enabled,
+                    r.kiro_zero_cache_debug_enabled, r.kiro_cache_policy_override_json,
+                    r.kiro_billable_model_multipliers_override_json,
+                    u.input_uncached_tokens, u.input_cached_tokens, u.output_tokens,
+                    u.billable_tokens, u.credit_total, u.credit_missing_events,
+                    u.last_used_at_ms, u.updated_at_ms
+                 FROM llm_keys k
+                 JOIN llm_key_route_config r ON r.key_id = k.key_id
+                 JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
+                 ORDER BY k.created_at_ms DESC, k.key_id DESC",
+            )
+            .context("prepare admin key list")?;
+        let keys = stmt
+            .query_map([], decode_key_bundle)
+            .context("query admin key list")?
+            .map(|row| row.map(|bundle| admin_key_from_bundle(&bundle)))
+            .collect::<Result<Vec<_>, _>>()
+            .context("collect admin key list")?;
+        Ok(keys)
+    }
+
+    /// Create one admin-managed Codex key.
+    pub fn create_admin_key(&self, key: &NewAdminKey) -> anyhow::Result<AdminKey> {
+        let key_record = KeyRecord {
+            key_id: key.id.clone(),
+            name: key.name.clone(),
+            secret: key.secret.clone(),
+            key_hash: key.key_hash.clone(),
+            status: core_store::KEY_STATUS_ACTIVE.to_string(),
+            provider_type: core_store::PROVIDER_CODEX.to_string(),
+            protocol_family: core_store::PROTOCOL_OPENAI.to_string(),
+            public_visible: key.public_visible,
+            quota_billable_limit: key.quota_billable_limit as i64,
+            created_at_ms: key.created_at_ms,
+            updated_at_ms: key.created_at_ms,
+        };
+        let route = KeyRouteConfig {
+            key_id: key.id.clone(),
+            route_strategy: None,
+            fixed_account_name: None,
+            auto_account_names_json: None,
+            account_group_id: None,
+            model_name_map_json: None,
+            request_max_concurrency: key.request_max_concurrency.map(|value| value as i64),
+            request_min_start_interval_ms: key
+                .request_min_start_interval_ms
+                .map(|value| value as i64),
+            kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
+            kiro_zero_cache_debug_enabled: false,
+            kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
+        };
+        let rollup = KeyUsageRollup {
+            key_id: key.id.clone(),
+            input_uncached_tokens: 0,
+            input_cached_tokens: 0,
+            output_tokens: 0,
+            billable_tokens: 0,
+            credit_total: 0.0,
+            credit_missing_events: 0,
+            last_used_at_ms: None,
+            updated_at_ms: key.created_at_ms,
+        };
+        self.upsert_key_bundle(&key_record, &route, &rollup)?;
+        self.get_key(&key.id)?
+            .map(|bundle| admin_key_from_bundle(&bundle))
+            .context("created admin key disappeared")
+    }
+
+    /// Patch one admin-managed key.
+    pub fn patch_admin_key(
+        &self,
+        key_id: &str,
+        patch: &AdminKeyPatch,
+    ) -> anyhow::Result<Option<AdminKey>> {
+        let Some(mut bundle) = self.get_key(key_id)? else {
+            return Ok(None);
+        };
+        if let Some(name) = patch.name.as_ref() {
+            bundle.key.name = name.clone();
+        }
+        if let Some(status) = patch.status.as_ref() {
+            bundle.key.status = status.clone();
+        }
+        if let Some(public_visible) = patch.public_visible {
+            bundle.key.public_visible = public_visible;
+        }
+        if let Some(limit) = patch.quota_billable_limit {
+            bundle.key.quota_billable_limit = limit as i64;
+        }
+        if let Some(value) = patch.route_strategy.as_ref() {
+            bundle.route.route_strategy = value.clone();
+        }
+        if let Some(value) = patch.account_group_id.as_ref() {
+            bundle.route.account_group_id = value.clone();
+        }
+        if let Some(value) = patch.fixed_account_name.as_ref() {
+            bundle.route.fixed_account_name = value.clone();
+        }
+        if let Some(value) = patch.auto_account_names.as_ref() {
+            bundle.route.auto_account_names_json = value
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .context("serialize auto account names")?;
+        }
+        if let Some(value) = patch.model_name_map.as_ref() {
+            bundle.route.model_name_map_json = value
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .context("serialize model name map")?;
+        }
+        if let Some(value) = patch.request_max_concurrency {
+            bundle.route.request_max_concurrency = value.map(|value| value as i64);
+        }
+        if let Some(value) = patch.request_min_start_interval_ms {
+            bundle.route.request_min_start_interval_ms = value.map(|value| value as i64);
+        }
+        bundle.key.updated_at_ms = patch.updated_at_ms;
+        bundle.rollup.updated_at_ms = bundle.rollup.updated_at_ms.max(patch.updated_at_ms);
+        self.upsert_key_bundle(&bundle.key, &bundle.route, &bundle.rollup)?;
+        Ok(Some(admin_key_from_bundle(&bundle)))
+    }
+
+    /// Delete one admin-managed key.
+    pub fn delete_admin_key(&self, key_id: &str) -> anyhow::Result<Option<AdminKey>> {
+        let Some(bundle) = self.get_key(key_id)? else {
+            return Ok(None);
+        };
+        self.conn
+            .execute("DELETE FROM llm_keys WHERE key_id = ?1", [key_id])
+            .context("delete admin key")?;
+        Ok(Some(admin_key_from_bundle(&bundle)))
     }
 
     /// Add one accepted usage event to the hot-path key rollup counters.
@@ -1090,6 +1240,70 @@ fn decode_key_bundle(row: &rusqlite::Row<'_>) -> rusqlite::Result<KeyBundle> {
             updated_at_ms: row.get(30)?,
         },
     })
+}
+
+fn admin_key_from_bundle(bundle: &KeyBundle) -> AdminKey {
+    let quota = bundle.key.quota_billable_limit.max(0) as u64;
+    let billable = bundle.rollup.billable_tokens.max(0) as u64;
+    AdminKey {
+        id: bundle.key.key_id.clone(),
+        name: bundle.key.name.clone(),
+        secret: bundle.key.secret.clone(),
+        key_hash: bundle.key.key_hash.clone(),
+        status: bundle.key.status.clone(),
+        provider_type: bundle.key.provider_type.clone(),
+        public_visible: bundle.key.public_visible,
+        quota_billable_limit: quota,
+        usage_input_uncached_tokens: bundle.rollup.input_uncached_tokens.max(0) as u64,
+        usage_input_cached_tokens: bundle.rollup.input_cached_tokens.max(0) as u64,
+        usage_output_tokens: bundle.rollup.output_tokens.max(0) as u64,
+        usage_credit_total: bundle.rollup.credit_total,
+        usage_credit_missing_events: bundle.rollup.credit_missing_events.max(0) as u64,
+        remaining_billable: (quota as i64).saturating_sub(billable as i64),
+        last_used_at: bundle.rollup.last_used_at_ms,
+        created_at: bundle.key.created_at_ms,
+        updated_at: bundle.key.updated_at_ms,
+        route_strategy: bundle.route.route_strategy.clone(),
+        account_group_id: bundle.route.account_group_id.clone(),
+        fixed_account_name: bundle.route.fixed_account_name.clone(),
+        auto_account_names: decode_optional_json(bundle.route.auto_account_names_json.as_deref()),
+        model_name_map: decode_optional_json(bundle.route.model_name_map_json.as_deref()),
+        request_max_concurrency: bundle
+            .route
+            .request_max_concurrency
+            .map(|value| value as u64),
+        request_min_start_interval_ms: bundle
+            .route
+            .request_min_start_interval_ms
+            .map(|value| value as u64),
+        kiro_request_validation_enabled: bundle.route.kiro_request_validation_enabled,
+        kiro_cache_estimation_enabled: bundle.route.kiro_cache_estimation_enabled,
+        kiro_zero_cache_debug_enabled: bundle.route.kiro_zero_cache_debug_enabled,
+        kiro_cache_policy_override_json: bundle.route.kiro_cache_policy_override_json.clone(),
+        kiro_billable_model_multipliers_override_json: bundle
+            .route
+            .kiro_billable_model_multipliers_override_json
+            .clone(),
+        effective_kiro_cache_policy_json: bundle
+            .route
+            .kiro_cache_policy_override_json
+            .clone()
+            .unwrap_or_else(core_store::default_kiro_cache_policy_json),
+        uses_global_kiro_cache_policy: bundle.route.kiro_cache_policy_override_json.is_none(),
+        effective_kiro_billable_model_multipliers_json: bundle
+            .route
+            .kiro_billable_model_multipliers_override_json
+            .clone()
+            .unwrap_or_else(core_store::default_kiro_billable_model_multipliers_json),
+        uses_global_kiro_billable_model_multipliers: bundle
+            .route
+            .kiro_billable_model_multipliers_override_json
+            .is_none(),
+    }
+}
+
+fn decode_optional_json<T: serde::de::DeserializeOwned>(value: Option<&str>) -> Option<T> {
+    value.and_then(|raw| serde_json::from_str(raw).ok())
 }
 
 fn decode_codex_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<CodexAccountRecord> {
