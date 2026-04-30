@@ -1,5 +1,7 @@
 //! Storage bootstrap helpers for the standalone LLM access service.
 
+/// DuckDB analytics writer helpers.
+pub mod duckdb;
 /// SQLite control-plane repository.
 pub mod sqlite;
 
