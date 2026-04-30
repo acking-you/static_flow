@@ -2,10 +2,10 @@
 
 use anyhow::Context;
 use llm_access_core::store::{
-    CodexRateLimitStatus, NewPublicAccountContributionRequest, NewPublicSponsorRequest,
-    NewPublicTokenRequest, PublicAccessKey, PublicAccountContribution, PublicSponsor,
-    PublicUsageLookupKey, PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED,
-    PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
+    self as core_store, AdminRuntimeConfig, CodexRateLimitStatus,
+    NewPublicAccountContributionRequest, NewPublicSponsorRequest, NewPublicTokenRequest,
+    PublicAccessKey, PublicAccountContribution, PublicSponsor, PublicUsageLookupKey,
+    PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED, PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
 };
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 
@@ -222,6 +222,13 @@ pub struct KiroAccountRecord {
     pub created_at_ms: i64,
     /// Update timestamp.
     pub updated_at_ms: i64,
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
 }
 
 impl SqliteControlStore {
@@ -593,6 +600,23 @@ impl SqliteControlStore {
             )
             .optional()
             .context("load runtime config")
+    }
+
+    /// Load the singleton runtime config row or the built-in default.
+    pub fn get_runtime_config_or_default(&self) -> anyhow::Result<RuntimeConfigRecord> {
+        Ok(self.get_runtime_config()?.unwrap_or_default())
+    }
+
+    /// Persist the admin-facing runtime config while preserving internal-only
+    /// storage fields.
+    pub fn update_admin_runtime_config(
+        &self,
+        config: &AdminRuntimeConfig,
+    ) -> anyhow::Result<AdminRuntimeConfig> {
+        let mut record = self.get_runtime_config_or_default()?;
+        record.apply_admin_runtime_config(config);
+        self.upsert_runtime_config(&record)?;
+        Ok(record.to_admin_runtime_config())
     }
 
     /// Insert or update the cached Codex public rate-limit snapshot.
@@ -1133,6 +1157,130 @@ fn decode_runtime_config(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeCon
         kiro_conversation_anchor_ttl_seconds: row.get(26)?,
         updated_at_ms: row.get(27)?,
     })
+}
+
+impl Default for RuntimeConfigRecord {
+    fn default() -> Self {
+        Self {
+            id: "default".to_string(),
+            auth_cache_ttl_seconds: core_store::DEFAULT_AUTH_CACHE_TTL_SECONDS as i64,
+            max_request_body_bytes: core_store::DEFAULT_MAX_REQUEST_BODY_BYTES as i64,
+            account_failure_retry_limit: core_store::DEFAULT_ACCOUNT_FAILURE_RETRY_LIMIT as i64,
+            codex_client_version: core_store::DEFAULT_CODEX_CLIENT_VERSION.to_string(),
+            kiro_channel_max_concurrency: core_store::DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY as i64,
+            kiro_channel_min_start_interval_ms:
+                core_store::DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS as i64,
+            codex_status_refresh_min_interval_seconds:
+                core_store::DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS as i64,
+            codex_status_refresh_max_interval_seconds:
+                core_store::DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS as i64,
+            codex_status_account_jitter_max_seconds:
+                core_store::DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS as i64,
+            kiro_status_refresh_min_interval_seconds:
+                core_store::DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS as i64,
+            kiro_status_refresh_max_interval_seconds:
+                core_store::DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS as i64,
+            kiro_status_account_jitter_max_seconds:
+                core_store::DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS as i64,
+            usage_event_flush_batch_size: core_store::DEFAULT_USAGE_EVENT_FLUSH_BATCH_SIZE as i64,
+            usage_event_flush_interval_seconds:
+                core_store::DEFAULT_USAGE_EVENT_FLUSH_INTERVAL_SECONDS as i64,
+            usage_event_flush_max_buffer_bytes:
+                core_store::DEFAULT_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES as i64,
+            usage_event_maintenance_enabled: core_store::DEFAULT_USAGE_EVENT_MAINTENANCE_ENABLED,
+            usage_event_maintenance_interval_seconds:
+                core_store::DEFAULT_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS as i64,
+            usage_event_detail_retention_days:
+                core_store::DEFAULT_USAGE_EVENT_DETAIL_RETENTION_DAYS,
+            kiro_cache_kmodels_json: core_store::default_kiro_cache_kmodels_json(),
+            kiro_billable_model_multipliers_json:
+                core_store::default_kiro_billable_model_multipliers_json(),
+            kiro_cache_policy_json: core_store::default_kiro_cache_policy_json(),
+            kiro_prefix_cache_mode: core_store::DEFAULT_KIRO_PREFIX_CACHE_MODE.to_string(),
+            kiro_prefix_cache_max_tokens: core_store::DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS as i64,
+            kiro_prefix_cache_entry_ttl_seconds:
+                core_store::DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS as i64,
+            kiro_conversation_anchor_max_entries:
+                core_store::DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES as i64,
+            kiro_conversation_anchor_ttl_seconds:
+                core_store::DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS as i64,
+            updated_at_ms: now_ms(),
+        }
+    }
+}
+
+impl RuntimeConfigRecord {
+    /// Convert the storage row into the admin response view.
+    pub fn to_admin_runtime_config(&self) -> AdminRuntimeConfig {
+        AdminRuntimeConfig {
+            auth_cache_ttl_seconds: self.auth_cache_ttl_seconds as u64,
+            max_request_body_bytes: self.max_request_body_bytes as u64,
+            account_failure_retry_limit: self.account_failure_retry_limit as u64,
+            codex_client_version: self.codex_client_version.clone(),
+            codex_status_refresh_min_interval_seconds: self
+                .codex_status_refresh_min_interval_seconds
+                as u64,
+            codex_status_refresh_max_interval_seconds: self
+                .codex_status_refresh_max_interval_seconds
+                as u64,
+            codex_status_account_jitter_max_seconds: self.codex_status_account_jitter_max_seconds
+                as u64,
+            kiro_status_refresh_min_interval_seconds: self.kiro_status_refresh_min_interval_seconds
+                as u64,
+            kiro_status_refresh_max_interval_seconds: self.kiro_status_refresh_max_interval_seconds
+                as u64,
+            kiro_status_account_jitter_max_seconds: self.kiro_status_account_jitter_max_seconds
+                as u64,
+            usage_event_flush_batch_size: self.usage_event_flush_batch_size as u64,
+            usage_event_flush_interval_seconds: self.usage_event_flush_interval_seconds as u64,
+            usage_event_flush_max_buffer_bytes: self.usage_event_flush_max_buffer_bytes as u64,
+            kiro_cache_kmodels_json: self.kiro_cache_kmodels_json.clone(),
+            kiro_billable_model_multipliers_json: self.kiro_billable_model_multipliers_json.clone(),
+            kiro_cache_policy_json: self.kiro_cache_policy_json.clone(),
+            kiro_prefix_cache_mode: self.kiro_prefix_cache_mode.clone(),
+            kiro_prefix_cache_max_tokens: self.kiro_prefix_cache_max_tokens as u64,
+            kiro_prefix_cache_entry_ttl_seconds: self.kiro_prefix_cache_entry_ttl_seconds as u64,
+            kiro_conversation_anchor_max_entries: self.kiro_conversation_anchor_max_entries as u64,
+            kiro_conversation_anchor_ttl_seconds: self.kiro_conversation_anchor_ttl_seconds as u64,
+        }
+    }
+
+    /// Apply the admin-visible config fields and preserve internal-only fields.
+    pub fn apply_admin_runtime_config(&mut self, config: &AdminRuntimeConfig) {
+        self.id = "default".to_string();
+        self.auth_cache_ttl_seconds = config.auth_cache_ttl_seconds as i64;
+        self.max_request_body_bytes = config.max_request_body_bytes as i64;
+        self.account_failure_retry_limit = config.account_failure_retry_limit as i64;
+        self.codex_client_version = config.codex_client_version.clone();
+        self.codex_status_refresh_min_interval_seconds =
+            config.codex_status_refresh_min_interval_seconds as i64;
+        self.codex_status_refresh_max_interval_seconds =
+            config.codex_status_refresh_max_interval_seconds as i64;
+        self.codex_status_account_jitter_max_seconds =
+            config.codex_status_account_jitter_max_seconds as i64;
+        self.kiro_status_refresh_min_interval_seconds =
+            config.kiro_status_refresh_min_interval_seconds as i64;
+        self.kiro_status_refresh_max_interval_seconds =
+            config.kiro_status_refresh_max_interval_seconds as i64;
+        self.kiro_status_account_jitter_max_seconds =
+            config.kiro_status_account_jitter_max_seconds as i64;
+        self.usage_event_flush_batch_size = config.usage_event_flush_batch_size as i64;
+        self.usage_event_flush_interval_seconds = config.usage_event_flush_interval_seconds as i64;
+        self.usage_event_flush_max_buffer_bytes = config.usage_event_flush_max_buffer_bytes as i64;
+        self.kiro_cache_kmodels_json = config.kiro_cache_kmodels_json.clone();
+        self.kiro_billable_model_multipliers_json =
+            config.kiro_billable_model_multipliers_json.clone();
+        self.kiro_cache_policy_json = config.kiro_cache_policy_json.clone();
+        self.kiro_prefix_cache_mode = config.kiro_prefix_cache_mode.clone();
+        self.kiro_prefix_cache_max_tokens = config.kiro_prefix_cache_max_tokens as i64;
+        self.kiro_prefix_cache_entry_ttl_seconds =
+            config.kiro_prefix_cache_entry_ttl_seconds as i64;
+        self.kiro_conversation_anchor_max_entries =
+            config.kiro_conversation_anchor_max_entries as i64;
+        self.kiro_conversation_anchor_ttl_seconds =
+            config.kiro_conversation_anchor_ttl_seconds as i64;
+        self.updated_at_ms = now_ms();
+    }
 }
 
 #[cfg(test)]

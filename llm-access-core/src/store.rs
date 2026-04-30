@@ -1,5 +1,7 @@
 //! Storage traits consumed by provider runtimes.
 
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -10,10 +12,252 @@ pub const DEFAULT_AUTH_CACHE_TTL_SECONDS: u64 = 60;
 /// Default Codex status refresh interval used before runtime config is
 /// imported.
 pub const DEFAULT_CODEX_STATUS_REFRESH_SECONDS: u64 = 300;
+/// Default maximum request body size enforced by provider request handlers.
+pub const DEFAULT_MAX_REQUEST_BODY_BYTES: u64 = 8 * 1024 * 1024;
+/// Default consecutive upstream failure threshold before an account is skipped.
+pub const DEFAULT_ACCOUNT_FAILURE_RETRY_LIMIT: u64 = 3;
+/// Default Codex client version sent to upstream requests.
+pub const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.124.0";
+/// Default lower bound for randomized Codex status refresh.
+pub const DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS: u64 = 240;
+/// Default upper bound for randomized Codex status refresh.
+pub const DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS: u64 = 300;
+/// Default maximum Codex account refresh jitter.
+pub const DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS: u64 = 10;
+/// Default lower bound for randomized Kiro status refresh.
+pub const DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS: u64 = 240;
+/// Default upper bound for randomized Kiro status refresh.
+pub const DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS: u64 = 300;
+/// Default maximum Kiro account refresh jitter.
+pub const DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS: u64 = 10;
+/// Default usage-event flush batch size.
+pub const DEFAULT_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 256;
+/// Default usage-event timed flush interval.
+pub const DEFAULT_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 15;
+/// Default usage-event buffered payload cap.
+pub const DEFAULT_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
+/// Default usage maintenance toggle.
+pub const DEFAULT_USAGE_EVENT_MAINTENANCE_ENABLED: bool = true;
+/// Default usage maintenance interval.
+pub const DEFAULT_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS: u64 = 60 * 60;
+/// Default detailed usage retention.
+pub const DEFAULT_USAGE_EVENT_DETAIL_RETENTION_DAYS: i64 = 7;
+/// Default Kiro prefix cache mode.
+pub const DEFAULT_KIRO_PREFIX_CACHE_MODE: &str = "prefix_tree";
+/// Alternate Kiro prefix cache mode retained for admin compatibility.
+pub const KIRO_PREFIX_CACHE_MODE_FORMULA: &str = "formula";
+/// Default Kiro prefix-cache budget.
+pub const DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS: u64 = 4_000_000;
+/// Default Kiro prefix-cache entry TTL.
+pub const DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS: u64 = 6 * 60 * 60;
+/// Default Kiro conversation anchor capacity.
+pub const DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES: u64 = 20_000;
+/// Default Kiro conversation anchor TTL.
+pub const DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS: u64 = 24 * 60 * 60;
+/// Default Kiro account channel concurrency retained in storage.
+pub const DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 1;
+/// Default Kiro account request pacing interval retained in storage.
+pub const DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS: u64 = 0;
 /// Pending status used by public token/account contribution requests.
 pub const PUBLIC_TOKEN_REQUEST_STATUS_PENDING: &str = "pending";
 /// Submitted status used by public sponsor requests before payment email.
 pub const PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED: &str = "submitted";
+
+/// Runtime config view shared by admin handlers and persistent stores.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminRuntimeConfig {
+    /// Auth cache TTL in seconds.
+    pub auth_cache_ttl_seconds: u64,
+    /// Maximum request body size in bytes.
+    pub max_request_body_bytes: u64,
+    /// Account failure retry limit.
+    pub account_failure_retry_limit: u64,
+    /// Default Codex client version.
+    pub codex_client_version: String,
+    /// Codex minimum status refresh interval.
+    pub codex_status_refresh_min_interval_seconds: u64,
+    /// Codex maximum status refresh interval.
+    pub codex_status_refresh_max_interval_seconds: u64,
+    /// Codex per-account refresh jitter.
+    pub codex_status_account_jitter_max_seconds: u64,
+    /// Kiro minimum status refresh interval.
+    pub kiro_status_refresh_min_interval_seconds: u64,
+    /// Kiro maximum status refresh interval.
+    pub kiro_status_refresh_max_interval_seconds: u64,
+    /// Kiro per-account refresh jitter.
+    pub kiro_status_account_jitter_max_seconds: u64,
+    /// Usage event flush batch size.
+    pub usage_event_flush_batch_size: u64,
+    /// Usage event timed flush interval.
+    pub usage_event_flush_interval_seconds: u64,
+    /// Usage event buffered payload cap.
+    pub usage_event_flush_max_buffer_bytes: u64,
+    /// Kiro cache k-model coefficients JSON.
+    pub kiro_cache_kmodels_json: String,
+    /// Kiro billable model multiplier JSON.
+    pub kiro_billable_model_multipliers_json: String,
+    /// Kiro cache policy JSON.
+    pub kiro_cache_policy_json: String,
+    /// Kiro prefix cache mode.
+    pub kiro_prefix_cache_mode: String,
+    /// Kiro prefix cache token budget.
+    pub kiro_prefix_cache_max_tokens: u64,
+    /// Kiro prefix cache entry TTL.
+    pub kiro_prefix_cache_entry_ttl_seconds: u64,
+    /// Kiro conversation anchor max entries.
+    pub kiro_conversation_anchor_max_entries: u64,
+    /// Kiro conversation anchor TTL.
+    pub kiro_conversation_anchor_ttl_seconds: u64,
+}
+
+impl Default for AdminRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            auth_cache_ttl_seconds: DEFAULT_AUTH_CACHE_TTL_SECONDS,
+            max_request_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
+            account_failure_retry_limit: DEFAULT_ACCOUNT_FAILURE_RETRY_LIMIT,
+            codex_client_version: DEFAULT_CODEX_CLIENT_VERSION.to_string(),
+            codex_status_refresh_min_interval_seconds:
+                DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
+            codex_status_refresh_max_interval_seconds:
+                DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+            codex_status_account_jitter_max_seconds:
+                DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+            kiro_status_refresh_min_interval_seconds:
+                DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
+            kiro_status_refresh_max_interval_seconds:
+                DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+            kiro_status_account_jitter_max_seconds: DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+            usage_event_flush_batch_size: DEFAULT_USAGE_EVENT_FLUSH_BATCH_SIZE,
+            usage_event_flush_interval_seconds: DEFAULT_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
+            usage_event_flush_max_buffer_bytes: DEFAULT_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
+            kiro_cache_kmodels_json: default_kiro_cache_kmodels_json(),
+            kiro_billable_model_multipliers_json: default_kiro_billable_model_multipliers_json(),
+            kiro_cache_policy_json: default_kiro_cache_policy_json(),
+            kiro_prefix_cache_mode: DEFAULT_KIRO_PREFIX_CACHE_MODE.to_string(),
+            kiro_prefix_cache_max_tokens: DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS,
+            kiro_prefix_cache_entry_ttl_seconds: DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS,
+            kiro_conversation_anchor_max_entries: DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
+            kiro_conversation_anchor_ttl_seconds: DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS,
+        }
+    }
+}
+
+/// Admin request body for patching runtime config.
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
+pub struct UpdateAdminRuntimeConfig {
+    /// Auth cache TTL in seconds.
+    #[serde(default)]
+    pub auth_cache_ttl_seconds: Option<u64>,
+    /// Maximum request body size in bytes.
+    #[serde(default)]
+    pub max_request_body_bytes: Option<u64>,
+    /// Account failure retry limit.
+    #[serde(default)]
+    pub account_failure_retry_limit: Option<u64>,
+    /// Default Codex client version.
+    #[serde(default)]
+    pub codex_client_version: Option<String>,
+    /// Codex minimum status refresh interval.
+    #[serde(default)]
+    pub codex_status_refresh_min_interval_seconds: Option<u64>,
+    /// Codex maximum status refresh interval.
+    #[serde(default)]
+    pub codex_status_refresh_max_interval_seconds: Option<u64>,
+    /// Codex per-account refresh jitter.
+    #[serde(default)]
+    pub codex_status_account_jitter_max_seconds: Option<u64>,
+    /// Kiro minimum status refresh interval.
+    #[serde(default)]
+    pub kiro_status_refresh_min_interval_seconds: Option<u64>,
+    /// Kiro maximum status refresh interval.
+    #[serde(default)]
+    pub kiro_status_refresh_max_interval_seconds: Option<u64>,
+    /// Kiro per-account refresh jitter.
+    #[serde(default)]
+    pub kiro_status_account_jitter_max_seconds: Option<u64>,
+    /// Usage event flush batch size.
+    #[serde(default)]
+    pub usage_event_flush_batch_size: Option<u64>,
+    /// Usage event timed flush interval.
+    #[serde(default)]
+    pub usage_event_flush_interval_seconds: Option<u64>,
+    /// Usage event buffered payload cap.
+    #[serde(default)]
+    pub usage_event_flush_max_buffer_bytes: Option<u64>,
+    /// Kiro cache k-model coefficients JSON.
+    #[serde(default)]
+    pub kiro_cache_kmodels_json: Option<String>,
+    /// Kiro billable model multiplier JSON.
+    #[serde(default)]
+    pub kiro_billable_model_multipliers_json: Option<String>,
+    /// Kiro cache policy JSON.
+    #[serde(default)]
+    pub kiro_cache_policy_json: Option<String>,
+    /// Kiro prefix cache mode.
+    #[serde(default)]
+    pub kiro_prefix_cache_mode: Option<String>,
+    /// Kiro prefix cache token budget.
+    #[serde(default)]
+    pub kiro_prefix_cache_max_tokens: Option<u64>,
+    /// Kiro prefix cache entry TTL.
+    #[serde(default)]
+    pub kiro_prefix_cache_entry_ttl_seconds: Option<u64>,
+    /// Kiro conversation anchor max entries.
+    #[serde(default)]
+    pub kiro_conversation_anchor_max_entries: Option<u64>,
+    /// Kiro conversation anchor TTL.
+    #[serde(default)]
+    pub kiro_conversation_anchor_ttl_seconds: Option<u64>,
+}
+
+/// Return the default Kiro cache k-model JSON.
+pub fn default_kiro_cache_kmodels_json() -> String {
+    let map = BTreeMap::from([
+        ("claude-haiku-4-5-20251001".to_string(), 2.3681034438052206e-06),
+        ("claude-opus-4-6".to_string(), 8.061927916785985e-06),
+        ("claude-sonnet-4-6".to_string(), 5.055065250835128e-06),
+    ]);
+    serde_json::to_string(&map).expect("default kmodels should serialize")
+}
+
+/// Return the default Kiro billable multiplier JSON.
+pub fn default_kiro_billable_model_multipliers_json() -> String {
+    let map = BTreeMap::from([
+        ("haiku".to_string(), 1.0),
+        ("opus".to_string(), 1.0),
+        ("sonnet".to_string(), 1.0),
+    ]);
+    serde_json::to_string(&map).expect("default billable multipliers should serialize")
+}
+
+/// Return the default Kiro cache policy JSON.
+pub fn default_kiro_cache_policy_json() -> String {
+    serde_json::json!({
+        "small_input_high_credit_boost": {
+            "target_input_tokens": 100000,
+            "credit_start": 1.0,
+            "credit_end": 1.8
+        },
+        "prefix_tree_credit_ratio_bands": [
+            {
+                "credit_start": 0.3,
+                "credit_end": 1.0,
+                "cache_ratio_start": 0.7,
+                "cache_ratio_end": 0.2
+            },
+            {
+                "credit_start": 1.0,
+                "credit_end": 2.5,
+                "cache_ratio_start": 0.2,
+                "cache_ratio_end": 0.0
+            }
+        ],
+        "high_credit_diagnostic_threshold": 2.0,
+        "anthropic_cache_creation_input_ratio": 0.0
+    })
+    .to_string()
+}
 
 /// Key state used on the hot request path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -294,6 +538,20 @@ pub trait PublicSubmissionStore: Send + Sync {
     ) -> anyhow::Result<()>;
 }
 
+/// Admin runtime config queries used by the standalone frontend surface.
+#[async_trait]
+pub trait AdminConfigStore: Send + Sync {
+    /// Load the current runtime config, or the built-in defaults if no row has
+    /// been imported yet.
+    async fn get_admin_runtime_config(&self) -> anyhow::Result<AdminRuntimeConfig>;
+
+    /// Persist a full runtime config row and return the stored view.
+    async fn update_admin_runtime_config(
+        &self,
+        config: AdminRuntimeConfig,
+    ) -> anyhow::Result<AdminRuntimeConfig>;
+}
+
 /// Empty public-access store used by isolated unit tests.
 pub struct EmptyPublicAccessStore;
 
@@ -362,6 +620,23 @@ impl PublicSubmissionStore for EmptyPublicSubmissionStore {
         _request: NewPublicSponsorRequest,
     ) -> anyhow::Result<()> {
         Ok(())
+    }
+}
+
+/// Empty admin config store used by isolated unit tests.
+pub struct EmptyAdminConfigStore;
+
+#[async_trait]
+impl AdminConfigStore for EmptyAdminConfigStore {
+    async fn get_admin_runtime_config(&self) -> anyhow::Result<AdminRuntimeConfig> {
+        Ok(AdminRuntimeConfig::default())
+    }
+
+    async fn update_admin_runtime_config(
+        &self,
+        config: AdminRuntimeConfig,
+    ) -> anyhow::Result<AdminRuntimeConfig> {
+        Ok(config)
     }
 }
 

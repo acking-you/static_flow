@@ -1,5 +1,6 @@
 //! Standalone HTTP service shell for LLM access.
 
+mod admin;
 /// Command-line and environment configuration.
 pub mod config;
 /// Local Kiro compatibility endpoints.
@@ -29,14 +30,15 @@ use axum::{
 };
 use config::{CliCommand, ServeConfig, StorageConfig};
 use llm_access_core::store::{
-    PublicAccessStore, PublicCommunityStore, PublicStatusStore, PublicSubmissionStore,
-    PublicUsageStore,
+    AdminConfigStore, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
+    PublicSubmissionStore, PublicUsageStore,
 };
 use serde::Serialize;
 
 #[derive(Clone)]
 struct HttpState {
     provider_state: provider::ProviderState,
+    admin_config_store: Arc<dyn AdminConfigStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
@@ -71,6 +73,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
     let provider_state = provider::ProviderState::new(runtime.control_store());
     let state = HttpState {
         provider_state,
+        admin_config_store: runtime.admin_config_store(),
         public_access_store: runtime.public_access_store(),
         public_community_store: runtime.public_community_store(),
         public_usage_store: runtime.public_usage_store(),
@@ -81,6 +84,10 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/version", get(version))
+        .route(
+            "/admin/llm-gateway/config",
+            get(admin::get_llm_gateway_config).post(admin::post_llm_gateway_config),
+        )
         .route("/api/llm-gateway/access", get(public::get_llm_gateway_access))
         .route("/api/llm-gateway/model-catalog.json", get(public::get_llm_gateway_model_catalog))
         .route("/api/llm-gateway/status", get(public::get_llm_gateway_status))
@@ -491,6 +498,85 @@ mod tests {
             .expect("body");
         let body = String::from_utf8(body.to_vec()).expect("utf8 body");
         assert!(body.contains("queryable key not found"));
+    }
+
+    #[tokio::test]
+    async fn router_serves_admin_runtime_config_for_local_request() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/llm-gateway/config")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(value["auth_cache_ttl_seconds"], 60);
+        assert_eq!(value["max_request_body_bytes"], 8 * 1024 * 1024);
+        assert_eq!(value["codex_client_version"], "0.124.0");
+        assert_eq!(value["kiro_prefix_cache_mode"], "prefix_tree");
+    }
+
+    #[tokio::test]
+    async fn router_rejects_remote_admin_runtime_config_without_token() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/llm-gateway/config")
+                    .header(header::HOST, "ackingliu.top")
+                    .header("x-forwarded-for", "198.51.100.10")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains("Admin endpoint is local-only"));
+    }
+
+    #[tokio::test]
+    async fn router_updates_admin_runtime_config_for_local_request() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/llm-gateway/config")
+                    .header(header::HOST, "localhost")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{
+                            "auth_cache_ttl_seconds": 120,
+                            "max_request_body_bytes": 2097152,
+                            "codex_client_version": " 0.125.0 ",
+                            "kiro_prefix_cache_mode": "formula"
+                        }"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(value["auth_cache_ttl_seconds"], 120);
+        assert_eq!(value["max_request_body_bytes"], 2 * 1024 * 1024);
+        assert_eq!(value["codex_client_version"], "0.125.0");
+        assert_eq!(value["kiro_prefix_cache_mode"], "formula");
     }
 
     #[tokio::test]

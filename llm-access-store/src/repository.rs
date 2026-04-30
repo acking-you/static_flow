@@ -6,11 +6,12 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use llm_access_core::{
     store::{
-        AuthenticatedKey, CodexRateLimitStatus, ControlStore, NewPublicAccountContributionRequest,
-        NewPublicSponsorRequest, NewPublicTokenRequest, PublicAccessKey, PublicAccessStore,
-        PublicAccountContribution, PublicCommunityStore, PublicSponsor, PublicStatusStore,
-        PublicSubmissionStore, PublicUsageLookupKey, PublicUsageStore, UsageEventSink,
-        DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_STATUS_REFRESH_SECONDS,
+        AdminConfigStore, AdminRuntimeConfig, AuthenticatedKey, CodexRateLimitStatus, ControlStore,
+        NewPublicAccountContributionRequest, NewPublicSponsorRequest, NewPublicTokenRequest,
+        PublicAccessKey, PublicAccessStore, PublicAccountContribution, PublicCommunityStore,
+        PublicSponsor, PublicStatusStore, PublicSubmissionStore, PublicUsageLookupKey,
+        PublicUsageStore, UsageEventSink, DEFAULT_AUTH_CACHE_TTL_SECONDS,
+        DEFAULT_CODEX_STATUS_REFRESH_SECONDS,
     },
     usage::UsageEvent,
 };
@@ -47,6 +48,38 @@ fn hash_bearer_secret(secret: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(secret.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+#[async_trait]
+impl AdminConfigStore for SqliteControlRepository {
+    async fn get_admin_runtime_config(&self) -> anyhow::Result<AdminRuntimeConfig> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store
+                .get_runtime_config_or_default()
+                .map(|record| record.to_admin_runtime_config())
+        })
+        .await
+        .context("sqlite control repository admin config read task failed")?
+    }
+
+    async fn update_admin_runtime_config(
+        &self,
+        config: AdminRuntimeConfig,
+    ) -> anyhow::Result<AdminRuntimeConfig> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.update_admin_runtime_config(&config)
+        })
+        .await
+        .context("sqlite control repository admin config update task failed")?
+    }
 }
 
 #[async_trait]
@@ -253,9 +286,9 @@ mod tests {
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType, RouteStrategy},
         store::{
-            CodexCredits, CodexPublicAccountStatus, CodexRateLimitBucket, CodexRateLimitStatus,
-            CodexRateLimitWindow, ControlStore, PublicAccessStore, PublicCommunityStore,
-            PublicStatusStore, PublicUsageStore, UsageEventSink,
+            AdminConfigStore, CodexCredits, CodexPublicAccountStatus, CodexRateLimitBucket,
+            CodexRateLimitStatus, CodexRateLimitWindow, ControlStore, PublicAccessStore,
+            PublicCommunityStore, PublicStatusStore, PublicUsageStore, UsageEventSink,
         },
         usage::{UsageEvent, UsageTiming},
     };
@@ -330,6 +363,41 @@ mod tests {
                 account_name: Some("primary".to_string()),
             }],
         }
+    }
+
+    #[tokio::test]
+    async fn sqlite_repository_reads_and_updates_admin_runtime_config() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+
+        let repo = super::SqliteControlRepository::new(conn);
+        let mut config = repo
+            .get_admin_runtime_config()
+            .await
+            .expect("load default config");
+        assert_eq!(config.auth_cache_ttl_seconds, 60);
+        assert_eq!(config.max_request_body_bytes, 8 * 1024 * 1024);
+        assert_eq!(config.kiro_prefix_cache_mode, "prefix_tree");
+
+        config.auth_cache_ttl_seconds = 75;
+        config.codex_client_version = "0.125.0".to_string();
+        config.kiro_prefix_cache_mode = "formula".to_string();
+        let updated = repo
+            .update_admin_runtime_config(config)
+            .await
+            .expect("update config");
+
+        assert_eq!(updated.auth_cache_ttl_seconds, 75);
+        assert_eq!(updated.codex_client_version, "0.125.0");
+        assert_eq!(updated.kiro_prefix_cache_mode, "formula");
+
+        let stored = repo
+            .get_admin_runtime_config()
+            .await
+            .expect("reload config");
+        assert_eq!(stored.auth_cache_ttl_seconds, 75);
+        assert_eq!(stored.codex_client_version, "0.125.0");
+        assert_eq!(stored.kiro_prefix_cache_mode, "formula");
     }
 
     #[tokio::test]
