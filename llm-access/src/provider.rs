@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use axum::{
     body::Body,
     extract::State,
-    http::{header, HeaderMap, Request, StatusCode},
+    http::{header, HeaderMap, Method, Request, StatusCode},
     response::{IntoResponse, Response},
 };
 use llm_access_core::{
@@ -25,7 +25,7 @@ pub struct ProviderState {
 impl ProviderState {
     /// Create provider request state.
     pub fn new(control_store: Arc<dyn ControlStore>) -> Self {
-        Self::with_dispatcher(control_store, Arc::new(NotImplementedProviderDispatcher))
+        Self::with_dispatcher(control_store, Arc::new(DefaultProviderDispatcher))
     }
 
     /// Create provider request state with an explicit dispatcher.
@@ -47,11 +47,14 @@ pub trait ProviderDispatcher: Send + Sync {
     async fn dispatch(&self, key: AuthenticatedKey, request: Request<Body>) -> Response;
 }
 
-struct NotImplementedProviderDispatcher;
+struct DefaultProviderDispatcher;
 
 #[async_trait]
-impl ProviderDispatcher for NotImplementedProviderDispatcher {
-    async fn dispatch(&self, _key: AuthenticatedKey, _request: Request<Body>) -> Response {
+impl ProviderDispatcher for DefaultProviderDispatcher {
+    async fn dispatch(&self, key: AuthenticatedKey, request: Request<Body>) -> Response {
+        if should_serve_local_codex_models(&key, &request) {
+            return local_codex_models_response();
+        }
         (StatusCode::NOT_IMPLEMENTED, "provider dispatch is not wired").into_response()
     }
 }
@@ -155,6 +158,48 @@ fn quota_exhausted_response(key: &AuthenticatedKey) -> Response {
     } else {
         (StatusCode::TOO_MANY_REQUESTS, "quota_exceeded").into_response()
     }
+}
+
+fn should_serve_local_codex_models(key: &AuthenticatedKey, request: &Request<Body>) -> bool {
+    ProviderType::from_storage_str(&key.provider_type) == Some(ProviderType::Codex)
+        && request.method() == Method::GET
+        && normalized_codex_gateway_path(request.uri().path()) == Some("/v1/models")
+}
+
+fn normalized_codex_gateway_path(path: &str) -> Option<&str> {
+    if path == "/v1/models" {
+        return Some(path);
+    }
+    path.strip_prefix("/api/llm-gateway")
+        .or_else(|| path.strip_prefix("/api/codex-gateway"))
+        .filter(|value| *value == "/v1/models")
+}
+
+fn local_codex_models_response() -> Response {
+    let body = match llm_access_codex::models::default_openai_models_response_json(now_seconds()) {
+        Ok(body) => body,
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to build codex models response")
+                .into_response();
+        },
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(body))
+        .unwrap_or_else(|_| {
+            (StatusCode::INTERNAL_SERVER_ERROR, "failed to build codex models response")
+                .into_response()
+        })
+}
+
+fn now_seconds() -> i64 {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    seconds.min(i64::MAX as u64) as i64
 }
 
 #[cfg(test)]
@@ -472,5 +517,27 @@ mod tests {
             "key-2".to_string(),
             "/api/codex-gateway/v1/responses".to_string()
         )]);
+    }
+
+    #[tokio::test]
+    async fn provider_entry_serves_codex_models_locally_after_auth() {
+        let state = super::ProviderState::new(Arc::new(TestStore));
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/llm-gateway/v1/models")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .body(Body::empty())
+            .expect("request");
+
+        let response = super::provider_entry(state, request).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains(r#""object":"list""#));
+        assert!(body.contains(r#""id":"gpt-5.5""#));
+        assert!(body.contains(r#""owned_by":"static-flow""#));
     }
 }

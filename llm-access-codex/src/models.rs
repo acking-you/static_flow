@@ -166,6 +166,42 @@ pub fn default_public_model_catalog_json() -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(&default_public_model_catalog_value()?)?)
 }
 
+/// Build an OpenAI-compatible `/v1/models` payload from a Codex model catalog.
+pub fn openai_models_response_value_from_catalog(
+    catalog: &Value,
+    map_gpt53_codex_to_spark: bool,
+    created: i64,
+) -> Value {
+    let data = apply_model_aliases(
+        extract_gateway_model_descriptors(catalog, gateway_models_owner()),
+        map_gpt53_codex_to_spark,
+    )
+    .into_iter()
+    .map(|item| {
+        json!({
+            "id": item.id,
+            "object": "model",
+            "created": created,
+            "owned_by": item.owned_by,
+        })
+    })
+    .collect::<Vec<_>>();
+    json!({
+        "object": "list",
+        "data": data,
+    })
+}
+
+/// Encode the standalone service's default OpenAI-compatible `/v1/models`
+/// response as JSON.
+pub fn default_openai_models_response_json(created: i64) -> Result<Vec<u8>> {
+    Ok(serde_json::to_vec(&openai_models_response_value_from_catalog(
+        &default_public_model_catalog_value()?,
+        false,
+        created,
+    ))?)
+}
+
 #[cfg(test)]
 fn parse_public_model_catalog_json(body: &[u8], map_gpt53_codex_to_spark: bool) -> Result<Value> {
     use anyhow::Context;
@@ -325,5 +361,19 @@ mod tests {
             .get("base_instructions")
             .and_then(serde_json::Value::as_str)
             == Some(codex_default_instructions())));
+    }
+
+    #[test]
+    fn default_openai_models_response_uses_staticflow_owner() {
+        let body = super::default_openai_models_response_json(123)
+            .expect("default models response should build");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        let data = value["data"].as_array().expect("data should be an array");
+
+        assert_eq!(value["object"], "list");
+        assert!(data.iter().any(|item| item["id"] == "gpt-5.5"
+            && item["object"] == "model"
+            && item["created"] == 123
+            && item["owned_by"] == "static-flow"));
     }
 }

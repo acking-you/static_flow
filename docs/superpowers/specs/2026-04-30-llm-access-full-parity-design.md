@@ -321,6 +321,11 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
   compatibility endpoint. The response comes from a persisted SQLite Codex
   public status snapshot when present, and otherwise exposes the same `loading`
   empty-cache shape used by the existing backend before its refresh task warms.
+- `llm-access` now serves authenticated Codex/OpenAI model-list requests for
+  `/v1/models`, `/api/llm-gateway/v1/models`, and
+  `/api/codex-gateway/v1/models` from the standalone default Codex catalog.
+  Other Codex generation routes still remain behind the explicit provider
+  dispatch seam until the real upstream account runtime is wired.
 - `llm-access-kiro` now owns Kiro auth-file persistence, local Kiro CLI import,
   deterministic machine-id derivation, and token-count estimation. The backend
   keeps compatibility modules that re-export those implementations.
