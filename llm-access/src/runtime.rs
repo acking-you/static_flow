@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use llm_access_core::store::{
-    AdminConfigStore, AdminKeyStore, ControlStore, EmptyAdminConfigStore, EmptyAdminKeyStore,
+    AdminAccountGroupStore, AdminConfigStore, AdminKeyStore, AdminProxyStore, ControlStore,
+    EmptyAdminAccountGroupStore, EmptyAdminConfigStore, EmptyAdminKeyStore, EmptyAdminProxyStore,
     EmptyPublicAccessStore, EmptyPublicCommunityStore, EmptyPublicStatusStore,
     EmptyPublicSubmissionStore, EmptyPublicUsageStore, PublicAccessStore, PublicCommunityStore,
     PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
@@ -19,6 +20,8 @@ pub struct LlmAccessRuntime {
     control_store: Arc<dyn ControlStore>,
     admin_config_store: Arc<dyn AdminConfigStore>,
     admin_key_store: Arc<dyn AdminKeyStore>,
+    admin_account_group_store: Arc<dyn AdminAccountGroupStore>,
+    admin_proxy_store: Arc<dyn AdminProxyStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
@@ -32,6 +35,8 @@ struct LlmAccessStores {
     control_store: Arc<dyn ControlStore>,
     admin_config_store: Arc<dyn AdminConfigStore>,
     admin_key_store: Arc<dyn AdminKeyStore>,
+    admin_account_group_store: Arc<dyn AdminAccountGroupStore>,
+    admin_proxy_store: Arc<dyn AdminProxyStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
@@ -46,6 +51,8 @@ impl LlmAccessRuntime {
             control_store,
             admin_config_store: Arc::new(EmptyAdminConfigStore),
             admin_key_store: Arc::new(EmptyAdminKeyStore),
+            admin_account_group_store: Arc::new(EmptyAdminAccountGroupStore),
+            admin_proxy_store: Arc::new(EmptyAdminProxyStore),
             public_access_store: Arc::new(EmptyPublicAccessStore),
             public_community_store: Arc::new(EmptyPublicCommunityStore),
             public_usage_store: Arc::new(EmptyPublicUsageStore),
@@ -60,6 +67,8 @@ impl LlmAccessRuntime {
             control_store: stores.control_store,
             admin_config_store: stores.admin_config_store,
             admin_key_store: stores.admin_key_store,
+            admin_account_group_store: stores.admin_account_group_store,
+            admin_proxy_store: stores.admin_proxy_store,
             public_access_store: stores.public_access_store,
             public_community_store: stores.public_community_store,
             public_usage_store: stores.public_usage_store,
@@ -75,6 +84,8 @@ impl LlmAccessRuntime {
         let control_store: Arc<dyn ControlStore> = repository.clone();
         let admin_config_store: Arc<dyn AdminConfigStore> = repository.clone();
         let admin_key_store: Arc<dyn AdminKeyStore> = repository.clone();
+        let admin_account_group_store: Arc<dyn AdminAccountGroupStore> = repository.clone();
+        let admin_proxy_store: Arc<dyn AdminProxyStore> = repository.clone();
         let public_access_store: Arc<dyn PublicAccessStore> = repository.clone();
         let public_community_store: Arc<dyn PublicCommunityStore> = repository.clone();
         let public_usage_store: Arc<dyn PublicUsageStore> = repository.clone();
@@ -84,6 +95,8 @@ impl LlmAccessRuntime {
             control_store,
             admin_config_store,
             admin_key_store,
+            admin_account_group_store,
+            admin_proxy_store,
             public_access_store,
             public_community_store,
             public_usage_store,
@@ -105,6 +118,16 @@ impl LlmAccessRuntime {
     /// Admin key store used by local admin compatibility endpoints.
     pub fn admin_key_store(&self) -> Arc<dyn AdminKeyStore> {
         Arc::clone(&self.admin_key_store)
+    }
+
+    /// Admin account-group store used by local admin compatibility endpoints.
+    pub fn admin_account_group_store(&self) -> Arc<dyn AdminAccountGroupStore> {
+        Arc::clone(&self.admin_account_group_store)
+    }
+
+    /// Admin proxy store used by local admin compatibility endpoints.
+    pub fn admin_proxy_store(&self) -> Arc<dyn AdminProxyStore> {
+        Arc::clone(&self.admin_proxy_store)
     }
 
     /// Public access store used by unauthenticated compatibility endpoints.

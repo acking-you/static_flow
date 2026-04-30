@@ -6,8 +6,10 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use llm_access_core::{
     store::{
-        AdminConfigStore, AdminKey, AdminKeyPatch, AdminKeyStore, AdminRuntimeConfig,
-        AuthenticatedKey, CodexRateLimitStatus, ControlStore, NewAdminKey,
+        AdminAccountGroup, AdminAccountGroupPatch, AdminAccountGroupStore, AdminConfigStore,
+        AdminKey, AdminKeyPatch, AdminKeyStore, AdminProxyBinding, AdminProxyConfig,
+        AdminProxyConfigPatch, AdminProxyStore, AdminRuntimeConfig, AuthenticatedKey,
+        CodexRateLimitStatus, ControlStore, NewAdminAccountGroup, NewAdminKey, NewAdminProxyConfig,
         NewPublicAccountContributionRequest, NewPublicSponsorRequest, NewPublicTokenRequest,
         PublicAccessKey, PublicAccessStore, PublicAccountContribution, PublicCommunityStore,
         PublicSponsor, PublicStatusStore, PublicSubmissionStore, PublicUsageLookupKey,
@@ -137,6 +139,181 @@ impl AdminKeyStore for SqliteControlRepository {
         })
         .await
         .context("sqlite control repository admin key delete task failed")?
+    }
+}
+
+#[async_trait]
+impl AdminAccountGroupStore for SqliteControlRepository {
+    async fn list_admin_account_groups(
+        &self,
+        provider_type: &str,
+    ) -> anyhow::Result<Vec<AdminAccountGroup>> {
+        let provider_type = provider_type.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.list_admin_account_groups(&provider_type)
+        })
+        .await
+        .context("sqlite control repository account group list task failed")?
+    }
+
+    async fn create_admin_account_group(
+        &self,
+        group: NewAdminAccountGroup,
+    ) -> anyhow::Result<AdminAccountGroup> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.create_admin_account_group(&group)
+        })
+        .await
+        .context("sqlite control repository account group create task failed")?
+    }
+
+    async fn patch_admin_account_group(
+        &self,
+        group_id: &str,
+        patch: AdminAccountGroupPatch,
+    ) -> anyhow::Result<Option<AdminAccountGroup>> {
+        let group_id = group_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.patch_admin_account_group(&group_id, &patch)
+        })
+        .await
+        .context("sqlite control repository account group patch task failed")?
+    }
+
+    async fn delete_admin_account_group(
+        &self,
+        group_id: &str,
+    ) -> anyhow::Result<Option<AdminAccountGroup>> {
+        let group_id = group_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.delete_admin_account_group(&group_id)
+        })
+        .await
+        .context("sqlite control repository account group delete task failed")?
+    }
+}
+
+#[async_trait]
+impl AdminProxyStore for SqliteControlRepository {
+    async fn list_admin_proxy_configs(&self) -> anyhow::Result<Vec<AdminProxyConfig>> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.list_admin_proxy_configs()
+        })
+        .await
+        .context("sqlite control repository proxy config list task failed")?
+    }
+
+    async fn get_admin_proxy_config(
+        &self,
+        proxy_id: &str,
+    ) -> anyhow::Result<Option<AdminProxyConfig>> {
+        let proxy_id = proxy_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.get_admin_proxy_config(&proxy_id)
+        })
+        .await
+        .context("sqlite control repository proxy config get task failed")?
+    }
+
+    async fn create_admin_proxy_config(
+        &self,
+        proxy: NewAdminProxyConfig,
+    ) -> anyhow::Result<AdminProxyConfig> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.create_admin_proxy_config(&proxy)
+        })
+        .await
+        .context("sqlite control repository proxy config create task failed")?
+    }
+
+    async fn patch_admin_proxy_config(
+        &self,
+        proxy_id: &str,
+        patch: AdminProxyConfigPatch,
+    ) -> anyhow::Result<Option<AdminProxyConfig>> {
+        let proxy_id = proxy_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.patch_admin_proxy_config(&proxy_id, &patch)
+        })
+        .await
+        .context("sqlite control repository proxy config patch task failed")?
+    }
+
+    async fn delete_admin_proxy_config(
+        &self,
+        proxy_id: &str,
+    ) -> anyhow::Result<Option<AdminProxyConfig>> {
+        let proxy_id = proxy_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.delete_admin_proxy_config(&proxy_id)
+        })
+        .await
+        .context("sqlite control repository proxy config delete task failed")?
+    }
+
+    async fn list_admin_proxy_bindings(&self) -> anyhow::Result<Vec<AdminProxyBinding>> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.list_admin_proxy_bindings()
+        })
+        .await
+        .context("sqlite control repository proxy binding list task failed")?
+    }
+
+    async fn update_admin_proxy_binding(
+        &self,
+        provider_type: &str,
+        proxy_config_id: Option<String>,
+    ) -> anyhow::Result<AdminProxyBinding> {
+        let provider_type = provider_type.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.update_admin_proxy_binding(&provider_type, proxy_config_id)
+        })
+        .await
+        .context("sqlite control repository proxy binding update task failed")?
     }
 }
 
@@ -344,9 +521,11 @@ mod tests {
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType, RouteStrategy},
         store::{
-            AdminConfigStore, AdminKeyPatch, AdminKeyStore, CodexCredits, CodexPublicAccountStatus,
-            CodexRateLimitBucket, CodexRateLimitStatus, CodexRateLimitWindow, ControlStore,
-            NewAdminKey, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
+            AdminAccountGroupPatch, AdminAccountGroupStore, AdminConfigStore, AdminKeyPatch,
+            AdminKeyStore, AdminProxyConfigPatch, AdminProxyStore, CodexCredits,
+            CodexPublicAccountStatus, CodexRateLimitBucket, CodexRateLimitStatus,
+            CodexRateLimitWindow, ControlStore, NewAdminAccountGroup, NewAdminKey,
+            NewAdminProxyConfig, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
             PublicUsageStore, UsageEventSink,
         },
         usage::{UsageEvent, UsageTiming},
@@ -524,6 +703,104 @@ mod tests {
             .expect("key exists");
         assert_eq!(deleted.id, "llm-key-test");
         assert!(repo.list_admin_keys().await.expect("list keys").is_empty());
+    }
+
+    #[tokio::test]
+    async fn sqlite_repository_manages_admin_account_groups_and_proxies() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlRepository::new(conn);
+
+        let group = repo
+            .create_admin_account_group(NewAdminAccountGroup {
+                id: "llm-group-test".to_string(),
+                provider_type: "codex".to_string(),
+                name: "primary pool".to_string(),
+                account_names: vec!["codex-a".to_string(), "codex-b".to_string()],
+                created_at_ms: 100,
+            })
+            .await
+            .expect("create account group");
+        assert_eq!(group.id, "llm-group-test");
+        assert_eq!(group.provider_type, "codex");
+
+        let groups = repo
+            .list_admin_account_groups("codex")
+            .await
+            .expect("list account groups");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].account_names, vec!["codex-a", "codex-b"]);
+
+        let patched_group = repo
+            .patch_admin_account_group("llm-group-test", AdminAccountGroupPatch {
+                name: Some("patched pool".to_string()),
+                account_names: Some(vec!["codex-c".to_string()]),
+                updated_at_ms: 200,
+            })
+            .await
+            .expect("patch account group")
+            .expect("group exists");
+        assert_eq!(patched_group.name, "patched pool");
+        assert_eq!(patched_group.account_names, vec!["codex-c"]);
+
+        let proxy = repo
+            .create_admin_proxy_config(NewAdminProxyConfig {
+                id: "llm-proxy-test".to_string(),
+                name: "hk".to_string(),
+                proxy_url: "http://127.0.0.1:11111".to_string(),
+                proxy_username: Some("user".to_string()),
+                proxy_password: Some("pass".to_string()),
+                created_at_ms: 300,
+            })
+            .await
+            .expect("create proxy config");
+        assert_eq!(proxy.status, "active");
+
+        let binding = repo
+            .update_admin_proxy_binding("codex", Some("llm-proxy-test".to_string()))
+            .await
+            .expect("bind proxy");
+        assert_eq!(binding.effective_source, "binding");
+        assert_eq!(binding.effective_proxy_url.as_deref(), Some("http://127.0.0.1:11111"));
+
+        let patched_proxy = repo
+            .patch_admin_proxy_config("llm-proxy-test", AdminProxyConfigPatch {
+                status: Some("disabled".to_string()),
+                updated_at_ms: 400,
+                ..AdminProxyConfigPatch::default()
+            })
+            .await
+            .expect("patch proxy config")
+            .expect("proxy exists");
+        assert_eq!(patched_proxy.status, "disabled");
+
+        let bindings = repo
+            .list_admin_proxy_bindings()
+            .await
+            .expect("list proxy bindings");
+        let codex_binding = bindings
+            .iter()
+            .find(|binding| binding.provider_type == "codex")
+            .expect("codex binding");
+        assert_eq!(codex_binding.effective_source, "invalid");
+        assert_eq!(codex_binding.error_message.as_deref(), Some("bound proxy config is disabled"));
+
+        repo.update_admin_proxy_binding("codex", None)
+            .await
+            .expect("clear proxy binding");
+        let deleted_proxy = repo
+            .delete_admin_proxy_config("llm-proxy-test")
+            .await
+            .expect("delete proxy config")
+            .expect("proxy exists");
+        assert_eq!(deleted_proxy.id, "llm-proxy-test");
+
+        let deleted_group = repo
+            .delete_admin_account_group("llm-group-test")
+            .await
+            .expect("delete account group")
+            .expect("group exists");
+        assert_eq!(deleted_group.id, "llm-group-test");
     }
 
     #[tokio::test]

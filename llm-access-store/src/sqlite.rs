@@ -2,11 +2,12 @@
 
 use anyhow::Context;
 use llm_access_core::store::{
-    self as core_store, AdminKey, AdminKeyPatch, AdminRuntimeConfig, CodexRateLimitStatus,
-    NewAdminKey, NewPublicAccountContributionRequest, NewPublicSponsorRequest,
-    NewPublicTokenRequest, PublicAccessKey, PublicAccountContribution, PublicSponsor,
-    PublicUsageLookupKey, PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED,
-    PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
+    self as core_store, AdminAccountGroup, AdminAccountGroupPatch, AdminKey, AdminKeyPatch,
+    AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch, AdminRuntimeConfig,
+    CodexRateLimitStatus, NewAdminAccountGroup, NewAdminKey, NewAdminProxyConfig,
+    NewPublicAccountContributionRequest, NewPublicSponsorRequest, NewPublicTokenRequest,
+    PublicAccessKey, PublicAccountContribution, PublicSponsor, PublicUsageLookupKey,
+    PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED, PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
 };
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 
@@ -557,6 +558,345 @@ impl SqliteControlStore {
             .execute("DELETE FROM llm_keys WHERE key_id = ?1", [key_id])
             .context("delete admin key")?;
         Ok(Some(admin_key_from_bundle(&bundle)))
+    }
+
+    /// List admin account groups for one provider.
+    pub fn list_admin_account_groups(
+        &self,
+        provider_type: &str,
+    ) -> anyhow::Result<Vec<AdminAccountGroup>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT group_id, provider_type, name, account_names_json,
+                    created_at_ms, updated_at_ms
+                 FROM llm_account_groups
+                 WHERE provider_type = ?1
+                 ORDER BY name ASC, group_id ASC",
+            )
+            .context("prepare account group list")?;
+        let groups = stmt
+            .query_map([provider_type], decode_admin_account_group)
+            .context("query account group list")?
+            .collect::<Result<Vec<_>, _>>()
+            .context("collect account group list")?;
+        Ok(groups)
+    }
+
+    /// Create one admin account group.
+    pub fn create_admin_account_group(
+        &self,
+        group: &NewAdminAccountGroup,
+    ) -> anyhow::Result<AdminAccountGroup> {
+        let account_names_json =
+            serde_json::to_string(&group.account_names).context("serialize account group names")?;
+        self.conn
+            .execute(
+                "INSERT INTO llm_account_groups (
+                    group_id, provider_type, name, account_names_json,
+                    created_at_ms, updated_at_ms
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    &group.id,
+                    &group.provider_type,
+                    &group.name,
+                    &account_names_json,
+                    group.created_at_ms,
+                    group.created_at_ms,
+                ],
+            )
+            .context("create admin account group")?;
+        self.get_admin_account_group(&group.id)?
+            .context("created account group disappeared")
+    }
+
+    /// Patch one admin account group.
+    pub fn patch_admin_account_group(
+        &self,
+        group_id: &str,
+        patch: &AdminAccountGroupPatch,
+    ) -> anyhow::Result<Option<AdminAccountGroup>> {
+        let Some(mut group) = self.get_admin_account_group(group_id)? else {
+            return Ok(None);
+        };
+        if let Some(name) = patch.name.as_ref() {
+            group.name = name.clone();
+        }
+        if let Some(account_names) = patch.account_names.as_ref() {
+            group.account_names = account_names.clone();
+        }
+        group.updated_at = patch.updated_at_ms;
+        let account_names_json =
+            serde_json::to_string(&group.account_names).context("serialize account group names")?;
+        self.conn
+            .execute(
+                "UPDATE llm_account_groups
+                 SET name = ?2, account_names_json = ?3, updated_at_ms = ?4
+                 WHERE group_id = ?1",
+                params![group_id, &group.name, &account_names_json, group.updated_at],
+            )
+            .context("patch admin account group")?;
+        Ok(Some(group))
+    }
+
+    /// Delete one admin account group.
+    pub fn delete_admin_account_group(
+        &self,
+        group_id: &str,
+    ) -> anyhow::Result<Option<AdminAccountGroup>> {
+        let Some(group) = self.get_admin_account_group(group_id)? else {
+            return Ok(None);
+        };
+        self.conn
+            .execute("DELETE FROM llm_account_groups WHERE group_id = ?1", [group_id])
+            .context("delete admin account group")?;
+        Ok(Some(group))
+    }
+
+    fn get_admin_account_group(&self, group_id: &str) -> anyhow::Result<Option<AdminAccountGroup>> {
+        self.conn
+            .query_row(
+                "SELECT group_id, provider_type, name, account_names_json,
+                    created_at_ms, updated_at_ms
+                 FROM llm_account_groups
+                 WHERE group_id = ?1",
+                [group_id],
+                decode_admin_account_group,
+            )
+            .optional()
+            .context("load admin account group")
+    }
+
+    /// List reusable proxy configs.
+    pub fn list_admin_proxy_configs(&self) -> anyhow::Result<Vec<AdminProxyConfig>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT proxy_config_id, name, proxy_url, proxy_username, proxy_password,
+                    status, created_at_ms, updated_at_ms
+                 FROM llm_proxy_configs
+                 ORDER BY created_at_ms DESC, proxy_config_id DESC",
+            )
+            .context("prepare proxy config list")?;
+        let proxy_configs = stmt
+            .query_map([], decode_admin_proxy_config)
+            .context("query proxy config list")?
+            .collect::<Result<Vec<_>, _>>()
+            .context("collect proxy config list")?;
+        Ok(proxy_configs)
+    }
+
+    /// Load one reusable proxy config by id.
+    pub fn get_admin_proxy_config(
+        &self,
+        proxy_id: &str,
+    ) -> anyhow::Result<Option<AdminProxyConfig>> {
+        self.conn
+            .query_row(
+                "SELECT proxy_config_id, name, proxy_url, proxy_username, proxy_password,
+                    status, created_at_ms, updated_at_ms
+                 FROM llm_proxy_configs
+                 WHERE proxy_config_id = ?1",
+                [proxy_id],
+                decode_admin_proxy_config,
+            )
+            .optional()
+            .context("load admin proxy config")
+    }
+
+    /// Create one reusable proxy config.
+    pub fn create_admin_proxy_config(
+        &self,
+        proxy: &NewAdminProxyConfig,
+    ) -> anyhow::Result<AdminProxyConfig> {
+        self.conn
+            .execute(
+                "INSERT INTO llm_proxy_configs (
+                    proxy_config_id, name, proxy_url, proxy_username, proxy_password,
+                    status, created_at_ms, updated_at_ms
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    &proxy.id,
+                    &proxy.name,
+                    &proxy.proxy_url,
+                    &proxy.proxy_username,
+                    &proxy.proxy_password,
+                    core_store::KEY_STATUS_ACTIVE,
+                    proxy.created_at_ms,
+                    proxy.created_at_ms,
+                ],
+            )
+            .context("create admin proxy config")?;
+        self.get_admin_proxy_config(&proxy.id)?
+            .context("created proxy config disappeared")
+    }
+
+    /// Patch one reusable proxy config.
+    pub fn patch_admin_proxy_config(
+        &self,
+        proxy_id: &str,
+        patch: &AdminProxyConfigPatch,
+    ) -> anyhow::Result<Option<AdminProxyConfig>> {
+        let Some(mut proxy) = self.get_admin_proxy_config(proxy_id)? else {
+            return Ok(None);
+        };
+        if let Some(name) = patch.name.as_ref() {
+            proxy.name = name.clone();
+        }
+        if let Some(proxy_url) = patch.proxy_url.as_ref() {
+            proxy.proxy_url = proxy_url.clone();
+        }
+        if let Some(proxy_username) = patch.proxy_username.as_ref() {
+            proxy.proxy_username = proxy_username.clone();
+        }
+        if let Some(proxy_password) = patch.proxy_password.as_ref() {
+            proxy.proxy_password = proxy_password.clone();
+        }
+        if let Some(status) = patch.status.as_ref() {
+            proxy.status = status.clone();
+        }
+        proxy.updated_at = patch.updated_at_ms;
+        self.conn
+            .execute(
+                "UPDATE llm_proxy_configs
+                 SET name = ?2, proxy_url = ?3, proxy_username = ?4,
+                     proxy_password = ?5, status = ?6, updated_at_ms = ?7
+                 WHERE proxy_config_id = ?1",
+                params![
+                    proxy_id,
+                    &proxy.name,
+                    &proxy.proxy_url,
+                    &proxy.proxy_username,
+                    &proxy.proxy_password,
+                    &proxy.status,
+                    proxy.updated_at,
+                ],
+            )
+            .context("patch admin proxy config")?;
+        Ok(Some(proxy))
+    }
+
+    /// Delete one reusable proxy config.
+    pub fn delete_admin_proxy_config(
+        &self,
+        proxy_id: &str,
+    ) -> anyhow::Result<Option<AdminProxyConfig>> {
+        let Some(proxy) = self.get_admin_proxy_config(proxy_id)? else {
+            return Ok(None);
+        };
+        self.conn
+            .execute("DELETE FROM llm_proxy_configs WHERE proxy_config_id = ?1", [proxy_id])
+            .context("delete admin proxy config")?;
+        Ok(Some(proxy))
+    }
+
+    /// List effective provider-level proxy bindings.
+    pub fn list_admin_proxy_bindings(&self) -> anyhow::Result<Vec<AdminProxyBinding>> {
+        [core_store::PROVIDER_CODEX, core_store::PROVIDER_KIRO]
+            .into_iter()
+            .map(|provider_type| self.load_admin_proxy_binding(provider_type))
+            .collect()
+    }
+
+    /// Update or clear one provider-level proxy binding.
+    pub fn update_admin_proxy_binding(
+        &self,
+        provider_type: &str,
+        proxy_config_id: Option<String>,
+    ) -> anyhow::Result<AdminProxyBinding> {
+        match proxy_config_id {
+            Some(proxy_config_id) => {
+                self.conn
+                    .execute(
+                        "INSERT INTO llm_proxy_bindings (
+                            provider_type, proxy_config_id, updated_at_ms
+                        ) VALUES (?1, ?2, ?3)
+                        ON CONFLICT(provider_type) DO UPDATE SET
+                            proxy_config_id = excluded.proxy_config_id,
+                            updated_at_ms = excluded.updated_at_ms",
+                        params![provider_type, &proxy_config_id, now_ms()],
+                    )
+                    .context("upsert admin proxy binding")?;
+            },
+            None => {
+                self.conn
+                    .execute("DELETE FROM llm_proxy_bindings WHERE provider_type = ?1", [
+                        provider_type,
+                    ])
+                    .context("delete admin proxy binding")?;
+            },
+        }
+        self.load_admin_proxy_binding(provider_type)
+    }
+
+    fn load_admin_proxy_binding(&self, provider_type: &str) -> anyhow::Result<AdminProxyBinding> {
+        let binding = self
+            .conn
+            .query_row(
+                "SELECT provider_type, proxy_config_id, updated_at_ms
+                 FROM llm_proxy_bindings
+                 WHERE provider_type = ?1",
+                [provider_type],
+                |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+                },
+            )
+            .optional()
+            .context("load proxy binding row")?;
+        let Some((provider_type, proxy_config_id, updated_at_ms)) = binding else {
+            return Ok(core_store::default_proxy_bindings()
+                .into_iter()
+                .find(|binding| binding.provider_type == provider_type)
+                .unwrap_or_else(|| AdminProxyBinding {
+                    provider_type: provider_type.to_string(),
+                    effective_source: "none".to_string(),
+                    bound_proxy_config_id: None,
+                    effective_proxy_config_name: None,
+                    effective_proxy_url: None,
+                    effective_proxy_username: None,
+                    effective_proxy_password: None,
+                    binding_updated_at: None,
+                    error_message: None,
+                }));
+        };
+        let proxy = self.get_admin_proxy_config(&proxy_config_id)?;
+        let Some(proxy) = proxy else {
+            return Ok(AdminProxyBinding {
+                provider_type,
+                effective_source: "invalid".to_string(),
+                bound_proxy_config_id: Some(proxy_config_id),
+                effective_proxy_config_name: None,
+                effective_proxy_url: None,
+                effective_proxy_username: None,
+                effective_proxy_password: None,
+                binding_updated_at: Some(updated_at_ms),
+                error_message: Some("bound proxy config is missing".to_string()),
+            });
+        };
+        if proxy.status != core_store::KEY_STATUS_ACTIVE {
+            return Ok(AdminProxyBinding {
+                provider_type,
+                effective_source: "invalid".to_string(),
+                bound_proxy_config_id: Some(proxy.id),
+                effective_proxy_config_name: Some(proxy.name),
+                effective_proxy_url: None,
+                effective_proxy_username: None,
+                effective_proxy_password: None,
+                binding_updated_at: Some(updated_at_ms),
+                error_message: Some("bound proxy config is disabled".to_string()),
+            });
+        }
+        Ok(AdminProxyBinding {
+            provider_type,
+            effective_source: "binding".to_string(),
+            bound_proxy_config_id: Some(proxy.id),
+            effective_proxy_config_name: Some(proxy.name),
+            effective_proxy_url: Some(proxy.proxy_url),
+            effective_proxy_username: proxy.proxy_username,
+            effective_proxy_password: proxy.proxy_password,
+            binding_updated_at: Some(updated_at_ms),
+            error_message: None,
+        })
     }
 
     /// Add one accepted usage event to the hot-path key rollup counters.
@@ -1300,6 +1640,33 @@ fn admin_key_from_bundle(bundle: &KeyBundle) -> AdminKey {
             .kiro_billable_model_multipliers_override_json
             .is_none(),
     }
+}
+
+fn decode_admin_account_group(row: &rusqlite::Row<'_>) -> rusqlite::Result<AdminAccountGroup> {
+    let account_names_json: String = row.get(3)?;
+    let account_names = serde_json::from_str::<Vec<String>>(&account_names_json)
+        .map_err(|err| rusqlite::Error::FromSqlConversionFailure(3, Type::Text, Box::new(err)))?;
+    Ok(AdminAccountGroup {
+        id: row.get(0)?,
+        provider_type: row.get(1)?,
+        name: row.get(2)?,
+        account_names,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
+    })
+}
+
+fn decode_admin_proxy_config(row: &rusqlite::Row<'_>) -> rusqlite::Result<AdminProxyConfig> {
+    Ok(AdminProxyConfig {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        proxy_url: row.get(2)?,
+        proxy_username: row.get(3)?,
+        proxy_password: row.get(4)?,
+        status: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+    })
 }
 
 fn decode_optional_json<T: serde::de::DeserializeOwned>(value: Option<&str>) -> Option<T> {

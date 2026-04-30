@@ -30,8 +30,8 @@ use axum::{
 };
 use config::{CliCommand, ServeConfig, StorageConfig};
 use llm_access_core::store::{
-    AdminConfigStore, AdminKeyStore, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
-    PublicSubmissionStore, PublicUsageStore,
+    AdminAccountGroupStore, AdminConfigStore, AdminKeyStore, AdminProxyStore, PublicAccessStore,
+    PublicCommunityStore, PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
 };
 use serde::Serialize;
 
@@ -40,6 +40,8 @@ struct HttpState {
     provider_state: provider::ProviderState,
     admin_config_store: Arc<dyn AdminConfigStore>,
     admin_key_store: Arc<dyn AdminKeyStore>,
+    admin_account_group_store: Arc<dyn AdminAccountGroupStore>,
+    admin_proxy_store: Arc<dyn AdminProxyStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
@@ -76,6 +78,8 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         provider_state,
         admin_config_store: runtime.admin_config_store(),
         admin_key_store: runtime.admin_key_store(),
+        admin_account_group_store: runtime.admin_account_group_store(),
+        admin_proxy_store: runtime.admin_proxy_store(),
         public_access_store: runtime.public_access_store(),
         public_community_store: runtime.public_community_store(),
         public_usage_store: runtime.public_usage_store(),
@@ -98,6 +102,30 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
             "/admin/llm-gateway/keys/:key_id",
             axum::routing::patch(admin::patch_llm_gateway_key)
                 .delete(admin::delete_llm_gateway_key),
+        )
+        .route(
+            "/admin/llm-gateway/account-groups",
+            get(admin::list_llm_gateway_account_groups)
+                .post(admin::create_llm_gateway_account_group),
+        )
+        .route(
+            "/admin/llm-gateway/account-groups/:group_id",
+            axum::routing::patch(admin::patch_llm_gateway_account_group)
+                .delete(admin::delete_llm_gateway_account_group),
+        )
+        .route(
+            "/admin/llm-gateway/proxy-configs",
+            get(admin::list_llm_gateway_proxy_configs).post(admin::create_llm_gateway_proxy_config),
+        )
+        .route(
+            "/admin/llm-gateway/proxy-configs/:proxy_id",
+            axum::routing::patch(admin::patch_llm_gateway_proxy_config)
+                .delete(admin::delete_llm_gateway_proxy_config),
+        )
+        .route("/admin/llm-gateway/proxy-bindings", get(admin::list_llm_gateway_proxy_bindings))
+        .route(
+            "/admin/llm-gateway/proxy-bindings/:provider_type",
+            post(admin::update_llm_gateway_proxy_binding),
         )
         .route("/api/llm-gateway/access", get(public::get_llm_gateway_access))
         .route("/api/llm-gateway/model-catalog.json", get(public::get_llm_gateway_model_catalog))
@@ -698,6 +726,136 @@ mod tests {
             .expect("body");
         let body = String::from_utf8(body.to_vec()).expect("utf8 body");
         assert!(body.contains("LLM gateway key not found"));
+    }
+
+    #[tokio::test]
+    async fn router_serves_admin_llm_gateway_account_groups_for_local_request() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/llm-gateway/account-groups")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(value["groups"].as_array().expect("groups array").len(), 0);
+    }
+
+    #[tokio::test]
+    async fn router_creates_admin_llm_gateway_account_group_for_local_request() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/llm-gateway/account-groups")
+                    .header(header::HOST, "localhost")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"name":"pool","account_names":["beta","alpha","alpha"]}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert!(value["id"].as_str().expect("id").starts_with("llm-group-"));
+        assert_eq!(value["provider_type"], "codex");
+        assert_eq!(value["account_names"], serde_json::json!(["alpha", "beta"]));
+    }
+
+    #[tokio::test]
+    async fn router_serves_admin_llm_gateway_proxy_configs_for_local_request() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/llm-gateway/proxy-configs")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(
+            value["proxy_configs"]
+                .as_array()
+                .expect("proxy configs array")
+                .len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn router_creates_admin_llm_gateway_proxy_config_for_local_request() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/llm-gateway/proxy-configs")
+                    .header(header::HOST, "localhost")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"name":"hk","proxy_url":"http://127.0.0.1:11111","proxy_username":" u ","proxy_password":" p "}"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert!(value["id"].as_str().expect("id").starts_with("llm-proxy-"));
+        assert_eq!(value["name"], "hk");
+        assert_eq!(value["proxy_url"], "http://127.0.0.1:11111");
+        assert_eq!(value["proxy_username"], "u");
+        assert_eq!(value["proxy_password"], "p");
+        assert_eq!(value["status"], "active");
+    }
+
+    #[tokio::test]
+    async fn router_serves_admin_llm_gateway_proxy_bindings_for_local_request() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/llm-gateway/proxy-bindings")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        let bindings = value["bindings"].as_array().expect("bindings array");
+        assert!(bindings
+            .iter()
+            .any(|binding| binding["provider_type"] == "codex"));
+        assert!(bindings
+            .iter()
+            .any(|binding| binding["provider_type"] == "kiro"));
     }
 
     #[tokio::test]

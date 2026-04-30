@@ -394,6 +394,127 @@ pub struct AdminKeyPatch {
     pub updated_at_ms: i64,
 }
 
+/// Admin-facing projection of one reusable account group.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminAccountGroup {
+    /// Group id.
+    pub id: String,
+    /// Provider type.
+    pub provider_type: String,
+    /// Human-readable group name.
+    pub name: String,
+    /// Account names included in the group.
+    pub account_names: Vec<String>,
+    /// Creation timestamp.
+    pub created_at: i64,
+    /// Update timestamp.
+    pub updated_at: i64,
+}
+
+/// New reusable account group row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAdminAccountGroup {
+    /// Group id.
+    pub id: String,
+    /// Provider type.
+    pub provider_type: String,
+    /// Human-readable group name.
+    pub name: String,
+    /// Account names included in the group.
+    pub account_names: Vec<String>,
+    /// Creation timestamp.
+    pub created_at_ms: i64,
+}
+
+/// Patch for one reusable account group.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdminAccountGroupPatch {
+    /// New group name.
+    pub name: Option<String>,
+    /// Replacement account list.
+    pub account_names: Option<Vec<String>>,
+    /// Patch timestamp.
+    pub updated_at_ms: i64,
+}
+
+/// Admin-facing projection of one reusable upstream proxy config.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminProxyConfig {
+    /// Proxy config id.
+    pub id: String,
+    /// Human-readable proxy name.
+    pub name: String,
+    /// Proxy URL.
+    pub proxy_url: String,
+    /// Optional proxy username.
+    pub proxy_username: Option<String>,
+    /// Optional proxy password.
+    pub proxy_password: Option<String>,
+    /// Config status.
+    pub status: String,
+    /// Creation timestamp.
+    pub created_at: i64,
+    /// Update timestamp.
+    pub updated_at: i64,
+}
+
+/// New reusable proxy config row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAdminProxyConfig {
+    /// Proxy config id.
+    pub id: String,
+    /// Human-readable proxy name.
+    pub name: String,
+    /// Proxy URL.
+    pub proxy_url: String,
+    /// Optional proxy username.
+    pub proxy_username: Option<String>,
+    /// Optional proxy password.
+    pub proxy_password: Option<String>,
+    /// Creation timestamp.
+    pub created_at_ms: i64,
+}
+
+/// Patch for one reusable proxy config.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdminProxyConfigPatch {
+    /// New proxy name.
+    pub name: Option<String>,
+    /// New proxy URL.
+    pub proxy_url: Option<String>,
+    /// New optional proxy username.
+    pub proxy_username: Option<Option<String>>,
+    /// New optional proxy password.
+    pub proxy_password: Option<Option<String>>,
+    /// New status.
+    pub status: Option<String>,
+    /// Patch timestamp.
+    pub updated_at_ms: i64,
+}
+
+/// Effective provider-level proxy binding shown in admin.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminProxyBinding {
+    /// Provider type.
+    pub provider_type: String,
+    /// Source used to resolve the effective proxy.
+    pub effective_source: String,
+    /// Explicitly bound proxy config id.
+    pub bound_proxy_config_id: Option<String>,
+    /// Effective proxy config name.
+    pub effective_proxy_config_name: Option<String>,
+    /// Effective proxy URL.
+    pub effective_proxy_url: Option<String>,
+    /// Effective proxy username.
+    pub effective_proxy_username: Option<String>,
+    /// Effective proxy password.
+    pub effective_proxy_password: Option<String>,
+    /// Binding update timestamp.
+    pub binding_updated_at: Option<i64>,
+    /// Error message for invalid bindings.
+    pub error_message: Option<String>,
+}
+
 /// Key state used on the hot request path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthenticatedKey {
@@ -707,6 +828,77 @@ pub trait AdminKeyStore: Send + Sync {
     async fn delete_admin_key(&self, key_id: &str) -> anyhow::Result<Option<AdminKey>>;
 }
 
+/// Admin account-group management queries used by the current frontend.
+#[async_trait]
+pub trait AdminAccountGroupStore: Send + Sync {
+    /// List all account groups for one provider.
+    async fn list_admin_account_groups(
+        &self,
+        provider_type: &str,
+    ) -> anyhow::Result<Vec<AdminAccountGroup>>;
+
+    /// Create one account group.
+    async fn create_admin_account_group(
+        &self,
+        group: NewAdminAccountGroup,
+    ) -> anyhow::Result<AdminAccountGroup>;
+
+    /// Patch one account group by id.
+    async fn patch_admin_account_group(
+        &self,
+        group_id: &str,
+        patch: AdminAccountGroupPatch,
+    ) -> anyhow::Result<Option<AdminAccountGroup>>;
+
+    /// Delete one account group by id and return the removed row.
+    async fn delete_admin_account_group(
+        &self,
+        group_id: &str,
+    ) -> anyhow::Result<Option<AdminAccountGroup>>;
+}
+
+/// Admin reusable proxy configuration queries used by the current frontend.
+#[async_trait]
+pub trait AdminProxyStore: Send + Sync {
+    /// List all proxy configs.
+    async fn list_admin_proxy_configs(&self) -> anyhow::Result<Vec<AdminProxyConfig>>;
+
+    /// Load one proxy config by id.
+    async fn get_admin_proxy_config(
+        &self,
+        proxy_id: &str,
+    ) -> anyhow::Result<Option<AdminProxyConfig>>;
+
+    /// Create one proxy config.
+    async fn create_admin_proxy_config(
+        &self,
+        proxy: NewAdminProxyConfig,
+    ) -> anyhow::Result<AdminProxyConfig>;
+
+    /// Patch one proxy config by id.
+    async fn patch_admin_proxy_config(
+        &self,
+        proxy_id: &str,
+        patch: AdminProxyConfigPatch,
+    ) -> anyhow::Result<Option<AdminProxyConfig>>;
+
+    /// Delete one proxy config by id and return the removed row.
+    async fn delete_admin_proxy_config(
+        &self,
+        proxy_id: &str,
+    ) -> anyhow::Result<Option<AdminProxyConfig>>;
+
+    /// List effective provider-level proxy bindings.
+    async fn list_admin_proxy_bindings(&self) -> anyhow::Result<Vec<AdminProxyBinding>>;
+
+    /// Update or clear one provider-level proxy binding.
+    async fn update_admin_proxy_binding(
+        &self,
+        provider_type: &str,
+        proxy_config_id: Option<String>,
+    ) -> anyhow::Result<AdminProxyBinding>;
+}
+
 /// Empty public-access store used by isolated unit tests.
 pub struct EmptyPublicAccessStore;
 
@@ -853,6 +1045,130 @@ impl AdminKeyStore for EmptyAdminKeyStore {
 
     async fn delete_admin_key(&self, _key_id: &str) -> anyhow::Result<Option<AdminKey>> {
         Ok(None)
+    }
+}
+
+/// Empty admin account-group store used by isolated unit tests.
+pub struct EmptyAdminAccountGroupStore;
+
+#[async_trait]
+impl AdminAccountGroupStore for EmptyAdminAccountGroupStore {
+    async fn list_admin_account_groups(
+        &self,
+        _provider_type: &str,
+    ) -> anyhow::Result<Vec<AdminAccountGroup>> {
+        Ok(Vec::new())
+    }
+
+    async fn create_admin_account_group(
+        &self,
+        group: NewAdminAccountGroup,
+    ) -> anyhow::Result<AdminAccountGroup> {
+        Ok(AdminAccountGroup {
+            id: group.id,
+            provider_type: group.provider_type,
+            name: group.name,
+            account_names: group.account_names,
+            created_at: group.created_at_ms,
+            updated_at: group.created_at_ms,
+        })
+    }
+
+    async fn patch_admin_account_group(
+        &self,
+        _group_id: &str,
+        _patch: AdminAccountGroupPatch,
+    ) -> anyhow::Result<Option<AdminAccountGroup>> {
+        Ok(None)
+    }
+
+    async fn delete_admin_account_group(
+        &self,
+        _group_id: &str,
+    ) -> anyhow::Result<Option<AdminAccountGroup>> {
+        Ok(None)
+    }
+}
+
+/// Empty admin proxy store used by isolated unit tests.
+pub struct EmptyAdminProxyStore;
+
+#[async_trait]
+impl AdminProxyStore for EmptyAdminProxyStore {
+    async fn list_admin_proxy_configs(&self) -> anyhow::Result<Vec<AdminProxyConfig>> {
+        Ok(Vec::new())
+    }
+
+    async fn get_admin_proxy_config(
+        &self,
+        _proxy_id: &str,
+    ) -> anyhow::Result<Option<AdminProxyConfig>> {
+        Ok(None)
+    }
+
+    async fn create_admin_proxy_config(
+        &self,
+        proxy: NewAdminProxyConfig,
+    ) -> anyhow::Result<AdminProxyConfig> {
+        Ok(AdminProxyConfig {
+            id: proxy.id,
+            name: proxy.name,
+            proxy_url: proxy.proxy_url,
+            proxy_username: proxy.proxy_username,
+            proxy_password: proxy.proxy_password,
+            status: KEY_STATUS_ACTIVE.to_string(),
+            created_at: proxy.created_at_ms,
+            updated_at: proxy.created_at_ms,
+        })
+    }
+
+    async fn patch_admin_proxy_config(
+        &self,
+        _proxy_id: &str,
+        _patch: AdminProxyConfigPatch,
+    ) -> anyhow::Result<Option<AdminProxyConfig>> {
+        Ok(None)
+    }
+
+    async fn delete_admin_proxy_config(
+        &self,
+        _proxy_id: &str,
+    ) -> anyhow::Result<Option<AdminProxyConfig>> {
+        Ok(None)
+    }
+
+    async fn list_admin_proxy_bindings(&self) -> anyhow::Result<Vec<AdminProxyBinding>> {
+        Ok(default_proxy_bindings())
+    }
+
+    async fn update_admin_proxy_binding(
+        &self,
+        provider_type: &str,
+        _proxy_config_id: Option<String>,
+    ) -> anyhow::Result<AdminProxyBinding> {
+        Ok(default_proxy_binding(provider_type))
+    }
+}
+
+/// Return the default unbound proxy binding views for supported providers.
+pub fn default_proxy_bindings() -> Vec<AdminProxyBinding> {
+    [PROVIDER_CODEX, PROVIDER_KIRO]
+        .into_iter()
+        .map(default_proxy_binding)
+        .collect()
+}
+
+fn default_proxy_binding(provider_type: &str) -> AdminProxyBinding {
+    AdminProxyBinding {
+        provider_type: provider_type.to_string(),
+        effective_source: "none".to_string(),
+        bound_proxy_config_id: None,
+        effective_proxy_config_name: None,
+        effective_proxy_url: None,
+        effective_proxy_username: None,
+        effective_proxy_password: None,
+        binding_updated_at: None,
+        error_message: None,
     }
 }
 

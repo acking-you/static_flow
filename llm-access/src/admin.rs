@@ -9,8 +9,10 @@ use axum::{
     Json,
 };
 use llm_access_core::store::{
-    self as core_store, AdminKeyPatch, AdminRuntimeConfig, NewAdminKey, UpdateAdminRuntimeConfig,
-    KEY_STATUS_ACTIVE, KEY_STATUS_DISABLED, KIRO_PREFIX_CACHE_MODE_FORMULA,
+    self as core_store, AdminAccountGroupPatch, AdminKeyPatch, AdminProxyConfigPatch,
+    AdminRuntimeConfig, NewAdminAccountGroup, NewAdminKey, NewAdminProxyConfig,
+    UpdateAdminRuntimeConfig, KEY_STATUS_ACTIVE, KEY_STATUS_DISABLED,
+    KIRO_PREFIX_CACHE_MODE_FORMULA, PROVIDER_CODEX, PROVIDER_KIRO,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -56,6 +58,24 @@ struct DeleteResponse {
     id: String,
 }
 
+#[derive(Debug, Serialize)]
+struct AdminAccountGroupsResponse {
+    groups: Vec<core_store::AdminAccountGroup>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminProxyConfigsResponse {
+    proxy_configs: Vec<core_store::AdminProxyConfig>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminProxyBindingsResponse {
+    bindings: Vec<core_store::AdminProxyBinding>,
+    generated_at: i64,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct CreateLlmGatewayKeyRequest {
     name: String,
@@ -96,6 +116,50 @@ pub(crate) struct PatchLlmGatewayKeyRequest {
     request_max_concurrency_unlimited: bool,
     #[serde(default)]
     request_min_start_interval_ms_unlimited: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateLlmGatewayAccountGroupRequest {
+    name: String,
+    account_names: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PatchLlmGatewayAccountGroupRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    account_names: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateLlmGatewayProxyConfigRequest {
+    name: String,
+    proxy_url: String,
+    #[serde(default)]
+    proxy_username: Option<String>,
+    #[serde(default)]
+    proxy_password: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PatchLlmGatewayProxyConfigRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    proxy_url: Option<String>,
+    #[serde(default)]
+    proxy_username: Option<String>,
+    #[serde(default)]
+    proxy_password: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateLlmGatewayProxyBindingRequest {
+    #[serde(default)]
+    proxy_config_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -283,6 +347,302 @@ pub(crate) async fn delete_llm_gateway_key(
         .into_response(),
         Ok(None) => not_found("LLM gateway key not found").into_response(),
         Err(_) => internal_error("Failed to delete llm gateway key").into_response(),
+    }
+}
+
+pub(crate) async fn list_llm_gateway_account_groups(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state
+        .admin_account_group_store
+        .list_admin_account_groups(PROVIDER_CODEX)
+        .await
+    {
+        Ok(groups) => Json(AdminAccountGroupsResponse {
+            groups,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to list llm gateway account groups").into_response(),
+    }
+}
+
+pub(crate) async fn create_llm_gateway_account_group(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateLlmGatewayAccountGroupRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_name(&request.name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    let account_names = match normalize_account_names(request.account_names) {
+        Ok(Some(names)) => names,
+        Ok(None) => return bad_request("account_names must not be empty").into_response(),
+        Err(response) => return response.into_response(),
+    };
+    let group = NewAdminAccountGroup {
+        id: generate_id("llm-group"),
+        provider_type: PROVIDER_CODEX.to_string(),
+        name,
+        account_names,
+        created_at_ms: now_ms(),
+    };
+    match state
+        .admin_account_group_store
+        .create_admin_account_group(group)
+        .await
+    {
+        Ok(group) => Json(group).into_response(),
+        Err(_) => internal_error("Failed to create llm gateway account group").into_response(),
+    }
+}
+
+pub(crate) async fn patch_llm_gateway_account_group(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+    Json(request): Json<PatchLlmGatewayAccountGroupRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match request.name.as_deref().map(normalize_name).transpose() {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    let account_names = match request
+        .account_names
+        .map(normalize_account_names)
+        .transpose()
+    {
+        Ok(value) => value.flatten(),
+        Err(response) => return response.into_response(),
+    };
+    let patch = AdminAccountGroupPatch {
+        name,
+        account_names,
+        updated_at_ms: now_ms(),
+    };
+    match state
+        .admin_account_group_store
+        .patch_admin_account_group(&group_id, patch)
+        .await
+    {
+        Ok(Some(group)) => Json(group).into_response(),
+        Ok(None) => not_found("LLM gateway account group not found").into_response(),
+        Err(_) => internal_error("Failed to update llm gateway account group").into_response(),
+    }
+}
+
+pub(crate) async fn delete_llm_gateway_account_group(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let keys = match state.admin_key_store.list_admin_keys().await {
+        Ok(keys) => keys,
+        Err(_) => return internal_error("Failed to inspect llm gateway keys").into_response(),
+    };
+    if let Some(key) = keys
+        .iter()
+        .find(|key| key.account_group_id.as_deref() == Some(group_id.as_str()))
+    {
+        return bad_request(&format!("account group is still referenced by key `{}`", key.name))
+            .into_response();
+    }
+    match state
+        .admin_account_group_store
+        .delete_admin_account_group(&group_id)
+        .await
+    {
+        Ok(Some(group)) => Json(DeleteResponse {
+            deleted: true,
+            id: group.id,
+        })
+        .into_response(),
+        Ok(None) => not_found("LLM gateway account group not found").into_response(),
+        Err(_) => internal_error("Failed to delete llm gateway account group").into_response(),
+    }
+}
+
+pub(crate) async fn list_llm_gateway_proxy_configs(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state.admin_proxy_store.list_admin_proxy_configs().await {
+        Ok(proxy_configs) => Json(AdminProxyConfigsResponse {
+            proxy_configs,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to list llm gateway proxy configs").into_response(),
+    }
+}
+
+pub(crate) async fn create_llm_gateway_proxy_config(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateLlmGatewayProxyConfigRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_name(&request.name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    let proxy_url = match normalize_required_proxy_url(&request.proxy_url) {
+        Ok(proxy_url) => proxy_url,
+        Err(response) => return response.into_response(),
+    };
+    let proxy = NewAdminProxyConfig {
+        id: generate_id("llm-proxy"),
+        name,
+        proxy_url,
+        proxy_username: normalize_optional_string_option(request.proxy_username.as_deref()),
+        proxy_password: normalize_optional_string_option(request.proxy_password.as_deref()),
+        created_at_ms: now_ms(),
+    };
+    match state
+        .admin_proxy_store
+        .create_admin_proxy_config(proxy)
+        .await
+    {
+        Ok(proxy) => Json(proxy).into_response(),
+        Err(_) => internal_error("Failed to create llm gateway proxy config").into_response(),
+    }
+}
+
+pub(crate) async fn patch_llm_gateway_proxy_config(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(proxy_id): Path<String>,
+    Json(request): Json<PatchLlmGatewayProxyConfigRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let patch = match normalize_proxy_config_patch(request) {
+        Ok(patch) => patch,
+        Err(response) => return response.into_response(),
+    };
+    match state
+        .admin_proxy_store
+        .patch_admin_proxy_config(&proxy_id, patch)
+        .await
+    {
+        Ok(Some(proxy)) => Json(proxy).into_response(),
+        Ok(None) => not_found("LLM gateway proxy config not found").into_response(),
+        Err(_) => internal_error("Failed to update llm gateway proxy config").into_response(),
+    }
+}
+
+pub(crate) async fn delete_llm_gateway_proxy_config(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(proxy_id): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let bindings = match state.admin_proxy_store.list_admin_proxy_bindings().await {
+        Ok(bindings) => bindings,
+        Err(_) => {
+            return internal_error("Failed to inspect llm gateway proxy bindings").into_response()
+        },
+    };
+    if let Some(binding) = bindings
+        .iter()
+        .find(|binding| binding.bound_proxy_config_id.as_deref() == Some(proxy_id.as_str()))
+    {
+        return conflict(&format!(
+            "proxy config is still bound to provider `{}`",
+            binding.provider_type
+        ))
+        .into_response();
+    }
+    match state
+        .admin_proxy_store
+        .delete_admin_proxy_config(&proxy_id)
+        .await
+    {
+        Ok(Some(proxy)) => Json(DeleteResponse {
+            deleted: true,
+            id: proxy.id,
+        })
+        .into_response(),
+        Ok(None) => not_found("LLM gateway proxy config not found").into_response(),
+        Err(_) => internal_error("Failed to delete llm gateway proxy config").into_response(),
+    }
+}
+
+pub(crate) async fn list_llm_gateway_proxy_bindings(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state.admin_proxy_store.list_admin_proxy_bindings().await {
+        Ok(bindings) => Json(AdminProxyBindingsResponse {
+            bindings,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to list llm gateway proxy bindings").into_response(),
+    }
+}
+
+pub(crate) async fn update_llm_gateway_proxy_binding(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(provider_type): Path<String>,
+    Json(request): Json<UpdateLlmGatewayProxyBindingRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    if let Err(response) = validate_provider_type(&provider_type) {
+        return response.into_response();
+    }
+    let proxy_config_id = normalize_optional_string_option(request.proxy_config_id.as_deref());
+    if let Some(proxy_id) = proxy_config_id.as_deref() {
+        let proxy = match state
+            .admin_proxy_store
+            .get_admin_proxy_config(proxy_id)
+            .await
+        {
+            Ok(Some(proxy)) => proxy,
+            Ok(None) => return not_found("LLM gateway proxy config not found").into_response(),
+            Err(_) => {
+                return internal_error("Failed to load llm gateway proxy config").into_response()
+            },
+        };
+        if proxy.status != KEY_STATUS_ACTIVE {
+            return bad_request("proxy config must be active before binding").into_response();
+        }
+    }
+    match state
+        .admin_proxy_store
+        .update_admin_proxy_binding(&provider_type, proxy_config_id)
+        .await
+    {
+        Ok(binding) => Json(binding).into_response(),
+        Err(_) => internal_error("Failed to update llm gateway proxy binding").into_response(),
     }
 }
 
@@ -676,12 +1036,56 @@ fn normalize_route_strategy_input(raw: &str) -> Result<Option<String>, AdminHttp
     }
 }
 
+fn validate_provider_type(provider_type: &str) -> Result<(), AdminHttpError> {
+    match provider_type {
+        PROVIDER_CODEX | PROVIDER_KIRO => Ok(()),
+        _ => Err(bad_request("provider_type must be `codex` or `kiro`")),
+    }
+}
+
 fn normalize_optional_string(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         None
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+fn normalize_optional_string_option(raw: Option<&str>) -> Option<String> {
+    raw.and_then(normalize_optional_string)
+}
+
+fn normalize_account_name(raw: &str) -> Result<String, AdminHttpError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(bad_request("account name is required"));
+    }
+    if trimmed.len() > 64 {
+        return Err(bad_request("account name must be 64 characters or fewer"));
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err(bad_request(
+            "account name must contain only ASCII letters, digits, hyphens, or underscores",
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn normalize_account_names(values: Vec<String>) -> Result<Option<Vec<String>>, AdminHttpError> {
+    let mut names = values
+        .into_iter()
+        .map(|value| normalize_account_name(&value))
+        .collect::<Result<Vec<_>, _>>()?;
+    names.sort();
+    names.dedup();
+    if names.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(names))
     }
 }
 
@@ -698,6 +1102,52 @@ fn normalize_auto_account_names(values: Vec<String>) -> Option<Vec<String>> {
     } else {
         Some(names)
     }
+}
+
+fn normalize_required_proxy_url(raw: &str) -> Result<String, AdminHttpError> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(bad_request("proxy_url is required"));
+    }
+    let parsed =
+        url::Url::parse(value).map_err(|_| bad_request("proxy_url must be a valid URL"))?;
+    if !matches!(parsed.scheme(), "http" | "https" | "socks5" | "socks5h") {
+        return Err(bad_request("proxy_url scheme must be http, https, socks5, or socks5h"));
+    }
+    if parsed.host_str().is_none() {
+        return Err(bad_request("proxy_url must include a host"));
+    }
+    Ok(value.to_string())
+}
+
+fn normalize_proxy_config_patch(
+    request: PatchLlmGatewayProxyConfigRequest,
+) -> Result<AdminProxyConfigPatch, AdminHttpError> {
+    let name = request.name.as_deref().map(normalize_name).transpose()?;
+    let proxy_url = request
+        .proxy_url
+        .as_deref()
+        .map(normalize_required_proxy_url)
+        .transpose()?;
+    let status = request
+        .status
+        .as_deref()
+        .map(normalize_status)
+        .transpose()?;
+    Ok(AdminProxyConfigPatch {
+        name,
+        proxy_url,
+        proxy_username: request
+            .proxy_username
+            .as_deref()
+            .map(|value| normalize_optional_string_option(Some(value))),
+        proxy_password: request
+            .proxy_password
+            .as_deref()
+            .map(|value| normalize_optional_string_option(Some(value))),
+        status,
+        updated_at_ms: now_ms(),
+    })
 }
 
 fn validate_codex_request_limit_inputs(
@@ -949,6 +1399,13 @@ fn bad_request(message: &str) -> AdminHttpError {
 fn forbidden(message: &str) -> AdminHttpError {
     AdminHttpError {
         status: StatusCode::FORBIDDEN,
+        message: message.to_string(),
+    }
+}
+
+fn conflict(message: &str) -> AdminHttpError {
+    AdminHttpError {
+        status: StatusCode::CONFLICT,
         message: message.to_string(),
     }
 }
