@@ -5,13 +5,14 @@
 
 use std::collections::BTreeMap;
 
+pub use llm_access_kiro::status::{KiroBalanceView, KiroCacheView};
 use serde::{Deserialize, Deserializer, Serialize};
 use static_flow_shared::llm_gateway_store::{
     KiroCachePolicy, LlmGatewayAccountGroupRecord, LlmGatewayKeyRecord, LlmGatewayUsageEventRecord,
     LlmGatewayUsageEventSummaryRecord,
 };
 
-use super::{auth_file::KiroAuthRecord, wire::UsageLimitsResponse};
+use super::auth_file::KiroAuthRecord;
 use crate::llm_gateway::compute_other_latency_ms;
 
 /// Public access bundle returned by the Kiro gateway status endpoint.
@@ -30,27 +31,6 @@ pub struct KiroAccessResponse {
     pub accounts: Vec<KiroPublicStatusView>,
     /// Unix-epoch timestamp (seconds) when this response was generated.
     pub generated_at: i64,
-}
-
-/// Cache status view for a single Kiro account's balance/auth probe.
-///
-/// Tracks when the background refresh last ran, whether it succeeded,
-/// and any error that occurred.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct KiroCacheView {
-    /// Human-readable cache state (e.g. `"fresh"`, `"stale"`, `"error"`).
-    pub status: String,
-    /// How often the background task refreshes this account, in seconds.
-    pub refresh_interval_seconds: u64,
-    /// Unix-epoch timestamp of the most recent probe attempt.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_checked_at: Option<i64>,
-    /// Unix-epoch timestamp of the most recent successful probe.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_success_at: Option<i64>,
-    /// Error message from the last failed probe, if any.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
 }
 
 /// Public-facing status snapshot for one Kiro account.
@@ -485,39 +465,6 @@ pub struct PatchKiroAccountGroupRequest {
     pub name: Option<String>,
     #[serde(default)]
     pub account_names: Option<Vec<String>>,
-}
-
-/// Normalized account-balance snapshot derived from Kiro `getUsageLimits`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KiroBalanceView {
-    pub current_usage: f64,
-    pub usage_limit: f64,
-    pub remaining: f64,
-    pub next_reset_at: Option<i64>,
-    pub subscription_title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
-}
-
-impl KiroBalanceView {
-    /// Convert the raw upstream usage-limit payload into the admin/public view
-    /// shape used by StaticFlow.
-    pub fn from_usage(usage: &UsageLimitsResponse) -> Self {
-        let usage_limit = usage.usage_limit();
-        let current_usage = usage.current_usage();
-        Self {
-            current_usage,
-            usage_limit,
-            remaining: (usage_limit - current_usage).max(0.0),
-            next_reset_at: usage
-                .usage_breakdown_list
-                .first()
-                .and_then(|item| item.next_date_reset.or(usage.next_date_reset))
-                .map(|value| value as i64),
-            subscription_title: usage.subscription_title().map(ToString::to_string),
-            user_id: usage.user_id().map(ToString::to_string),
-        }
-    }
 }
 
 /// Admin-facing projection of one configured Kiro account.

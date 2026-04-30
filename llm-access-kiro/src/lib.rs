@@ -65,6 +65,12 @@ pub mod scheduler;
     reason = "Extracted Kiro modules preserve the existing backend runtime surface during \
               migration."
 )]
+pub mod status;
+#[allow(
+    missing_docs,
+    reason = "Extracted Kiro modules preserve the existing backend runtime surface during \
+              migration."
+)]
 pub mod token;
 #[allow(
     missing_docs,

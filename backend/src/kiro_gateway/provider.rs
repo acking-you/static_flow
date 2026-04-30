@@ -2369,11 +2369,12 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    use llm_access_kiro::status::STATUS_QUOTA_EXHAUSTED;
     use static_flow_shared::llm_gateway_store::LlmGatewayStore;
 
     use super::*;
     use crate::kiro_gateway::{
-        status_cache::{KiroCachedAccountStatus, STATUS_QUOTA_EXHAUSTED},
+        status_cache::KiroCachedAccountStatus,
         types::{KiroBalanceView, KiroCacheView},
     };
 

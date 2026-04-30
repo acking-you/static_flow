@@ -14,33 +14,27 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
-use llm_access_kiro::config::KiroRuntimeConfig;
+pub(crate) use llm_access_kiro::status::{
+    account_is_request_eligible, account_request_block_reason, KiroCachedAccountStatus,
+    KiroStatusCacheSnapshot, RequestEligibilityBlockReason, STATUS_LOADING, STATUS_READY,
+};
+use llm_access_kiro::{
+    config::KiroRuntimeConfig,
+    status::{
+        apply_snapshot_summary, disabled_status_entry as disabled_entry,
+        duplicate_upstream_identities, error_status_entry as error_entry,
+        load_persisted_status_cache_from_dir as load_persisted_status_cache_snapshot_from_dir,
+        merge_newer_account_statuses,
+        persist_status_cache_to_dir as persist_status_cache_snapshot_to_dir,
+        quota_exhausted_status_entry as quota_exhausted_entry, ready_status_entry as ready_entry,
+        refresh_snapshot_aggregate_metadata, status_counts_as_problem,
+    },
+};
 use rand::Rng;
-use serde::{Deserialize, Serialize};
 use static_flow_shared::llm_gateway_store::now_ms;
 use tokio::sync::watch;
 
-use super::{
-    auth_file::{resolve_auths_dir, KiroAuthRecord},
-    runtime::KiroGatewayRuntimeState,
-    types::{KiroBalanceView, KiroCacheView},
-};
-
-pub(crate) const STATUS_LOADING: &str = "loading";
-pub(crate) const STATUS_READY: &str = "ready";
-pub(crate) const STATUS_DEGRADED: &str = "degraded";
-pub(crate) const STATUS_ERROR: &str = "error";
-pub(crate) const STATUS_DISABLED: &str = "disabled";
-pub(crate) const STATUS_EMPTY: &str = "empty";
-pub(crate) const STATUS_QUOTA_EXHAUSTED: &str = "quota_exhausted";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RequestEligibilityBlockReason {
-    MissingStatus,
-    Disabled,
-    QuotaExhausted,
-    MinimumRemainingCreditsThreshold,
-}
+use super::{auth_file::resolve_auths_dir, runtime::KiroGatewayRuntimeState};
 
 fn next_kiro_refresh_delay(config: &KiroRuntimeConfig) -> Duration {
     let min_seconds = config
@@ -66,41 +60,6 @@ fn next_kiro_account_jitter(config: &KiroRuntimeConfig) -> Duration {
     }
 }
 
-/// Cached status for a single Kiro account: last-known balance and cache
-/// metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct KiroCachedAccountStatus {
-    pub balance: Option<KiroBalanceView>,
-    pub cache: KiroCacheView,
-}
-
-/// Point-in-time snapshot of all account statuses, with an aggregate health
-/// indicator (`status`) derived from individual account states.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct KiroStatusCacheSnapshot {
-    pub status: String,
-    pub last_checked_at: Option<i64>,
-    pub last_success_at: Option<i64>,
-    pub error_message: Option<String>,
-    pub accounts: HashMap<String, KiroCachedAccountStatus>,
-}
-
-impl Default for KiroStatusCacheSnapshot {
-    fn default() -> Self {
-        Self {
-            status: STATUS_LOADING.to_string(),
-            last_checked_at: None,
-            last_success_at: None,
-            error_message: None,
-            accounts: HashMap::new(),
-        }
-    }
-}
-
-fn persisted_status_cache_path_from_dir(auths_dir: &Path) -> std::path::PathBuf {
-    auths_dir.join(".status-cache").join("snapshot.json")
-}
-
 pub(crate) async fn load_persisted_status_cache() -> Result<KiroStatusCacheSnapshot> {
     load_persisted_status_cache_from_dir(&resolve_auths_dir()).await
 }
@@ -112,29 +71,14 @@ async fn persist_status_cache(snapshot: &KiroStatusCacheSnapshot) -> Result<()> 
 pub(crate) async fn load_persisted_status_cache_from_dir(
     auths_dir: &Path,
 ) -> Result<KiroStatusCacheSnapshot> {
-    let path = persisted_status_cache_path_from_dir(auths_dir);
-    if !path.exists() {
-        return Ok(KiroStatusCacheSnapshot::default());
-    }
-    let raw = tokio::fs::read_to_string(&path).await?;
-    if raw.trim().is_empty() {
-        return Ok(KiroStatusCacheSnapshot::default());
-    }
-    let snapshot = serde_json::from_str(&raw)?;
-    Ok(snapshot)
+    load_persisted_status_cache_snapshot_from_dir(auths_dir).await
 }
 
 pub(crate) async fn persist_status_cache_to_dir(
     auths_dir: &Path,
     snapshot: &KiroStatusCacheSnapshot,
 ) -> Result<()> {
-    let path = persisted_status_cache_path_from_dir(auths_dir);
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    let content = serde_json::to_string_pretty(snapshot)?;
-    tokio::fs::write(path, content).await?;
-    Ok(())
+    persist_status_cache_snapshot_to_dir(auths_dir, snapshot).await
 }
 
 async fn persist_status_cache_best_effort(snapshot: &KiroStatusCacheSnapshot) {
@@ -435,143 +379,8 @@ pub(crate) async fn mark_account_quota_exhausted(
     tracing::warn!(account_name, error_message, "marked cached kiro account as quota exhausted");
 }
 
-/// Determine whether an account should be considered for the next upstream
-/// request based on its disabled flag, cached status, and remaining balance.
-pub(crate) fn account_request_block_reason(
-    auth: &KiroAuthRecord,
-    entry: Option<&KiroCachedAccountStatus>,
-) -> Option<RequestEligibilityBlockReason> {
-    if auth.disabled {
-        return Some(RequestEligibilityBlockReason::Disabled);
-    }
-    let Some(entry) = entry else {
-        return Some(RequestEligibilityBlockReason::MissingStatus);
-    };
-    match entry.cache.status.as_str() {
-        STATUS_DISABLED => return Some(RequestEligibilityBlockReason::Disabled),
-        STATUS_QUOTA_EXHAUSTED => return Some(RequestEligibilityBlockReason::QuotaExhausted),
-        _ => {},
-    }
-    let balance = entry.balance.as_ref()?;
-    if balance.remaining <= 0.0 {
-        return Some(RequestEligibilityBlockReason::QuotaExhausted);
-    }
-    if balance.remaining <= auth.effective_minimum_remaining_credits_before_block() {
-        return Some(RequestEligibilityBlockReason::MinimumRemainingCreditsThreshold);
-    }
-    None
-}
-
-pub(crate) fn account_is_request_eligible(
-    auth: &KiroAuthRecord,
-    entry: Option<&KiroCachedAccountStatus>,
-) -> bool {
-    account_request_block_reason(auth, entry).is_none()
-}
-
-fn apply_snapshot_summary(
-    snapshot: &mut KiroStatusCacheSnapshot,
-    error_count: usize,
-    ready_count: usize,
-) {
-    if snapshot.accounts.is_empty() {
-        snapshot.status = STATUS_EMPTY.to_string();
-        snapshot.error_message = None;
-        return;
-    }
-
-    snapshot.status = if error_count == 0 {
-        STATUS_READY.to_string()
-    } else if ready_count > 0 {
-        STATUS_DEGRADED.to_string()
-    } else {
-        STATUS_ERROR.to_string()
-    };
-
-    snapshot.error_message = if error_count == 0 { None } else { first_error_message(snapshot) };
-}
-
-fn merge_newer_account_statuses(
-    snapshot: &mut KiroStatusCacheSnapshot,
-    current: &KiroStatusCacheSnapshot,
-) {
-    for (account_name, current_status) in &current.accounts {
-        let current_checked_at = current_status.cache.last_checked_at.unwrap_or(i64::MIN);
-        let snapshot_checked_at = snapshot
-            .accounts
-            .get(account_name)
-            .and_then(|status| status.cache.last_checked_at)
-            .unwrap_or(i64::MIN);
-        if current_checked_at >= snapshot_checked_at {
-            snapshot
-                .accounts
-                .insert(account_name.clone(), current_status.clone());
-        }
-    }
-}
-
-fn refresh_snapshot_aggregate_metadata(snapshot: &mut KiroStatusCacheSnapshot) -> (usize, usize) {
-    snapshot.last_checked_at = snapshot
-        .accounts
-        .values()
-        .filter_map(|status| status.cache.last_checked_at)
-        .max()
-        .or(snapshot.last_checked_at);
-    snapshot.last_success_at = snapshot
-        .accounts
-        .values()
-        .filter_map(|status| status.cache.last_success_at)
-        .max()
-        .or(snapshot.last_success_at);
-    let ready_count = snapshot
-        .accounts
-        .values()
-        .filter(|status| status.cache.status == STATUS_READY)
-        .count();
-    let error_count = snapshot
-        .accounts
-        .values()
-        .filter(|status| status_counts_as_problem(&status.cache.status))
-        .count();
-    apply_snapshot_summary(snapshot, error_count, ready_count);
-    (ready_count, error_count)
-}
-
-fn first_error_message(snapshot: &KiroStatusCacheSnapshot) -> Option<String> {
-    snapshot.accounts.values().find_map(|status| {
-        status
-            .cache
-            .error_message
-            .as_ref()
-            .filter(|_| status_counts_as_problem(&status.cache.status))
-            .cloned()
-    })
-}
-
-fn status_counts_as_problem(status: &str) -> bool {
-    matches!(status, STATUS_ERROR | STATUS_DEGRADED | STATUS_QUOTA_EXHAUSTED)
-}
-
 fn log_duplicate_upstream_identities(snapshot: &KiroStatusCacheSnapshot) {
-    let mut grouped = HashMap::<String, Vec<String>>::new();
-    for (account_name, status) in &snapshot.accounts {
-        let Some(user_id) = status
-            .balance
-            .as_ref()
-            .and_then(|balance| balance.user_id.as_ref())
-        else {
-            continue;
-        };
-        grouped
-            .entry(user_id.clone())
-            .or_default()
-            .push(account_name.clone());
-    }
-    for (user_id, mut account_names) in grouped {
-        if account_names.len() < 2 {
-            continue;
-        }
-        account_names.sort();
+    for (user_id, account_names) in duplicate_upstream_identities(snapshot) {
         tracing::warn!(
             upstream_user_id = %user_id,
             account_names = ?account_names,
@@ -580,91 +389,13 @@ fn log_duplicate_upstream_identities(snapshot: &KiroStatusCacheSnapshot) {
     }
 }
 
-fn ready_entry(
-    usage: &super::wire::UsageLimitsResponse,
-    checked_at: i64,
-    refresh_interval_seconds: u64,
-) -> KiroCachedAccountStatus {
-    KiroCachedAccountStatus {
-        balance: Some(KiroBalanceView::from_usage(usage)),
-        cache: KiroCacheView {
-            status: STATUS_READY.to_string(),
-            refresh_interval_seconds,
-            last_checked_at: Some(checked_at),
-            last_success_at: Some(checked_at),
-            error_message: None,
-        },
-    }
-}
-
-fn error_entry(
-    prior: Option<&KiroCachedAccountStatus>,
-    checked_at: i64,
-    error_message: String,
-    refresh_interval_seconds: u64,
-) -> KiroCachedAccountStatus {
-    let previous_balance = prior.and_then(|status| status.balance.clone());
-    let previous_success_at = prior.and_then(|status| status.cache.last_success_at);
-    let status = if previous_balance.is_some() { STATUS_DEGRADED } else { STATUS_ERROR };
-    KiroCachedAccountStatus {
-        balance: previous_balance,
-        cache: KiroCacheView {
-            status: status.to_string(),
-            refresh_interval_seconds,
-            last_checked_at: Some(checked_at),
-            last_success_at: previous_success_at,
-            error_message: Some(error_message),
-        },
-    }
-}
-
-fn disabled_entry(
-    prior: Option<&KiroCachedAccountStatus>,
-    checked_at: i64,
-    refresh_interval_seconds: u64,
-) -> KiroCachedAccountStatus {
-    KiroCachedAccountStatus {
-        balance: prior.and_then(|status| status.balance.clone()),
-        cache: KiroCacheView {
-            status: STATUS_DISABLED.to_string(),
-            refresh_interval_seconds,
-            last_checked_at: Some(checked_at),
-            last_success_at: prior.and_then(|status| status.cache.last_success_at),
-            error_message: None,
-        },
-    }
-}
-
-fn quota_exhausted_entry(
-    prior: Option<&KiroCachedAccountStatus>,
-    checked_at: i64,
-    error_message: String,
-    refresh_interval_seconds: u64,
-) -> KiroCachedAccountStatus {
-    let previous_balance = prior.and_then(|status| status.balance.clone());
-    let previous_success_at = prior
-        .and_then(|status| status.cache.last_success_at)
-        .or(Some(checked_at));
-    let balance = previous_balance.map(|mut balance| {
-        balance.current_usage = balance.current_usage.max(balance.usage_limit);
-        balance.remaining = 0.0;
-        balance
-    });
-    KiroCachedAccountStatus {
-        balance,
-        cache: KiroCacheView {
-            status: STATUS_QUOTA_EXHAUSTED.to_string(),
-            refresh_interval_seconds,
-            last_checked_at: Some(checked_at),
-            last_success_at: previous_success_at,
-            error_message: Some(error_message),
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use llm_access_kiro::status::{
+        KiroBalanceView, KiroCacheView, STATUS_DEGRADED, STATUS_EMPTY, STATUS_QUOTA_EXHAUSTED,
+    };
+
+    use super::{super::auth_file::KiroAuthRecord, *};
 
     #[test]
     fn error_entry_preserves_previous_balance_as_degraded() {

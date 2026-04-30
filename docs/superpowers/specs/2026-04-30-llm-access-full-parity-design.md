@@ -296,6 +296,11 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
   scheduling, status refresh, and cache simulation. The backend adapts its
   existing shared config into that contract instead of leaking backend state
   types into Kiro logic.
+- `llm-access-kiro` now owns Kiro balance/cache status view types, persisted
+  status-cache snapshot helpers, account eligibility checks, aggregate snapshot
+  summarization, quota-exhausted entries, and duplicate upstream-identity
+  grouping. The backend status cache keeps orchestration and logging while
+  delegating those reusable rules to the shared crate.
 
 ### Store Adapter Rule
 
