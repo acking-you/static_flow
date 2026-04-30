@@ -2,4 +2,5 @@
 
 pub mod provider;
 pub mod routes;
+pub mod store;
 pub mod usage;

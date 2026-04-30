@@ -2,6 +2,8 @@
 
 /// DuckDB analytics writer helpers.
 pub mod duckdb;
+/// Async repository adapters for runtime traits.
+pub mod repository;
 /// SQLite control-plane repository.
 pub mod sqlite;
 

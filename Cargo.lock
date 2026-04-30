@@ -6073,6 +6073,7 @@ dependencies = [
 name = "llm-access-core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "serde",
  "serde_json",
@@ -6128,9 +6129,13 @@ name = "llm-access-store"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "duckdb",
+ "llm-access-core",
  "llm-access-migrations",
  "rusqlite",
+ "sha2",
+ "tokio",
 ]
 
 [[package]]

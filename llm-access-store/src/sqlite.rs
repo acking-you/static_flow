@@ -368,6 +368,76 @@ impl SqliteControlStore {
             .context("load key bundle")
     }
 
+    /// Load one key bundle by bearer secret hash.
+    pub fn get_key_by_hash(&self, key_hash: &str) -> anyhow::Result<Option<KeyBundle>> {
+        self.conn
+            .query_row(
+                "SELECT
+                    k.key_id, k.name, k.secret, k.key_hash, k.status, k.provider_type,
+                    k.protocol_family, k.public_visible, k.quota_billable_limit,
+                    k.created_at_ms, k.updated_at_ms,
+                    r.route_strategy, r.fixed_account_name, r.auto_account_names_json,
+                    r.account_group_id, r.model_name_map_json,
+                    r.request_max_concurrency, r.request_min_start_interval_ms,
+                    r.kiro_request_validation_enabled, r.kiro_cache_estimation_enabled,
+                    r.kiro_zero_cache_debug_enabled, r.kiro_cache_policy_override_json,
+                    r.kiro_billable_model_multipliers_override_json,
+                    u.input_uncached_tokens, u.input_cached_tokens, u.output_tokens,
+                    u.billable_tokens, u.credit_total, u.credit_missing_events,
+                    u.last_used_at_ms, u.updated_at_ms
+                 FROM llm_keys k
+                 LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
+                 LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
+                 WHERE k.key_hash = ?1",
+                [key_hash],
+                decode_key_bundle,
+            )
+            .optional()
+            .context("load key bundle by hash")
+    }
+
+    /// Add one accepted usage event to the hot-path key rollup counters.
+    pub fn increment_key_usage_rollup(
+        &self,
+        event: &llm_access_core::usage::UsageEvent,
+    ) -> anyhow::Result<()> {
+        let credit_delta = event
+            .credit_usage
+            .as_deref()
+            .unwrap_or("0")
+            .parse::<f64>()
+            .context("parse usage event credit usage")?;
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE llm_key_usage_rollups
+                 SET input_uncached_tokens = input_uncached_tokens + ?2,
+                     input_cached_tokens = input_cached_tokens + ?3,
+                     output_tokens = output_tokens + ?4,
+                     billable_tokens = billable_tokens + ?5,
+                     credit_total = CAST((CAST(credit_total AS REAL) + ?6) AS TEXT),
+                     credit_missing_events = credit_missing_events + ?7,
+                     last_used_at_ms = ?8,
+                     updated_at_ms = ?8
+                 WHERE key_id = ?1",
+                params![
+                    &event.key_id,
+                    event.input_uncached_tokens,
+                    event.input_cached_tokens,
+                    event.output_tokens,
+                    event.billable_tokens,
+                    credit_delta,
+                    event.credit_usage_missing as i64,
+                    event.created_at_ms,
+                ],
+            )
+            .context("increment key usage rollup")?;
+        if changed == 0 {
+            anyhow::bail!("usage rollup not found for key `{}`", event.key_id);
+        }
+        Ok(())
+    }
+
     /// Insert or update the singleton runtime config row.
     pub fn upsert_runtime_config(&self, record: &RuntimeConfigRecord) -> anyhow::Result<()> {
         self.conn
@@ -914,6 +984,150 @@ mod tests {
         assert!(loaded.route.kiro_cache_estimation_enabled);
         assert!(!loaded.route.kiro_zero_cache_debug_enabled);
         assert_eq!(loaded.rollup.output_tokens, 33);
+    }
+
+    #[test]
+    fn key_repository_loads_key_bundle_by_hash() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlStore::new(conn);
+        let key = super::KeyRecord {
+            key_id: "key-by-hash".to_string(),
+            name: "hash target".to_string(),
+            secret: "sk-test".to_string(),
+            key_hash: "hash-target".to_string(),
+            status: "active".to_string(),
+            provider_type: "codex".to_string(),
+            protocol_family: "openai".to_string(),
+            public_visible: false,
+            quota_billable_limit: 10_000,
+            created_at_ms: 10,
+            updated_at_ms: 20,
+        };
+        let route = super::KeyRouteConfig {
+            key_id: key.key_id.clone(),
+            route_strategy: Some("fixed".to_string()),
+            fixed_account_name: Some("account-a".to_string()),
+            auto_account_names_json: None,
+            account_group_id: None,
+            model_name_map_json: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            kiro_request_validation_enabled: false,
+            kiro_cache_estimation_enabled: false,
+            kiro_zero_cache_debug_enabled: false,
+            kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
+        };
+        let rollup = super::KeyUsageRollup {
+            key_id: key.key_id.clone(),
+            input_uncached_tokens: 1,
+            input_cached_tokens: 2,
+            output_tokens: 3,
+            billable_tokens: 4,
+            credit_total: 0.0,
+            credit_missing_events: 0,
+            last_used_at_ms: None,
+            updated_at_ms: 20,
+        };
+
+        repo.upsert_key_bundle(&key, &route, &rollup)
+            .expect("upsert key");
+
+        let loaded = repo
+            .get_key_by_hash("hash-target")
+            .expect("load key by hash")
+            .expect("key exists");
+        assert_eq!(loaded.key.key_id, "key-by-hash");
+        assert_eq!(loaded.route.fixed_account_name.as_deref(), Some("account-a"));
+        assert_eq!(loaded.rollup.billable_tokens, 4);
+    }
+
+    #[test]
+    fn key_usage_rollup_increments_from_usage_event() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlStore::new(conn);
+        let key = super::KeyRecord {
+            key_id: "key-rollup".to_string(),
+            name: "rollup".to_string(),
+            secret: "sk-test".to_string(),
+            key_hash: "hash-rollup".to_string(),
+            status: "active".to_string(),
+            provider_type: "kiro".to_string(),
+            protocol_family: "anthropic".to_string(),
+            public_visible: true,
+            quota_billable_limit: 10_000,
+            created_at_ms: 10,
+            updated_at_ms: 20,
+        };
+        let route = super::KeyRouteConfig {
+            key_id: key.key_id.clone(),
+            route_strategy: Some("auto".to_string()),
+            fixed_account_name: None,
+            auto_account_names_json: None,
+            account_group_id: None,
+            model_name_map_json: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
+            kiro_zero_cache_debug_enabled: false,
+            kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
+        };
+        let rollup = super::KeyUsageRollup {
+            key_id: key.key_id.clone(),
+            input_uncached_tokens: 10,
+            input_cached_tokens: 20,
+            output_tokens: 30,
+            billable_tokens: 40,
+            credit_total: 1.5,
+            credit_missing_events: 2,
+            last_used_at_ms: Some(100),
+            updated_at_ms: 100,
+        };
+        repo.upsert_key_bundle(&key, &route, &rollup)
+            .expect("upsert key");
+
+        let event = llm_access_core::usage::UsageEvent {
+            event_id: "event-1".to_string(),
+            created_at_ms: 500,
+            provider_type: llm_access_core::provider::ProviderType::Kiro,
+            protocol_family: llm_access_core::provider::ProtocolFamily::Anthropic,
+            key_id: key.key_id.clone(),
+            key_name: key.name.clone(),
+            account_name: Some("account-a".to_string()),
+            route_strategy_at_event: Some(llm_access_core::provider::RouteStrategy::Auto),
+            endpoint: "/v1/messages".to_string(),
+            model: Some("claude-sonnet-4-5".to_string()),
+            mapped_model: None,
+            status_code: 200,
+            request_body_bytes: Some(1024),
+            input_uncached_tokens: 7,
+            input_cached_tokens: 8,
+            output_tokens: 9,
+            billable_tokens: 10,
+            credit_usage: Some("0.25".to_string()),
+            usage_missing: false,
+            credit_usage_missing: false,
+            timing: llm_access_core::usage::UsageTiming::default(),
+        };
+
+        repo.increment_key_usage_rollup(&event)
+            .expect("increment rollup");
+
+        let loaded = repo
+            .get_key("key-rollup")
+            .expect("load key")
+            .expect("key exists");
+        assert_eq!(loaded.rollup.input_uncached_tokens, 17);
+        assert_eq!(loaded.rollup.input_cached_tokens, 28);
+        assert_eq!(loaded.rollup.output_tokens, 39);
+        assert_eq!(loaded.rollup.billable_tokens, 50);
+        assert_eq!(loaded.rollup.credit_total, 1.75);
+        assert_eq!(loaded.rollup.credit_missing_events, 2);
+        assert_eq!(loaded.rollup.last_used_at_ms, Some(500));
     }
 
     #[test]
