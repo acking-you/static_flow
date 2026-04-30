@@ -9,7 +9,11 @@ use axum::{
     http::{header, HeaderMap, Request, StatusCode},
     response::{IntoResponse, Response},
 };
-use llm_access_core::store::{AuthenticatedKey, ControlStore};
+use llm_access_core::{
+    provider::{ProtocolFamily, ProviderType},
+    routes::provider_route_requirement,
+    store::{AuthenticatedKey, ControlStore},
+};
 
 /// Shared provider request state.
 #[derive(Clone)]
@@ -80,6 +84,9 @@ pub async fn provider_entry(state: ProviderState, request: Request<Body>) -> Res
     if !is_active_key(&key) {
         return (StatusCode::FORBIDDEN, "llm key is not active").into_response();
     }
+    if !key_matches_route(&key, request.uri().path()) {
+        return (StatusCode::FORBIDDEN, "llm key does not match provider route").into_response();
+    }
 
     state.dispatcher.dispatch(key, request).await
 }
@@ -100,6 +107,15 @@ fn bearer_secret(headers: &HeaderMap) -> Option<&str> {
 
 fn is_active_key(key: &AuthenticatedKey) -> bool {
     key.status == "active"
+}
+
+fn key_matches_route(key: &AuthenticatedKey, path: &str) -> bool {
+    let Some(requirement) = provider_route_requirement(path) else {
+        return true;
+    };
+    ProviderType::from_storage_str(&key.provider_type) == Some(requirement.provider_type)
+        && ProtocolFamily::from_storage_str(&key.protocol_family)
+            == Some(requirement.protocol_family)
 }
 
 #[cfg(test)]
@@ -125,16 +141,17 @@ mod tests {
             &self,
             secret: &str,
         ) -> anyhow::Result<Option<AuthenticatedKey>> {
-            let status = match secret {
-                "valid-secret" => "active",
-                "paused-secret" => "paused",
+            let (key_id, key_name, provider_type, protocol_family, status) = match secret {
+                "valid-secret" => ("key-1", "test-key", "kiro", "anthropic", "active"),
+                "codex-secret" => ("key-2", "codex-key", "codex", "openai", "active"),
+                "paused-secret" => ("key-1", "test-key", "kiro", "anthropic", "paused"),
                 _ => return Ok(None),
             };
             Ok(Some(AuthenticatedKey {
-                key_id: "key-1".to_string(),
-                key_name: "test-key".to_string(),
-                provider_type: "kiro".to_string(),
-                protocol_family: "anthropic".to_string(),
+                key_id: key_id.to_string(),
+                key_name: key_name.to_string(),
+                provider_type: provider_type.to_string(),
+                protocol_family: protocol_family.to_string(),
                 status: status.to_string(),
                 quota_billable_limit: 100,
                 billable_tokens_used: 0,
@@ -185,12 +202,16 @@ mod tests {
         }
     }
 
-    fn request_with_bearer(secret: Option<&str>) -> Request<Body> {
-        let mut builder = Request::builder().uri("/api/kiro-gateway/v1/messages");
+    fn request_with_bearer_to_path(path: &str, secret: Option<&str>) -> Request<Body> {
+        let mut builder = Request::builder().uri(path);
         if let Some(secret) = secret {
             builder = builder.header(header::AUTHORIZATION, secret);
         }
         builder.body(Body::empty()).expect("request")
+    }
+
+    fn request_with_bearer(secret: Option<&str>) -> Request<Body> {
+        request_with_bearer_to_path("/api/kiro-gateway/v1/messages", secret)
     }
 
     #[tokio::test]
@@ -260,6 +281,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_entry_rejects_kiro_key_on_codex_route_before_dispatch() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+
+        let response = super::provider_entry(
+            state,
+            request_with_bearer_to_path("/v1/responses", Some("Bearer valid-secret")),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(dispatcher.seen.lock().expect("dispatcher state").is_empty());
+    }
+
+    #[tokio::test]
+    async fn provider_entry_rejects_codex_key_on_kiro_route_before_dispatch() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+
+        let response = super::provider_entry(
+            state,
+            request_with_bearer_to_path(
+                "/api/kiro-gateway/v1/messages",
+                Some("Bearer codex-secret"),
+            ),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(dispatcher.seen.lock().expect("dispatcher state").is_empty());
+    }
+
+    #[tokio::test]
     async fn provider_entry_dispatches_authenticated_active_requests() {
         let dispatcher = Arc::new(CapturingDispatcher::default());
         let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
@@ -271,6 +325,27 @@ mod tests {
         assert_eq!(dispatcher.seen.lock().expect("dispatcher state").as_slice(), &[(
             "key-1".to_string(),
             "/api/kiro-gateway/v1/messages".to_string()
+        )]);
+    }
+
+    #[tokio::test]
+    async fn provider_entry_dispatches_codex_key_on_codex_routes() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let state = super::ProviderState::with_dispatcher(Arc::new(TestStore), dispatcher.clone());
+
+        let response = super::provider_entry(
+            state,
+            request_with_bearer_to_path(
+                "/api/codex-gateway/v1/responses",
+                Some("Bearer codex-secret"),
+            ),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(dispatcher.seen.lock().expect("dispatcher state").as_slice(), &[(
+            "key-2".to_string(),
+            "/api/codex-gateway/v1/responses".to_string()
         )]);
     }
 }

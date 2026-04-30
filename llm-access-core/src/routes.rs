@@ -1,5 +1,7 @@
 //! Canonical route surface owned by the standalone LLM access service.
 
+use crate::provider::{ProtocolFamily, ProviderType};
+
 /// HTTP route declaration used by compatibility tests and router wiring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RouteSpec {
@@ -8,6 +10,25 @@ pub struct RouteSpec {
     /// Axum-compatible route pattern.
     pub path: &'static str,
 }
+
+/// Provider and wire-protocol required by a provider-facing route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderRouteRequirement {
+    /// Required backend provider family.
+    pub provider_type: ProviderType,
+    /// Required client-facing protocol family.
+    pub protocol_family: ProtocolFamily,
+}
+
+const CODEX_OPENAI_ROUTE: ProviderRouteRequirement = ProviderRouteRequirement {
+    provider_type: ProviderType::Codex,
+    protocol_family: ProtocolFamily::OpenAi,
+};
+
+const KIRO_ANTHROPIC_ROUTE: ProviderRouteRequirement = ProviderRouteRequirement {
+    provider_type: ProviderType::Kiro,
+    protocol_family: ProtocolFamily::Anthropic,
+};
 
 /// Public/provider routes that must be handled by `llm-access`.
 pub const PUBLIC_PROVIDER_ROUTES: &[RouteSpec] = &[
@@ -247,9 +268,30 @@ pub fn is_llm_access_path(path: &str) -> bool {
         || path.starts_with("/admin/kiro-gateway/")
 }
 
+/// Return the provider/protocol contract for provider data-plane routes.
+pub fn provider_route_requirement(path: &str) -> Option<ProviderRouteRequirement> {
+    if path.starts_with("/cc/v1/")
+        || path.starts_with("/api/kiro-gateway/v1/")
+        || path.starts_with("/api/kiro-gateway/cc/v1/")
+    {
+        Some(KIRO_ANTHROPIC_ROUTE)
+    } else if path.starts_with("/v1/")
+        || path.starts_with("/api/codex-gateway/")
+        || path.starts_with("/api/llm-gateway/v1/")
+    {
+        Some(CODEX_OPENAI_ROUTE)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{is_llm_access_path, ADMIN_ROUTES, PUBLIC_PROVIDER_ROUTES};
+    use super::{
+        is_llm_access_path, provider_route_requirement, ProviderRouteRequirement, ADMIN_ROUTES,
+        PUBLIC_PROVIDER_ROUTES,
+    };
+    use crate::provider::{ProtocolFamily, ProviderType};
 
     #[test]
     fn route_contract_contains_required_public_provider_paths() {
@@ -282,5 +324,26 @@ mod tests {
         assert!(is_llm_access_path("/admin/kiro-gateway/accounts"));
         assert!(!is_llm_access_path("/api/articles"));
         assert!(!is_llm_access_path("/admin/local-media"));
+    }
+
+    #[test]
+    fn provider_route_requirement_matches_provider_protocol_prefixes() {
+        let codex = ProviderRouteRequirement {
+            provider_type: ProviderType::Codex,
+            protocol_family: ProtocolFamily::OpenAi,
+        };
+        let kiro = ProviderRouteRequirement {
+            provider_type: ProviderType::Kiro,
+            protocol_family: ProtocolFamily::Anthropic,
+        };
+
+        assert_eq!(provider_route_requirement("/v1/responses"), Some(codex));
+        assert_eq!(provider_route_requirement("/api/llm-gateway/v1/responses"), Some(codex));
+        assert_eq!(provider_route_requirement("/api/codex-gateway/v1/responses"), Some(codex));
+        assert_eq!(provider_route_requirement("/cc/v1/messages"), Some(kiro));
+        assert_eq!(provider_route_requirement("/api/kiro-gateway/v1/messages"), Some(kiro));
+        assert_eq!(provider_route_requirement("/api/kiro-gateway/cc/v1/messages"), Some(kiro));
+        assert_eq!(provider_route_requirement("/api/llm-gateway/status"), None);
+        assert_eq!(provider_route_requirement("/api/kiro-gateway/access"), None);
     }
 }

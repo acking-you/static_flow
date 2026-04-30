@@ -293,6 +293,10 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
   authentication. The default dispatcher preserves the current 501 behavior,
   while tests can inject a dispatcher and prove active keys reach the provider
   runtime seam with the authenticated key and original request.
+- `llm-access-core` now exposes provider-route requirements for Codex/OpenAI
+  and Kiro/Anthropic paths, and `llm-access` rejects keys whose stored
+  provider/protocol does not match the requested provider route before
+  dispatch.
 - `llm-access-kiro` now owns Kiro auth-file persistence, local Kiro CLI import,
   deterministic machine-id derivation, and token-count estimation. The backend
   keeps compatibility modules that re-export those implementations.
