@@ -14,10 +14,12 @@ bytes = { workspace = true }
 charabia = "0.9"
 chrono = { workspace = true }
 crc = "3.3"
+hex = "0.4"
 llm-access-core = { path = "../llm-access-core" }
 lopdf = "0.38"
 lru = "0.12"
 parking_lot = "0.12"
+rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

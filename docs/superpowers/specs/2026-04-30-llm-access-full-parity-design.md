@@ -289,6 +289,9 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
   authenticates provider requests by bearer secret before dispatch. Missing,
   malformed, unknown, and non-active keys are rejected before any provider
   runtime is selected.
+- `llm-access-kiro` now owns Kiro auth-file persistence, local Kiro CLI import,
+  deterministic machine-id derivation, and token-count estimation. The backend
+  keeps compatibility modules that re-export those implementations.
 
 ### Store Adapter Rule
 

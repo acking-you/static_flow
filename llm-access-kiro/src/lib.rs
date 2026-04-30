@@ -11,6 +11,12 @@ pub mod anthropic;
     reason = "Extracted Kiro modules preserve the existing backend runtime surface during \
               migration."
 )]
+pub mod auth_file;
+#[allow(
+    missing_docs,
+    reason = "Extracted Kiro modules preserve the existing backend runtime surface during \
+              migration."
+)]
 pub mod billable_multipliers;
 #[allow(
     missing_docs,
@@ -29,6 +35,18 @@ pub mod cache_sim;
     reason = "Extracted Kiro modules preserve the existing backend runtime surface during \
               migration."
 )]
+pub mod local_import;
+#[allow(
+    missing_docs,
+    reason = "Extracted Kiro modules preserve the existing backend runtime surface during \
+              migration."
+)]
+pub mod machine_id;
+#[allow(
+    missing_docs,
+    reason = "Extracted Kiro modules preserve the existing backend runtime surface during \
+              migration."
+)]
 pub mod parser;
 #[allow(
     missing_docs,
@@ -36,6 +54,12 @@ pub mod parser;
               migration."
 )]
 pub mod scheduler;
+#[allow(
+    missing_docs,
+    reason = "Extracted Kiro modules preserve the existing backend runtime surface during \
+              migration."
+)]
+pub mod token;
 #[allow(
     missing_docs,
     reason = "Extracted Kiro modules preserve the existing backend runtime surface during \
