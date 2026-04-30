@@ -2,7 +2,7 @@
 
 use axum::{
     body::Body,
-    extract::State,
+    extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -33,6 +33,19 @@ struct LlmGatewayPublicKeyView {
     usage_output_tokens: u64,
     remaining_billable: i64,
     last_used_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct LlmGatewaySupportConfigView {
+    sponsor_title: String,
+    sponsor_intro: String,
+    group_name: String,
+    qq_group_number: String,
+    group_invite_text: String,
+    alipay_qr_url: String,
+    wechat_qr_url: String,
+    qq_group_qr_url: Option<String>,
+    generated_at: i64,
 }
 
 impl From<PublicAccessKey> for LlmGatewayPublicKeyView {
@@ -149,6 +162,52 @@ pub(crate) async fn get_llm_gateway_status(State(state): State<HttpState>) -> Re
         Ok(status) => Json(status).into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "public status store error").into_response(),
     }
+}
+
+pub(crate) async fn get_llm_gateway_support_config() -> Response {
+    let config = match crate::support::load_support_config() {
+        Ok(config) => config,
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to load support config")
+                .into_response()
+        },
+    };
+    let qq_group_qr_url = config
+        .has_group_qr()
+        .then(|| format!("/api/llm-gateway/support-assets/{}", crate::support::QQ_GROUP_QR_FILE));
+    Json(LlmGatewaySupportConfigView {
+        sponsor_title: config.sponsor_title,
+        sponsor_intro: config.sponsor_intro,
+        group_name: config.group_name,
+        qq_group_number: config.qq_group_number,
+        group_invite_text: config.group_invite_text,
+        alipay_qr_url: format!(
+            "/api/llm-gateway/support-assets/{}",
+            crate::support::ALIPAY_QR_FILE
+        ),
+        wechat_qr_url: format!(
+            "/api/llm-gateway/support-assets/{}",
+            crate::support::WECHAT_QR_FILE
+        ),
+        qq_group_qr_url,
+        generated_at: now_ms(),
+    })
+    .into_response()
+}
+
+pub(crate) async fn get_llm_gateway_support_asset(Path(file_name): Path<String>) -> Response {
+    let asset = match crate::support::load_support_asset(&file_name) {
+        Ok(asset) => asset,
+        Err(_) => return (StatusCode::NOT_FOUND, "support asset not found").into_response(),
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, asset.content_type)
+        .body(Body::from(asset.bytes))
+        .unwrap_or_else(|_| {
+            (StatusCode::INTERNAL_SERVER_ERROR, "failed to build support asset response")
+                .into_response()
+        })
 }
 
 pub(crate) async fn get_kiro_gateway_access(

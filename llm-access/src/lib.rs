@@ -11,6 +11,7 @@ mod public;
 pub mod routes;
 /// Runtime startup validation.
 pub mod runtime;
+mod support;
 /// Usage-event helpers.
 pub mod usage;
 
@@ -71,6 +72,11 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         .route("/api/llm-gateway/access", get(public::get_llm_gateway_access))
         .route("/api/llm-gateway/model-catalog.json", get(public::get_llm_gateway_model_catalog))
         .route("/api/llm-gateway/status", get(public::get_llm_gateway_status))
+        .route("/api/llm-gateway/support-config", get(public::get_llm_gateway_support_config))
+        .route(
+            "/api/llm-gateway/support-assets/:file_name",
+            get(public::get_llm_gateway_support_asset),
+        )
         .route("/api/kiro-gateway/access", get(public::get_kiro_gateway_access))
         .route("/v1/chat/completions", post(provider_entry_handler))
         .route("/v1/responses", post(provider_entry_handler))
@@ -132,7 +138,7 @@ async fn version() -> Json<VersionResponse> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
     use axum::{
@@ -141,6 +147,8 @@ mod tests {
     };
     use llm_access_core::store::{AuthenticatedKey, ControlStore};
     use tower::util::ServiceExt;
+
+    static SUPPORT_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[derive(Default)]
     struct EmptyStore;
@@ -308,5 +316,54 @@ mod tests {
         assert!(body.contains(r#""status":"loading""#));
         assert!(body.contains(r#""accounts":[]"#));
         assert!(body.contains(r#""buckets":[]"#));
+    }
+
+    #[tokio::test]
+    async fn router_serves_llm_gateway_support_config_without_provider_key() {
+        let _guard = SUPPORT_ENV_LOCK.lock().expect("support env lock");
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-support-config-{}-{unique}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create support dir");
+        std::fs::write(
+            root.join("config.json"),
+            r#"{
+                "owner_display_name":"StaticFlow",
+                "sponsor_title":"Support StaticFlow",
+                "sponsor_intro":"Keep the shared LLM pool healthy.",
+                "group_name":"StaticFlow Group",
+                "qq_group_number":"123456",
+                "group_invite_text":"Join the group",
+                "payment_email_subject":"Payment instructions",
+                "payment_email_signature":"StaticFlow"
+            }"#,
+        )
+        .expect("write support config");
+        std::env::set_var("LLM_ACCESS_SUPPORT_DIR", &root);
+
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/llm-gateway/support-config")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        std::env::remove_var("LLM_ACCESS_SUPPORT_DIR");
+        std::fs::remove_dir_all(&root).expect("cleanup support dir");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains(r#""sponsor_title":"Support StaticFlow""#));
+        assert!(body.contains(r#""qq_group_number":"123456""#));
+        assert!(body.contains(r#""alipay_qr_url":"/api/llm-gateway/support-assets/alipay_qr.png""#));
     }
 }

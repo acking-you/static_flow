@@ -326,6 +326,10 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
   `/api/codex-gateway/v1/models` from the standalone default Codex catalog.
   Other Codex generation routes still remain behind the explicit provider
   dispatch seam until the real upstream account runtime is wired.
+- `llm-access` now serves the public support/community compatibility endpoints
+  `/api/llm-gateway/support-config` and
+  `/api/llm-gateway/support-assets/:file_name` from the same
+  `LLM_ACCESS_SUPPORT_DIR` file layout used by the current backend.
 - `llm-access-kiro` now owns Kiro auth-file persistence, local Kiro CLI import,
   deterministic machine-id derivation, and token-count estimation. The backend
   keeps compatibility modules that re-export those implementations.

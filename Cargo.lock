@@ -6050,6 +6050,7 @@ dependencies = [
  "llm-access-kiro",
  "llm-access-store",
  "serde",
+ "serde_json",
  "tokio",
  "tower 0.5.2",
 ]
