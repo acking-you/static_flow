@@ -616,6 +616,57 @@ pub struct ProviderCodexRoute {
     pub auth_json: String,
     /// Whether this account maps public gpt-5.3-codex to Spark upstream.
     pub map_gpt53_codex_to_spark: bool,
+    /// Request concurrency cap configured on this key route.
+    pub request_max_concurrency: Option<u64>,
+    /// Minimum interval between request starts configured on this key route.
+    pub request_min_start_interval_ms: Option<u64>,
+    /// Request concurrency cap configured on the selected account.
+    pub account_request_max_concurrency: Option<u64>,
+    /// Minimum interval between request starts configured on the selected
+    /// account.
+    pub account_request_min_start_interval_ms: Option<u64>,
+}
+
+/// Resolved Kiro account selected for one provider request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderKiroRoute {
+    /// Selected account name.
+    pub account_name: String,
+    /// Persisted auth JSON for the selected account.
+    pub auth_json: String,
+    /// Profile ARN used by Kiro upstream requests.
+    pub profile_arn: Option<String>,
+    /// Effective API region used by Kiro upstream requests.
+    pub api_region: String,
+    /// Whether public request validation is enabled for this key.
+    pub request_validation_enabled: bool,
+    /// Whether cache estimation is enabled for this key.
+    pub cache_estimation_enabled: bool,
+    /// Effective Kiro cache k-model JSON for this key.
+    pub cache_kmodels_json: String,
+    /// Effective Kiro cache policy JSON for this key.
+    pub cache_policy_json: String,
+    /// Prefix-cache simulation mode.
+    pub prefix_cache_mode: String,
+    /// Prefix-cache maximum token budget.
+    pub prefix_cache_max_tokens: u64,
+    /// Prefix-cache entry TTL in seconds.
+    pub prefix_cache_entry_ttl_seconds: u64,
+    /// Conversation-anchor maximum entries.
+    pub conversation_anchor_max_entries: u64,
+    /// Conversation-anchor TTL in seconds.
+    pub conversation_anchor_ttl_seconds: u64,
+    /// Effective Kiro billable multiplier JSON for this key.
+    pub billable_model_multipliers_json: String,
+    /// Request concurrency cap configured on this key route.
+    pub request_max_concurrency: Option<u64>,
+    /// Minimum interval between request starts configured on this key route.
+    pub request_min_start_interval_ms: Option<u64>,
+    /// Request concurrency cap configured on the selected account.
+    pub account_request_max_concurrency: Option<u64>,
+    /// Minimum interval between request starts configured on the selected
+    /// account.
+    pub account_request_min_start_interval_ms: Option<u64>,
 }
 
 impl AuthenticatedKey {
@@ -973,6 +1024,41 @@ pub struct AdminReviewQueueAction {
     pub updated_at_ms: i64,
 }
 
+/// Paginated usage-event query used by admin and public compatibility views.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageEventQuery {
+    /// Optional key filter.
+    pub key_id: Option<String>,
+    /// Page limit.
+    pub limit: usize,
+    /// Page offset.
+    pub offset: usize,
+}
+
+/// Usage-event page returned by the analytics store.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsageEventPage {
+    /// Total matching rows.
+    pub total: usize,
+    /// Page offset.
+    pub offset: usize,
+    /// Page limit.
+    pub limit: usize,
+    /// Whether more rows remain after this page.
+    pub has_more: bool,
+    /// Usage events in newest-first order.
+    pub events: Vec<UsageEvent>,
+}
+
+/// One public usage chart bucket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageChartPoint {
+    /// Bucket start timestamp in Unix milliseconds.
+    pub bucket_start_ms: i64,
+    /// Token total for the bucket.
+    pub tokens: u64,
+}
+
 impl PublicAccessKey {
     /// Remaining billable token budget available to this key.
     pub fn remaining_billable(&self) -> i64 {
@@ -1012,6 +1098,12 @@ pub trait ProviderRouteStore: Send + Sync {
         &self,
         key: &AuthenticatedKey,
     ) -> anyhow::Result<Option<ProviderCodexRoute>>;
+
+    /// Resolve the Kiro account to use for an authenticated key.
+    async fn resolve_kiro_route(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<Option<ProviderKiroRoute>>;
 }
 
 /// Public read-only queries used by unauthenticated compatibility endpoints.
@@ -1046,6 +1138,25 @@ pub trait PublicUsageStore: Send + Sync {
         &self,
         secret: &str,
     ) -> anyhow::Result<Option<PublicUsageLookupKey>>;
+}
+
+/// Analytics queries over settled usage events.
+#[async_trait]
+pub trait UsageAnalyticsStore: Send + Sync {
+    /// List settled usage events.
+    async fn list_usage_events(&self, query: UsageEventQuery) -> anyhow::Result<UsageEventPage>;
+
+    /// Load one settled usage event.
+    async fn get_usage_event(&self, event_id: &str) -> anyhow::Result<Option<UsageEvent>>;
+
+    /// Return chart buckets for one key.
+    async fn usage_chart_points(
+        &self,
+        key_id: &str,
+        start_ms: i64,
+        bucket_ms: i64,
+        bucket_count: usize,
+    ) -> anyhow::Result<Vec<UsageChartPoint>>;
 }
 
 /// Public write queries used by unauthenticated compatibility endpoints.
@@ -1306,6 +1417,13 @@ impl ProviderRouteStore for EmptyProviderRouteStore {
     ) -> anyhow::Result<Option<ProviderCodexRoute>> {
         Ok(None)
     }
+
+    async fn resolve_kiro_route(
+        &self,
+        _key: &AuthenticatedKey,
+    ) -> anyhow::Result<Option<ProviderKiroRoute>> {
+        Ok(None)
+    }
 }
 
 #[async_trait]
@@ -1346,6 +1464,51 @@ impl PublicUsageStore for EmptyPublicUsageStore {
         _secret: &str,
     ) -> anyhow::Result<Option<PublicUsageLookupKey>> {
         Ok(None)
+    }
+}
+
+/// Empty analytics store used by isolated unit tests.
+pub struct EmptyUsageAnalyticsStore;
+
+#[async_trait]
+impl UsageAnalyticsStore for EmptyUsageAnalyticsStore {
+    async fn list_usage_events(&self, query: UsageEventQuery) -> anyhow::Result<UsageEventPage> {
+        Ok(UsageEventPage {
+            total: 0,
+            offset: query.offset,
+            limit: query.limit,
+            has_more: false,
+            events: Vec::new(),
+        })
+    }
+
+    async fn get_usage_event(&self, _event_id: &str) -> anyhow::Result<Option<UsageEvent>> {
+        Ok(None)
+    }
+
+    async fn usage_chart_points(
+        &self,
+        _key_id: &str,
+        start_ms: i64,
+        bucket_ms: i64,
+        bucket_count: usize,
+    ) -> anyhow::Result<Vec<UsageChartPoint>> {
+        Ok((0..bucket_count)
+            .map(|index| UsageChartPoint {
+                bucket_start_ms: start_ms.saturating_add((index as i64).saturating_mul(bucket_ms)),
+                tokens: 0,
+            })
+            .collect())
+    }
+}
+
+/// No-op usage sink used by isolated unit tests.
+pub struct NoopUsageEventSink;
+
+#[async_trait]
+impl UsageEventSink for NoopUsageEventSink {
+    async fn append_usage_event(&self, _event: &UsageEvent) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 

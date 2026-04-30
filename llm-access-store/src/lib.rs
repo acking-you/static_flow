@@ -65,10 +65,16 @@ pub fn sqlite_schema_sql() -> String {
 /// Initialize the DuckDB usage and audit schema for the standalone LLM access
 /// service.
 #[cfg(feature = "duckdb-runtime")]
-pub fn initialize_duckdb_target(conn: &duckdb::Connection) -> anyhow::Result<()> {
+pub fn initialize_duckdb_target(conn: &::duckdb::Connection) -> anyhow::Result<()> {
     conn.execute_batch(&duckdb_schema_sql())
         .context("failed to initialize duckdb llm access schema")?;
     Ok(())
+}
+
+/// Initialize a DuckDB usage database at `path`.
+#[cfg(feature = "duckdb-runtime")]
+pub fn initialize_duckdb_target_path(path: impl AsRef<Path>) -> anyhow::Result<()> {
+    crate::duckdb::initialize_duckdb_target_path(path)
 }
 
 #[cfg(test)]

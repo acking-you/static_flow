@@ -7,10 +7,18 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+default = []
+duckdb-runtime = ["llm-access-store/duckdb-runtime"]
+duckdb-bundled = ["llm-access-store/duckdb-bundled"]
+
 [dependencies]
 anyhow = { workspace = true }
+async-stream = "0.3"
 async-trait = { workspace = true }
 axum = { workspace = true }
+eventsource-stream = "0.2"
+futures-util = "0.3"
 llm-access-codex = { path = "../llm-access-codex" }
 llm-access-core = { path = "../llm-access-core" }
 llm-access-kiro = { path = "../llm-access-kiro" }

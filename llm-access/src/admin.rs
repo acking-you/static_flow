@@ -1,6 +1,10 @@
 //! Local admin compatibility endpoints for the standalone LLM access service.
 
-use std::{collections::BTreeMap, net::IpAddr};
+use std::{
+    collections::BTreeMap,
+    net::IpAddr,
+    time::{Duration, Instant},
+};
 
 use axum::{
     extract::{Path, Query, State},
@@ -8,12 +12,15 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use llm_access_core::store::{
-    self as core_store, AdminAccountGroupPatch, AdminCodexAccountPatch, AdminKeyPatch,
-    AdminProxyConfigPatch, AdminReviewQueueAction, AdminRuntimeConfig, NewAdminAccountGroup,
-    NewAdminCodexAccount, NewAdminKey, NewAdminProxyConfig, UpdateAdminRuntimeConfig,
-    KEY_STATUS_ACTIVE, KEY_STATUS_DISABLED, KIRO_PREFIX_CACHE_MODE_FORMULA, PROVIDER_CODEX,
-    PROVIDER_KIRO,
+use llm_access_core::{
+    store::{
+        self as core_store, AdminAccountGroupPatch, AdminCodexAccountPatch, AdminKeyPatch,
+        AdminProxyConfigPatch, AdminReviewQueueAction, AdminRuntimeConfig, NewAdminAccountGroup,
+        NewAdminCodexAccount, NewAdminKey, NewAdminProxyConfig, UpdateAdminRuntimeConfig,
+        UsageEventQuery, KEY_STATUS_ACTIVE, KEY_STATUS_DISABLED, KIRO_PREFIX_CACHE_MODE_FORMULA,
+        PROVIDER_CODEX, PROVIDER_KIRO,
+    },
+    usage::UsageEvent,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -40,6 +47,9 @@ const MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY: u64 = 1_024;
 const MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS: u64 = 300_000;
 const DEFAULT_ADMIN_REVIEW_QUEUE_LIMIT: usize = 50;
 const MAX_ADMIN_REVIEW_QUEUE_LIMIT: usize = 200;
+const DEFAULT_ADMIN_USAGE_LIMIT: usize = 50;
+const MAX_ADMIN_USAGE_LIMIT: usize = 500;
+const PROXY_CONNECTIVITY_CHECK_TIMEOUT_SECONDS: u64 = 10;
 const BAND_CONTIGUITY_TOLERANCE: f64 = 1e-12;
 
 #[derive(Debug, Serialize)]
@@ -113,6 +123,104 @@ struct AdminSponsorRequestsResponse {
     has_more: bool,
     requests: Vec<core_store::AdminSponsorRequest>,
     generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminUsageEventsResponse {
+    total: usize,
+    offset: usize,
+    limit: usize,
+    has_more: bool,
+    current_rpm: u32,
+    current_in_flight: u32,
+    events: Vec<AdminUsageEventView>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminUsageEventView {
+    id: String,
+    key_id: String,
+    key_name: String,
+    account_name: Option<String>,
+    request_method: String,
+    request_url: String,
+    latency_ms: i32,
+    routing_wait_ms: Option<i32>,
+    upstream_headers_ms: Option<i32>,
+    post_headers_body_ms: Option<i32>,
+    request_body_bytes: Option<u64>,
+    request_body_read_ms: Option<i32>,
+    request_json_parse_ms: Option<i32>,
+    pre_handler_ms: Option<i32>,
+    first_sse_write_ms: Option<i32>,
+    stream_finish_ms: Option<i32>,
+    other_latency_ms: Option<i32>,
+    quota_failover_count: u64,
+    routing_diagnostics_json: Option<String>,
+    endpoint: String,
+    model: Option<String>,
+    status_code: i32,
+    input_uncached_tokens: u64,
+    input_cached_tokens: u64,
+    output_tokens: u64,
+    billable_tokens: u64,
+    usage_missing: bool,
+    credit_usage: Option<f64>,
+    credit_usage_missing: bool,
+    client_ip: String,
+    ip_region: String,
+    last_message_content: Option<String>,
+    created_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminUsageEventDetailView {
+    #[serde(flatten)]
+    event: AdminUsageEventView,
+    request_headers_json: String,
+    client_request_body_json: Option<String>,
+    upstream_request_body_json: Option<String>,
+    full_request_json: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminProxyCheckTargetView {
+    target: String,
+    url: String,
+    reachable: bool,
+    status_code: Option<u16>,
+    latency_ms: i64,
+    error_message: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminProxyCheckResponse {
+    proxy_config_id: String,
+    proxy_config_name: String,
+    provider_type: String,
+    auth_label: String,
+    ok: bool,
+    targets: Vec<AdminProxyCheckTargetView>,
+    checked_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminLegacyKiroProxyMigrationResponse {
+    created_configs: Vec<core_store::AdminProxyConfig>,
+    reused_configs: Vec<core_store::AdminProxyConfig>,
+    migrated_account_names: Vec<String>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ListUsageEventsRequest {
+    #[serde(default)]
+    key_id: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    offset: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -731,6 +839,95 @@ pub(crate) async fn update_llm_gateway_proxy_binding(
     {
         Ok(binding) => Json(binding).into_response(),
         Err(_) => internal_error("Failed to update llm gateway proxy binding").into_response(),
+    }
+}
+
+pub(crate) async fn check_llm_gateway_proxy_config(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path((proxy_id, provider_type)): Path<(String, String)>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    if let Err(response) = validate_provider_type(&provider_type) {
+        return response.into_response();
+    }
+    let proxy = match state
+        .admin_proxy_store
+        .get_admin_proxy_config(&proxy_id)
+        .await
+    {
+        Ok(Some(proxy)) => proxy,
+        Ok(None) => return not_found("LLM gateway proxy config not found").into_response(),
+        Err(_) => return internal_error("Failed to load llm gateway proxy config").into_response(),
+    };
+    match run_proxy_connectivity_check(&proxy, &provider_type).await {
+        Ok(result) => Json(result).into_response(),
+        Err(_) => internal_error("Failed to check upstream proxy config").into_response(),
+    }
+}
+
+pub(crate) async fn import_legacy_kiro_proxy_configs(
+    State(_state): State<HttpState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    Json(AdminLegacyKiroProxyMigrationResponse {
+        created_configs: Vec::new(),
+        reused_configs: Vec::new(),
+        migrated_account_names: Vec::new(),
+        generated_at: now_ms(),
+    })
+    .into_response()
+}
+
+pub(crate) async fn list_llm_gateway_usage_events(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(request): Query<ListUsageEventsRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let query = normalize_usage_query(request);
+    match state.usage_analytics_store.list_usage_events(query).await {
+        Ok(page) => Json(AdminUsageEventsResponse {
+            total: page.total,
+            offset: page.offset,
+            limit: page.limit,
+            has_more: page.has_more,
+            current_rpm: 0,
+            current_in_flight: 0,
+            events: page.events.iter().map(AdminUsageEventView::from).collect(),
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to list llm gateway usage events").into_response(),
+    }
+}
+
+pub(crate) async fn get_llm_gateway_usage_event(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(event_id): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state.usage_analytics_store.get_usage_event(&event_id).await {
+        Ok(Some(event)) => Json(AdminUsageEventDetailView {
+            event: AdminUsageEventView::from(&event),
+            request_headers_json: "{}".to_string(),
+            client_request_body_json: None,
+            upstream_request_body_json: None,
+            full_request_json: None,
+        })
+        .into_response(),
+        Ok(None) => not_found("LLM gateway usage event not found").into_response(),
+        Err(_) => internal_error("Failed to load llm gateway usage event").into_response(),
     }
 }
 
@@ -1526,10 +1723,190 @@ fn normalize_review_queue_query(
     }
 }
 
+fn normalize_usage_query(request: ListUsageEventsRequest) -> UsageEventQuery {
+    UsageEventQuery {
+        key_id: request
+            .key_id
+            .and_then(|key_id| normalize_optional_string(&key_id)),
+        limit: request
+            .limit
+            .unwrap_or(DEFAULT_ADMIN_USAGE_LIMIT)
+            .clamp(1, MAX_ADMIN_USAGE_LIMIT),
+        offset: request.offset.unwrap_or(0),
+    }
+}
+
 fn review_queue_action(request: ReviewQueueActionRequest) -> AdminReviewQueueAction {
     AdminReviewQueueAction {
         admin_note: normalize_optional_string_option(request.admin_note.as_deref()),
         updated_at_ms: now_ms(),
+    }
+}
+
+impl From<&UsageEvent> for AdminUsageEventView {
+    fn from(value: &UsageEvent) -> Self {
+        let latency_ms = usage_latency_ms(value);
+        Self {
+            id: value.event_id.clone(),
+            key_id: value.key_id.clone(),
+            key_name: value.key_name.clone(),
+            account_name: value.account_name.clone(),
+            request_method: usage_request_method(value),
+            request_url: value.endpoint.clone(),
+            latency_ms,
+            routing_wait_ms: None,
+            upstream_headers_ms: optional_i64_to_i32(value.timing.upstream_headers_ms),
+            post_headers_body_ms: optional_i64_to_i32(value.timing.post_headers_body_ms),
+            request_body_bytes: value.request_body_bytes.and_then(non_negative_i64_to_u64),
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: optional_i64_to_i32(value.timing.first_sse_write_ms),
+            stream_finish_ms: optional_i64_to_i32(value.timing.stream_finish_ms),
+            other_latency_ms: compute_other_latency_ms(
+                latency_ms,
+                None,
+                optional_i64_to_i32(value.timing.upstream_headers_ms),
+                optional_i64_to_i32(value.timing.post_headers_body_ms),
+            ),
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
+            endpoint: value.endpoint.clone(),
+            model: value.model.clone(),
+            status_code: value.status_code.clamp(0, i64::from(i32::MAX)) as i32,
+            input_uncached_tokens: non_negative_i64_to_u64(value.input_uncached_tokens)
+                .unwrap_or(0),
+            input_cached_tokens: non_negative_i64_to_u64(value.input_cached_tokens).unwrap_or(0),
+            output_tokens: non_negative_i64_to_u64(value.output_tokens).unwrap_or(0),
+            billable_tokens: non_negative_i64_to_u64(value.billable_tokens).unwrap_or(0),
+            usage_missing: value.usage_missing,
+            credit_usage: value
+                .credit_usage
+                .as_deref()
+                .and_then(|raw| raw.parse::<f64>().ok()),
+            credit_usage_missing: value.credit_usage_missing,
+            client_ip: "unknown".to_string(),
+            ip_region: "unknown".to_string(),
+            last_message_content: None,
+            created_at: value.created_at_ms,
+        }
+    }
+}
+
+fn usage_request_method(value: &UsageEvent) -> String {
+    if value.endpoint.ends_with("/models") || value.endpoint == "/v1/models" {
+        "GET"
+    } else {
+        "POST"
+    }
+    .to_string()
+}
+
+fn usage_latency_ms(value: &UsageEvent) -> i32 {
+    let latency = value.timing.stream_finish_ms.or_else(|| {
+        match (value.timing.upstream_headers_ms, value.timing.post_headers_body_ms) {
+            (Some(headers), Some(body)) => Some(headers.saturating_add(body)),
+            _ => None,
+        }
+    });
+    optional_i64_to_i32(latency).unwrap_or(0)
+}
+
+fn optional_i64_to_i32(value: Option<i64>) -> Option<i32> {
+    value.map(|value| value.clamp(0, i64::from(i32::MAX)) as i32)
+}
+
+fn non_negative_i64_to_u64(value: i64) -> Option<u64> {
+    u64::try_from(value.max(0)).ok()
+}
+
+fn compute_other_latency_ms(
+    latency_ms: i32,
+    routing_wait_ms: Option<i32>,
+    upstream_headers_ms: Option<i32>,
+    post_headers_body_ms: Option<i32>,
+) -> Option<i32> {
+    if routing_wait_ms.is_none() && upstream_headers_ms.is_none() && post_headers_body_ms.is_none()
+    {
+        return None;
+    }
+    let measured_ms: i64 = [routing_wait_ms, upstream_headers_ms, post_headers_body_ms]
+        .into_iter()
+        .flatten()
+        .map(|value| i64::from(value.max(0)))
+        .sum();
+    Some((i64::from(latency_ms.max(0)) - measured_ms).clamp(0, i64::from(i32::MAX)) as i32)
+}
+
+async fn run_proxy_connectivity_check(
+    proxy: &core_store::AdminProxyConfig,
+    provider_type: &str,
+) -> anyhow::Result<AdminProxyCheckResponse> {
+    let target_url = match provider_type {
+        PROVIDER_CODEX => "https://chatgpt.com/backend-api/codex/v1/models".to_string(),
+        PROVIDER_KIRO => {
+            "https://q.us-east-1.amazonaws.com/getUsageLimits?origin=AI_EDITOR&resourceType=AGENTIC_REQUEST"
+                .to_string()
+        },
+        _ => unreachable!("provider type must be validated before proxy check"),
+    };
+    let client = build_proxy_client(proxy)?;
+    let started_at = Instant::now();
+    let result = client.get(&target_url).send().await;
+    let target = match result {
+        Ok(response) => {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            AdminProxyCheckTargetView {
+                target: provider_type.to_string(),
+                url: target_url,
+                reachable: true,
+                status_code: Some(status.as_u16()),
+                latency_ms: started_at.elapsed().as_millis().min(i64::MAX as u128) as i64,
+                error_message: (!status.is_success()).then(|| summarize_upstream_error_body(&body)),
+            }
+        },
+        Err(err) => AdminProxyCheckTargetView {
+            target: provider_type.to_string(),
+            url: target_url,
+            reachable: false,
+            status_code: None,
+            latency_ms: started_at.elapsed().as_millis().min(i64::MAX as u128) as i64,
+            error_message: Some(err.to_string()),
+        },
+    };
+    Ok(AdminProxyCheckResponse {
+        proxy_config_id: proxy.id.clone(),
+        proxy_config_name: proxy.name.clone(),
+        provider_type: provider_type.to_string(),
+        auth_label: "anonymous connectivity probe".to_string(),
+        ok: target.reachable,
+        targets: vec![target],
+        checked_at: now_ms(),
+    })
+}
+
+fn build_proxy_client(proxy: &core_store::AdminProxyConfig) -> anyhow::Result<reqwest::Client> {
+    let mut proxy_config = reqwest::Proxy::all(&proxy.proxy_url)?;
+    if let Some(username) = proxy.proxy_username.as_deref() {
+        proxy_config =
+            proxy_config.basic_auth(username, proxy.proxy_password.as_deref().unwrap_or(""));
+    }
+    reqwest::Client::builder()
+        .proxy(proxy_config)
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(PROXY_CONNECTIVITY_CHECK_TIMEOUT_SECONDS))
+        .build()
+        .map_err(Into::into)
+}
+
+fn summarize_upstream_error_body(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        "empty body".to_string()
+    } else {
+        trimmed.chars().take(200).collect()
     }
 }
 

@@ -15,10 +15,10 @@ use llm_access_core::{
         AuthenticatedKey, CodexRateLimitStatus, ControlStore, NewAdminAccountGroup,
         NewAdminCodexAccount, NewAdminKey, NewAdminProxyConfig,
         NewPublicAccountContributionRequest, NewPublicSponsorRequest, NewPublicTokenRequest,
-        ProviderCodexRoute, ProviderRouteStore, PublicAccessKey, PublicAccessStore,
-        PublicAccountContribution, PublicCommunityStore, PublicSponsor, PublicStatusStore,
-        PublicSubmissionStore, PublicUsageLookupKey, PublicUsageStore, UsageEventSink,
-        DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_STATUS_REFRESH_SECONDS,
+        ProviderCodexRoute, ProviderKiroRoute, ProviderRouteStore, PublicAccessKey,
+        PublicAccessStore, PublicAccountContribution, PublicCommunityStore, PublicSponsor,
+        PublicStatusStore, PublicSubmissionStore, PublicUsageLookupKey, PublicUsageStore,
+        UsageEventSink, DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_STATUS_REFRESH_SECONDS,
     },
     usage::UsageEvent,
 };
@@ -459,6 +459,22 @@ impl ProviderRouteStore for SqliteControlRepository {
         })
         .await
         .context("sqlite control repository provider codex route task failed")?
+    }
+
+    async fn resolve_kiro_route(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<Option<ProviderKiroRoute>> {
+        let key = key.clone();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.resolve_provider_kiro_route(&key)
+        })
+        .await
+        .context("sqlite control repository provider kiro route task failed")?
     }
 }
 

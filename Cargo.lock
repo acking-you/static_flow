@@ -6043,8 +6043,11 @@ name = "llm-access"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "axum",
+ "eventsource-stream",
+ "futures-util",
  "lettre",
  "llm-access-codex",
  "llm-access-core",

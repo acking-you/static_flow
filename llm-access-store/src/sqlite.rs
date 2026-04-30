@@ -572,6 +572,108 @@ impl SqliteControlStore {
             account_name: record.account_name,
             auth_json: record.auth_json,
             map_gpt53_codex_to_spark: settings.map_gpt53_codex_to_spark,
+            request_max_concurrency: bundle
+                .route
+                .request_max_concurrency
+                .and_then(non_negative_i64_to_u64),
+            request_min_start_interval_ms: bundle
+                .route
+                .request_min_start_interval_ms
+                .and_then(non_negative_i64_to_u64),
+            account_request_max_concurrency: settings.request_max_concurrency,
+            account_request_min_start_interval_ms: settings.request_min_start_interval_ms,
+        }))
+    }
+
+    /// Resolve the Kiro account route for one authenticated key.
+    pub fn resolve_provider_kiro_route(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<Option<core_store::ProviderKiroRoute>> {
+        let Some(bundle) = self.get_key(&key.key_id)? else {
+            return Ok(None);
+        };
+        if bundle.key.provider_type != core_store::PROVIDER_KIRO {
+            return Ok(None);
+        }
+
+        let account_name = if let Some(name) = bundle.route.fixed_account_name.clone() {
+            Some(name)
+        } else if let Some(group_id) = bundle.route.account_group_id.as_deref() {
+            self.get_admin_account_group(group_id)?
+                .and_then(|group| group.account_names.into_iter().next())
+        } else {
+            self.list_kiro_accounts()?
+                .into_iter()
+                .find(|record| record.status == core_store::KEY_STATUS_ACTIVE)
+                .map(|record| record.account_name)
+        };
+        let Some(account_name) = account_name else {
+            return Ok(None);
+        };
+        let Some(record) = self.get_kiro_account(&account_name)? else {
+            return Ok(None);
+        };
+        if record.status != core_store::KEY_STATUS_ACTIVE {
+            return Ok(None);
+        }
+        let auth_json = serde_json::from_str::<serde_json::Value>(&record.auth_json)
+            .context("parse kiro account auth json")?;
+        let profile_arn = record
+            .profile_arn
+            .clone()
+            .or_else(|| optional_json_string(&auth_json, "profileArn"))
+            .or_else(|| optional_json_string(&auth_json, "profile_arn"));
+        let api_region = optional_json_string(&auth_json, "apiRegion")
+            .or_else(|| optional_json_string(&auth_json, "api_region"))
+            .or_else(|| optional_json_string(&auth_json, "region"))
+            .unwrap_or_else(|| "us-east-1".to_string());
+        let runtime_config = self.get_runtime_config_or_default()?;
+        let cache_policy_json = bundle
+            .route
+            .kiro_cache_policy_override_json
+            .clone()
+            .unwrap_or_else(|| runtime_config.kiro_cache_policy_json.clone());
+        let billable_model_multipliers_json = bundle
+            .route
+            .kiro_billable_model_multipliers_override_json
+            .clone()
+            .unwrap_or_else(|| runtime_config.kiro_billable_model_multipliers_json.clone());
+        Ok(Some(core_store::ProviderKiroRoute {
+            account_name: record.account_name,
+            auth_json: record.auth_json,
+            profile_arn,
+            api_region,
+            request_validation_enabled: bundle.route.kiro_request_validation_enabled,
+            cache_estimation_enabled: bundle.route.kiro_cache_estimation_enabled,
+            cache_kmodels_json: runtime_config.kiro_cache_kmodels_json,
+            cache_policy_json,
+            prefix_cache_mode: runtime_config.kiro_prefix_cache_mode,
+            prefix_cache_max_tokens: runtime_config.kiro_prefix_cache_max_tokens.max(0) as u64,
+            prefix_cache_entry_ttl_seconds: runtime_config
+                .kiro_prefix_cache_entry_ttl_seconds
+                .max(0) as u64,
+            conversation_anchor_max_entries: runtime_config
+                .kiro_conversation_anchor_max_entries
+                .max(0) as u64,
+            conversation_anchor_ttl_seconds: runtime_config
+                .kiro_conversation_anchor_ttl_seconds
+                .max(0) as u64,
+            billable_model_multipliers_json,
+            request_max_concurrency: bundle
+                .route
+                .request_max_concurrency
+                .and_then(non_negative_i64_to_u64),
+            request_min_start_interval_ms: bundle
+                .route
+                .request_min_start_interval_ms
+                .and_then(non_negative_i64_to_u64),
+            account_request_max_concurrency: record
+                .max_concurrency
+                .and_then(non_negative_i64_to_u64),
+            account_request_min_start_interval_ms: record
+                .min_start_interval_ms
+                .and_then(non_negative_i64_to_u64),
         }))
     }
 
@@ -2477,6 +2579,23 @@ impl SqliteControlStore {
             .context("list kiro accounts")?;
         Ok(rows)
     }
+
+    fn get_kiro_account(&self, account_name: &str) -> anyhow::Result<Option<KiroAccountRecord>> {
+        self.conn
+            .query_row(
+                "SELECT
+                    account_name, auth_method, account_id, profile_arn, user_id,
+                    status, auth_json, max_concurrency, min_start_interval_ms,
+                    proxy_config_id, last_refresh_at_ms, last_error, created_at_ms,
+                    updated_at_ms
+                 FROM llm_kiro_accounts
+                 WHERE account_name = ?1",
+                [account_name],
+                decode_kiro_account,
+            )
+            .optional()
+            .context("load kiro account")
+    }
 }
 
 fn decode_key_bundle(row: &rusqlite::Row<'_>) -> rusqlite::Result<KeyBundle> {
@@ -2617,6 +2736,19 @@ fn decode_admin_proxy_config(row: &rusqlite::Row<'_>) -> rusqlite::Result<AdminP
 
 fn decode_optional_json<T: serde::de::DeserializeOwned>(value: Option<&str>) -> Option<T> {
     value.and_then(|raw| serde_json::from_str(raw).ok())
+}
+
+fn optional_json_string(value: &serde_json::Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn non_negative_i64_to_u64(value: i64) -> Option<u64> {
+    u64::try_from(value.max(0)).ok()
 }
 
 fn decode_codex_account_settings(value: &str) -> anyhow::Result<CodexAccountSettings> {
@@ -3479,6 +3611,18 @@ mod tests {
             created_at_ms: 100,
         })
         .expect("create codex account");
+        repo.patch_admin_codex_account(
+            "codex-route",
+            &llm_access_core::store::AdminCodexAccountPatch {
+                map_gpt53_codex_to_spark: None,
+                proxy_mode: None,
+                proxy_config_id: None,
+                request_max_concurrency: Some(Some(3)),
+                request_min_start_interval_ms: Some(Some(75)),
+                updated_at_ms: 110,
+            },
+        )
+        .expect("patch codex account limits");
         repo.create_admin_account_group(&llm_access_core::store::NewAdminAccountGroup {
             id: "group-route".to_string(),
             provider_type: "codex".to_string(),
@@ -3494,8 +3638,8 @@ mod tests {
             key_hash: "hash-route".to_string(),
             public_visible: false,
             quota_billable_limit: 1000,
-            request_max_concurrency: None,
-            request_min_start_interval_ms: None,
+            request_max_concurrency: Some(2),
+            request_min_start_interval_ms: Some(50),
             created_at_ms: 100,
         })
         .expect("create key");
@@ -3530,6 +3674,114 @@ mod tests {
         assert_eq!(route.account_name, "codex-route");
         assert_eq!(route.auth_json, r#"{"access_token":"access-route"}"#);
         assert!(route.map_gpt53_codex_to_spark);
+        assert_eq!(route.request_max_concurrency, Some(2));
+        assert_eq!(route.request_min_start_interval_ms, Some(50));
+        assert_eq!(route.account_request_max_concurrency, Some(3));
+        assert_eq!(route.account_request_min_start_interval_ms, Some(75));
+    }
+
+    #[test]
+    fn provider_route_repository_resolves_kiro_account_from_key_route() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlStore::new(conn);
+
+        repo.upsert_kiro_account(&super::KiroAccountRecord {
+            account_name: "kiro-route".to_string(),
+            auth_method: "idc".to_string(),
+            account_id: Some("kiro-account".to_string()),
+            profile_arn: Some("arn:aws:kiro:test".to_string()),
+            user_id: Some("user-1".to_string()),
+            status: "active".to_string(),
+            auth_json: r#"{"accessToken":"access-route","apiRegion":"us-west-2"}"#.to_string(),
+            max_concurrency: Some(1),
+            min_start_interval_ms: Some(100),
+            proxy_config_id: None,
+            last_refresh_at_ms: Some(200),
+            last_error: None,
+            created_at_ms: 30,
+            updated_at_ms: 40,
+        })
+        .expect("upsert kiro account");
+        repo.create_admin_account_group(&llm_access_core::store::NewAdminAccountGroup {
+            id: "kiro-group-route".to_string(),
+            provider_type: "kiro".to_string(),
+            name: "kiro route group".to_string(),
+            account_names: vec!["kiro-route".to_string()],
+            created_at_ms: 100,
+        })
+        .expect("create group");
+        repo.upsert_key_bundle(
+            &super::KeyRecord {
+                key_id: "kiro-key-route".to_string(),
+                name: "kiro route key".to_string(),
+                secret: "sfk_kiro_route".to_string(),
+                key_hash: "hash-kiro-route".to_string(),
+                status: "active".to_string(),
+                provider_type: "kiro".to_string(),
+                protocol_family: "anthropic".to_string(),
+                public_visible: false,
+                quota_billable_limit: 1000,
+                created_at_ms: 100,
+                updated_at_ms: 200,
+            },
+            &super::KeyRouteConfig {
+                key_id: "kiro-key-route".to_string(),
+                route_strategy: Some("fixed".to_string()),
+                fixed_account_name: None,
+                auto_account_names_json: None,
+                account_group_id: Some("kiro-group-route".to_string()),
+                model_name_map_json: None,
+                request_max_concurrency: Some(2),
+                request_min_start_interval_ms: Some(50),
+                kiro_request_validation_enabled: true,
+                kiro_cache_estimation_enabled: true,
+                kiro_zero_cache_debug_enabled: false,
+                kiro_cache_policy_override_json: None,
+                kiro_billable_model_multipliers_override_json: Some(r#"{"sonnet":2}"#.to_string()),
+            },
+            &super::KeyUsageRollup {
+                key_id: "kiro-key-route".to_string(),
+                input_uncached_tokens: 0,
+                input_cached_tokens: 0,
+                output_tokens: 0,
+                billable_tokens: 0,
+                credit_total: 0.0,
+                credit_missing_events: 0,
+                last_used_at_ms: None,
+                updated_at_ms: 100,
+            },
+        )
+        .expect("upsert kiro key bundle");
+
+        let route = repo
+            .resolve_provider_kiro_route(&llm_access_core::store::AuthenticatedKey {
+                key_id: "kiro-key-route".to_string(),
+                key_name: "kiro route key".to_string(),
+                provider_type: "kiro".to_string(),
+                protocol_family: "anthropic".to_string(),
+                status: "active".to_string(),
+                quota_billable_limit: 1000,
+                billable_tokens_used: 0,
+            })
+            .expect("resolve route")
+            .expect("route exists");
+        assert_eq!(route.account_name, "kiro-route");
+        assert_eq!(route.auth_json, r#"{"accessToken":"access-route","apiRegion":"us-west-2"}"#);
+        assert_eq!(route.profile_arn.as_deref(), Some("arn:aws:kiro:test"));
+        assert_eq!(route.api_region, "us-west-2");
+        assert!(route.request_validation_enabled);
+        assert!(route.cache_estimation_enabled);
+        assert_eq!(
+            route.cache_kmodels_json,
+            llm_access_core::store::default_kiro_cache_kmodels_json()
+        );
+        assert_eq!(route.prefix_cache_mode, llm_access_core::store::DEFAULT_KIRO_PREFIX_CACHE_MODE);
+        assert_eq!(route.billable_model_multipliers_json, r#"{"sonnet":2}"#);
+        assert_eq!(route.request_max_concurrency, Some(2));
+        assert_eq!(route.request_min_start_interval_ms, Some(50));
+        assert_eq!(route.account_request_max_concurrency, Some(1));
+        assert_eq!(route.account_request_min_start_interval_ms, Some(100));
     }
 
     #[test]

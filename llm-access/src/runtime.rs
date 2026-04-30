@@ -3,15 +3,24 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+use async_trait::async_trait;
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+use llm_access_core::store::UsageEventSink;
 use llm_access_core::store::{
     AdminAccountGroupStore, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,
     AdminProxyStore, AdminReviewQueueStore, ControlStore, EmptyAdminAccountGroupStore,
     EmptyAdminCodexAccountStore, EmptyAdminConfigStore, EmptyAdminKeyStore, EmptyAdminProxyStore,
     EmptyAdminReviewQueueStore, EmptyProviderRouteStore, EmptyPublicAccessStore,
     EmptyPublicCommunityStore, EmptyPublicStatusStore, EmptyPublicSubmissionStore,
-    EmptyPublicUsageStore, ProviderRouteStore, PublicAccessStore, PublicCommunityStore,
-    PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
+    EmptyPublicUsageStore, EmptyUsageAnalyticsStore, ProviderRouteStore, PublicAccessStore,
+    PublicCommunityStore, PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
+    UsageAnalyticsStore,
 };
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+use llm_access_core::usage::UsageEvent;
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+use llm_access_store::duckdb::DuckDbUsageRepository;
 use llm_access_store::repository::SqliteControlRepository;
 
 use crate::config::StorageConfig;
@@ -30,6 +39,7 @@ pub struct LlmAccessRuntime {
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
+    usage_analytics_store: Arc<dyn UsageAnalyticsStore>,
     public_submission_store: Arc<dyn PublicSubmissionStore>,
     public_status_store: Arc<dyn PublicStatusStore>,
 }
@@ -48,6 +58,7 @@ struct LlmAccessStores {
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
+    usage_analytics_store: Arc<dyn UsageAnalyticsStore>,
     public_submission_store: Arc<dyn PublicSubmissionStore>,
     public_status_store: Arc<dyn PublicStatusStore>,
 }
@@ -67,6 +78,7 @@ impl LlmAccessRuntime {
             public_access_store: Arc::new(EmptyPublicAccessStore),
             public_community_store: Arc::new(EmptyPublicCommunityStore),
             public_usage_store: Arc::new(EmptyPublicUsageStore),
+            usage_analytics_store: Arc::new(EmptyUsageAnalyticsStore),
             public_submission_store: Arc::new(EmptyPublicSubmissionStore),
             public_status_store: Arc::new(EmptyPublicStatusStore),
         })
@@ -86,6 +98,7 @@ impl LlmAccessRuntime {
             public_access_store: stores.public_access_store,
             public_community_store: stores.public_community_store,
             public_usage_store: stores.public_usage_store,
+            usage_analytics_store: stores.usage_analytics_store,
             public_submission_store: stores.public_submission_store,
             public_status_store: stores.public_status_store,
         }
@@ -95,6 +108,14 @@ impl LlmAccessRuntime {
     pub fn from_storage_config(config: &StorageConfig) -> anyhow::Result<Self> {
         validate_state_root(config)?;
         let repository = Arc::new(SqliteControlRepository::open_path(&config.sqlite_control)?);
+        #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+        let duckdb_usage = Arc::new(DuckDbUsageRepository::open_path(&config.duckdb)?);
+        #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+        let control_store: Arc<dyn ControlStore> = Arc::new(RecordingControlStore {
+            control_store: repository.clone(),
+            usage_event_sink: duckdb_usage.clone(),
+        });
+        #[cfg(not(any(feature = "duckdb-runtime", feature = "duckdb-bundled")))]
         let control_store: Arc<dyn ControlStore> = repository.clone();
         let provider_route_store: Arc<dyn ProviderRouteStore> = repository.clone();
         let admin_config_store: Arc<dyn AdminConfigStore> = repository.clone();
@@ -106,6 +127,11 @@ impl LlmAccessRuntime {
         let public_access_store: Arc<dyn PublicAccessStore> = repository.clone();
         let public_community_store: Arc<dyn PublicCommunityStore> = repository.clone();
         let public_usage_store: Arc<dyn PublicUsageStore> = repository.clone();
+        #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+        let usage_analytics_store: Arc<dyn UsageAnalyticsStore> = duckdb_usage;
+        #[cfg(not(any(feature = "duckdb-runtime", feature = "duckdb-bundled")))]
+        let usage_analytics_store: Arc<dyn UsageAnalyticsStore> =
+            Arc::new(EmptyUsageAnalyticsStore);
         let public_submission_store: Arc<dyn PublicSubmissionStore> = repository.clone();
         let public_status_store: Arc<dyn PublicStatusStore> = repository;
         Ok(Self::with_stores(LlmAccessStores {
@@ -120,6 +146,7 @@ impl LlmAccessRuntime {
             public_access_store,
             public_community_store,
             public_usage_store,
+            usage_analytics_store,
             public_submission_store,
             public_status_store,
         }))
@@ -180,6 +207,11 @@ impl LlmAccessRuntime {
         Arc::clone(&self.public_usage_store)
     }
 
+    /// Usage analytics store used by admin and public usage views.
+    pub fn usage_analytics_store(&self) -> Arc<dyn UsageAnalyticsStore> {
+        Arc::clone(&self.usage_analytics_store)
+    }
+
     /// Public submission store used by unauthenticated compatibility endpoints.
     pub fn public_submission_store(&self) -> Arc<dyn PublicSubmissionStore> {
         Arc::clone(&self.public_submission_store)
@@ -188,6 +220,28 @@ impl LlmAccessRuntime {
     /// Public status store used by unauthenticated compatibility endpoints.
     pub fn public_status_store(&self) -> Arc<dyn PublicStatusStore> {
         Arc::clone(&self.public_status_store)
+    }
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+struct RecordingControlStore {
+    control_store: Arc<dyn ControlStore>,
+    usage_event_sink: Arc<dyn UsageEventSink>,
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+#[async_trait]
+impl ControlStore for RecordingControlStore {
+    async fn authenticate_bearer_secret(
+        &self,
+        secret: &str,
+    ) -> anyhow::Result<Option<llm_access_core::store::AuthenticatedKey>> {
+        self.control_store.authenticate_bearer_secret(secret).await
+    }
+
+    async fn apply_usage_rollup(&self, event: &UsageEvent) -> anyhow::Result<()> {
+        self.control_store.apply_usage_rollup(event).await?;
+        self.usage_event_sink.append_usage_event(event).await
     }
 }
 

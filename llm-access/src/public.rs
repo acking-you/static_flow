@@ -7,8 +7,12 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use llm_access_core::store::{
-    PublicAccessKey, PublicAccountContribution, PublicSponsor, PublicUsageLookupKey,
+use llm_access_core::{
+    store::{
+        PublicAccessKey, PublicAccountContribution, PublicSponsor, PublicUsageLookupKey,
+        UsageEventQuery,
+    },
+    usage::UsageEvent,
 };
 use serde::{Deserialize, Serialize};
 
@@ -351,14 +355,51 @@ pub(crate) async fn post_llm_gateway_public_usage_query(
         .limit
         .unwrap_or(PUBLIC_USAGE_LOOKUP_DEFAULT_LIMIT)
         .clamp(1, PUBLIC_USAGE_LOOKUP_MAX_LIMIT);
+    let key_id = key.key_id.clone();
+    let chart_start = public_usage_chart_window_start(now);
+    let chart_points = match state
+        .usage_analytics_store
+        .usage_chart_points(
+            &key_id,
+            chart_start,
+            PUBLIC_USAGE_LOOKUP_BUCKET_MS,
+            PUBLIC_USAGE_LOOKUP_CHART_BUCKETS,
+        )
+        .await
+    {
+        Ok(points) => points
+            .into_iter()
+            .map(|point| PublicLlmGatewayUsageChartPointView {
+                bucket_start_ms: point.bucket_start_ms,
+                tokens: point.tokens,
+            })
+            .collect(),
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "public usage store error"),
+    };
+    let page = match state
+        .usage_analytics_store
+        .list_usage_events(UsageEventQuery {
+            key_id: Some(key_id),
+            limit,
+            offset,
+        })
+        .await
+    {
+        Ok(page) => page,
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "public usage store error"),
+    };
     let mut response = Json(PublicLlmGatewayUsageLookupResponse {
         key: PublicLlmGatewayUsageKeyView::from(key),
-        chart_points: build_public_usage_chart_points(now),
-        total: 0,
+        chart_points,
+        total: page.total,
         offset,
         limit,
-        has_more: false,
-        events: Vec::new(),
+        has_more: page.has_more,
+        events: page
+            .events
+            .iter()
+            .map(PublicLlmGatewayUsageEventView::from)
+            .collect(),
         generated_at: now,
     })
     .into_response();
@@ -500,15 +541,96 @@ fn json_error(status: StatusCode, message: &str) -> Response {
         .into_response()
 }
 
-fn build_public_usage_chart_points(now_ms: i64) -> Vec<PublicLlmGatewayUsageChartPointView> {
-    let start_ms = public_usage_chart_window_start(now_ms);
-    (0..PUBLIC_USAGE_LOOKUP_CHART_BUCKETS)
-        .map(|index| PublicLlmGatewayUsageChartPointView {
-            bucket_start_ms: start_ms
-                .saturating_add((index as i64).saturating_mul(PUBLIC_USAGE_LOOKUP_BUCKET_MS)),
-            tokens: 0,
-        })
-        .collect()
+impl From<&UsageEvent> for PublicLlmGatewayUsageEventView {
+    fn from(value: &UsageEvent) -> Self {
+        let latency_ms = usage_latency_ms(value);
+        Self {
+            id: value.event_id.clone(),
+            key_name: value.key_name.clone(),
+            account_name: value.account_name.clone(),
+            request_method: usage_request_method(value),
+            request_url: value.endpoint.clone(),
+            latency_ms,
+            routing_wait_ms: None,
+            upstream_headers_ms: optional_i64_to_i32(value.timing.upstream_headers_ms),
+            post_headers_body_ms: optional_i64_to_i32(value.timing.post_headers_body_ms),
+            request_body_bytes: value.request_body_bytes.and_then(non_negative_i64_to_u64),
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            first_sse_write_ms: optional_i64_to_i32(value.timing.first_sse_write_ms),
+            stream_finish_ms: optional_i64_to_i32(value.timing.stream_finish_ms),
+            other_latency_ms: compute_other_latency_ms(
+                latency_ms,
+                None,
+                optional_i64_to_i32(value.timing.upstream_headers_ms),
+                optional_i64_to_i32(value.timing.post_headers_body_ms),
+            ),
+            quota_failover_count: 0,
+            endpoint: value.endpoint.clone(),
+            model: value.model.clone(),
+            status_code: value.status_code.clamp(0, i64::from(i32::MAX)) as i32,
+            input_uncached_tokens: non_negative_i64_to_u64(value.input_uncached_tokens)
+                .unwrap_or(0),
+            input_cached_tokens: non_negative_i64_to_u64(value.input_cached_tokens).unwrap_or(0),
+            output_tokens: non_negative_i64_to_u64(value.output_tokens).unwrap_or(0),
+            billable_tokens: non_negative_i64_to_u64(value.billable_tokens).unwrap_or(0),
+            usage_missing: value.usage_missing,
+            credit_usage: value
+                .credit_usage
+                .as_deref()
+                .and_then(|raw| raw.parse::<f64>().ok()),
+            credit_usage_missing: value.credit_usage_missing,
+            client_ip: "unknown".to_string(),
+            ip_region: "unknown".to_string(),
+            created_at: value.created_at_ms,
+        }
+    }
+}
+
+fn usage_request_method(value: &UsageEvent) -> String {
+    if value.endpoint.ends_with("/models") || value.endpoint == "/v1/models" {
+        "GET"
+    } else {
+        "POST"
+    }
+    .to_string()
+}
+
+fn usage_latency_ms(value: &UsageEvent) -> i32 {
+    let latency = value.timing.stream_finish_ms.or_else(|| {
+        match (value.timing.upstream_headers_ms, value.timing.post_headers_body_ms) {
+            (Some(headers), Some(body)) => Some(headers.saturating_add(body)),
+            _ => None,
+        }
+    });
+    optional_i64_to_i32(latency).unwrap_or(0)
+}
+
+fn optional_i64_to_i32(value: Option<i64>) -> Option<i32> {
+    value.map(|value| value.clamp(0, i64::from(i32::MAX)) as i32)
+}
+
+fn non_negative_i64_to_u64(value: i64) -> Option<u64> {
+    u64::try_from(value.max(0)).ok()
+}
+
+fn compute_other_latency_ms(
+    latency_ms: i32,
+    routing_wait_ms: Option<i32>,
+    upstream_headers_ms: Option<i32>,
+    post_headers_body_ms: Option<i32>,
+) -> Option<i32> {
+    if routing_wait_ms.is_none() && upstream_headers_ms.is_none() && post_headers_body_ms.is_none()
+    {
+        return None;
+    }
+    let measured_ms: i64 = [routing_wait_ms, upstream_headers_ms, post_headers_body_ms]
+        .into_iter()
+        .flatten()
+        .map(|value| i64::from(value.max(0)))
+        .sum();
+    Some((i64::from(latency_ms.max(0)) - measured_ms).clamp(0, i64::from(i32::MAX)) as i32)
 }
 
 fn public_usage_chart_window_start(now_ms: i64) -> i64 {

@@ -21,6 +21,14 @@ impl ProviderType {
             _ => None,
         }
     }
+
+    /// Return the canonical provider string stored in control-plane records.
+    pub fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Kiro => "kiro",
+        }
+    }
 }
 
 /// Client-facing protocol family.
@@ -42,6 +50,14 @@ impl ProtocolFamily {
             _ => None,
         }
     }
+
+    /// Return the canonical protocol string stored in control-plane records.
+    pub fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::OpenAi => "openai",
+            Self::Anthropic => "anthropic",
+        }
+    }
 }
 
 /// Account routing strategy stored on a key.
@@ -52,4 +68,25 @@ pub enum RouteStrategy {
     Auto,
     /// Force a single account.
     Fixed,
+}
+
+impl RouteStrategy {
+    /// Parse the canonical route strategy string stored in control-plane
+    /// records.
+    pub fn from_storage_str(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(Self::Auto),
+            "fixed" => Some(Self::Fixed),
+            _ => None,
+        }
+    }
+
+    /// Return the canonical route strategy string stored in control-plane
+    /// records.
+    pub fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Fixed => "fixed",
+        }
+    }
 }

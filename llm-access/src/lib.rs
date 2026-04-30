@@ -32,7 +32,7 @@ use config::{CliCommand, ServeConfig, StorageConfig};
 use llm_access_core::store::{
     AdminAccountGroupStore, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,
     AdminProxyStore, AdminReviewQueueStore, PublicAccessStore, PublicCommunityStore,
-    PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
+    PublicStatusStore, PublicSubmissionStore, PublicUsageStore, UsageAnalyticsStore,
 };
 use serde::Serialize;
 
@@ -48,6 +48,7 @@ struct HttpState {
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
+    usage_analytics_store: Arc<dyn UsageAnalyticsStore>,
     public_submission_store: Arc<dyn PublicSubmissionStore>,
     public_submit_guard: Arc<submission::PublicSubmitGuard>,
     public_status_store: Arc<dyn PublicStatusStore>,
@@ -70,6 +71,8 @@ pub fn run_from_env() -> anyhow::Result<()> {
 pub fn bootstrap_storage(config: &StorageConfig) -> anyhow::Result<()> {
     runtime::validate_state_root(config)?;
     llm_access_store::initialize_sqlite_target_path(&config.sqlite_control)?;
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    llm_access_store::initialize_duckdb_target_path(&config.duckdb)?;
     llm_access_store::write_duckdb_schema_file(config.duckdb.with_extension("schema.sql"))?;
     Ok(())
 }
@@ -89,6 +92,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         public_access_store: runtime.public_access_store(),
         public_community_store: runtime.public_community_store(),
         public_usage_store: runtime.public_usage_store(),
+        usage_analytics_store: runtime.usage_analytics_store(),
         public_submission_store: runtime.public_submission_store(),
         public_submit_guard: Arc::new(submission::PublicSubmitGuard::default()),
         public_status_store: runtime.public_status_store(),
@@ -128,6 +132,14 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
             axum::routing::patch(admin::patch_llm_gateway_proxy_config)
                 .delete(admin::delete_llm_gateway_proxy_config),
         )
+        .route(
+            "/admin/llm-gateway/proxy-configs/:proxy_id/check/:provider_type",
+            post(admin::check_llm_gateway_proxy_config),
+        )
+        .route(
+            "/admin/llm-gateway/proxy-configs/import-legacy-kiro",
+            post(admin::import_legacy_kiro_proxy_configs),
+        )
         .route("/admin/llm-gateway/proxy-bindings", get(admin::list_llm_gateway_proxy_bindings))
         .route(
             "/admin/llm-gateway/proxy-bindings/:provider_type",
@@ -146,6 +158,8 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
             "/admin/llm-gateway/accounts/:name/refresh",
             post(admin::refresh_llm_gateway_account),
         )
+        .route("/admin/llm-gateway/usage", get(admin::list_llm_gateway_usage_events))
+        .route("/admin/llm-gateway/usage/:event_id", get(admin::get_llm_gateway_usage_event))
         .route("/admin/llm-gateway/token-requests", get(admin::list_llm_gateway_token_requests))
         .route(
             "/admin/llm-gateway/token-requests/:request_id/approve-and-issue",
@@ -926,6 +940,71 @@ mod tests {
             .expect("body");
         let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
         assert_eq!(value["accounts"].as_array().expect("accounts array").len(), 0);
+    }
+
+    #[tokio::test]
+    async fn router_serves_admin_llm_gateway_usage_for_local_request() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/llm-gateway/usage")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(value["total"], 0);
+        assert_eq!(value["events"].as_array().expect("events array").len(), 0);
+    }
+
+    #[tokio::test]
+    async fn router_routes_admin_llm_gateway_usage_detail_to_store() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/llm-gateway/usage/missing")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains("LLM gateway usage event not found"));
+    }
+
+    #[tokio::test]
+    async fn router_routes_admin_proxy_check_to_store() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/llm-gateway/proxy-configs/missing/check/codex")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains("LLM gateway proxy config not found"));
     }
 
     #[tokio::test]
