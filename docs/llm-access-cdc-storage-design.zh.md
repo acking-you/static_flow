@@ -90,21 +90,38 @@ DuckDB Rust runtime 是 feature-gated：
 初始化 SQLite 控制面 DB，并输出 DuckDB schema SQL：
 
 ```bash
-cargo run -p llm-access -- init \
-  --sqlite-control /path/to/llm-access.sqlite3 \
-  --duckdb-schema-sql /path/to/duckdb-schema.sql
+llm-access init \
+  --state-root /mnt/llm-access \
+  --sqlite-control /mnt/llm-access/control/llm-access.sqlite3 \
+  --duckdb /mnt/llm-access/analytics/usage.duckdb
 ```
 
-启动独立服务空壳：
+启动独立服务：
 
 ```bash
-cargo run -p llm-access -- serve \
+llm-access serve \
   --bind 127.0.0.1:19080 \
-  --sqlite-control /path/to/llm-access.sqlite3 \
-  --duckdb-schema-sql /path/to/duckdb-schema.sql
+  --state-root /mnt/llm-access \
+  --sqlite-control /mnt/llm-access/control/llm-access.sqlite3 \
+  --duckdb /mnt/llm-access/analytics/usage.duckdb
 ```
 
-当前代码已经把 StaticFlow LLM 写入路径接入 source-side SQLite outbox，并实现
-了第一版 source outbox 到目标 SQLite 的 key replay。下一阶段是扩展
-`llm-access-migrator` 的 snapshot + 全实体 replay，并把 `llm-access` 的
-provider runtime 接到新 store 上。
+当前代码已经把 StaticFlow LLM 写入路径接入 source-side SQLite outbox，并实现：
+
+- 目标 SQLite/DuckDB schema bootstrap。
+- source outbox 到目标 SQLite 的控制面 replay。
+- snapshot manifest、CDC high-water 记录、以及 JSONL snapshot 文件契约。
+- `llm-access` 的 `/healthz`、`/version`、OpenAI/Claude 兼容入口和 LLM
+  路由边界。
+
+部署模板位于：
+
+```text
+deployment-examples/systemd/llm-access.service.template
+deployment-examples/systemd/llm-access-juicefs.mount.template
+deployment-examples/caddy/llm-access-path-split.Caddyfile
+```
+
+Caddy 模板使用 path matcher 和 `handle @llm_access`，不会使用会剥离路径前缀
+的 `handle_path`。这样 `/v1/chat/completions` 到 `llm-access` 后仍然保持
+原始路径。

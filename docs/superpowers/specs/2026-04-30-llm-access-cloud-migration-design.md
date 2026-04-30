@@ -76,6 +76,10 @@ Candidate LLM paths:
 /api/llm-access/*
 ```
 
+The deployment template uses a Caddy path matcher plus `handle @llm_access`.
+It intentionally does not use `handle_path`, because `handle_path` strips the
+matched prefix and would break provider routes such as `/v1/chat/completions`.
+
 Before implementation, verify the exact route list against backend routes. The
 principle is simple: routes that issue upstream LLM requests, manage LLM keys,
 manage Kiro/Codex accounts, write usage events, or handle LLM contribution
@@ -181,6 +185,32 @@ For canary and cutover, track:
 5. Add deployment files for JuiceFS mount and `llm-access.service`.
 6. Add Caddy path split for LLM paths.
 7. Run test-key canary, then switch production LLM paths.
+
+## Current Implementation Snapshot
+
+Implemented in this repo:
+
+- Source-side SQLite CDC outbox for StaticFlow LLM mutations.
+- `llm-access-migrations`, `llm-access-store`, `llm-access-migrator`, and
+  `llm-access` workspace crates.
+- SQLite control-plane schema and DuckDB analytics schema files.
+- Control-plane CDC replay for keys, runtime config, account groups, proxy
+  config/bindings, public request queues, and sponsor requests.
+- Snapshot manifest/export scaffold with CDC high-water marks and optional
+  `staticflow-source` JSONL export using the existing StaticFlow store APIs.
+- `llm-access` HTTP shell with route ownership tests and explicit 401 for
+  unauthenticated provider entries.
+- Deployment bundle templates:
+  `deployment-examples/systemd/llm-access.service.template`,
+  `deployment-examples/systemd/llm-access-juicefs.mount.template`, and
+  `deployment-examples/caddy/llm-access-path-split.Caddyfile`.
+
+Still pending before real production cutover:
+
+- Move the actual Kiro/Codex provider runtime into `llm-access`.
+- Import snapshot JSONL rows into SQLite/DuckDB, not only initialize targets.
+- Write live usage events to DuckDB from the standalone service.
+- Run a test-key canary before routing all LLM paths to the cloud service.
 
 ## Open Decisions
 
