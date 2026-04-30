@@ -5,7 +5,10 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use llm_access_core::{
-    store::{AuthenticatedKey, ControlStore, UsageEventSink},
+    store::{
+        AuthenticatedKey, ControlStore, PublicAccessKey, PublicAccessStore, UsageEventSink,
+        DEFAULT_AUTH_CACHE_TTL_SECONDS,
+    },
     usage::UsageEvent,
 };
 use rusqlite::Connection;
@@ -92,11 +95,42 @@ impl UsageEventSink for SqliteControlRepository {
     }
 }
 
+#[async_trait]
+impl PublicAccessStore for SqliteControlRepository {
+    async fn auth_cache_ttl_seconds(&self) -> anyhow::Result<u64> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.get_runtime_config().map(|record| {
+                record.map_or(DEFAULT_AUTH_CACHE_TTL_SECONDS, |record| {
+                    record.auth_cache_ttl_seconds as u64
+                })
+            })
+        })
+        .await
+        .context("sqlite control repository runtime config task failed")?
+    }
+
+    async fn list_public_access_keys(&self) -> anyhow::Result<Vec<PublicAccessKey>> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.list_public_access_keys()
+        })
+        .await
+        .context("sqlite control repository public keys task failed")?
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType, RouteStrategy},
-        store::{ControlStore, UsageEventSink},
+        store::{ControlStore, PublicAccessStore, UsageEventSink},
         usage::{UsageEvent, UsageTiming},
     };
 
@@ -179,5 +213,80 @@ mod tests {
             .expect("authenticate")
             .expect("key exists");
         assert_eq!(key.billable_tokens_used, 10);
+    }
+
+    #[tokio::test]
+    async fn sqlite_repository_lists_public_access_keys_with_rollups() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        conn.execute(
+            "INSERT INTO llm_runtime_config (
+                id, auth_cache_ttl_seconds, max_request_body_bytes,
+                account_failure_retry_limit, codex_client_version,
+                kiro_channel_max_concurrency, kiro_channel_min_start_interval_ms,
+                codex_status_refresh_min_interval_seconds,
+                codex_status_refresh_max_interval_seconds,
+                codex_status_account_jitter_max_seconds,
+                kiro_status_refresh_min_interval_seconds,
+                kiro_status_refresh_max_interval_seconds,
+                kiro_status_account_jitter_max_seconds,
+                usage_event_flush_batch_size,
+                usage_event_flush_interval_seconds,
+                usage_event_flush_max_buffer_bytes,
+                usage_event_maintenance_enabled,
+                usage_event_maintenance_interval_seconds,
+                usage_event_detail_retention_days,
+                kiro_cache_kmodels_json,
+                kiro_billable_model_multipliers_json,
+                kiro_cache_policy_json,
+                kiro_prefix_cache_mode,
+                kiro_prefix_cache_max_tokens,
+                kiro_prefix_cache_entry_ttl_seconds,
+                kiro_conversation_anchor_max_entries,
+                kiro_conversation_anchor_ttl_seconds,
+                updated_at_ms
+            ) VALUES (
+                'default', 42, 1048576, 3, '0.124.0',
+                1, 0, 240, 300, 10, 240, 300, 10,
+                100, 5, 1048576, 1, 3600, 30,
+                '{}', '{}', '{}', 'prefix_tree', 4000000, 21600, 20000, 86400, 10
+            )",
+            [],
+        )
+        .expect("insert runtime config");
+        conn.execute(
+            "INSERT INTO llm_keys (
+                key_id, name, secret, key_hash, status, provider_type, protocol_family,
+                public_visible, quota_billable_limit, created_at_ms, updated_at_ms
+            ) VALUES
+                ('key-hidden', 'hidden key', 'sk-hidden', 'hash-hidden', 'active', 'codex',
+                    'openai', 0, 1000, 10, 10),
+                ('key-public', 'public key', 'sk-public', 'hash-public', 'active', 'codex',
+                    'openai', 1, 1000, 10, 10)",
+            [],
+        )
+        .expect("insert keys");
+        conn.execute(
+            "INSERT INTO llm_key_usage_rollups (
+                key_id, input_uncached_tokens, input_cached_tokens, output_tokens,
+                billable_tokens, credit_total, credit_missing_events, last_used_at_ms,
+                updated_at_ms
+            ) VALUES ('key-public', 10, 20, 30, 40, '0', 0, 99, 99)",
+            [],
+        )
+        .expect("insert rollup");
+
+        let repo = super::SqliteControlRepository::new(conn);
+        assert_eq!(repo.auth_cache_ttl_seconds().await.expect("load ttl"), 42);
+        let keys = repo
+            .list_public_access_keys()
+            .await
+            .expect("list public keys");
+
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key_id, "key-public");
+        assert_eq!(keys[0].usage_billable_tokens, 40);
+        assert_eq!(keys[0].remaining_billable(), 960);
+        assert_eq!(keys[0].last_used_at_ms, Some(99));
     }
 }

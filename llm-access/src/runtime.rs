@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
-use llm_access_core::store::ControlStore;
+use llm_access_core::store::{ControlStore, EmptyPublicAccessStore, PublicAccessStore};
 use llm_access_store::repository::SqliteControlRepository;
 
 use crate::config::StorageConfig;
@@ -12,26 +12,43 @@ use crate::config::StorageConfig;
 #[derive(Clone)]
 pub struct LlmAccessRuntime {
     control_store: Arc<dyn ControlStore>,
+    public_access_store: Arc<dyn PublicAccessStore>,
 }
 
 impl LlmAccessRuntime {
     /// Create runtime dependencies from explicit storage adapters.
     pub fn new(control_store: Arc<dyn ControlStore>) -> Self {
+        Self::with_stores(control_store, Arc::new(EmptyPublicAccessStore))
+    }
+
+    /// Create runtime dependencies from explicit storage adapters.
+    pub fn with_stores(
+        control_store: Arc<dyn ControlStore>,
+        public_access_store: Arc<dyn PublicAccessStore>,
+    ) -> Self {
         Self {
             control_store,
+            public_access_store,
         }
     }
 
     /// Open runtime dependencies from configured persistent storage.
     pub fn from_storage_config(config: &StorageConfig) -> anyhow::Result<Self> {
         validate_state_root(config)?;
-        let control_store = SqliteControlRepository::open_path(&config.sqlite_control)?;
-        Ok(Self::new(Arc::new(control_store)))
+        let repository = Arc::new(SqliteControlRepository::open_path(&config.sqlite_control)?);
+        let control_store: Arc<dyn ControlStore> = repository.clone();
+        let public_access_store: Arc<dyn PublicAccessStore> = repository;
+        Ok(Self::with_stores(control_store, public_access_store))
     }
 
     /// Shared control store used by request handlers.
     pub fn control_store(&self) -> Arc<dyn ControlStore> {
         Arc::clone(&self.control_store)
+    }
+
+    /// Public access store used by unauthenticated compatibility endpoints.
+    pub fn public_access_store(&self) -> Arc<dyn PublicAccessStore> {
+        Arc::clone(&self.public_access_store)
     }
 }
 

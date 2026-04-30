@@ -308,6 +308,11 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
   `/api/kiro-gateway/v1/messages/count_tokens`, and
   `/api/kiro-gateway/cc/v1/messages/count_tokens` without requiring provider
   key authentication, matching the existing backend route contract.
+- `llm-access` now serves the unauthenticated public access compatibility
+  endpoints `/api/llm-gateway/access` and `/api/kiro-gateway/access` from the
+  standalone runtime state. The LLM access response reads active public keys
+  and rollup counters from SQLite; the Kiro response preserves the current
+  backend behavior of exposing an empty public account list.
 - `llm-access-kiro` now owns Kiro auth-file persistence, local Kiro CLI import,
   deterministic machine-id derivation, and token-count estimation. The backend
   keeps compatibility modules that re-export those implementations.

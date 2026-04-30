@@ -6,6 +6,7 @@ pub mod config;
 pub mod kiro;
 /// Provider request entrypoints.
 pub mod provider;
+mod public;
 /// LLM-owned route classification.
 pub mod routes;
 /// Runtime startup validation.
@@ -13,13 +14,26 @@ pub mod runtime;
 /// Usage-event helpers.
 pub mod usage;
 
+use std::sync::Arc;
+
 use anyhow::Context;
 use axum::{
+    body::Body,
+    extract::State,
+    http::Request,
+    response::Response,
     routing::{any, get, post},
     Json, Router,
 };
 use config::{CliCommand, ServeConfig, StorageConfig};
+use llm_access_core::store::PublicAccessStore;
 use serde::Serialize;
+
+#[derive(Clone)]
+struct HttpState {
+    provider_state: provider::ProviderState,
+    public_access_store: Arc<dyn PublicAccessStore>,
+}
 
 /// Run `llm-access` from process arguments.
 pub fn run_from_env() -> anyhow::Result<()> {
@@ -45,21 +59,34 @@ pub fn bootstrap_storage(config: &StorageConfig) -> anyhow::Result<()> {
 /// Build the HTTP router.
 pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
     let provider_state = provider::ProviderState::new(runtime.control_store());
+    let state = HttpState {
+        provider_state,
+        public_access_store: runtime.public_access_store(),
+    };
     Router::new()
         .route("/healthz", get(healthz))
         .route("/version", get(version))
-        .route("/v1/chat/completions", post(provider::provider_entry_handler))
-        .route("/v1/responses", post(provider::provider_entry_handler))
-        .route("/v1/models", get(provider::provider_entry_handler))
-        .route("/cc/v1/messages", post(provider::provider_entry_handler))
+        .route("/api/llm-gateway/access", get(public::get_llm_gateway_access))
+        .route("/api/kiro-gateway/access", get(public::get_kiro_gateway_access))
+        .route("/v1/chat/completions", post(provider_entry_handler))
+        .route("/v1/responses", post(provider_entry_handler))
+        .route("/v1/models", get(provider_entry_handler))
+        .route("/cc/v1/messages", post(provider_entry_handler))
         .route("/api/kiro-gateway/v1/models", get(kiro::get_models))
         .route("/api/kiro-gateway/v1/messages/count_tokens", post(kiro::count_tokens))
         .route("/api/kiro-gateway/cc/v1/messages/count_tokens", post(kiro::count_tokens))
-        .route("/api/llm-gateway/*path", any(provider::provider_entry_handler))
-        .route("/api/kiro-gateway/*path", any(provider::provider_entry_handler))
-        .route("/api/codex-gateway/*path", any(provider::provider_entry_handler))
-        .route("/api/llm-access/*path", any(provider::provider_entry_handler))
-        .with_state(provider_state)
+        .route("/api/llm-gateway/*path", any(provider_entry_handler))
+        .route("/api/kiro-gateway/*path", any(provider_entry_handler))
+        .route("/api/codex-gateway/*path", any(provider_entry_handler))
+        .route("/api/llm-access/*path", any(provider_entry_handler))
+        .with_state(state)
+}
+
+async fn provider_entry_handler(
+    State(state): State<HttpState>,
+    request: Request<Body>,
+) -> Response {
+    provider::provider_entry(state.provider_state, request).await
 }
 
 /// Run the HTTP server until interrupted.
@@ -179,5 +206,52 @@ mod tests {
             .expect("body");
         let body = String::from_utf8(body.to_vec()).expect("utf8 body");
         assert!(body.contains(r#""input_tokens":"#));
+    }
+
+    #[tokio::test]
+    async fn router_serves_kiro_public_access_without_provider_key() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/kiro-gateway/access")
+                    .header(header::HOST, "example.test")
+                    .header("x-forwarded-proto", "https")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains(r#""base_url":"https://example.test/api/kiro-gateway""#));
+        assert!(body.contains(r#""accounts":[]"#));
+    }
+
+    #[tokio::test]
+    async fn router_serves_llm_gateway_public_access_without_provider_key() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/llm-gateway/access")
+                    .header(header::HOST, "example.test")
+                    .header("x-forwarded-proto", "https")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains(r#""base_url":"https://example.test/api/llm-gateway/v1""#));
+        assert!(body.contains(r#""model_catalog_path":"/api/llm-gateway/model-catalog.json""#));
+        assert!(body.contains(r#""keys":[]"#));
     }
 }

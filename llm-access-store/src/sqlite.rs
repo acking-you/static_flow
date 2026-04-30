@@ -1,6 +1,7 @@
 //! SQLite control-plane repository for `llm-access`.
 
 use anyhow::Context;
+use llm_access_core::store::PublicAccessKey;
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 
 /// SQLite-backed control-plane store.
@@ -587,6 +588,46 @@ impl SqliteControlStore {
             )
             .optional()
             .context("load runtime config")
+    }
+
+    /// List active public keys with accumulated rollup counters.
+    pub fn list_public_access_keys(&self) -> anyhow::Result<Vec<PublicAccessKey>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT
+                    k.key_id,
+                    k.name,
+                    k.secret,
+                    k.quota_billable_limit,
+                    COALESCE(u.input_uncached_tokens, 0),
+                    COALESCE(u.input_cached_tokens, 0),
+                    COALESCE(u.output_tokens, 0),
+                    COALESCE(u.billable_tokens, 0),
+                    u.last_used_at_ms
+                 FROM llm_keys k
+                 LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
+                 WHERE k.status = 'active' AND k.public_visible = 1
+                 ORDER BY lower(k.name)",
+            )
+            .context("prepare list public access keys")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PublicAccessKey {
+                    key_id: row.get(0)?,
+                    key_name: row.get(1)?,
+                    secret: row.get(2)?,
+                    quota_billable_limit: row.get::<_, i64>(3)? as u64,
+                    usage_input_uncached_tokens: row.get::<_, i64>(4)? as u64,
+                    usage_input_cached_tokens: row.get::<_, i64>(5)? as u64,
+                    usage_output_tokens: row.get::<_, i64>(6)? as u64,
+                    usage_billable_tokens: row.get::<_, i64>(7)? as u64,
+                    last_used_at_ms: row.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .context("list public access keys")?;
+        Ok(rows)
     }
 
     /// Insert or update a Codex account row.
