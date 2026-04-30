@@ -21,6 +21,7 @@ futures = "0.3"
 lance = { workspace = true }
 lancedb = { workspace = true }
 rand = "0.8"
+rusqlite = { version = "0.37", features = ["bundled"] }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing-appender = { workspace = true }

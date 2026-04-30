@@ -1,0 +1,19 @@
+[package]
+name = "llm-access-store"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+duckdb-bundled = ["duckdb-runtime", "duckdb/bundled"]
+duckdb-runtime = ["dep:duckdb"]
+
+[dependencies]
+anyhow = { workspace = true }
+duckdb = { version = "1.10502.0", optional = true }
+llm-access-migrations = { path = "../llm-access-migrations" }
+rusqlite = { version = "0.37", features = ["bundled"] }

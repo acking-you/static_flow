@@ -1,6 +1,18 @@
 [workspace]
 resolver = "2"
-members = ["frontend", "shared", "backend", "cli", "media-service", "media-types", "gateway"]
+members = [
+    "frontend",
+    "shared",
+    "backend",
+    "cli",
+    "media-service",
+    "media-types",
+    "gateway",
+    "llm-access",
+    "llm-access-migrations",
+    "llm-access-migrator",
+    "llm-access-store",
+]
 exclude = ["deps/lance", "deps/lancedb"]
 
 # Workspace 级别的依赖版本管理

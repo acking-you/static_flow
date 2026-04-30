@@ -1,0 +1,14 @@
+[package]
+name = "llm-access-migrator"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+llm-access-store = { path = "../llm-access-store" }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde_json = { workspace = true }
