@@ -285,6 +285,10 @@ can either proxy LLM paths to `llm-access` or leave routing to Caddy/Pingora.
   response/SSE adaptation, usage extraction, embedded default instructions, and
   model catalog normalization. The StaticFlow backend keeps only transport and
   runtime orchestration around those shared helpers.
+- `llm-access` now opens the SQLite-backed control store at startup and
+  authenticates provider requests by bearer secret before dispatch. Missing,
+  malformed, unknown, and non-active keys are rejected before any provider
+  runtime is selected.
 
 ### Store Adapter Rule
 

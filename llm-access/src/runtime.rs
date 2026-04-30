@@ -1,8 +1,39 @@
 //! Runtime startup validation for the standalone LLM access service.
 
+use std::sync::Arc;
+
 use anyhow::{anyhow, Context};
+use llm_access_core::store::ControlStore;
+use llm_access_store::repository::SqliteControlRepository;
 
 use crate::config::StorageConfig;
+
+/// Runtime dependencies shared by provider routes.
+#[derive(Clone)]
+pub struct LlmAccessRuntime {
+    control_store: Arc<dyn ControlStore>,
+}
+
+impl LlmAccessRuntime {
+    /// Create runtime dependencies from explicit storage adapters.
+    pub fn new(control_store: Arc<dyn ControlStore>) -> Self {
+        Self {
+            control_store,
+        }
+    }
+
+    /// Open runtime dependencies from configured persistent storage.
+    pub fn from_storage_config(config: &StorageConfig) -> anyhow::Result<Self> {
+        validate_state_root(config)?;
+        let control_store = SqliteControlRepository::open_path(&config.sqlite_control)?;
+        Ok(Self::new(Arc::new(control_store)))
+    }
+
+    /// Shared control store used by request handlers.
+    pub fn control_store(&self) -> Arc<dyn ControlStore> {
+        Arc::clone(&self.control_store)
+    }
+}
 
 /// Validate and prepare the persistent state root before storage is opened.
 pub fn validate_state_root(config: &StorageConfig) -> anyhow::Result<()> {
@@ -22,13 +53,14 @@ pub fn validate_state_root(config: &StorageConfig) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn validate_state_root_creates_expected_subdirectories() {
+    fn temp_storage_config(name: &str) -> crate::config::StorageConfig {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
         let root =
-            std::env::temp_dir().join(format!("llm-access-state-root-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("create root");
-        let config = crate::config::StorageConfig {
+            std::env::temp_dir().join(format!("llm-access-{name}-{}-{unique}", std::process::id()));
+        crate::config::StorageConfig {
             state_root: root.clone(),
             sqlite_control: root.join("control/llm-access.sqlite3"),
             duckdb: root.join("analytics/usage.duckdb"),
@@ -36,7 +68,15 @@ mod tests {
             codex_auths_dir: root.join("auths/codex"),
             cdc_dir: root.join("cdc"),
             logs_dir: root.join("logs"),
-        };
+        }
+    }
+
+    #[test]
+    fn validate_state_root_creates_expected_subdirectories() {
+        let config = temp_storage_config("state-root");
+        let root = config.state_root.clone();
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create root");
 
         super::validate_state_root(&config).expect("validate root");
 
@@ -44,6 +84,27 @@ mod tests {
         assert!(config.codex_auths_dir.is_dir());
         assert!(config.cdc_dir.is_dir());
         assert!(config.logs_dir.is_dir());
+        std::fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn opens_runtime_control_store_from_sqlite_path() {
+        let config = temp_storage_config("runtime-open");
+        let root = config.state_root.clone();
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create root");
+        llm_access_store::initialize_sqlite_target_path(&config.sqlite_control)
+            .expect("initialize sqlite");
+
+        let runtime =
+            super::LlmAccessRuntime::from_storage_config(&config).expect("open runtime storage");
+        let key = runtime
+            .control_store()
+            .authenticate_bearer_secret("missing")
+            .await
+            .expect("query store");
+
+        assert!(key.is_none());
         std::fs::remove_dir_all(&root).expect("cleanup");
     }
 }

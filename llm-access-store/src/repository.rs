@@ -26,6 +26,15 @@ impl SqliteControlRepository {
             inner: Arc::new(Mutex::new(SqliteControlStore::new(conn))),
         }
     }
+
+    /// Open a repository from a SQLite database path.
+    pub fn open_path(path: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
+        let path = path.as_ref();
+        let conn = Connection::open(path).with_context(|| {
+            format!("failed to open sqlite control database `{}`", path.display())
+        })?;
+        Ok(Self::new(conn))
+    }
 }
 
 fn hash_bearer_secret(secret: &str) -> String {
