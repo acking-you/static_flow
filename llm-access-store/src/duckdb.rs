@@ -467,6 +467,62 @@ fn decode_usage_event_row(row: &duckdb::Row<'_>) -> duckdb::Result<UsageEvent> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "duckdb-runtime")]
+    use llm_access_core::{
+        provider::{ProtocolFamily, ProviderType, RouteStrategy},
+        store::{UsageAnalyticsStore, UsageEventQuery, UsageEventSink},
+        usage::{UsageEvent, UsageTiming},
+    };
+
+    #[cfg(feature = "duckdb-runtime")]
+    fn test_usage_event() -> UsageEvent {
+        UsageEvent {
+            event_id: "duckdb-test-event".to_string(),
+            created_at_ms: 1_700_000_000_000,
+            provider_type: ProviderType::Kiro,
+            protocol_family: ProtocolFamily::Anthropic,
+            key_id: "key-duckdb".to_string(),
+            key_name: "DuckDB Key".to_string(),
+            account_name: Some("kiro-account".to_string()),
+            route_strategy_at_event: Some(RouteStrategy::Auto),
+            endpoint: "/cc/v1/messages".to_string(),
+            model: Some("claude-sonnet-4-5".to_string()),
+            mapped_model: Some("claude-sonnet-4-5".to_string()),
+            status_code: 200,
+            request_body_bytes: Some(1234),
+            input_uncached_tokens: 10,
+            input_cached_tokens: 20,
+            output_tokens: 30,
+            billable_tokens: 40,
+            credit_usage: Some("0.5".to_string()),
+            usage_missing: false,
+            credit_usage_missing: false,
+            timing: UsageTiming {
+                upstream_headers_ms: Some(11),
+                post_headers_body_ms: Some(22),
+                first_sse_write_ms: Some(33),
+                stream_finish_ms: Some(44),
+            },
+        }
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    fn assert_usage_event_round_trips(actual: &UsageEvent, expected: &UsageEvent) {
+        let actual_credit = actual
+            .credit_usage
+            .as_deref()
+            .and_then(|value| value.parse::<f64>().ok());
+        let expected_credit = expected
+            .credit_usage
+            .as_deref()
+            .and_then(|value| value.parse::<f64>().ok());
+        assert_eq!(actual_credit, expected_credit);
+
+        let mut actual_without_decimal_format = actual.clone();
+        actual_without_decimal_format.credit_usage = expected.credit_usage.clone();
+        assert_eq!(actual_without_decimal_format, expected.clone());
+    }
+
     #[test]
     fn usage_insert_sql_targets_all_fact_columns_without_runtime_joins() {
         let sql = super::insert_usage_event_sql();
@@ -501,5 +557,50 @@ mod tests {
             assert!(sql.contains(column), "missing column {column}");
         }
         assert!(!lower.contains(" join "));
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn duckdb_repository_persists_usage_events_with_default_feature() {
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-duckdb-test-{}-duckdb-repository", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create duckdb test directory");
+        let db_path = root.join("usage.duckdb");
+        let repo = super::DuckDbUsageRepository::open_path(&db_path).expect("open duckdb usage db");
+        let event = test_usage_event();
+
+        repo.append_usage_event(&event)
+            .await
+            .expect("append duckdb usage event");
+
+        let page = repo
+            .list_usage_events(UsageEventQuery {
+                key_id: Some(event.key_id.clone()),
+                limit: 10,
+                offset: 0,
+            })
+            .await
+            .expect("list duckdb usage events");
+        assert_eq!(page.total, 1);
+        assert_eq!(page.events.len(), 1);
+        assert_usage_event_round_trips(&page.events[0], &event);
+
+        let detail = repo
+            .get_usage_event(&event.event_id)
+            .await
+            .expect("get duckdb usage event")
+            .expect("duckdb usage event exists");
+        assert_usage_event_round_trips(&detail, &event);
+
+        let chart = repo
+            .usage_chart_points(&event.key_id, event.created_at_ms, 60_000, 1)
+            .await
+            .expect("query duckdb usage chart");
+        assert_eq!(chart.len(), 1);
+        assert_eq!(chart[0].bucket_start_ms, event.created_at_ms);
+        assert_eq!(chart[0].tokens, 40);
+
+        std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
     }
 }

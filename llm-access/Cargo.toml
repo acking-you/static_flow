@@ -8,7 +8,7 @@ publish = false
 workspace = true
 
 [features]
-default = []
+default = ["duckdb-prebuilt"]
 duckdb-prebuilt = ["duckdb-runtime"]
 duckdb-runtime = ["llm-access-store/duckdb-runtime"]
 duckdb-bundled = ["llm-access-store/duckdb-bundled"]

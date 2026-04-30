@@ -76,13 +76,19 @@ flusher 重试时把同一批事件重复 append 到 LanceDB。key/config/reques
 
 ## 构建策略
 
-`llm-access-store` 默认只编译 SQLite 控制面和 DuckDB schema SQL 输出。
-DuckDB Rust runtime 是 feature-gated：
+`llm-access-store` 默认启用 `duckdb-prebuilt`，真实运行 DuckDB usage
+analytics 路径。仓库 `.cargo/config.toml` 默认设置
+`DUCKDB_DOWNLOAD_LIB=1`，让 `libduckdb-sys` 自动下载 DuckDB GitHub Releases
+上的预编译 `libduckdb`，不在本机编译 DuckDB C++。
 
-- 默认：不编译 DuckDB C++ 本体
-- `duckdb-prebuilt`：推荐的 release 构建路径。仓库 `.cargo/config.toml`
-  默认设置 `DUCKDB_DOWNLOAD_LIB=1`，让 `libduckdb-sys` 自动下载 DuckDB
-  GitHub Releases 上的预编译 `libduckdb`，不在本机编译 DuckDB C++。
+DuckDB Rust runtime 仍保留 feature-gated 入口：
+
+- 默认：启用 `duckdb-prebuilt`，覆盖 SQLite 控制面和 DuckDB usage fact
+  table。
+- `--no-default-features`：只编译 SQLite 控制面和 DuckDB schema SQL 输出，
+  仅用于极窄的 schema/control-plane 检查。
+- `duckdb-prebuilt`：推荐的 release 构建路径；显式指定该 feature 与默认
+  feature 等价。
 - `duckdb-runtime`：底层 DuckDB runtime feature；可配合 `DUCKDB_LIB_DIR`
   使用已有系统库，或在本仓库默认配置下自动下载预编译库。
 - `duckdb-bundled`：编译 bundled DuckDB 源码，仅适合构建机或明确允许的环境。
@@ -92,7 +98,7 @@ DuckDB Rust runtime 是 feature-gated：
 推荐 release 构建命令：
 
 ```bash
-CARGO_BUILD_JOBS=1 cargo build -p llm-access --release --features duckdb-prebuilt --jobs 1
+CARGO_BUILD_JOBS=1 cargo build -p llm-access --release --jobs 1
 ```
 
 ## 当前工具入口
