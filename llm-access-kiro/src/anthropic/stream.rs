@@ -21,6 +21,11 @@ pub enum KiroInputTokenSource {
     LocalRequestEstimateFallback,
 }
 
+/// Kiro reports its injected Claude prompt inside contextUsage; hide that
+/// stable baseline from user-visible low-token requests.
+pub const KIRO_HIDDEN_PROMPT_BASELINE_TOKENS: i32 = 4_100;
+pub const KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS: i32 = 50_000;
+
 pub fn anthropic_usage_json(
     input_tokens_total: i32,
     output_tokens: i32,
@@ -47,7 +52,15 @@ pub fn resolve_input_tokens(
     let request_input = request_input_tokens.max(0);
     let context_input = context_input_tokens.unwrap_or_default().max(0);
     if context_input > 0 {
-        (context_input, KiroInputTokenSource::UpstreamContextUsage)
+        let resolved_context_input =
+            if request_input <= KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS {
+                context_input
+                    .saturating_sub(KIRO_HIDDEN_PROMPT_BASELINE_TOKENS)
+                    .max(request_input)
+            } else {
+                context_input
+            };
+        (resolved_context_input, KiroInputTokenSource::UpstreamContextUsage)
     } else {
         (request_input, KiroInputTokenSource::LocalRequestEstimateFallback)
     }
@@ -1283,6 +1296,42 @@ mod tests {
     use super::*;
     use crate::wire::{ContextUsageEvent, Event, MeteringEvent, ToolUseEvent};
 
+    #[test]
+    fn resolve_input_tokens_discounts_kiro_hidden_prompt_for_small_requests() {
+        let request_input_tokens = 18;
+        let upstream_context_tokens = KIRO_HIDDEN_PROMPT_BASELINE_TOKENS + request_input_tokens;
+        let (input_tokens, source) =
+            resolve_input_tokens(request_input_tokens, Some(upstream_context_tokens));
+
+        assert_eq!(input_tokens, 18);
+        assert_eq!(source, KiroInputTokenSource::UpstreamContextUsage);
+    }
+
+    #[test]
+    fn resolve_input_tokens_keeps_corrected_context_when_it_exceeds_local_request() {
+        let (input_tokens, source) =
+            resolve_input_tokens(1_000, Some(KIRO_HIDDEN_PROMPT_BASELINE_TOKENS + 1_900));
+
+        assert_eq!(input_tokens, 1_900);
+        assert_eq!(source, KiroInputTokenSource::UpstreamContextUsage);
+    }
+
+    #[test]
+    fn resolve_input_tokens_keeps_upstream_context_for_large_requests() {
+        let (input_tokens, source) = resolve_input_tokens(60_000, Some(90_000));
+
+        assert_eq!(input_tokens, 90_000);
+        assert_eq!(source, KiroInputTokenSource::UpstreamContextUsage);
+    }
+
+    #[test]
+    fn resolve_input_tokens_falls_back_to_local_request_without_context_usage() {
+        let (input_tokens, source) = resolve_input_tokens(123, None);
+
+        assert_eq!(input_tokens, 123);
+        assert_eq!(source, KiroInputTokenSource::LocalRequestEstimateFallback);
+    }
+
     fn collect_delta_text(events: &[SseEvent], delta_type: &str, field: &str) -> String {
         events
             .iter()
@@ -1709,7 +1758,7 @@ mod tests {
             .expect("should have message_start");
         assert_eq!(
             message_start.data["message"]["usage"]["input_tokens"],
-            serde_json::json!(125000)
+            serde_json::json!(125000 - KIRO_HIDDEN_PROMPT_BASELINE_TOKENS)
         );
     }
 

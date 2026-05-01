@@ -13,7 +13,6 @@ members = [
     "llm-access-codex",
     "llm-access-kiro",
     "llm-access-migrations",
-    "llm-access-migrator",
     "llm-access-store",
 ]
 exclude = ["deps/lance", "deps/lancedb"]

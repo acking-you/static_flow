@@ -1,10 +1,13 @@
 //! Standalone HTTP service shell for LLM access.
 
 mod admin;
+mod codex_refresh;
 /// Command-line and environment configuration.
 pub mod config;
-/// Local Kiro compatibility endpoints.
+/// Local Kiro endpoints.
 pub mod kiro;
+mod kiro_refresh;
+mod kiro_status;
 /// Provider request entrypoints.
 pub mod provider;
 mod public;
@@ -12,6 +15,7 @@ mod public;
 pub mod routes;
 /// Runtime startup validation.
 pub mod runtime;
+mod seed_staticflow;
 mod submission;
 mod support;
 /// Usage-event helpers.
@@ -31,10 +35,14 @@ use axum::{
 use config::{CliCommand, ServeConfig, StorageConfig};
 use llm_access_core::store::{
     AdminAccountGroupStore, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,
-    AdminProxyStore, AdminReviewQueueStore, PublicAccessStore, PublicCommunityStore,
-    PublicStatusStore, PublicSubmissionStore, PublicUsageStore, UsageAnalyticsStore,
+    AdminKiroAccountStore, AdminProxyStore, AdminReviewQueueStore, PublicAccessStore,
+    PublicCommunityStore, PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
+    UsageAnalyticsStore,
 };
 use serde::Serialize;
+
+#[cfg(test)]
+pub(crate) static KIRO_UPSTREAM_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Clone)]
 struct HttpState {
@@ -44,6 +52,7 @@ struct HttpState {
     admin_account_group_store: Arc<dyn AdminAccountGroupStore>,
     admin_proxy_store: Arc<dyn AdminProxyStore>,
     admin_codex_account_store: Arc<dyn AdminCodexAccountStore>,
+    admin_kiro_account_store: Arc<dyn AdminKiroAccountStore>,
     admin_review_queue_store: Arc<dyn AdminReviewQueueStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
@@ -64,6 +73,12 @@ pub fn run_from_env() -> anyhow::Result<()> {
                 tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
             runtime.block_on(serve(config))
         },
+        CliCommand::SeedStaticFlow(config) => {
+            bootstrap_storage(&config.storage)?;
+            let runtime =
+                tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
+            runtime.block_on(seed_staticflow::seed_staticflow(config))
+        },
     }
 }
 
@@ -79,8 +94,11 @@ pub fn bootstrap_storage(config: &StorageConfig) -> anyhow::Result<()> {
 
 /// Build the HTTP router.
 pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
-    let provider_state =
-        provider::ProviderState::new(runtime.control_store(), runtime.provider_route_store());
+    let provider_state = provider::ProviderState::new_with_config_store(
+        runtime.control_store(),
+        runtime.provider_route_store(),
+        runtime.admin_config_store(),
+    );
     let state = HttpState {
         provider_state,
         admin_config_store: runtime.admin_config_store(),
@@ -88,6 +106,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         admin_account_group_store: runtime.admin_account_group_store(),
         admin_proxy_store: runtime.admin_proxy_store(),
         admin_codex_account_store: runtime.admin_codex_account_store(),
+        admin_kiro_account_store: runtime.admin_kiro_account_store(),
         admin_review_queue_store: runtime.admin_review_queue_store(),
         public_access_store: runtime.public_access_store(),
         public_community_store: runtime.public_community_store(),
@@ -190,6 +209,44 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
             "/admin/llm-gateway/sponsor-requests/:request_id",
             axum::routing::delete(admin::delete_llm_gateway_sponsor_request),
         )
+        .route(
+            "/admin/kiro-gateway/account-groups",
+            get(admin::list_admin_kiro_account_groups).post(admin::create_admin_kiro_account_group),
+        )
+        .route(
+            "/admin/kiro-gateway/account-groups/:group_id",
+            axum::routing::patch(admin::patch_admin_kiro_account_group)
+                .delete(admin::delete_admin_kiro_account_group),
+        )
+        .route(
+            "/admin/kiro-gateway/keys",
+            get(admin::list_admin_kiro_keys).post(admin::create_admin_kiro_key),
+        )
+        .route(
+            "/admin/kiro-gateway/keys/:key_id",
+            axum::routing::patch(admin::patch_admin_kiro_key).delete(admin::delete_admin_kiro_key),
+        )
+        .route("/admin/kiro-gateway/usage", get(admin::list_admin_kiro_usage_events))
+        .route("/admin/kiro-gateway/usage/:event_id", get(admin::get_admin_kiro_usage_event))
+        .route(
+            "/admin/kiro-gateway/accounts/statuses",
+            get(admin::list_admin_kiro_account_statuses),
+        )
+        .route(
+            "/admin/kiro-gateway/accounts",
+            get(admin::list_admin_kiro_accounts).post(admin::create_admin_kiro_manual_account),
+        )
+        .route("/admin/kiro-gateway/accounts/import-local", post(admin::import_admin_kiro_account))
+        .route(
+            "/admin/kiro-gateway/accounts/:name",
+            axum::routing::patch(admin::patch_admin_kiro_account)
+                .delete(admin::delete_admin_kiro_account),
+        )
+        .route(
+            "/admin/kiro-gateway/accounts/:name/balance",
+            get(admin::get_admin_kiro_account_balance)
+                .post(admin::refresh_admin_kiro_account_balance),
+        )
         .route("/api/llm-gateway/access", get(public::get_llm_gateway_access))
         .route("/api/llm-gateway/model-catalog.json", get(public::get_llm_gateway_model_catalog))
         .route("/api/llm-gateway/status", get(public::get_llm_gateway_status))
@@ -243,13 +300,24 @@ async fn provider_entry_handler(
 
 /// Run the HTTP server until interrupted.
 pub async fn serve(config: ServeConfig) -> anyhow::Result<()> {
-    let service_runtime = runtime::LlmAccessRuntime::from_storage_config(&config.storage)?;
+    let service_runtime = runtime::LlmAccessRuntime::from_storage_config(&config.storage).await?;
+    kiro_status::spawn_kiro_status_refresher(&service_runtime);
+    let shutdown_runtime = service_runtime.clone();
     let listener = tokio::net::TcpListener::bind(config.bind_addr)
         .await
         .with_context(|| format!("failed to bind {}", config.bind_addr))?;
-    axum::serve(listener, router(service_runtime))
+    let result = axum::serve(listener, router(service_runtime))
+        .with_graceful_shutdown(shutdown_signal())
         .await
-        .context("llm-access server failed")
+        .context("llm-access server failed");
+    shutdown_runtime.shutdown_usage_events().await;
+    result
+}
+
+async fn shutdown_signal() {
+    if let Err(err) = tokio::signal::ctrl_c().await {
+        tracing::warn!("failed to listen for shutdown signal: {err}");
+    }
 }
 
 #[derive(Serialize)]
@@ -280,14 +348,20 @@ async fn version() -> Json<VersionResponse> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        path::PathBuf,
+        sync::{Arc, Mutex},
+    };
 
     use async_trait::async_trait;
     use axum::{
         body::{to_bytes, Body},
         http::{header, Request, StatusCode},
+        routing::get,
+        Json, Router,
     };
     use llm_access_core::store::{AuthenticatedKey, ControlStore};
+    use serde_json::json;
     use tower::util::ServiceExt;
 
     static SUPPORT_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -315,6 +389,55 @@ mod tests {
     fn test_router() -> axum::Router {
         let runtime = crate::runtime::LlmAccessRuntime::new(Arc::new(EmptyStore));
         super::router(runtime)
+    }
+
+    async fn persistent_test_router(name: &str) -> (axum::Router, PathBuf) {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-router-{name}-{}-{unique}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create state root");
+        let config = crate::config::StorageConfig {
+            state_root: root.clone(),
+            sqlite_control: root.join("control/llm-access.sqlite3"),
+            duckdb: root.join("analytics/usage.duckdb"),
+            kiro_auths_dir: root.join("auths/kiro"),
+            codex_auths_dir: root.join("auths/codex"),
+            logs_dir: root.join("logs"),
+        };
+        crate::bootstrap_storage(&config).expect("bootstrap storage");
+        let runtime = crate::runtime::LlmAccessRuntime::from_storage_config(&config)
+            .await
+            .expect("open runtime");
+        (super::router(runtime), root)
+    }
+
+    async fn fake_kiro_usage_limits() -> Json<serde_json::Value> {
+        Json(json!({
+            "subscriptionInfo": {"subscriptionTitle": "Pro"},
+            "userInfo": {"userId": "kiro-import-user"},
+            "usageBreakdownList": [{
+                "currentUsageWithPrecision": 7.0,
+                "usageLimitWithPrecision": 100.0,
+                "nextDateReset": 1777777777000_i64
+            }]
+        }))
+    }
+
+    async fn spawn_fake_kiro_usage_upstream() -> String {
+        let app = Router::new().route("/getUsageLimits", get(fake_kiro_usage_limits));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake Kiro upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake Kiro upstream");
+        });
+        upstream_base
     }
 
     #[tokio::test]
@@ -627,6 +750,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn router_primes_kiro_status_after_admin_account_create() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("Kiro upstream env lock");
+        let upstream_base = spawn_fake_kiro_usage_upstream().await;
+        std::env::set_var("KIRO_UPSTREAM_BASE_URL", upstream_base);
+        let (router, root) = persistent_test_router("kiro-status-prime").await;
+        let refresh_token = "r".repeat(96);
+        let create_body = json!({
+            "name": "imported-kiro",
+            "access_token": "kiro-access-token",
+            "refresh_token": refresh_token,
+            "expires_at": "2035-01-01T00:00:00Z",
+            "auth_method": "social",
+            "profile_arn": "arn:aws:iam::123456789012:role/KiroProfile"
+        });
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/kiro-gateway/accounts")
+                    .header(header::HOST, "localhost")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(create_body.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/kiro-gateway/accounts/imported-kiro/balance")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("balance response");
+
+        std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
+        std::fs::remove_dir_all(&root).expect("cleanup state root");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(value["user_id"], "kiro-import-user");
+        assert_eq!(value["remaining"], 93.0);
+    }
+
+    #[tokio::test]
     async fn router_rejects_remote_admin_runtime_config_without_token() {
         let response = test_router()
             .oneshot(
@@ -744,6 +923,127 @@ mod tests {
         assert_eq!(value["remaining_billable"], 1000);
         assert_eq!(value["request_max_concurrency"], 2);
         assert_eq!(value["request_min_start_interval_ms"], 50);
+    }
+
+    #[tokio::test]
+    async fn router_rejects_codex_patch_for_persisted_kiro_key() {
+        let (router, root) = persistent_test_router("codex-patch-kiro-key").await;
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/kiro-gateway/keys")
+                    .header(header::HOST, "localhost")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{
+                            "name": "external kiro",
+                            "quota_billable_limit": 1000
+                        }"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("create response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        let key_id = value["id"].as_str().expect("id").to_string();
+        assert_eq!(value["provider_type"], "kiro");
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/admin/llm-gateway/keys/{key_id}"))
+                    .header(header::HOST, "localhost")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"name":"wrong surface"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("patch response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains("Kiro keys must be managed from /admin/kiro-gateway"));
+
+        std::fs::remove_dir_all(&root).expect("cleanup state root");
+    }
+
+    #[tokio::test]
+    async fn router_kiro_key_create_and_patch_ignore_codex_only_fields() {
+        let (router, root) = persistent_test_router("kiro-key-codex-fields").await;
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/kiro-gateway/keys")
+                    .header(header::HOST, "localhost")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{
+                            "name": "kiro api",
+                            "quota_billable_limit": 1000,
+                            "public_visible": true,
+                            "request_max_concurrency": 9,
+                            "request_min_start_interval_ms": 10
+                        }"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("create response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        let key_id = value["id"].as_str().expect("id").to_string();
+        assert_eq!(value["provider_type"], "kiro");
+        assert_eq!(value["public_visible"], false);
+        assert!(value["request_max_concurrency"].is_null());
+        assert!(value["request_min_start_interval_ms"].is_null());
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/admin/kiro-gateway/keys/{key_id}"))
+                    .header(header::HOST, "localhost")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{
+                            "name": "kiro api patched",
+                            "public_visible": true,
+                            "request_max_concurrency": 7,
+                            "request_min_start_interval_ms": 30
+                        }"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("patch response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(value["name"], "kiro api patched");
+        assert_eq!(value["public_visible"], false);
+        assert!(value["request_max_concurrency"].is_null());
+        assert!(value["request_min_start_interval_ms"].is_null());
+
+        std::fs::remove_dir_all(&root).expect("cleanup state root");
     }
 
     #[tokio::test]

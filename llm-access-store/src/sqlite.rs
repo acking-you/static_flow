@@ -3,17 +3,23 @@
 use std::collections::BTreeMap;
 
 use anyhow::Context;
-use llm_access_core::store::{
-    self as core_store, AdminAccountContributionRequest, AdminAccountContributionRequestsPage,
-    AdminAccountGroup, AdminAccountGroupPatch, AdminCodexAccount, AdminCodexAccountPatch, AdminKey,
-    AdminKeyPatch, AdminLegacyKiroProxyMigration, AdminProxyBinding, AdminProxyConfig,
-    AdminProxyConfigPatch, AdminReviewQueueAction, AdminReviewQueueQuery, AdminRuntimeConfig,
-    AdminSponsorRequest, AdminSponsorRequestsPage, AdminTokenRequest, AdminTokenRequestsPage,
-    AuthenticatedKey, CodexRateLimitStatus, NewAdminAccountGroup, NewAdminCodexAccount,
-    NewAdminKey, NewAdminProxyConfig, NewPublicAccountContributionRequest, NewPublicSponsorRequest,
-    NewPublicTokenRequest, ProviderCodexRoute, ProviderProxyConfig, PublicAccessKey,
-    PublicAccountContribution, PublicSponsor, PublicUsageLookupKey,
-    PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED, PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
+use llm_access_core::{
+    provider::RouteStrategy,
+    store::{
+        self as core_store, AdminAccountContributionRequest, AdminAccountContributionRequestsPage,
+        AdminAccountGroup, AdminAccountGroupPatch, AdminCodexAccount, AdminCodexAccountPatch,
+        AdminKey, AdminKeyPatch, AdminKiroAccount, AdminKiroAccountPatch, AdminKiroBalanceView,
+        AdminKiroCacheView, AdminKiroStatusCacheUpdate, AdminLegacyKiroProxyMigration,
+        AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch, AdminReviewQueueAction,
+        AdminReviewQueueQuery, AdminRuntimeConfig, AdminSponsorRequest, AdminSponsorRequestsPage,
+        AdminTokenRequest, AdminTokenRequestsPage, AuthenticatedKey, CodexRateLimitStatus,
+        NewAdminAccountGroup, NewAdminCodexAccount, NewAdminKey, NewAdminKiroAccount,
+        NewAdminProxyConfig, NewPublicAccountContributionRequest, NewPublicSponsorRequest,
+        NewPublicTokenRequest, ProviderCodexAuthUpdate, ProviderCodexRoute, ProviderKiroAuthUpdate,
+        ProviderProxyConfig, PublicAccessKey, PublicAccountContribution, PublicSponsor,
+        PublicUsageLookupKey, PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED,
+        PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
+    },
 };
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -488,7 +494,7 @@ impl SqliteControlStore {
         Ok(keys)
     }
 
-    /// Create one admin-managed Codex key.
+    /// Create one admin-managed provider key.
     pub fn create_admin_key(&self, key: &NewAdminKey) -> anyhow::Result<AdminKey> {
         let key_record = KeyRecord {
             key_id: key.id.clone(),
@@ -496,8 +502,8 @@ impl SqliteControlStore {
             secret: key.secret.clone(),
             key_hash: key.key_hash.clone(),
             status: core_store::KEY_STATUS_ACTIVE.to_string(),
-            provider_type: core_store::PROVIDER_CODEX.to_string(),
-            protocol_family: core_store::PROTOCOL_OPENAI.to_string(),
+            provider_type: key.provider_type.clone(),
+            protocol_family: key.protocol_family.clone(),
             public_visible: key.public_visible,
             quota_billable_limit: key.quota_billable_limit as i64,
             created_at_ms: key.created_at_ms,
@@ -542,55 +548,66 @@ impl SqliteControlStore {
         &self,
         key: &AuthenticatedKey,
     ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+        Ok(self.resolve_provider_codex_routes(key)?.into_iter().next())
+    }
+
+    /// Resolve all Codex account route candidates for one authenticated key.
+    pub fn resolve_provider_codex_routes(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<Vec<ProviderCodexRoute>> {
         let Some(bundle) = self.get_key(&key.key_id)? else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
         if bundle.key.provider_type != core_store::PROVIDER_CODEX {
-            return Ok(None);
+            return Ok(Vec::new());
         }
 
-        let account_name = if let Some(name) = bundle.route.fixed_account_name.clone() {
-            Some(name)
-        } else if let Some(group_id) = bundle.route.account_group_id.as_deref() {
-            self.get_admin_account_group(group_id)?
-                .and_then(|group| group.account_names.into_iter().next())
-        } else {
+        let account_names = self.resolve_route_account_names(
+            core_store::PROVIDER_CODEX,
+            &bundle.route,
             self.list_codex_accounts()?
                 .into_iter()
-                .find(|record| record.status == core_store::KEY_STATUS_ACTIVE)
+                .filter(|record| record.status == core_store::KEY_STATUS_ACTIVE)
                 .map(|record| record.account_name)
-        };
-        let Some(account_name) = account_name else {
-            return Ok(None);
-        };
-        let Some(record) = self.get_codex_account(&account_name)? else {
-            return Ok(None);
-        };
-        if record.status != core_store::KEY_STATUS_ACTIVE {
-            return Ok(None);
-        }
-        let settings = decode_codex_account_settings(&record.settings_json)?;
-        let proxy = self.resolve_provider_proxy_config(
-            core_store::PROVIDER_CODEX,
-            &settings.proxy_mode,
-            settings.proxy_config_id.as_deref(),
+                .collect(),
         )?;
-        Ok(Some(ProviderCodexRoute {
-            account_name: record.account_name,
-            auth_json: record.auth_json,
-            map_gpt53_codex_to_spark: settings.map_gpt53_codex_to_spark,
-            request_max_concurrency: bundle
-                .route
-                .request_max_concurrency
-                .and_then(non_negative_i64_to_u64),
-            request_min_start_interval_ms: bundle
-                .route
-                .request_min_start_interval_ms
-                .and_then(non_negative_i64_to_u64),
-            account_request_max_concurrency: settings.request_max_concurrency,
-            account_request_min_start_interval_ms: settings.request_min_start_interval_ms,
-            proxy,
-        }))
+        let route_strategy_at_event = route_strategy_from_config(&bundle.route)?;
+        let account_group_id_at_event = bundle.route.account_group_id.clone();
+        let mut routes = Vec::new();
+        for account_name in account_names {
+            let Some(record) = self.get_codex_account(&account_name)? else {
+                continue;
+            };
+            if record.status != core_store::KEY_STATUS_ACTIVE {
+                continue;
+            }
+            let settings = decode_codex_account_settings(&record.settings_json)?;
+            let proxy = self.resolve_provider_proxy_config(
+                core_store::PROVIDER_CODEX,
+                &settings.proxy_mode,
+                settings.proxy_config_id.as_deref(),
+            )?;
+            routes.push(ProviderCodexRoute {
+                account_name: record.account_name,
+                account_group_id_at_event: account_group_id_at_event.clone(),
+                route_strategy_at_event,
+                auth_json: record.auth_json,
+                map_gpt53_codex_to_spark: settings.map_gpt53_codex_to_spark,
+                request_max_concurrency: bundle
+                    .route
+                    .request_max_concurrency
+                    .and_then(non_negative_i64_to_u64),
+                request_min_start_interval_ms: bundle
+                    .route
+                    .request_min_start_interval_ms
+                    .and_then(non_negative_i64_to_u64),
+                account_request_max_concurrency: settings.request_max_concurrency,
+                account_request_min_start_interval_ms: settings.request_min_start_interval_ms,
+                proxy,
+            });
+        }
+        Ok(routes)
     }
 
     /// Resolve the Kiro account route for one authenticated key.
@@ -598,98 +615,225 @@ impl SqliteControlStore {
         &self,
         key: &AuthenticatedKey,
     ) -> anyhow::Result<Option<core_store::ProviderKiroRoute>> {
+        Ok(self.resolve_provider_kiro_routes(key)?.into_iter().next())
+    }
+
+    /// Resolve all Kiro account route candidates for one authenticated key.
+    pub fn resolve_provider_kiro_routes(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<Vec<core_store::ProviderKiroRoute>> {
         let Some(bundle) = self.get_key(&key.key_id)? else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
         if bundle.key.provider_type != core_store::PROVIDER_KIRO {
-            return Ok(None);
+            return Ok(Vec::new());
         }
 
-        let account_name = if let Some(name) = bundle.route.fixed_account_name.clone() {
-            Some(name)
-        } else if let Some(group_id) = bundle.route.account_group_id.as_deref() {
-            self.get_admin_account_group(group_id)?
-                .and_then(|group| group.account_names.into_iter().next())
-        } else {
+        let runtime_config = self.get_runtime_config_or_default()?;
+        let account_names = self.resolve_route_account_names(
+            core_store::PROVIDER_KIRO,
+            &bundle.route,
             self.list_kiro_accounts()?
                 .into_iter()
-                .find(|record| record.status == core_store::KEY_STATUS_ACTIVE)
+                .filter(|record| record.status == core_store::KEY_STATUS_ACTIVE)
                 .map(|record| record.account_name)
-        };
-        let Some(account_name) = account_name else {
-            return Ok(None);
-        };
-        let Some(record) = self.get_kiro_account(&account_name)? else {
-            return Ok(None);
-        };
-        if record.status != core_store::KEY_STATUS_ACTIVE {
-            return Ok(None);
-        }
-        let auth_json = serde_json::from_str::<serde_json::Value>(&record.auth_json)
-            .context("parse kiro account auth json")?;
-        let profile_arn = record
-            .profile_arn
-            .clone()
-            .or_else(|| optional_json_string(&auth_json, "profileArn"))
-            .or_else(|| optional_json_string(&auth_json, "profile_arn"));
-        let api_region = optional_json_string(&auth_json, "apiRegion")
-            .or_else(|| optional_json_string(&auth_json, "api_region"))
-            .or_else(|| optional_json_string(&auth_json, "region"))
-            .unwrap_or_else(|| "us-east-1".to_string());
-        let runtime_config = self.get_runtime_config_or_default()?;
-        let cache_policy_json = bundle
-            .route
-            .kiro_cache_policy_override_json
-            .clone()
-            .unwrap_or_else(|| runtime_config.kiro_cache_policy_json.clone());
-        let billable_model_multipliers_json = bundle
-            .route
-            .kiro_billable_model_multipliers_override_json
-            .clone()
-            .unwrap_or_else(|| runtime_config.kiro_billable_model_multipliers_json.clone());
-        let proxy_mode = if record.proxy_config_id.is_some() { "fixed" } else { "inherit" };
-        let proxy = self.resolve_provider_proxy_config(
-            core_store::PROVIDER_KIRO,
-            proxy_mode,
-            record.proxy_config_id.as_deref(),
+                .collect(),
         )?;
-        Ok(Some(core_store::ProviderKiroRoute {
-            account_name: record.account_name,
-            auth_json: record.auth_json,
-            profile_arn,
-            api_region,
-            request_validation_enabled: bundle.route.kiro_request_validation_enabled,
-            cache_estimation_enabled: bundle.route.kiro_cache_estimation_enabled,
-            cache_kmodels_json: runtime_config.kiro_cache_kmodels_json,
-            cache_policy_json,
-            prefix_cache_mode: runtime_config.kiro_prefix_cache_mode,
-            prefix_cache_max_tokens: runtime_config.kiro_prefix_cache_max_tokens.max(0) as u64,
-            prefix_cache_entry_ttl_seconds: runtime_config
-                .kiro_prefix_cache_entry_ttl_seconds
-                .max(0) as u64,
-            conversation_anchor_max_entries: runtime_config
-                .kiro_conversation_anchor_max_entries
-                .max(0) as u64,
-            conversation_anchor_ttl_seconds: runtime_config
-                .kiro_conversation_anchor_ttl_seconds
-                .max(0) as u64,
-            billable_model_multipliers_json,
-            request_max_concurrency: bundle
+        let route_strategy_at_event = route_strategy_from_config(&bundle.route)?;
+        let account_group_id_at_event = bundle.route.account_group_id.clone();
+        let mut routes = Vec::new();
+        for account_name in account_names {
+            let Some(record) = self.get_kiro_account(&account_name)? else {
+                continue;
+            };
+            if record.status != core_store::KEY_STATUS_ACTIVE {
+                continue;
+            }
+            let auth_json = serde_json::from_str::<serde_json::Value>(&record.auth_json)
+                .context("parse kiro account auth json")?;
+            if optional_json_bool_any(&auth_json, &["disabled"]).unwrap_or(false) {
+                continue;
+            }
+            let minimum_remaining_credits_before_block = optional_json_f64_any(&auth_json, &[
+                "minimumRemainingCreditsBeforeBlock",
+                "minimum_remaining_credits_before_block",
+            ])
+            .unwrap_or(0.0)
+            .max(0.0);
+            let cached_status = self.get_kiro_cached_status_parts(&record.account_name)?;
+            if let Some((balance, cache)) = &cached_status {
+                if matches!(cache.status.as_str(), "disabled" | "quota_exhausted") {
+                    continue;
+                }
+                if balance.as_ref().is_some_and(|balance| {
+                    balance.remaining <= 0.0
+                        || balance.remaining <= minimum_remaining_credits_before_block
+                }) {
+                    continue;
+                }
+            }
+            let cached_balance = cached_status
+                .as_ref()
+                .and_then(|(balance, _)| balance.as_ref());
+            let cached_balance_view = cached_balance.cloned();
+            let cached_cache_view = cached_status.as_ref().map(|(_, cache)| cache.clone());
+            let cached_status_label = cached_status
+                .as_ref()
+                .map(|(_, cache)| cache.status.clone());
+            let cached_remaining_credits = cached_balance.map(|balance| balance.remaining);
+            let routing_identity = cached_balance
+                .and_then(|balance| balance.user_id.clone())
+                .or_else(|| record.user_id.clone())
+                .unwrap_or_else(|| record.account_name.clone());
+            let profile_arn = record
+                .profile_arn
+                .clone()
+                .or_else(|| optional_json_string(&auth_json, "profileArn"))
+                .or_else(|| optional_json_string(&auth_json, "profile_arn"));
+            let api_region = optional_json_string(&auth_json, "apiRegion")
+                .or_else(|| optional_json_string(&auth_json, "api_region"))
+                .or_else(|| optional_json_string(&auth_json, "region"))
+                .unwrap_or_else(|| "us-east-1".to_string());
+            let cache_policy_json = bundle
                 .route
-                .request_max_concurrency
-                .and_then(non_negative_i64_to_u64),
-            request_min_start_interval_ms: bundle
+                .kiro_cache_policy_override_json
+                .clone()
+                .unwrap_or_else(|| runtime_config.kiro_cache_policy_json.clone());
+            let billable_model_multipliers_json = bundle
                 .route
-                .request_min_start_interval_ms
-                .and_then(non_negative_i64_to_u64),
-            account_request_max_concurrency: record
-                .max_concurrency
-                .and_then(non_negative_i64_to_u64),
-            account_request_min_start_interval_ms: record
-                .min_start_interval_ms
-                .and_then(non_negative_i64_to_u64),
-            proxy,
-        }))
+                .kiro_billable_model_multipliers_override_json
+                .clone()
+                .unwrap_or_else(|| runtime_config.kiro_billable_model_multipliers_json.clone());
+            let proxy_mode = optional_json_string_any(&auth_json, &["proxyMode", "proxy_mode"])
+                .unwrap_or_else(|| {
+                    if record.proxy_config_id.is_some() {
+                        "fixed".to_string()
+                    } else {
+                        "inherit".to_string()
+                    }
+                });
+            let proxy_config_id = record.proxy_config_id.clone().or_else(|| {
+                optional_json_string_any(&auth_json, &["proxyConfigId", "proxy_config_id"])
+            });
+            let proxy = self.resolve_provider_proxy_config(
+                core_store::PROVIDER_KIRO,
+                &proxy_mode,
+                proxy_config_id.as_deref(),
+            )?;
+            routes.push(core_store::ProviderKiroRoute {
+                account_name: record.account_name,
+                account_group_id_at_event: account_group_id_at_event.clone(),
+                route_strategy_at_event,
+                auth_json: record.auth_json,
+                profile_arn,
+                api_region,
+                request_validation_enabled: bundle.route.kiro_request_validation_enabled,
+                cache_estimation_enabled: bundle.route.kiro_cache_estimation_enabled,
+                zero_cache_debug_enabled: bundle.route.kiro_zero_cache_debug_enabled,
+                model_name_map_json: bundle
+                    .route
+                    .model_name_map_json
+                    .clone()
+                    .unwrap_or_else(|| "{}".to_string()),
+                cache_kmodels_json: runtime_config.kiro_cache_kmodels_json.clone(),
+                cache_policy_json,
+                prefix_cache_mode: runtime_config.kiro_prefix_cache_mode.clone(),
+                prefix_cache_max_tokens: runtime_config.kiro_prefix_cache_max_tokens.max(0) as u64,
+                prefix_cache_entry_ttl_seconds: runtime_config
+                    .kiro_prefix_cache_entry_ttl_seconds
+                    .max(0) as u64,
+                conversation_anchor_max_entries: runtime_config
+                    .kiro_conversation_anchor_max_entries
+                    .max(0) as u64,
+                conversation_anchor_ttl_seconds: runtime_config
+                    .kiro_conversation_anchor_ttl_seconds
+                    .max(0) as u64,
+                billable_model_multipliers_json,
+                request_max_concurrency: bundle
+                    .route
+                    .request_max_concurrency
+                    .and_then(non_negative_i64_to_u64),
+                request_min_start_interval_ms: bundle
+                    .route
+                    .request_min_start_interval_ms
+                    .and_then(non_negative_i64_to_u64),
+                account_request_max_concurrency: record
+                    .max_concurrency
+                    .and_then(non_negative_i64_to_u64),
+                account_request_min_start_interval_ms: record
+                    .min_start_interval_ms
+                    .and_then(non_negative_i64_to_u64),
+                proxy,
+                routing_identity,
+                cached_status: cached_status_label,
+                cached_remaining_credits,
+                cached_balance: cached_balance_view,
+                cached_cache: cached_cache_view,
+                status_refresh_interval_seconds: runtime_config
+                    .kiro_status_refresh_max_interval_seconds
+                    .max(0) as u64,
+                minimum_remaining_credits_before_block,
+            });
+        }
+        Ok(routes)
+    }
+
+    fn resolve_route_account_names(
+        &self,
+        provider_type: &str,
+        route: &KeyRouteConfig,
+        default_active_account_names: Vec<String>,
+    ) -> anyhow::Result<Vec<String>> {
+        let strategy = route.route_strategy.as_deref().unwrap_or("auto");
+        match strategy {
+            "fixed" => {
+                let account_name = if let Some(group_id) = route.account_group_id.as_deref() {
+                    let group = self.get_admin_account_group(group_id)?.with_context(|| {
+                        format!("configured account_group_id `{group_id}` does not exist")
+                    })?;
+                    if group.provider_type != provider_type {
+                        anyhow::bail!(
+                            "configured account_group_id belongs to a different provider"
+                        );
+                    }
+                    if group.account_names.len() != 1 {
+                        anyhow::bail!(
+                            "fixed route_strategy requires an account group with exactly one \
+                             account"
+                        );
+                    }
+                    group.account_names[0].clone()
+                } else {
+                    route
+                        .fixed_account_name
+                        .clone()
+                        .filter(|value| !value.trim().is_empty())
+                        .context("fixed route_strategy requires account_group_id")?
+                };
+                Ok(vec![account_name])
+            },
+            "auto" => {
+                if let Some(group_id) = route.account_group_id.as_deref() {
+                    let group = self.get_admin_account_group(group_id)?.with_context(|| {
+                        format!("configured account_group_id `{group_id}` does not exist")
+                    })?;
+                    if group.provider_type != provider_type {
+                        anyhow::bail!(
+                            "configured account_group_id belongs to a different provider"
+                        );
+                    }
+                    return Ok(group.account_names);
+                }
+                if let Some(names) =
+                    decode_optional_json::<Vec<String>>(route.auto_account_names_json.as_deref())
+                {
+                    return Ok(names);
+                }
+                Ok(default_active_account_names)
+            },
+            other => anyhow::bail!("unsupported route strategy `{other}`"),
+        }
     }
 
     /// Patch one admin-managed key.
@@ -741,6 +885,21 @@ impl SqliteControlStore {
         }
         if let Some(value) = patch.request_min_start_interval_ms {
             bundle.route.request_min_start_interval_ms = value.map(|value| value as i64);
+        }
+        if let Some(value) = patch.kiro_request_validation_enabled {
+            bundle.route.kiro_request_validation_enabled = value;
+        }
+        if let Some(value) = patch.kiro_cache_estimation_enabled {
+            bundle.route.kiro_cache_estimation_enabled = value;
+        }
+        if let Some(value) = patch.kiro_zero_cache_debug_enabled {
+            bundle.route.kiro_zero_cache_debug_enabled = value;
+        }
+        if let Some(value) = patch.kiro_cache_policy_override_json.as_ref() {
+            bundle.route.kiro_cache_policy_override_json = value.clone();
+        }
+        if let Some(value) = patch.kiro_billable_model_multipliers_override_json.as_ref() {
+            bundle.route.kiro_billable_model_multipliers_override_json = value.clone();
         }
         bundle.key.updated_at_ms = patch.updated_at_ms;
         bundle.rollup.updated_at_ms = bundle.rollup.updated_at_ms.max(patch.updated_at_ms);
@@ -1334,6 +1493,53 @@ impl SqliteControlStore {
         Ok(Some(self.admin_codex_account_from_record(&record)?))
     }
 
+    /// Persist refreshed Codex credential fields without changing settings.
+    pub fn save_codex_auth_update(&self, update: &ProviderCodexAuthUpdate) -> anyhow::Result<()> {
+        let Some(mut record) = self.get_codex_account(&update.account_name)? else {
+            anyhow::bail!("codex account `{}` is not configured", update.account_name);
+        };
+        record.auth_json = update.auth_json.clone();
+        if update.account_id.is_some() {
+            record.account_id = update.account_id.clone();
+        }
+        record.status = update.status.clone();
+        record.last_refresh_at_ms = Some(update.refreshed_at_ms);
+        record.last_error = update.last_error.clone();
+        record.updated_at_ms = update.refreshed_at_ms;
+        self.upsert_codex_account(&record)
+    }
+
+    /// Resolve one Codex account as a provider route for admin refresh.
+    pub fn resolve_admin_codex_account_route(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+        let Some(record) = self.get_codex_account(name)? else {
+            return Ok(None);
+        };
+        if record.status != core_store::KEY_STATUS_ACTIVE {
+            return Ok(None);
+        }
+        let settings = decode_codex_account_settings(&record.settings_json)?;
+        let proxy = self.resolve_provider_proxy_config(
+            core_store::PROVIDER_CODEX,
+            &settings.proxy_mode,
+            settings.proxy_config_id.as_deref(),
+        )?;
+        Ok(Some(ProviderCodexRoute {
+            account_name: record.account_name,
+            account_group_id_at_event: None,
+            route_strategy_at_event: RouteStrategy::Auto,
+            auth_json: record.auth_json,
+            map_gpt53_codex_to_spark: settings.map_gpt53_codex_to_spark,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            account_request_max_concurrency: settings.request_max_concurrency,
+            account_request_min_start_interval_ms: settings.request_min_start_interval_ms,
+            proxy,
+        }))
+    }
+
     fn get_codex_account(&self, name: &str) -> anyhow::Result<Option<CodexAccountRecord>> {
         self.conn
             .query_row(
@@ -1398,6 +1604,446 @@ impl SqliteControlStore {
             },
             _ => {
                 let binding = self.load_admin_proxy_binding(core_store::PROVIDER_CODEX)?;
+                Ok((
+                    binding.effective_source,
+                    binding.effective_proxy_url,
+                    binding.effective_proxy_config_name,
+                ))
+            },
+        }
+    }
+
+    /// List persisted Kiro accounts for the admin UI.
+    pub fn list_admin_kiro_accounts(&self) -> anyhow::Result<Vec<AdminKiroAccount>> {
+        let records = self.list_kiro_accounts()?;
+        records
+            .iter()
+            .map(|record| self.admin_kiro_account_from_record(record))
+            .collect()
+    }
+
+    /// Create or replace one Kiro account.
+    pub fn create_admin_kiro_account(
+        &self,
+        account: &NewAdminKiroAccount,
+    ) -> anyhow::Result<AdminKiroAccount> {
+        let record = KiroAccountRecord {
+            account_name: account.name.clone(),
+            auth_method: account.auth_method.clone(),
+            account_id: account.account_id.clone(),
+            profile_arn: account.profile_arn.clone(),
+            user_id: account.user_id.clone(),
+            status: account.status.clone(),
+            auth_json: account.auth_json.clone(),
+            max_concurrency: account.max_concurrency.map(|value| value as i64),
+            min_start_interval_ms: account.min_start_interval_ms.map(|value| value as i64),
+            proxy_config_id: account.proxy_config_id.clone(),
+            last_refresh_at_ms: Some(account.created_at_ms),
+            last_error: None,
+            created_at_ms: account.created_at_ms,
+            updated_at_ms: account.created_at_ms,
+        };
+        self.upsert_kiro_account(&record)?;
+        self.get_kiro_account(&account.name)?
+            .map(|record| self.admin_kiro_account_from_record(&record))
+            .transpose()?
+            .context("created kiro account disappeared")
+    }
+
+    /// Patch mutable Kiro account routing/scheduler settings.
+    pub fn patch_admin_kiro_account(
+        &self,
+        name: &str,
+        patch: &AdminKiroAccountPatch,
+    ) -> anyhow::Result<Option<AdminKiroAccount>> {
+        let Some(mut record) = self.get_kiro_account(name)? else {
+            return Ok(None);
+        };
+        let mut auth_value = serde_json::from_str::<serde_json::Value>(&record.auth_json)
+            .context("parse kiro auth json for patch")?;
+        let object = auth_value
+            .as_object_mut()
+            .context("kiro auth json must be an object")?;
+        if let Some(value) = patch.max_concurrency {
+            record.max_concurrency = Some(value as i64);
+            set_json_optional_u64(object, "kiroChannelMaxConcurrency", Some(value));
+        }
+        if let Some(value) = patch.min_start_interval_ms {
+            record.min_start_interval_ms = Some(value as i64);
+            set_json_optional_u64(object, "kiroChannelMinStartIntervalMs", Some(value));
+        }
+        if let Some(value) = patch.minimum_remaining_credits_before_block {
+            set_json_optional_f64(
+                object,
+                "minimumRemainingCreditsBeforeBlock",
+                Some(value.max(0.0)),
+            )?;
+        }
+        if let Some(proxy_mode) = patch.proxy_mode.as_ref() {
+            set_json_optional_string(object, "proxyMode", Some(proxy_mode.clone()));
+        }
+        if let Some(proxy_config_id) = patch.proxy_config_id.as_ref() {
+            record.proxy_config_id = proxy_config_id.clone();
+            set_json_optional_string(object, "proxyConfigId", proxy_config_id.clone());
+        }
+        record.auth_json =
+            serde_json::to_string(&auth_value).context("serialize patched kiro auth json")?;
+        record.updated_at_ms = patch.updated_at_ms;
+        self.upsert_kiro_account(&record)?;
+        Ok(Some(self.admin_kiro_account_from_record(&record)?))
+    }
+
+    /// Delete one persisted Kiro account.
+    pub fn delete_admin_kiro_account(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<AdminKiroAccount>> {
+        let Some(record) = self.get_kiro_account(name)? else {
+            return Ok(None);
+        };
+        let view = self.admin_kiro_account_from_record(&record)?;
+        self.conn
+            .execute("DELETE FROM llm_kiro_accounts WHERE account_name = ?1", [name])
+            .context("delete kiro account")?;
+        Ok(Some(view))
+    }
+
+    /// Return cached Kiro account balance when available.
+    pub fn get_admin_kiro_balance(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<AdminKiroBalanceView>> {
+        let Some((balance, _cache)) = self.get_kiro_cached_status_parts(name)? else {
+            return Ok(None);
+        };
+        Ok(balance)
+    }
+
+    /// Resolve one Kiro account as a provider route for admin balance refresh.
+    pub fn resolve_admin_kiro_account_route(
+        &self,
+        account_name: &str,
+    ) -> anyhow::Result<Option<core_store::ProviderKiroRoute>> {
+        let Some(record) = self.get_kiro_account(account_name)? else {
+            return Ok(None);
+        };
+        if record.status != core_store::KEY_STATUS_ACTIVE {
+            return Ok(None);
+        }
+        let runtime_config = self.get_runtime_config_or_default()?;
+        let auth_json = serde_json::from_str::<serde_json::Value>(&record.auth_json)
+            .context("parse kiro account auth json")?;
+        let profile_arn = record
+            .profile_arn
+            .clone()
+            .or_else(|| optional_json_string(&auth_json, "profileArn"))
+            .or_else(|| optional_json_string(&auth_json, "profile_arn"));
+        let api_region = optional_json_string(&auth_json, "apiRegion")
+            .or_else(|| optional_json_string(&auth_json, "api_region"))
+            .or_else(|| optional_json_string(&auth_json, "region"))
+            .unwrap_or_else(|| "us-east-1".to_string());
+        let minimum_remaining_credits_before_block = optional_json_f64_any(&auth_json, &[
+            "minimumRemainingCreditsBeforeBlock",
+            "minimum_remaining_credits_before_block",
+        ])
+        .filter(|value| value.is_finite())
+        .unwrap_or(0.0)
+        .max(0.0);
+        let cached_status = self.get_kiro_cached_status_parts(&record.account_name)?;
+        let cached_balance = cached_status
+            .as_ref()
+            .and_then(|(balance, _)| balance.as_ref());
+        let cached_balance_view = cached_balance.cloned();
+        let cached_cache_view = cached_status.as_ref().map(|(_, cache)| cache.clone());
+        let cached_status_label = cached_status
+            .as_ref()
+            .map(|(_, cache)| cache.status.clone());
+        let cached_remaining_credits = cached_balance.map(|balance| balance.remaining);
+        let routing_identity = cached_balance
+            .and_then(|balance| balance.user_id.clone())
+            .or_else(|| record.user_id.clone())
+            .unwrap_or_else(|| record.account_name.clone());
+        let proxy_mode = optional_json_string_any(&auth_json, &["proxyMode", "proxy_mode"])
+            .unwrap_or_else(|| {
+                if record.proxy_config_id.is_some() {
+                    "fixed".to_string()
+                } else {
+                    "inherit".to_string()
+                }
+            });
+        let proxy_config_id = record.proxy_config_id.clone().or_else(|| {
+            optional_json_string_any(&auth_json, &["proxyConfigId", "proxy_config_id"])
+        });
+        let proxy = self.resolve_provider_proxy_config(
+            core_store::PROVIDER_KIRO,
+            &proxy_mode,
+            proxy_config_id.as_deref(),
+        )?;
+        Ok(Some(core_store::ProviderKiroRoute {
+            account_name: record.account_name,
+            account_group_id_at_event: None,
+            route_strategy_at_event: RouteStrategy::Auto,
+            auth_json: record.auth_json,
+            profile_arn,
+            api_region,
+            request_validation_enabled: true,
+            cache_estimation_enabled: true,
+            zero_cache_debug_enabled: false,
+            model_name_map_json: "{}".to_string(),
+            cache_kmodels_json: runtime_config.kiro_cache_kmodels_json,
+            cache_policy_json: runtime_config.kiro_cache_policy_json,
+            prefix_cache_mode: runtime_config.kiro_prefix_cache_mode,
+            prefix_cache_max_tokens: runtime_config.kiro_prefix_cache_max_tokens.max(0) as u64,
+            prefix_cache_entry_ttl_seconds: runtime_config
+                .kiro_prefix_cache_entry_ttl_seconds
+                .max(0) as u64,
+            conversation_anchor_max_entries: runtime_config
+                .kiro_conversation_anchor_max_entries
+                .max(0) as u64,
+            conversation_anchor_ttl_seconds: runtime_config
+                .kiro_conversation_anchor_ttl_seconds
+                .max(0) as u64,
+            billable_model_multipliers_json: runtime_config.kiro_billable_model_multipliers_json,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            account_request_max_concurrency: record
+                .max_concurrency
+                .and_then(non_negative_i64_to_u64),
+            account_request_min_start_interval_ms: record
+                .min_start_interval_ms
+                .and_then(non_negative_i64_to_u64),
+            proxy,
+            routing_identity,
+            cached_status: cached_status_label,
+            cached_remaining_credits,
+            cached_balance: cached_balance_view,
+            cached_cache: cached_cache_view,
+            status_refresh_interval_seconds: runtime_config
+                .kiro_status_refresh_max_interval_seconds
+                .max(0) as u64,
+            minimum_remaining_credits_before_block,
+        }))
+    }
+
+    /// Persist one Kiro status-cache update.
+    pub fn save_admin_kiro_status_cache(
+        &self,
+        update: &AdminKiroStatusCacheUpdate,
+    ) -> anyhow::Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO llm_kiro_status_cache (
+                    account_name, status, balance_json, cache_json, refreshed_at_ms,
+                    expires_at_ms, last_error
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                ON CONFLICT(account_name) DO UPDATE SET
+                    status = excluded.status,
+                    balance_json = excluded.balance_json,
+                    cache_json = excluded.cache_json,
+                    refreshed_at_ms = excluded.refreshed_at_ms,
+                    expires_at_ms = excluded.expires_at_ms,
+                    last_error = excluded.last_error",
+                params![
+                    &update.account_name,
+                    &update.cache.status,
+                    serde_json::to_string(&update.balance).context("encode kiro balance cache")?,
+                    serde_json::to_string(&update.cache).context("encode kiro cache view")?,
+                    update.refreshed_at_ms,
+                    update.expires_at_ms,
+                    &update.last_error,
+                ],
+            )
+            .context("upsert kiro status cache")?;
+        Ok(())
+    }
+
+    /// Mark one Kiro account as quota-exhausted after the hot provider path
+    /// receives an authoritative upstream quota response.
+    pub fn mark_kiro_account_quota_exhausted(
+        &self,
+        account_name: &str,
+        error_message: &str,
+        checked_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        let refresh_interval_seconds = self
+            .get_runtime_config_or_default()?
+            .kiro_status_refresh_max_interval_seconds
+            .max(0) as u64;
+        let update = AdminKiroStatusCacheUpdate {
+            account_name: account_name.to_string(),
+            balance: None,
+            cache: AdminKiroCacheView {
+                status: "quota_exhausted".to_string(),
+                refresh_interval_seconds,
+                last_checked_at: Some(checked_at_ms),
+                last_success_at: Some(checked_at_ms),
+                error_message: Some(error_message.to_string()),
+            },
+            refreshed_at_ms: checked_at_ms,
+            expires_at_ms: checked_at_ms
+                .saturating_add((refresh_interval_seconds as i64).saturating_mul(1000)),
+            last_error: Some(error_message.to_string()),
+        };
+        self.save_admin_kiro_status_cache(&update)
+    }
+
+    fn admin_kiro_account_from_record(
+        &self,
+        record: &KiroAccountRecord,
+    ) -> anyhow::Result<AdminKiroAccount> {
+        let auth = serde_json::from_str::<serde_json::Value>(&record.auth_json)
+            .context("parse kiro auth json for admin view")?;
+        let (balance, cache) = self
+            .get_kiro_cached_status_parts(&record.account_name)?
+            .unwrap_or_else(|| {
+                let refresh_interval_seconds = self
+                    .get_runtime_config_or_default()
+                    .map(|config| config.kiro_status_refresh_max_interval_seconds.max(0) as u64)
+                    .unwrap_or(core_store::DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS);
+                (None, AdminKiroCacheView {
+                    refresh_interval_seconds,
+                    ..AdminKiroCacheView::default()
+                })
+            });
+        let proxy_mode = optional_json_string_any(&auth, &["proxyMode", "proxy_mode"])
+            .unwrap_or_else(|| {
+                if record.proxy_config_id.is_some() {
+                    "fixed".to_string()
+                } else {
+                    "inherit".to_string()
+                }
+            });
+        let proxy_config_id = record
+            .proxy_config_id
+            .clone()
+            .or_else(|| optional_json_string_any(&auth, &["proxyConfigId", "proxy_config_id"]));
+        let (effective_proxy_source, effective_proxy_url, effective_proxy_config_name) =
+            self.resolve_kiro_account_proxy_view(&proxy_mode, proxy_config_id.as_deref())?;
+        let disabled_json = optional_json_bool_any(&auth, &["disabled"]).unwrap_or(false);
+        let disabled = disabled_json || record.status != core_store::KEY_STATUS_ACTIVE;
+        let disabled_reason =
+            optional_json_string_any(&auth, &["disabledReason", "disabled_reason"])
+                .or_else(|| record.last_error.clone());
+        let subscription_title = balance
+            .as_ref()
+            .and_then(|value| value.subscription_title.clone())
+            .or_else(|| {
+                optional_json_string_any(&auth, &["subscriptionTitle", "subscription_title"])
+            });
+        Ok(AdminKiroAccount {
+            name: record.account_name.clone(),
+            auth_method: record.auth_method.clone(),
+            provider: optional_json_string_any(&auth, &["provider"]),
+            upstream_user_id: balance
+                .as_ref()
+                .and_then(|value| value.user_id.clone())
+                .or_else(|| record.user_id.clone()),
+            email: optional_json_string_any(&auth, &["email"]),
+            expires_at: optional_json_string_any(&auth, &["expiresAt", "expires_at"]),
+            profile_arn: record
+                .profile_arn
+                .clone()
+                .or_else(|| optional_json_string_any(&auth, &["profileArn", "profile_arn"])),
+            has_refresh_token: optional_json_string_any(&auth, &["refreshToken", "refresh_token"])
+                .is_some(),
+            disabled,
+            disabled_reason,
+            source: optional_json_string_any(&auth, &["source"]),
+            source_db_path: optional_json_string_any(&auth, &["sourceDbPath", "source_db_path"]),
+            last_imported_at: optional_json_i64_any(&auth, &["lastImportedAt", "last_imported_at"]),
+            subscription_title,
+            region: optional_json_string_any(&auth, &["region"]),
+            auth_region: optional_json_string_any(&auth, &["authRegion", "auth_region"]),
+            api_region: optional_json_string_any(&auth, &["apiRegion", "api_region"]),
+            machine_id: optional_json_string_any(&auth, &["machineId", "machine_id"]),
+            kiro_channel_max_concurrency: record
+                .max_concurrency
+                .and_then(non_negative_i64_to_u64)
+                .or_else(|| {
+                    optional_json_u64_any(&auth, &[
+                        "kiroChannelMaxConcurrency",
+                        "kiro_channel_max_concurrency",
+                    ])
+                })
+                .unwrap_or(core_store::DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY)
+                .max(1),
+            kiro_channel_min_start_interval_ms: record
+                .min_start_interval_ms
+                .and_then(non_negative_i64_to_u64)
+                .or_else(|| {
+                    optional_json_u64_any(&auth, &[
+                        "kiroChannelMinStartIntervalMs",
+                        "kiro_channel_min_start_interval_ms",
+                    ])
+                })
+                .unwrap_or(core_store::DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS),
+            minimum_remaining_credits_before_block: optional_json_f64_any(&auth, &[
+                "minimumRemainingCreditsBeforeBlock",
+                "minimum_remaining_credits_before_block",
+            ])
+            .filter(|value| value.is_finite())
+            .unwrap_or(0.0)
+            .max(0.0),
+            proxy_mode,
+            proxy_config_id,
+            effective_proxy_source,
+            effective_proxy_url,
+            effective_proxy_config_name,
+            proxy_url: optional_json_string_any(&auth, &["proxyUrl", "proxy_url"]),
+            balance,
+            cache,
+        })
+    }
+
+    fn get_kiro_cached_status_parts(
+        &self,
+        account_name: &str,
+    ) -> anyhow::Result<Option<(Option<AdminKiroBalanceView>, AdminKiroCacheView)>> {
+        self.conn
+            .query_row(
+                "SELECT balance_json, cache_json
+                 FROM llm_kiro_status_cache
+                 WHERE account_name = ?1",
+                [account_name],
+                |row| {
+                    let balance_json: String = row.get(0)?;
+                    let cache_json: String = row.get(1)?;
+                    Ok((balance_json, cache_json))
+                },
+            )
+            .optional()
+            .context("load kiro cached status")?
+            .map(|(balance_json, cache_json)| {
+                let balance = serde_json::from_str::<Option<AdminKiroBalanceView>>(&balance_json)
+                    .context("decode kiro cached balance")?;
+                let cache = serde_json::from_str::<AdminKiroCacheView>(&cache_json)
+                    .context("decode kiro cached cache view")?;
+                Ok((balance, cache))
+            })
+            .transpose()
+    }
+
+    fn resolve_kiro_account_proxy_view(
+        &self,
+        proxy_mode: &str,
+        proxy_config_id: Option<&str>,
+    ) -> anyhow::Result<(String, Option<String>, Option<String>)> {
+        match proxy_mode {
+            "none" | "direct" => Ok(("none".to_string(), None, None)),
+            "fixed" => {
+                let Some(proxy_id) = proxy_config_id else {
+                    return Ok(("invalid".to_string(), None, None));
+                };
+                match self.get_admin_proxy_config(proxy_id)? {
+                    Some(proxy) if proxy.status == core_store::KEY_STATUS_ACTIVE => {
+                        Ok(("fixed".to_string(), Some(proxy.proxy_url), Some(proxy.name)))
+                    },
+                    Some(proxy) => Ok(("invalid".to_string(), None, Some(proxy.name))),
+                    None => Ok(("invalid".to_string(), None, None)),
+                }
+            },
+            _ => {
+                let binding = self.load_admin_proxy_binding(core_store::PROVIDER_KIRO)?;
                 Ok((
                     binding.effective_source,
                     binding.effective_proxy_url,
@@ -2269,6 +2915,7 @@ impl SqliteControlStore {
                         request_max_concurrency: None,
                         request_min_start_interval_ms: None,
                         updated_at_ms: action.updated_at_ms,
+                        ..AdminKeyPatch::default()
                     })?;
                 }
                 (Some(key.id.clone()), Some(key.name.clone()))
@@ -2378,6 +3025,7 @@ impl SqliteControlStore {
                 request_max_concurrency: None,
                 request_min_start_interval_ms: None,
                 updated_at_ms,
+                ..AdminKeyPatch::default()
             })?;
         }
         Ok(())
@@ -2711,6 +3359,24 @@ impl SqliteControlStore {
         Ok(())
     }
 
+    /// Persist refreshed Kiro credential fields without changing scheduler or
+    /// proxy settings.
+    pub fn save_kiro_auth_update(&self, update: &ProviderKiroAuthUpdate) -> anyhow::Result<()> {
+        let Some(mut record) = self.get_kiro_account(&update.account_name)? else {
+            anyhow::bail!("kiro account `{}` is not configured", update.account_name);
+        };
+        record.auth_json = update.auth_json.clone();
+        record.auth_method = update.auth_method.clone();
+        record.account_id = update.account_id.clone();
+        record.profile_arn = update.profile_arn.clone();
+        record.user_id = update.user_id.clone();
+        record.status = update.status.clone();
+        record.last_refresh_at_ms = Some(update.refreshed_at_ms);
+        record.last_error = update.last_error.clone();
+        record.updated_at_ms = update.refreshed_at_ms;
+        self.upsert_kiro_account(&record)
+    }
+
     /// List Kiro account rows ordered by account name.
     pub fn list_kiro_accounts(&self) -> anyhow::Result<Vec<KiroAccountRecord>> {
         let mut stmt = self
@@ -2897,6 +3563,100 @@ fn optional_json_string(value: &serde_json::Value, field: &str) -> Option<String
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+fn optional_json_string_any(value: &serde_json::Value, fields: &[&str]) -> Option<String> {
+    fields
+        .iter()
+        .find_map(|field| optional_json_string(value, field))
+}
+
+fn optional_json_bool_any(value: &serde_json::Value, fields: &[&str]) -> Option<bool> {
+    fields
+        .iter()
+        .find_map(|field| value.get(*field).and_then(serde_json::Value::as_bool))
+}
+
+fn optional_json_u64_any(value: &serde_json::Value, fields: &[&str]) -> Option<u64> {
+    fields.iter().find_map(|field| {
+        value
+            .get(*field)
+            .and_then(serde_json::Value::as_u64)
+            .or_else(|| {
+                value
+                    .get(*field)
+                    .and_then(serde_json::Value::as_i64)
+                    .and_then(non_negative_i64_to_u64)
+            })
+    })
+}
+
+fn optional_json_i64_any(value: &serde_json::Value, fields: &[&str]) -> Option<i64> {
+    fields
+        .iter()
+        .find_map(|field| value.get(*field).and_then(serde_json::Value::as_i64))
+}
+
+fn optional_json_f64_any(value: &serde_json::Value, fields: &[&str]) -> Option<f64> {
+    fields
+        .iter()
+        .find_map(|field| value.get(*field).and_then(serde_json::Value::as_f64))
+}
+
+fn set_json_optional_string(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    value: Option<String>,
+) {
+    match value {
+        Some(value) => {
+            object.insert(key.to_string(), serde_json::Value::String(value));
+        },
+        None => {
+            object.remove(key);
+        },
+    }
+}
+
+fn set_json_optional_u64(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    value: Option<u64>,
+) {
+    match value {
+        Some(value) => {
+            object.insert(key.to_string(), serde_json::Value::Number(value.into()));
+        },
+        None => {
+            object.remove(key);
+        },
+    }
+}
+
+fn set_json_optional_f64(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    value: Option<f64>,
+) -> anyhow::Result<()> {
+    match value {
+        Some(value) => {
+            let number =
+                serde_json::Number::from_f64(value).context("serialize finite JSON number")?;
+            object.insert(key.to_string(), serde_json::Value::Number(number));
+        },
+        None => {
+            object.remove(key);
+        },
+    }
+    Ok(())
+}
+
+fn route_strategy_from_config(route: &KeyRouteConfig) -> anyhow::Result<RouteStrategy> {
+    match route.route_strategy.as_deref().unwrap_or("auto") {
+        "auto" => Ok(RouteStrategy::Auto),
+        "fixed" => Ok(RouteStrategy::Fixed),
+        other => anyhow::bail!("unsupported route strategy `{other}`"),
+    }
 }
 
 fn non_negative_i64_to_u64(value: i64) -> Option<u64> {
@@ -3208,9 +3968,6 @@ mod schema_tests {
             "llm_token_requests",
             "llm_account_contribution_requests",
             "llm_sponsor_requests",
-            "cdc_consumer_offsets",
-            "cdc_apply_state",
-            "cdc_applied_events_recent",
         ] {
             assert!(tables.contains(&required.to_string()), "missing table {required}");
         }
@@ -3410,12 +4167,17 @@ mod tests {
             key_id: key.key_id.clone(),
             key_name: key.name.clone(),
             account_name: Some("account-a".to_string()),
+            account_group_id_at_event: None,
             route_strategy_at_event: Some(llm_access_core::provider::RouteStrategy::Auto),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
             endpoint: "/v1/messages".to_string(),
             model: Some("claude-sonnet-4-5".to_string()),
             mapped_model: None,
             status_code: 200,
             request_body_bytes: Some(1024),
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
             input_uncached_tokens: 7,
             input_cached_tokens: 8,
             output_tokens: 9,
@@ -3423,6 +4185,13 @@ mod tests {
             credit_usage: Some("0.25".to_string()),
             usage_missing: false,
             credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: None,
+            client_request_body_json: None,
+            upstream_request_body_json: None,
+            full_request_json: None,
             timing: llm_access_core::usage::UsageTiming::default(),
         };
 
@@ -3675,6 +4444,8 @@ mod tests {
                     name: "wish-llmwish-action".to_string(),
                     secret: "sfk_token_action".to_string(),
                     key_hash: "hash-token-action".to_string(),
+                    provider_type: "codex".to_string(),
+                    protocol_family: "openai".to_string(),
                     public_visible: false,
                     quota_billable_limit: 1234,
                     request_max_concurrency: None,
@@ -3737,6 +4508,8 @@ mod tests {
                     name: "contrib-llmacct-action".to_string(),
                     secret: "sfk_contrib_action".to_string(),
                     key_hash: "hash-contrib-action".to_string(),
+                    provider_type: "codex".to_string(),
+                    protocol_family: "openai".to_string(),
                     public_visible: false,
                     quota_billable_limit: 100_000_000_000,
                     request_max_concurrency: None,
@@ -3837,6 +4610,8 @@ mod tests {
             name: "route key".to_string(),
             secret: "sfk_route".to_string(),
             key_hash: "hash-route".to_string(),
+            provider_type: "codex".to_string(),
+            protocol_family: "openai".to_string(),
             public_visible: false,
             quota_billable_limit: 1000,
             request_max_concurrency: Some(2),
@@ -3857,6 +4632,7 @@ mod tests {
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             updated_at_ms: 200,
+            ..llm_access_core::store::AdminKeyPatch::default()
         })
         .expect("patch key route");
 
@@ -3873,6 +4649,8 @@ mod tests {
             .expect("resolve route")
             .expect("route exists");
         assert_eq!(route.account_name, "codex-route");
+        assert_eq!(route.account_group_id_at_event.as_deref(), Some("group-route"));
+        assert_eq!(route.route_strategy_at_event, llm_access_core::provider::RouteStrategy::Fixed);
         assert_eq!(route.auth_json, r#"{"access_token":"access-route"}"#);
         assert!(route.map_gpt53_codex_to_spark);
         assert_eq!(route.request_max_concurrency, Some(2));
@@ -3944,7 +4722,9 @@ mod tests {
                 fixed_account_name: None,
                 auto_account_names_json: None,
                 account_group_id: Some("kiro-group-route".to_string()),
-                model_name_map_json: None,
+                model_name_map_json: Some(
+                    r#"{"claude-haiku-4-5-20251001":"claude-sonnet-4-6"}"#.to_string(),
+                ),
                 request_max_concurrency: Some(2),
                 request_min_start_interval_ms: Some(50),
                 kiro_request_validation_enabled: true,
@@ -3980,6 +4760,8 @@ mod tests {
             .expect("resolve route")
             .expect("route exists");
         assert_eq!(route.account_name, "kiro-route");
+        assert_eq!(route.account_group_id_at_event.as_deref(), Some("kiro-group-route"));
+        assert_eq!(route.route_strategy_at_event, llm_access_core::provider::RouteStrategy::Fixed);
         assert_eq!(route.auth_json, r#"{"accessToken":"access-route","apiRegion":"us-west-2"}"#);
         assert_eq!(route.profile_arn.as_deref(), Some("arn:aws:kiro:test"));
         assert_eq!(route.api_region, "us-west-2");
@@ -3989,6 +4771,10 @@ mod tests {
             route.cache_kmodels_json,
             llm_access_core::store::default_kiro_cache_kmodels_json()
         );
+        assert_eq!(
+            route.model_name_map_json,
+            r#"{"claude-haiku-4-5-20251001":"claude-sonnet-4-6"}"#
+        );
         assert_eq!(route.prefix_cache_mode, llm_access_core::store::DEFAULT_KIRO_PREFIX_CACHE_MODE);
         assert_eq!(route.billable_model_multipliers_json, r#"{"sonnet":2}"#);
         assert_eq!(route.request_max_concurrency, Some(2));
@@ -3997,6 +4783,29 @@ mod tests {
         assert_eq!(route.account_request_min_start_interval_ms, Some(100));
         let proxy = route.proxy.expect("kiro proxy");
         assert_eq!(proxy.proxy_url, "socks5h://127.0.0.1:9011");
+
+        let mut direct_record = repo
+            .get_kiro_account("kiro-route")
+            .expect("load kiro route account")
+            .expect("kiro route account exists");
+        direct_record.auth_json =
+            r#"{"accessToken":"access-route","apiRegion":"us-west-2","proxyMode":"none"}"#
+                .to_string();
+        repo.upsert_kiro_account(&direct_record)
+            .expect("upsert direct-proxy kiro account");
+        let direct_route = repo
+            .resolve_provider_kiro_route(&llm_access_core::store::AuthenticatedKey {
+                key_id: "kiro-key-route".to_string(),
+                key_name: "kiro route key".to_string(),
+                provider_type: "kiro".to_string(),
+                protocol_family: "anthropic".to_string(),
+                status: "active".to_string(),
+                quota_billable_limit: 1000,
+                billable_tokens_used: 0,
+            })
+            .expect("resolve direct route")
+            .expect("direct route exists");
+        assert!(direct_route.proxy.is_none());
     }
 
     #[test]

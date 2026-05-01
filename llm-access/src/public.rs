@@ -1,16 +1,16 @@
-//! Public unauthenticated compatibility endpoints.
+//! Public unauthenticated endpoints.
 
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{OriginalUri, Path, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use llm_access_core::{
     store::{
-        PublicAccessKey, PublicAccountContribution, PublicSponsor, PublicUsageLookupKey,
-        UsageEventQuery,
+        ProviderCodexRoute, PublicAccessKey, PublicAccountContribution, PublicSponsor,
+        PublicUsageLookupKey, UsageEventQuery,
     },
     usage::UsageEvent,
 };
@@ -305,23 +305,95 @@ pub(crate) async fn get_llm_gateway_access(
     .into_response()
 }
 
-pub(crate) async fn get_llm_gateway_model_catalog() -> Response {
-    let body = match llm_access_codex::models::default_public_model_catalog_json() {
-        Ok(body) => body,
+pub(crate) async fn get_llm_gateway_model_catalog(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+) -> Response {
+    let route = match select_public_codex_catalog_route(&state).await {
+        Ok(Some(route)) => route,
+        Ok(None) => return crate::provider::default_codex_public_model_catalog_response(),
         Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to build model catalog")
+            return (StatusCode::INTERNAL_SERVER_ERROR, "public model catalog store error")
                 .into_response()
         },
     };
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
-        .header(header::CACHE_CONTROL, "no-store")
-        .header(header::CONTENT_DISPOSITION, r#"inline; filename="model_catalog.json""#)
-        .body(Body::from(body))
-        .unwrap_or_else(|_| {
-            (StatusCode::INTERNAL_SERVER_ERROR, "failed to build model catalog response")
+    let codex_client_version = match state.admin_config_store.get_admin_runtime_config().await {
+        Ok(config) => config.codex_client_version,
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "runtime config store error")
                 .into_response()
+        },
+    };
+    crate::provider::codex_public_model_catalog_response(
+        route,
+        state.provider_state.route_store(),
+        &headers,
+        uri.query().unwrap_or_default(),
+        &crate::provider::codex_upstream_base_url(),
+        &codex_client_version,
+    )
+    .await
+}
+
+async fn select_public_codex_catalog_route(
+    state: &HttpState,
+) -> anyhow::Result<Option<ProviderCodexRoute>> {
+    let mut accounts = state
+        .admin_codex_account_store
+        .list_admin_codex_accounts()
+        .await?
+        .into_iter()
+        .filter(|account| account.status == "active")
+        .filter_map(|account| {
+            let (primary, primary_invalid) =
+                sanitize_remaining_percent(account.primary_remaining_percent);
+            let (secondary, secondary_invalid) =
+                sanitize_remaining_percent(account.secondary_remaining_percent);
+            if primary <= 0.0 || secondary <= 0.0 {
+                return None;
+            }
+            Some((account.name, primary, secondary, primary_invalid || secondary_invalid))
+        })
+        .collect::<Vec<_>>();
+    accounts.sort_by(|left, right| {
+        public_codex_account_cmp(left, right).then_with(|| left.0.cmp(&right.0))
+    });
+    let Some(account_name) = accounts.into_iter().next().map(|account| account.0) else {
+        return Ok(None);
+    };
+    state
+        .admin_codex_account_store
+        .resolve_admin_codex_account_route(&account_name)
+        .await
+}
+
+fn sanitize_remaining_percent(value: Option<f64>) -> (f64, bool) {
+    match value {
+        Some(value) if value.is_finite() => (value, false),
+        Some(_) => (100.0, true),
+        None => (100.0, false),
+    }
+}
+
+fn public_codex_account_cmp(
+    left: &(String, f64, f64, bool),
+    right: &(String, f64, f64, bool),
+) -> std::cmp::Ordering {
+    match (left.3, right.3) {
+        (false, true) => return std::cmp::Ordering::Less,
+        (true, false) => return std::cmp::Ordering::Greater,
+        _ => {},
+    }
+    right
+        .1
+        .partial_cmp(&left.1)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| {
+            right
+                .2
+                .partial_cmp(&left.2)
+                .unwrap_or(std::cmp::Ordering::Equal)
         })
 }
 
@@ -380,6 +452,7 @@ pub(crate) async fn post_llm_gateway_public_usage_query(
         .usage_analytics_store
         .list_usage_events(UsageEventQuery {
             key_id: Some(key_id),
+            provider_type: None,
             limit,
             offset,
         })
@@ -548,25 +621,25 @@ impl From<&UsageEvent> for PublicLlmGatewayUsageEventView {
             id: value.event_id.clone(),
             key_name: value.key_name.clone(),
             account_name: value.account_name.clone(),
-            request_method: usage_request_method(value),
-            request_url: value.endpoint.clone(),
+            request_method: value.request_method.clone(),
+            request_url: value.request_url.clone(),
             latency_ms,
-            routing_wait_ms: None,
+            routing_wait_ms: optional_i64_to_i32(value.timing.routing_wait_ms),
             upstream_headers_ms: optional_i64_to_i32(value.timing.upstream_headers_ms),
             post_headers_body_ms: optional_i64_to_i32(value.timing.post_headers_body_ms),
             request_body_bytes: value.request_body_bytes.and_then(non_negative_i64_to_u64),
-            request_body_read_ms: None,
-            request_json_parse_ms: None,
-            pre_handler_ms: None,
+            request_body_read_ms: optional_i64_to_i32(value.timing.request_body_read_ms),
+            request_json_parse_ms: optional_i64_to_i32(value.timing.request_json_parse_ms),
+            pre_handler_ms: optional_i64_to_i32(value.timing.pre_handler_ms),
             first_sse_write_ms: optional_i64_to_i32(value.timing.first_sse_write_ms),
             stream_finish_ms: optional_i64_to_i32(value.timing.stream_finish_ms),
             other_latency_ms: compute_other_latency_ms(
                 latency_ms,
-                None,
+                optional_i64_to_i32(value.timing.routing_wait_ms),
                 optional_i64_to_i32(value.timing.upstream_headers_ms),
                 optional_i64_to_i32(value.timing.post_headers_body_ms),
             ),
-            quota_failover_count: 0,
+            quota_failover_count: value.quota_failover_count,
             endpoint: value.endpoint.clone(),
             model: value.model.clone(),
             status_code: value.status_code.clamp(0, i64::from(i32::MAX)) as i32,
@@ -581,28 +654,21 @@ impl From<&UsageEvent> for PublicLlmGatewayUsageEventView {
                 .as_deref()
                 .and_then(|raw| raw.parse::<f64>().ok()),
             credit_usage_missing: value.credit_usage_missing,
-            client_ip: "unknown".to_string(),
-            ip_region: "unknown".to_string(),
+            client_ip: value.client_ip.clone(),
+            ip_region: value.ip_region.clone(),
             created_at: value.created_at_ms,
         }
     }
 }
 
-fn usage_request_method(value: &UsageEvent) -> String {
-    if value.endpoint.ends_with("/models") || value.endpoint == "/v1/models" {
-        "GET"
-    } else {
-        "POST"
-    }
-    .to_string()
-}
-
 fn usage_latency_ms(value: &UsageEvent) -> i32 {
-    let latency = value.timing.stream_finish_ms.or_else(|| {
-        match (value.timing.upstream_headers_ms, value.timing.post_headers_body_ms) {
-            (Some(headers), Some(body)) => Some(headers.saturating_add(body)),
-            _ => None,
-        }
+    let latency = value.timing.latency_ms.or_else(|| {
+        value.timing.stream_finish_ms.or_else(|| {
+            match (value.timing.upstream_headers_ms, value.timing.post_headers_body_ms) {
+                (Some(headers), Some(body)) => Some(headers.saturating_add(body)),
+                _ => None,
+            }
+        })
     });
     optional_i64_to_i32(latency).unwrap_or(0)
 }

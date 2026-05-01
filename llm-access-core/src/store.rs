@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::usage::UsageEvent;
+use crate::{provider::RouteStrategy, usage::UsageEvent};
 
 /// Default public auth-cache TTL used when no runtime config row exists yet.
 pub const DEFAULT_AUTH_CACHE_TTL_SECONDS: u64 = 60;
@@ -353,6 +353,10 @@ pub struct NewAdminKey {
     pub secret: String,
     /// SHA-256 secret hash.
     pub key_hash: String,
+    /// Provider type.
+    pub provider_type: String,
+    /// Protocol family.
+    pub protocol_family: String,
     /// Whether the key is public-visible.
     pub public_visible: bool,
     /// Billable quota limit.
@@ -390,7 +394,17 @@ pub struct AdminKeyPatch {
     pub request_max_concurrency: Option<Option<u64>>,
     /// New per-key request pacing interval.
     pub request_min_start_interval_ms: Option<Option<u64>>,
-    /// Patch timestamp.
+    /// New Kiro request-validation toggle.
+    pub kiro_request_validation_enabled: Option<bool>,
+    /// New Kiro cache-estimation toggle.
+    pub kiro_cache_estimation_enabled: Option<bool>,
+    /// New Kiro zero-cache diagnostic toggle.
+    pub kiro_zero_cache_debug_enabled: Option<bool>,
+    /// New Kiro cache policy override JSON.
+    pub kiro_cache_policy_override_json: Option<Option<String>>,
+    /// New Kiro billable model multiplier override JSON.
+    pub kiro_billable_model_multipliers_override_json: Option<Option<String>>,
+    /// Update timestamp.
     pub updated_at_ms: i64,
 }
 
@@ -433,7 +447,7 @@ pub struct AdminAccountGroupPatch {
     pub name: Option<String>,
     /// Replacement account list.
     pub account_names: Option<Vec<String>>,
-    /// Patch timestamp.
+    /// Update timestamp.
     pub updated_at_ms: i64,
 }
 
@@ -488,7 +502,7 @@ pub struct AdminProxyConfigPatch {
     pub proxy_password: Option<Option<String>>,
     /// New status.
     pub status: Option<String>,
-    /// Patch timestamp.
+    /// Update timestamp.
     pub updated_at_ms: i64,
 }
 
@@ -584,8 +598,182 @@ pub struct AdminCodexAccountPatch {
     pub request_max_concurrency: Option<Option<u64>>,
     /// New per-account request pacing interval.
     pub request_min_start_interval_ms: Option<Option<u64>>,
-    /// Patch timestamp.
+    /// Update timestamp.
     pub updated_at_ms: i64,
+}
+
+/// Admin-facing Kiro account balance snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdminKiroBalanceView {
+    /// Current upstream credit usage.
+    pub current_usage: f64,
+    /// Current upstream credit limit.
+    pub usage_limit: f64,
+    /// Remaining upstream credits.
+    pub remaining: f64,
+    /// Next reset timestamp in Unix milliseconds.
+    pub next_reset_at: Option<i64>,
+    /// Upstream subscription title.
+    pub subscription_title: Option<String>,
+    /// Upstream user id when the status API provides it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+}
+
+/// Admin-facing Kiro status-cache metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminKiroCacheView {
+    /// Cache status label.
+    pub status: String,
+    /// Expected refresh interval in seconds.
+    pub refresh_interval_seconds: u64,
+    /// Last status-check attempt timestamp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_checked_at: Option<i64>,
+    /// Last successful status-check timestamp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_success_at: Option<i64>,
+    /// Last status-check error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+}
+
+impl Default for AdminKiroCacheView {
+    fn default() -> Self {
+        Self {
+            status: "loading".to_string(),
+            refresh_interval_seconds: DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+            last_checked_at: None,
+            last_success_at: None,
+            error_message: None,
+        }
+    }
+}
+
+/// Admin-facing projection of one configured Kiro account.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdminKiroAccount {
+    /// Account display name.
+    pub name: String,
+    /// Kiro auth method.
+    pub auth_method: String,
+    /// Identity provider label.
+    pub provider: Option<String>,
+    /// Upstream user id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_user_id: Option<String>,
+    /// Account email when known.
+    pub email: Option<String>,
+    /// Access token expiry string.
+    pub expires_at: Option<String>,
+    /// Kiro profile ARN.
+    pub profile_arn: Option<String>,
+    /// Whether a refresh token is available.
+    pub has_refresh_token: bool,
+    /// Whether this account is disabled.
+    pub disabled: bool,
+    /// Disable/error reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<String>,
+    /// Import source label.
+    pub source: Option<String>,
+    /// Import source DB path.
+    pub source_db_path: Option<String>,
+    /// Last import timestamp.
+    pub last_imported_at: Option<i64>,
+    /// Subscription title.
+    pub subscription_title: Option<String>,
+    /// Default region.
+    pub region: Option<String>,
+    /// Auth region.
+    pub auth_region: Option<String>,
+    /// API region.
+    pub api_region: Option<String>,
+    /// Machine id.
+    pub machine_id: Option<String>,
+    /// Per-account request concurrency cap.
+    pub kiro_channel_max_concurrency: u64,
+    /// Per-account request pacing interval.
+    pub kiro_channel_min_start_interval_ms: u64,
+    /// Cached-credit floor used before blocking the account locally.
+    pub minimum_remaining_credits_before_block: f64,
+    /// Account proxy mode.
+    pub proxy_mode: String,
+    /// Fixed proxy config id.
+    pub proxy_config_id: Option<String>,
+    /// Effective proxy source.
+    pub effective_proxy_source: String,
+    /// Effective proxy URL.
+    pub effective_proxy_url: Option<String>,
+    /// Effective proxy config name.
+    pub effective_proxy_config_name: Option<String>,
+    /// Legacy embedded proxy URL if present.
+    pub proxy_url: Option<String>,
+    /// Cached balance snapshot.
+    pub balance: Option<AdminKiroBalanceView>,
+    /// Cached status metadata.
+    pub cache: AdminKiroCacheView,
+}
+
+/// New persisted Kiro account row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAdminKiroAccount {
+    /// Account display name.
+    pub name: String,
+    /// Kiro auth method.
+    pub auth_method: String,
+    /// Upstream account id when known.
+    pub account_id: Option<String>,
+    /// Kiro profile ARN when known.
+    pub profile_arn: Option<String>,
+    /// Upstream user id when known.
+    pub user_id: Option<String>,
+    /// Runtime account status.
+    pub status: String,
+    /// Persisted auth payload JSON.
+    pub auth_json: String,
+    /// Per-account request concurrency cap.
+    pub max_concurrency: Option<u64>,
+    /// Per-account request pacing interval.
+    pub min_start_interval_ms: Option<u64>,
+    /// Fixed proxy config id when configured.
+    pub proxy_config_id: Option<String>,
+    /// Creation timestamp.
+    pub created_at_ms: i64,
+}
+
+/// Patch for mutable Kiro account routing/scheduler settings.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AdminKiroAccountPatch {
+    /// New per-account request concurrency cap.
+    pub max_concurrency: Option<u64>,
+    /// New per-account request pacing interval.
+    pub min_start_interval_ms: Option<u64>,
+    /// New cached-credit floor.
+    pub minimum_remaining_credits_before_block: Option<f64>,
+    /// New account proxy mode.
+    pub proxy_mode: Option<String>,
+    /// New fixed proxy config id.
+    pub proxy_config_id: Option<Option<String>>,
+    /// Update timestamp.
+    pub updated_at_ms: i64,
+}
+
+/// Cached Kiro account status update produced by a balance refresh.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdminKiroStatusCacheUpdate {
+    /// Account name.
+    pub account_name: String,
+    /// Cached balance payload.
+    pub balance: Option<AdminKiroBalanceView>,
+    /// Cache metadata.
+    pub cache: AdminKiroCacheView,
+    /// Refresh timestamp.
+    pub refreshed_at_ms: i64,
+    /// Expiration timestamp.
+    pub expires_at_ms: i64,
+    /// Last refresh error.
+    pub last_error: Option<String>,
 }
 
 /// Key state used on the hot request path.
@@ -623,6 +811,10 @@ pub struct ProviderProxyConfig {
 pub struct ProviderCodexRoute {
     /// Selected account name.
     pub account_name: String,
+    /// Account group id from the key route config at resolution time.
+    pub account_group_id_at_event: Option<String>,
+    /// Effective route strategy from the key route config at resolution time.
+    pub route_strategy_at_event: RouteStrategy,
     /// Persisted auth JSON for the selected account.
     pub auth_json: String,
     /// Whether this account maps public gpt-5.3-codex to Spark upstream.
@@ -640,11 +832,32 @@ pub struct ProviderCodexRoute {
     pub proxy: Option<ProviderProxyConfig>,
 }
 
-/// Resolved Kiro account selected for one provider request.
+/// Refreshed Codex account credential fields persisted by the provider runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderCodexAuthUpdate {
+    /// Account name.
+    pub account_name: String,
+    /// Refreshed auth payload JSON.
+    pub auth_json: String,
+    /// Upstream account id when known.
+    pub account_id: Option<String>,
+    /// Runtime status after refresh.
+    pub status: String,
+    /// Last refresh or runtime error.
+    pub last_error: Option<String>,
+    /// Refresh timestamp.
+    pub refreshed_at_ms: i64,
+}
+
+/// Resolved Kiro account selected for one provider request.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProviderKiroRoute {
     /// Selected account name.
     pub account_name: String,
+    /// Account group id from the key route config at resolution time.
+    pub account_group_id_at_event: Option<String>,
+    /// Effective route strategy from the key route config at resolution time.
+    pub route_strategy_at_event: RouteStrategy,
     /// Persisted auth JSON for the selected account.
     pub auth_json: String,
     /// Profile ARN used by Kiro upstream requests.
@@ -655,6 +868,10 @@ pub struct ProviderKiroRoute {
     pub request_validation_enabled: bool,
     /// Whether cache estimation is enabled for this key.
     pub cache_estimation_enabled: bool,
+    /// Whether zero-cache successes should retain diagnostic request bodies.
+    pub zero_cache_debug_enabled: bool,
+    /// JSON object mapping public model names to upstream Kiro model names.
+    pub model_name_map_json: String,
     /// Effective Kiro cache k-model JSON for this key.
     pub cache_kmodels_json: String,
     /// Effective Kiro cache policy JSON for this key.
@@ -682,6 +899,44 @@ pub struct ProviderKiroRoute {
     pub account_request_min_start_interval_ms: Option<u64>,
     /// Resolved proxy settings for this upstream request.
     pub proxy: Option<ProviderProxyConfig>,
+    /// Runtime routing identity used for local throttles and cooldowns. This is
+    /// the upstream user id when known, otherwise the account name.
+    pub routing_identity: String,
+    /// Last cached status label for diagnostics and route ordering.
+    pub cached_status: Option<String>,
+    /// Last cached remaining credits for fairness ordering.
+    pub cached_remaining_credits: Option<f64>,
+    /// Last cached balance payload for request-time status refreshes.
+    pub cached_balance: Option<AdminKiroBalanceView>,
+    /// Last cached status metadata for request-time status refreshes.
+    pub cached_cache: Option<AdminKiroCacheView>,
+    /// Status-refresh interval used when this route updates the cache.
+    pub status_refresh_interval_seconds: u64,
+    /// Cached-credit floor used before locally blocking this account.
+    pub minimum_remaining_credits_before_block: f64,
+}
+
+/// Refreshed Kiro account credential fields persisted by the provider runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderKiroAuthUpdate {
+    /// Account name.
+    pub account_name: String,
+    /// Refreshed auth payload JSON.
+    pub auth_json: String,
+    /// Kiro auth method.
+    pub auth_method: String,
+    /// Upstream account id when known.
+    pub account_id: Option<String>,
+    /// Kiro profile ARN when known.
+    pub profile_arn: Option<String>,
+    /// Upstream user id when known.
+    pub user_id: Option<String>,
+    /// Runtime status after refresh.
+    pub status: String,
+    /// Last refresh or runtime error.
+    pub last_error: Option<String>,
+    /// Refresh timestamp.
+    pub refreshed_at_ms: i64,
 }
 
 impl AuthenticatedKey {
@@ -1044,6 +1299,8 @@ pub struct AdminReviewQueueAction {
 pub struct UsageEventQuery {
     /// Optional key filter.
     pub key_id: Option<String>,
+    /// Optional provider filter.
+    pub provider_type: Option<String>,
     /// Page limit.
     pub limit: usize,
     /// Page offset.
@@ -1126,14 +1383,54 @@ pub trait ProviderRouteStore: Send + Sync {
         key: &AuthenticatedKey,
     ) -> anyhow::Result<Option<ProviderCodexRoute>>;
 
+    /// Resolve all Codex account candidates for one authenticated key.
+    async fn resolve_codex_route_candidates(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<Vec<ProviderCodexRoute>> {
+        Ok(self.resolve_codex_route(key).await?.into_iter().collect())
+    }
+
     /// Resolve the Kiro account to use for an authenticated key.
     async fn resolve_kiro_route(
         &self,
         key: &AuthenticatedKey,
     ) -> anyhow::Result<Option<ProviderKiroRoute>>;
+
+    /// Resolve all Kiro account candidates for one authenticated key.
+    async fn resolve_kiro_route_candidates(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<Vec<ProviderKiroRoute>> {
+        Ok(self.resolve_kiro_route(key).await?.into_iter().collect())
+    }
+
+    /// Persist a refreshed Kiro credential snapshot.
+    async fn save_kiro_auth_update(&self, update: ProviderKiroAuthUpdate) -> anyhow::Result<()>;
+
+    /// Persist a refreshed Codex credential snapshot.
+    async fn save_codex_auth_update(&self, update: ProviderCodexAuthUpdate) -> anyhow::Result<()>;
+
+    /// Persist a hot-path Kiro account quota-exhausted marker.
+    async fn mark_kiro_account_quota_exhausted(
+        &self,
+        _account_name: &str,
+        _error_message: &str,
+        _checked_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Persist a Kiro account status-cache update produced on the hot path.
+    async fn save_kiro_status_cache_update(
+        &self,
+        _update: AdminKiroStatusCacheUpdate,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
-/// Public read-only queries used by unauthenticated compatibility endpoints.
+/// Public read-only queries used by unauthenticated public endpoints.
 #[async_trait]
 pub trait PublicAccessStore: Send + Sync {
     /// Current auth-cache TTL in seconds.
@@ -1157,7 +1454,7 @@ pub trait PublicCommunityStore: Send + Sync {
     async fn list_public_sponsors(&self, limit: usize) -> anyhow::Result<Vec<PublicSponsor>>;
 }
 
-/// Public usage lookup queries used by unauthenticated compatibility endpoints.
+/// Public usage lookup queries used by unauthenticated public endpoints.
 #[async_trait]
 pub trait PublicUsageStore: Send + Sync {
     /// Load one key by its presented plaintext secret for public usage lookup.
@@ -1186,7 +1483,7 @@ pub trait UsageAnalyticsStore: Send + Sync {
     ) -> anyhow::Result<Vec<UsageChartPoint>>;
 }
 
-/// Public write queries used by unauthenticated compatibility endpoints.
+/// Public write queries used by unauthenticated public endpoints.
 #[async_trait]
 pub trait PublicSubmissionStore: Send + Sync {
     /// Persist one public token request.
@@ -1349,6 +1646,56 @@ pub trait AdminCodexAccountStore: Send + Sync {
         name: &str,
         refreshed_at_ms: i64,
     ) -> anyhow::Result<Option<AdminCodexAccount>>;
+
+    /// Resolve a single Codex account as a provider route for admin refreshes.
+    async fn resolve_admin_codex_account_route(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<ProviderCodexRoute>>;
+}
+
+/// Admin Kiro account management queries used by the current frontend.
+#[async_trait]
+pub trait AdminKiroAccountStore: Send + Sync {
+    /// List all persisted Kiro accounts with cached status information.
+    async fn list_admin_kiro_accounts(&self) -> anyhow::Result<Vec<AdminKiroAccount>>;
+
+    /// Create or replace one Kiro account.
+    async fn create_admin_kiro_account(
+        &self,
+        account: NewAdminKiroAccount,
+    ) -> anyhow::Result<AdminKiroAccount>;
+
+    /// Patch one Kiro account.
+    async fn patch_admin_kiro_account(
+        &self,
+        name: &str,
+        patch: AdminKiroAccountPatch,
+    ) -> anyhow::Result<Option<AdminKiroAccount>>;
+
+    /// Delete one Kiro account.
+    async fn delete_admin_kiro_account(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<AdminKiroAccount>>;
+
+    /// Return the cached Kiro balance for one account.
+    async fn get_admin_kiro_balance(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<AdminKiroBalanceView>>;
+
+    /// Resolve a single Kiro account as a provider route for admin refreshes.
+    async fn resolve_admin_kiro_account_route(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<ProviderKiroRoute>>;
+
+    /// Persist one Kiro status-cache update.
+    async fn save_admin_kiro_status_cache(
+        &self,
+        update: AdminKiroStatusCacheUpdate,
+    ) -> anyhow::Result<()>;
 }
 
 /// Admin review queue queries used by the current frontend.
@@ -1456,6 +1803,23 @@ impl ProviderRouteStore for EmptyProviderRouteStore {
     ) -> anyhow::Result<Option<ProviderKiroRoute>> {
         Ok(None)
     }
+
+    async fn save_kiro_auth_update(&self, _update: ProviderKiroAuthUpdate) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn save_codex_auth_update(&self, _update: ProviderCodexAuthUpdate) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn mark_kiro_account_quota_exhausted(
+        &self,
+        _account_name: &str,
+        _error_message: &str,
+        _checked_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -1542,6 +1906,10 @@ impl UsageEventSink for NoopUsageEventSink {
     async fn append_usage_event(&self, _event: &UsageEvent) -> anyhow::Result<()> {
         Ok(())
     }
+
+    async fn append_usage_events(&self, _events: &[UsageEvent]) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 /// Empty public submission store used by isolated unit tests.
@@ -1604,7 +1972,7 @@ impl AdminKeyStore for EmptyAdminKeyStore {
             secret: key.secret,
             key_hash: key.key_hash,
             status: KEY_STATUS_ACTIVE.to_string(),
-            provider_type: PROVIDER_CODEX.to_string(),
+            provider_type: key.provider_type,
             public_visible: key.public_visible,
             quota_billable_limit: key.quota_billable_limit,
             usage_input_uncached_tokens: 0,
@@ -1764,6 +2132,9 @@ impl AdminProxyStore for EmptyAdminProxyStore {
 /// Empty admin Codex account store used by isolated unit tests.
 pub struct EmptyAdminCodexAccountStore;
 
+/// Empty admin Kiro account store used by isolated unit tests.
+pub struct EmptyAdminKiroAccountStore;
+
 #[async_trait]
 impl AdminCodexAccountStore for EmptyAdminCodexAccountStore {
     async fn list_admin_codex_accounts(&self) -> anyhow::Result<Vec<AdminCodexAccount>> {
@@ -1817,6 +2188,93 @@ impl AdminCodexAccountStore for EmptyAdminCodexAccountStore {
         _refreshed_at_ms: i64,
     ) -> anyhow::Result<Option<AdminCodexAccount>> {
         Ok(None)
+    }
+
+    async fn resolve_admin_codex_account_route(
+        &self,
+        _name: &str,
+    ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+        Ok(None)
+    }
+}
+
+#[async_trait]
+impl AdminKiroAccountStore for EmptyAdminKiroAccountStore {
+    async fn list_admin_kiro_accounts(&self) -> anyhow::Result<Vec<AdminKiroAccount>> {
+        Ok(Vec::new())
+    }
+
+    async fn create_admin_kiro_account(
+        &self,
+        account: NewAdminKiroAccount,
+    ) -> anyhow::Result<AdminKiroAccount> {
+        Ok(AdminKiroAccount {
+            name: account.name,
+            auth_method: account.auth_method,
+            provider: None,
+            upstream_user_id: account.user_id,
+            email: None,
+            expires_at: None,
+            profile_arn: account.profile_arn,
+            has_refresh_token: false,
+            disabled: account.status != KEY_STATUS_ACTIVE,
+            disabled_reason: None,
+            source: None,
+            source_db_path: None,
+            last_imported_at: None,
+            subscription_title: None,
+            region: None,
+            auth_region: None,
+            api_region: None,
+            machine_id: None,
+            kiro_channel_max_concurrency: account.max_concurrency.unwrap_or(1),
+            kiro_channel_min_start_interval_ms: account.min_start_interval_ms.unwrap_or(0),
+            minimum_remaining_credits_before_block: 0.0,
+            proxy_mode: "inherit".to_string(),
+            proxy_config_id: account.proxy_config_id,
+            effective_proxy_source: "none".to_string(),
+            effective_proxy_url: None,
+            effective_proxy_config_name: None,
+            proxy_url: None,
+            balance: None,
+            cache: AdminKiroCacheView::default(),
+        })
+    }
+
+    async fn patch_admin_kiro_account(
+        &self,
+        _name: &str,
+        _patch: AdminKiroAccountPatch,
+    ) -> anyhow::Result<Option<AdminKiroAccount>> {
+        Ok(None)
+    }
+
+    async fn delete_admin_kiro_account(
+        &self,
+        _name: &str,
+    ) -> anyhow::Result<Option<AdminKiroAccount>> {
+        Ok(None)
+    }
+
+    async fn get_admin_kiro_balance(
+        &self,
+        _name: &str,
+    ) -> anyhow::Result<Option<AdminKiroBalanceView>> {
+        Ok(None)
+    }
+
+    async fn resolve_admin_kiro_account_route(
+        &self,
+        _name: &str,
+    ) -> anyhow::Result<Option<ProviderKiroRoute>> {
+        Ok(None)
+    }
+
+    async fn save_admin_kiro_status_cache(
+        &self,
+        _update: AdminKiroStatusCacheUpdate,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 
@@ -2092,4 +2550,12 @@ impl PublicStatusStore for EmptyPublicStatusStore {
 pub trait UsageEventSink: Send + Sync {
     /// Persist one usage event.
     async fn append_usage_event(&self, event: &UsageEvent) -> anyhow::Result<()>;
+
+    /// Persist a batch of usage events.
+    async fn append_usage_events(&self, events: &[UsageEvent]) -> anyhow::Result<()> {
+        for event in events {
+            self.append_usage_event(event).await?;
+        }
+        Ok(())
+    }
 }

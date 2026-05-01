@@ -6046,6 +6046,8 @@ dependencies = [
  "async-stream",
  "async-trait",
  "axum",
+ "base64 0.22.1",
+ "chrono",
  "eventsource-stream",
  "futures-util",
  "lettre",
@@ -6053,12 +6055,16 @@ dependencies = [
  "llm-access-core",
  "llm-access-kiro",
  "llm-access-store",
+ "rand 0.8.5",
  "reqwest 0.12.28",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
+ "static-flow-shared",
  "tokio",
  "tower 0.5.2",
+ "tracing",
  "url",
  "uuid",
 ]
@@ -6125,18 +6131,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "rusqlite",
-]
-
-[[package]]
-name = "llm-access-migrator"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "llm-access-store",
- "rusqlite",
- "serde",
- "serde_json",
- "static-flow-shared",
 ]
 
 [[package]]

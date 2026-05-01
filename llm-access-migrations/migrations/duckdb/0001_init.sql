@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS usage_events (
     account_name VARCHAR,
     account_group_id_at_event VARCHAR,
     route_strategy_at_event VARCHAR,
+    request_method VARCHAR NOT NULL DEFAULT 'POST',
+    request_url VARCHAR NOT NULL DEFAULT '',
     endpoint VARCHAR NOT NULL,
     model VARCHAR,
     mapped_model VARCHAR,
@@ -22,9 +24,14 @@ CREATE TABLE IF NOT EXISTS usage_events (
     routing_wait_ms INTEGER,
     upstream_headers_ms INTEGER,
     post_headers_body_ms INTEGER,
+    request_body_read_ms INTEGER,
+    request_json_parse_ms INTEGER,
+    pre_handler_ms INTEGER,
     first_sse_write_ms INTEGER,
     stream_finish_ms INTEGER,
     request_body_bytes BIGINT,
+    quota_failover_count BIGINT NOT NULL DEFAULT 0,
+    routing_diagnostics_json VARCHAR,
     input_uncached_tokens BIGINT NOT NULL,
     input_cached_tokens BIGINT NOT NULL,
     output_tokens BIGINT NOT NULL,
@@ -33,23 +40,25 @@ CREATE TABLE IF NOT EXISTS usage_events (
     usage_missing BOOLEAN NOT NULL,
     credit_usage_missing BOOLEAN NOT NULL,
     client_ip VARCHAR,
-    ip_region VARCHAR
+    ip_region VARCHAR,
+    request_headers_json VARCHAR NOT NULL DEFAULT '{}',
+    last_message_content VARCHAR,
+    client_request_body_json VARCHAR,
+    upstream_request_body_json VARCHAR,
+    full_request_json VARCHAR
 );
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_events_source_event_id
-    ON usage_events(source_event_id);
-
-CREATE INDEX IF NOT EXISTS idx_usage_events_source_seq
-    ON usage_events(source_seq);
-
-CREATE INDEX IF NOT EXISTS idx_usage_events_created_date
-    ON usage_events(created_date);
-
-CREATE INDEX IF NOT EXISTS idx_usage_events_key_date
-    ON usage_events(key_id, created_date);
-
-CREATE INDEX IF NOT EXISTS idx_usage_events_provider_date
-    ON usage_events(provider_type, created_date);
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS request_method VARCHAR DEFAULT 'POST';
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS request_url VARCHAR DEFAULT '';
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS request_body_read_ms INTEGER;
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS request_json_parse_ms INTEGER;
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS pre_handler_ms INTEGER;
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS quota_failover_count BIGINT DEFAULT 0;
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS routing_diagnostics_json VARCHAR;
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS request_headers_json VARCHAR DEFAULT '{}';
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS last_message_content VARCHAR;
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS client_request_body_json VARCHAR;
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS upstream_request_body_json VARCHAR;
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS full_request_json VARCHAR;
 
 CREATE TABLE IF NOT EXISTS usage_event_details (
     event_id VARCHAR PRIMARY KEY,
@@ -128,34 +137,3 @@ CREATE TABLE IF NOT EXISTS usage_rollups_daily (
         status_code_class
     )
 );
-
-CREATE TABLE IF NOT EXISTS cdc_event_log (
-    source_seq BIGINT PRIMARY KEY,
-    event_id VARCHAR NOT NULL,
-    source_instance VARCHAR NOT NULL,
-    entity VARCHAR NOT NULL,
-    op VARCHAR NOT NULL,
-    primary_key VARCHAR NOT NULL,
-    schema_version INTEGER NOT NULL,
-    payload_json VARCHAR NOT NULL,
-    created_at_ms BIGINT NOT NULL,
-    archived_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_cdc_event_log_entity_seq
-    ON cdc_event_log(entity, source_seq);
-
-CREATE TABLE IF NOT EXISTS cdc_apply_audit (
-    audit_id VARCHAR PRIMARY KEY,
-    consumer_name VARCHAR NOT NULL,
-    source_seq BIGINT NOT NULL,
-    event_id VARCHAR NOT NULL,
-    entity VARCHAR NOT NULL,
-    op VARCHAR NOT NULL,
-    status VARCHAR NOT NULL,
-    error_message VARCHAR,
-    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_cdc_apply_audit_consumer_seq
-    ON cdc_apply_audit(consumer_name, source_seq);

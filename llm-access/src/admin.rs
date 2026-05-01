@@ -1,8 +1,9 @@
-//! Local admin compatibility endpoints for the standalone LLM access service.
+//! Local admin endpoints for the standalone LLM access service.
 
 use std::{
     collections::BTreeMap,
     net::IpAddr,
+    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -16,16 +17,18 @@ use llm_access_core::{
     store::{
         self as core_store, AdminAccountGroupPatch, AdminCodexAccountPatch, AdminKeyPatch,
         AdminProxyConfigPatch, AdminReviewQueueAction, AdminRuntimeConfig, NewAdminAccountGroup,
-        NewAdminCodexAccount, NewAdminKey, NewAdminProxyConfig, UpdateAdminRuntimeConfig,
-        UsageEventQuery, KEY_STATUS_ACTIVE, KEY_STATUS_DISABLED, KIRO_PREFIX_CACHE_MODE_FORMULA,
-        PROVIDER_CODEX, PROVIDER_KIRO,
+        NewAdminCodexAccount, NewAdminKey, NewAdminKiroAccount, NewAdminProxyConfig,
+        UpdateAdminRuntimeConfig, UsageEventQuery, KEY_STATUS_ACTIVE, KEY_STATUS_DISABLED,
+        KIRO_PREFIX_CACHE_MODE_FORMULA, PROTOCOL_ANTHROPIC, PROTOCOL_OPENAI, PROVIDER_CODEX,
+        PROVIDER_KIRO,
     },
     usage::UsageEvent,
 };
+use llm_access_kiro::{auth_file::KiroAuthRecord, local_import};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::HttpState;
+use crate::{codex_refresh, kiro_refresh, kiro_status, HttpState};
 
 const MAX_CODEX_CLIENT_VERSION_LEN: usize = 64;
 const MAX_RUNTIME_CACHE_TTL_SECONDS: u64 = 86_400;
@@ -92,6 +95,21 @@ struct AdminProxyBindingsResponse {
 #[derive(Debug, Serialize)]
 struct AdminAccountsResponse {
     accounts: Vec<core_store::AdminCodexAccount>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminKiroAccountsResponse {
+    accounts: Vec<core_store::AdminKiroAccount>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminKiroAccountStatusesResponse {
+    accounts: Vec<core_store::AdminKiroAccount>,
+    total: usize,
+    limit: usize,
+    offset: usize,
     generated_at: i64,
 }
 
@@ -224,6 +242,16 @@ pub(crate) struct ListUsageEventsRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct ListKiroAccountStatusesRequest {
+    #[serde(default)]
+    prefix: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct ListReviewQueueRequest {
     #[serde(default)]
     status: Option<String>,
@@ -279,6 +307,16 @@ pub(crate) struct PatchLlmGatewayKeyRequest {
     request_max_concurrency_unlimited: bool,
     #[serde(default)]
     request_min_start_interval_ms_unlimited: bool,
+    #[serde(default)]
+    kiro_request_validation_enabled: Option<bool>,
+    #[serde(default)]
+    kiro_cache_estimation_enabled: Option<bool>,
+    #[serde(default)]
+    kiro_zero_cache_debug_enabled: Option<bool>,
+    #[serde(default)]
+    kiro_cache_policy_override_json: Option<Option<String>>,
+    #[serde(default)]
+    kiro_billable_model_multipliers_override_json: Option<Option<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -356,6 +394,73 @@ pub(crate) struct PatchLlmGatewayAccountRequest {
     request_max_concurrency_unlimited: bool,
     #[serde(default)]
     request_min_start_interval_ms_unlimited: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ImportLocalKiroAccountRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    sqlite_path: Option<String>,
+    #[serde(default)]
+    kiro_channel_max_concurrency: Option<u64>,
+    #[serde(default)]
+    kiro_channel_min_start_interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateManualKiroAccountRequest {
+    name: String,
+    #[serde(default)]
+    access_token: Option<String>,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    profile_arn: Option<String>,
+    #[serde(default)]
+    expires_at: Option<String>,
+    #[serde(default)]
+    auth_method: Option<String>,
+    #[serde(default)]
+    client_id: Option<String>,
+    #[serde(default)]
+    client_secret: Option<String>,
+    #[serde(default)]
+    region: Option<String>,
+    #[serde(default)]
+    auth_region: Option<String>,
+    #[serde(default)]
+    api_region: Option<String>,
+    #[serde(default)]
+    machine_id: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    subscription_title: Option<String>,
+    #[serde(default)]
+    kiro_channel_max_concurrency: Option<u64>,
+    #[serde(default)]
+    kiro_channel_min_start_interval_ms: Option<u64>,
+    #[serde(default)]
+    minimum_remaining_credits_before_block: Option<f64>,
+    #[serde(default)]
+    disabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PatchKiroAccountRequest {
+    #[serde(default)]
+    kiro_channel_max_concurrency: Option<u64>,
+    #[serde(default)]
+    kiro_channel_min_start_interval_ms: Option<u64>,
+    #[serde(default)]
+    minimum_remaining_credits_before_block: Option<f64>,
+    #[serde(default)]
+    proxy_mode: Option<String>,
+    #[serde(default)]
+    proxy_config_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -495,6 +600,8 @@ pub(crate) async fn create_llm_gateway_key(
         name,
         key_hash: sha256_hex(secret.as_bytes()),
         secret,
+        provider_type: PROVIDER_CODEX.to_string(),
+        protocol_family: PROTOCOL_OPENAI.to_string(),
         public_visible: request.public_visible,
         quota_billable_limit: request.quota_billable_limit,
         request_max_concurrency: request.request_max_concurrency,
@@ -515,6 +622,15 @@ pub(crate) async fn patch_llm_gateway_key(
 ) -> Response {
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
+    }
+    match admin_key_provider(&state, &key_id).await {
+        Ok(Some(provider_type)) if provider_type == PROVIDER_CODEX => {},
+        Ok(Some(_)) => {
+            return bad_request("Kiro keys must be managed from /admin/kiro-gateway")
+                .into_response();
+        },
+        Ok(None) => return not_found("LLM gateway key not found").into_response(),
+        Err(_) => return internal_error("Failed to load llm gateway key").into_response(),
     }
     let patch = match normalize_key_patch(request) {
         Ok(patch) => patch,
@@ -927,10 +1043,10 @@ pub(crate) async fn get_llm_gateway_usage_event(
     match state.usage_analytics_store.get_usage_event(&event_id).await {
         Ok(Some(event)) => Json(AdminUsageEventDetailView {
             event: AdminUsageEventView::from(&event),
-            request_headers_json: "{}".to_string(),
-            client_request_body_json: None,
-            upstream_request_body_json: None,
-            full_request_json: None,
+            request_headers_json: event.request_headers_json.clone(),
+            client_request_body_json: event.client_request_body_json.clone(),
+            upstream_request_body_json: event.upstream_request_body_json.clone(),
+            full_request_json: event.full_request_json.clone(),
         })
         .into_response(),
         Ok(None) => not_found("LLM gateway usage event not found").into_response(),
@@ -1094,6 +1210,31 @@ pub(crate) async fn refresh_llm_gateway_account(
         Ok(name) => name,
         Err(response) => return response.into_response(),
     };
+    let route = match state
+        .admin_codex_account_store
+        .resolve_admin_codex_account_route(&name)
+        .await
+    {
+        Ok(Some(route)) => route,
+        Ok(None) => return not_found("LLM gateway account not found").into_response(),
+        Err(_) => return internal_error("Failed to load llm gateway account").into_response(),
+    };
+    if let Err(err) = codex_refresh::ensure_context_for_route(
+        &route,
+        state.provider_state.route_store().as_ref(),
+        true,
+    )
+    .await
+    {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(ErrorResponse {
+                error: format!("Failed to refresh llm gateway account: {err}"),
+                code: StatusCode::BAD_GATEWAY.as_u16(),
+            }),
+        )
+            .into_response();
+    }
     match state
         .admin_codex_account_store
         .refresh_admin_codex_account(&name, now_ms())
@@ -1102,6 +1243,476 @@ pub(crate) async fn refresh_llm_gateway_account(
         Ok(Some(account)) => Json(account).into_response(),
         Ok(None) => not_found("LLM gateway account not found").into_response(),
         Err(_) => internal_error("Failed to refresh llm gateway account").into_response(),
+    }
+}
+
+pub(crate) async fn list_admin_kiro_keys(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let keys = match state.admin_key_store.list_admin_keys().await {
+        Ok(keys) => keys
+            .into_iter()
+            .filter(|key| key.provider_type == PROVIDER_KIRO)
+            .collect(),
+        Err(_) => return internal_error("Failed to list Kiro gateway keys").into_response(),
+    };
+    let auth_cache_ttl_seconds = match state.admin_config_store.get_admin_runtime_config().await {
+        Ok(config) => config.auth_cache_ttl_seconds,
+        Err(_) => return internal_error("Failed to load llm gateway config").into_response(),
+    };
+    Json(AdminKeysResponse {
+        keys,
+        auth_cache_ttl_seconds,
+        generated_at: now_ms(),
+    })
+    .into_response()
+}
+
+pub(crate) async fn create_admin_kiro_key(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateLlmGatewayKeyRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_name(&request.name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    if let Err(response) =
+        validate_i64_backed_u64("quota_billable_limit", request.quota_billable_limit)
+    {
+        return response.into_response();
+    }
+    let secret = generate_secret();
+    let key = NewAdminKey {
+        id: generate_id("kiro-key"),
+        name,
+        key_hash: sha256_hex(secret.as_bytes()),
+        secret,
+        provider_type: PROVIDER_KIRO.to_string(),
+        protocol_family: PROTOCOL_ANTHROPIC.to_string(),
+        public_visible: false,
+        quota_billable_limit: request.quota_billable_limit,
+        request_max_concurrency: None,
+        request_min_start_interval_ms: None,
+        created_at_ms: now_ms(),
+    };
+    match state.admin_key_store.create_admin_key(key).await {
+        Ok(key) => Json(key).into_response(),
+        Err(_) => internal_error("Failed to create Kiro gateway key").into_response(),
+    }
+}
+
+pub(crate) async fn patch_admin_kiro_key(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(key_id): Path<String>,
+    Json(request): Json<PatchLlmGatewayKeyRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    if !admin_key_matches_provider(&state, &key_id, PROVIDER_KIRO).await {
+        return not_found("Kiro gateway key not found").into_response();
+    }
+    let patch = match normalize_kiro_key_patch(request) {
+        Ok(patch) => patch,
+        Err(response) => return response.into_response(),
+    };
+    match state.admin_key_store.patch_admin_key(&key_id, patch).await {
+        Ok(Some(key)) if key.provider_type == PROVIDER_KIRO => Json(key).into_response(),
+        Ok(_) => not_found("Kiro gateway key not found").into_response(),
+        Err(_) => internal_error("Failed to update Kiro gateway key").into_response(),
+    }
+}
+
+pub(crate) async fn delete_admin_kiro_key(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(key_id): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    if !admin_key_matches_provider(&state, &key_id, PROVIDER_KIRO).await {
+        return not_found("Kiro gateway key not found").into_response();
+    }
+    match state.admin_key_store.delete_admin_key(&key_id).await {
+        Ok(Some(key)) => Json(DeleteResponse {
+            deleted: true,
+            id: key.id,
+        })
+        .into_response(),
+        Ok(None) => not_found("Kiro gateway key not found").into_response(),
+        Err(_) => internal_error("Failed to delete Kiro gateway key").into_response(),
+    }
+}
+
+pub(crate) async fn list_admin_kiro_account_groups(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Response {
+    list_account_groups_for_provider(state, headers, PROVIDER_KIRO, "Kiro gateway").await
+}
+
+pub(crate) async fn create_admin_kiro_account_group(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateLlmGatewayAccountGroupRequest>,
+) -> Response {
+    create_account_group_for_provider(state, headers, request, PROVIDER_KIRO, "kiro-group").await
+}
+
+pub(crate) async fn patch_admin_kiro_account_group(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+    Json(request): Json<PatchLlmGatewayAccountGroupRequest>,
+) -> Response {
+    patch_account_group_for_provider(state, headers, group_id, request, PROVIDER_KIRO).await
+}
+
+pub(crate) async fn delete_admin_kiro_account_group(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+) -> Response {
+    delete_account_group_for_provider(state, headers, group_id, PROVIDER_KIRO).await
+}
+
+pub(crate) async fn list_admin_kiro_usage_events(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(request): Query<ListUsageEventsRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let query = normalize_provider_usage_query(request, PROVIDER_KIRO);
+    match state.usage_analytics_store.list_usage_events(query).await {
+        Ok(page) => Json(AdminUsageEventsResponse {
+            total: page.total,
+            offset: page.offset,
+            limit: page.limit,
+            has_more: page.has_more,
+            current_rpm: 0,
+            current_in_flight: 0,
+            events: page.events.iter().map(AdminUsageEventView::from).collect(),
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to list Kiro gateway usage events").into_response(),
+    }
+}
+
+pub(crate) async fn get_admin_kiro_usage_event(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(event_id): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state.usage_analytics_store.get_usage_event(&event_id).await {
+        Ok(Some(event)) if event.provider_type.as_storage_str() == PROVIDER_KIRO => {
+            Json(AdminUsageEventDetailView {
+                event: AdminUsageEventView::from(&event),
+                request_headers_json: event.request_headers_json.clone(),
+                client_request_body_json: event.client_request_body_json.clone(),
+                upstream_request_body_json: event.upstream_request_body_json.clone(),
+                full_request_json: event.full_request_json.clone(),
+            })
+            .into_response()
+        },
+        Ok(_) => not_found("Kiro gateway usage event not found").into_response(),
+        Err(_) => internal_error("Failed to load Kiro gateway usage event").into_response(),
+    }
+}
+
+pub(crate) async fn list_admin_kiro_accounts(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state
+        .admin_kiro_account_store
+        .list_admin_kiro_accounts()
+        .await
+    {
+        Ok(accounts) => Json(AdminKiroAccountsResponse {
+            accounts,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to list Kiro gateway accounts").into_response(),
+    }
+}
+
+pub(crate) async fn list_admin_kiro_account_statuses(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<ListKiroAccountStatusesRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let mut accounts = match state
+        .admin_kiro_account_store
+        .list_admin_kiro_accounts()
+        .await
+    {
+        Ok(accounts) => accounts,
+        Err(_) => return internal_error("Failed to list Kiro gateway accounts").into_response(),
+    };
+    if let Some(prefix) = query
+        .prefix
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+    {
+        accounts.retain(|account| account.name.to_ascii_lowercase().starts_with(&prefix));
+    }
+    let total = accounts.len();
+    let limit = query.limit.unwrap_or(24).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0);
+    let accounts = accounts.into_iter().skip(offset).take(limit).collect();
+    Json(AdminKiroAccountStatusesResponse {
+        accounts,
+        total,
+        limit,
+        offset,
+        generated_at: now_ms(),
+    })
+    .into_response()
+}
+
+pub(crate) async fn import_admin_kiro_account(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<ImportLocalKiroAccountRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    if let Err(response) = validate_kiro_channel_limit_inputs(
+        request.kiro_channel_max_concurrency,
+        request.kiro_channel_min_start_interval_ms,
+    ) {
+        return response.into_response();
+    }
+    let sqlite_path = request
+        .sqlite_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(local_import::default_sqlite_path);
+    let mut auth =
+        match local_import::import_from_sqlite(&sqlite_path, request.name.as_deref()).await {
+            Ok(auth) => auth,
+            Err(_) => return internal_error("Failed to import local Kiro auth").into_response(),
+        };
+    if let Some(value) = request.kiro_channel_max_concurrency {
+        auth.kiro_channel_max_concurrency = Some(value);
+    }
+    if let Some(value) = request.kiro_channel_min_start_interval_ms {
+        auth.kiro_channel_min_start_interval_ms = Some(value);
+    }
+    create_or_replace_kiro_account(state, auth.canonicalize()).await
+}
+
+pub(crate) async fn create_admin_kiro_manual_account(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateManualKiroAccountRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let auth = match kiro_auth_from_manual_request(request) {
+        Ok(auth) => auth,
+        Err(response) => return response.into_response(),
+    };
+    create_or_replace_kiro_account(state, auth).await
+}
+
+pub(crate) async fn patch_admin_kiro_account(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(request): Json<PatchKiroAccountRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_account_name(&name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    let patch = match normalize_kiro_account_patch(request) {
+        Ok(patch) => patch,
+        Err(response) => return response.into_response(),
+    };
+    if let Some(Some(proxy_id)) = patch.proxy_config_id.as_ref() {
+        let proxy = match state
+            .admin_proxy_store
+            .get_admin_proxy_config(proxy_id)
+            .await
+        {
+            Ok(Some(proxy)) => proxy,
+            Ok(None) => return not_found("LLM gateway proxy config not found").into_response(),
+            Err(_) => {
+                return internal_error("Failed to load llm gateway proxy config").into_response()
+            },
+        };
+        if proxy.status != KEY_STATUS_ACTIVE {
+            return bad_request("proxy config must be active before account binding")
+                .into_response();
+        }
+    }
+    match state
+        .admin_kiro_account_store
+        .patch_admin_kiro_account(&name, patch)
+        .await
+    {
+        Ok(Some(account)) => Json(account).into_response(),
+        Ok(None) => not_found("Kiro account not found").into_response(),
+        Err(_) => internal_error("Failed to update Kiro account").into_response(),
+    }
+}
+
+pub(crate) async fn delete_admin_kiro_account(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_account_name(&name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    match state
+        .admin_kiro_account_store
+        .delete_admin_kiro_account(&name)
+        .await
+    {
+        Ok(Some(_account)) => Json(serde_json::json!({"status": "ok"})).into_response(),
+        Ok(None) => not_found("Kiro account not found").into_response(),
+        Err(_) => internal_error("Failed to delete Kiro account").into_response(),
+    }
+}
+
+pub(crate) async fn get_admin_kiro_account_balance(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state
+        .admin_kiro_account_store
+        .get_admin_kiro_balance(&name)
+        .await
+    {
+        Ok(Some(balance)) => Json(balance).into_response(),
+        Ok(None) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "Kiro balance cache is not ready yet".to_string(),
+                code: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            }),
+        )
+            .into_response(),
+        Err(_) => internal_error("Failed to load Kiro account balance").into_response(),
+    }
+}
+
+pub(crate) async fn refresh_admin_kiro_account_balance(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let route = match state
+        .admin_kiro_account_store
+        .resolve_admin_kiro_account_route(&name)
+        .await
+    {
+        Ok(Some(route)) => route,
+        Ok(None) => return not_found("Kiro account not found").into_response(),
+        Err(_) => return internal_error("Failed to load Kiro account").into_response(),
+    };
+    let now = now_ms();
+    let route_store = state.provider_state.route_store();
+    match kiro_refresh::fetch_usage_limits_for_route(&route, route_store.as_ref(), true).await {
+        Ok(usage) => {
+            let balance = admin_kiro_balance_from_usage(&usage);
+            let cache = core_store::AdminKiroCacheView {
+                status: "ready".to_string(),
+                last_checked_at: Some(now),
+                last_success_at: Some(now),
+                error_message: None,
+                ..core_store::AdminKiroCacheView::default()
+            };
+            if let Err(err) = state
+                .admin_kiro_account_store
+                .save_admin_kiro_status_cache(core_store::AdminKiroStatusCacheUpdate {
+                    account_name: name.clone(),
+                    balance: Some(balance.clone()),
+                    refreshed_at_ms: now,
+                    expires_at_ms: now
+                        + (cache.refresh_interval_seconds.min(i64::MAX as u64 / 1000) as i64
+                            * 1000),
+                    cache,
+                    last_error: None,
+                })
+                .await
+            {
+                tracing::warn!(account_name = %name, "failed to persist kiro balance cache: {err:#}");
+            }
+            Json(balance).into_response()
+        },
+        Err(err) => {
+            let cache = core_store::AdminKiroCacheView {
+                status: "error".to_string(),
+                last_checked_at: Some(now),
+                error_message: Some(err.to_string()),
+                ..core_store::AdminKiroCacheView::default()
+            };
+            let _ = state
+                .admin_kiro_account_store
+                .save_admin_kiro_status_cache(core_store::AdminKiroStatusCacheUpdate {
+                    account_name: name,
+                    balance: None,
+                    refreshed_at_ms: now,
+                    expires_at_ms: now + 60_000,
+                    cache,
+                    last_error: Some(err.to_string()),
+                })
+                .await;
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    error: format!("Failed to refresh Kiro account balance: {err}"),
+                    code: StatusCode::BAD_GATEWAY.as_u16(),
+                }),
+            )
+                .into_response()
+        },
     }
 }
 
@@ -1218,6 +1829,8 @@ pub(crate) async fn approve_and_issue_llm_gateway_token_request(
                 .unwrap_or_else(|_| format!("wish-{}", current.request_id)),
             key_hash: sha256_hex(secret.as_bytes()),
             secret,
+            provider_type: PROVIDER_CODEX.to_string(),
+            protocol_family: PROTOCOL_OPENAI.to_string(),
             public_visible: false,
             quota_billable_limit: current.requested_quota_billable_limit,
             request_max_concurrency: None,
@@ -1343,6 +1956,8 @@ pub(crate) async fn approve_and_issue_llm_gateway_account_contribution_request(
                 name,
                 key_hash: sha256_hex(secret.as_bytes()),
                 secret,
+                provider_type: PROVIDER_CODEX.to_string(),
+                protocol_family: PROTOCOL_OPENAI.to_string(),
                 public_visible: false,
                 quota_billable_limit: 100_000_000_000,
                 request_max_concurrency: None,
@@ -1458,6 +2073,183 @@ pub(crate) async fn delete_llm_gateway_sponsor_request(
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => not_found("LLM gateway sponsor request not found").into_response(),
         Err(_) => internal_error("Failed to delete llm gateway sponsor request").into_response(),
+    }
+}
+
+async fn admin_key_matches_provider(state: &HttpState, key_id: &str, provider_type: &str) -> bool {
+    state
+        .admin_key_store
+        .list_admin_keys()
+        .await
+        .ok()
+        .and_then(|keys| {
+            keys.into_iter()
+                .find(|key| key.id == key_id && key.provider_type == provider_type)
+        })
+        .is_some()
+}
+
+async fn admin_key_provider(state: &HttpState, key_id: &str) -> anyhow::Result<Option<String>> {
+    Ok(state
+        .admin_key_store
+        .list_admin_keys()
+        .await?
+        .into_iter()
+        .find(|key| key.id == key_id)
+        .map(|key| key.provider_type))
+}
+
+async fn list_account_groups_for_provider(
+    state: HttpState,
+    headers: HeaderMap,
+    provider_type: &str,
+    label: &str,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state
+        .admin_account_group_store
+        .list_admin_account_groups(provider_type)
+        .await
+    {
+        Ok(groups) => Json(AdminAccountGroupsResponse {
+            groups,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error(&format!("Failed to list {label} account groups")).into_response(),
+    }
+}
+
+async fn create_account_group_for_provider(
+    state: HttpState,
+    headers: HeaderMap,
+    request: CreateLlmGatewayAccountGroupRequest,
+    provider_type: &str,
+    id_prefix: &str,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_name(&request.name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    let account_names = match normalize_account_names(request.account_names) {
+        Ok(Some(names)) => names,
+        Ok(None) => return bad_request("account_names must not be empty").into_response(),
+        Err(response) => return response.into_response(),
+    };
+    let group = NewAdminAccountGroup {
+        id: generate_id(id_prefix),
+        provider_type: provider_type.to_string(),
+        name,
+        account_names,
+        created_at_ms: now_ms(),
+    };
+    match state
+        .admin_account_group_store
+        .create_admin_account_group(group)
+        .await
+    {
+        Ok(group) => Json(group).into_response(),
+        Err(_) => internal_error("Failed to create account group").into_response(),
+    }
+}
+
+async fn patch_account_group_for_provider(
+    state: HttpState,
+    headers: HeaderMap,
+    group_id: String,
+    request: PatchLlmGatewayAccountGroupRequest,
+    provider_type: &str,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let current_groups = match state
+        .admin_account_group_store
+        .list_admin_account_groups(provider_type)
+        .await
+    {
+        Ok(groups) => groups,
+        Err(_) => return internal_error("Failed to inspect account groups").into_response(),
+    };
+    if !current_groups.iter().any(|group| group.id == group_id) {
+        return not_found("Account group not found").into_response();
+    }
+    let name = match request.name.as_deref().map(normalize_name).transpose() {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    let account_names = match request
+        .account_names
+        .map(normalize_account_names)
+        .transpose()
+    {
+        Ok(value) => value.flatten(),
+        Err(response) => return response.into_response(),
+    };
+    let patch = AdminAccountGroupPatch {
+        name,
+        account_names,
+        updated_at_ms: now_ms(),
+    };
+    match state
+        .admin_account_group_store
+        .patch_admin_account_group(&group_id, patch)
+        .await
+    {
+        Ok(Some(group)) => Json(group).into_response(),
+        Ok(None) => not_found("Account group not found").into_response(),
+        Err(_) => internal_error("Failed to update account group").into_response(),
+    }
+}
+
+async fn delete_account_group_for_provider(
+    state: HttpState,
+    headers: HeaderMap,
+    group_id: String,
+    provider_type: &str,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let keys = match state.admin_key_store.list_admin_keys().await {
+        Ok(keys) => keys,
+        Err(_) => return internal_error("Failed to inspect gateway keys").into_response(),
+    };
+    if let Some(key) = keys.iter().find(|key| {
+        key.provider_type == provider_type
+            && key.account_group_id.as_deref() == Some(group_id.as_str())
+    }) {
+        return bad_request(&format!("account group is still referenced by key `{}`", key.name))
+            .into_response();
+    }
+    let current_groups = match state
+        .admin_account_group_store
+        .list_admin_account_groups(provider_type)
+        .await
+    {
+        Ok(groups) => groups,
+        Err(_) => return internal_error("Failed to inspect account groups").into_response(),
+    };
+    if !current_groups.iter().any(|group| group.id == group_id) {
+        return not_found("Account group not found").into_response();
+    }
+    match state
+        .admin_account_group_store
+        .delete_admin_account_group(&group_id)
+        .await
+    {
+        Ok(Some(group)) => Json(DeleteResponse {
+            deleted: true,
+            id: group.id,
+        })
+        .into_response(),
+        Ok(None) => not_found("Account group not found").into_response(),
+        Err(_) => internal_error("Failed to delete account group").into_response(),
     }
 }
 
@@ -1735,11 +2527,22 @@ fn normalize_usage_query(request: ListUsageEventsRequest) -> UsageEventQuery {
         key_id: request
             .key_id
             .and_then(|key_id| normalize_optional_string(&key_id)),
+        provider_type: None,
         limit: request
             .limit
             .unwrap_or(DEFAULT_ADMIN_USAGE_LIMIT)
             .clamp(1, MAX_ADMIN_USAGE_LIMIT),
         offset: request.offset.unwrap_or(0),
+    }
+}
+
+fn normalize_provider_usage_query(
+    request: ListUsageEventsRequest,
+    provider_type: &str,
+) -> UsageEventQuery {
+    UsageEventQuery {
+        provider_type: Some(provider_type.to_string()),
+        ..normalize_usage_query(request)
     }
 }
 
@@ -1758,26 +2561,26 @@ impl From<&UsageEvent> for AdminUsageEventView {
             key_id: value.key_id.clone(),
             key_name: value.key_name.clone(),
             account_name: value.account_name.clone(),
-            request_method: usage_request_method(value),
-            request_url: value.endpoint.clone(),
+            request_method: value.request_method.clone(),
+            request_url: value.request_url.clone(),
             latency_ms,
-            routing_wait_ms: None,
+            routing_wait_ms: optional_i64_to_i32(value.timing.routing_wait_ms),
             upstream_headers_ms: optional_i64_to_i32(value.timing.upstream_headers_ms),
             post_headers_body_ms: optional_i64_to_i32(value.timing.post_headers_body_ms),
             request_body_bytes: value.request_body_bytes.and_then(non_negative_i64_to_u64),
-            request_body_read_ms: None,
-            request_json_parse_ms: None,
-            pre_handler_ms: None,
+            request_body_read_ms: optional_i64_to_i32(value.timing.request_body_read_ms),
+            request_json_parse_ms: optional_i64_to_i32(value.timing.request_json_parse_ms),
+            pre_handler_ms: optional_i64_to_i32(value.timing.pre_handler_ms),
             first_sse_write_ms: optional_i64_to_i32(value.timing.first_sse_write_ms),
             stream_finish_ms: optional_i64_to_i32(value.timing.stream_finish_ms),
             other_latency_ms: compute_other_latency_ms(
                 latency_ms,
-                None,
+                optional_i64_to_i32(value.timing.routing_wait_ms),
                 optional_i64_to_i32(value.timing.upstream_headers_ms),
                 optional_i64_to_i32(value.timing.post_headers_body_ms),
             ),
-            quota_failover_count: 0,
-            routing_diagnostics_json: None,
+            quota_failover_count: value.quota_failover_count,
+            routing_diagnostics_json: value.routing_diagnostics_json.clone(),
             endpoint: value.endpoint.clone(),
             model: value.model.clone(),
             status_code: value.status_code.clamp(0, i64::from(i32::MAX)) as i32,
@@ -1792,29 +2595,22 @@ impl From<&UsageEvent> for AdminUsageEventView {
                 .as_deref()
                 .and_then(|raw| raw.parse::<f64>().ok()),
             credit_usage_missing: value.credit_usage_missing,
-            client_ip: "unknown".to_string(),
-            ip_region: "unknown".to_string(),
-            last_message_content: None,
+            client_ip: value.client_ip.clone(),
+            ip_region: value.ip_region.clone(),
+            last_message_content: value.last_message_content.clone(),
             created_at: value.created_at_ms,
         }
     }
 }
 
-fn usage_request_method(value: &UsageEvent) -> String {
-    if value.endpoint.ends_with("/models") || value.endpoint == "/v1/models" {
-        "GET"
-    } else {
-        "POST"
-    }
-    .to_string()
-}
-
 fn usage_latency_ms(value: &UsageEvent) -> i32 {
-    let latency = value.timing.stream_finish_ms.or_else(|| {
-        match (value.timing.upstream_headers_ms, value.timing.post_headers_body_ms) {
-            (Some(headers), Some(body)) => Some(headers.saturating_add(body)),
-            _ => None,
-        }
+    let latency = value.timing.latency_ms.or_else(|| {
+        value.timing.stream_finish_ms.or_else(|| {
+            match (value.timing.upstream_headers_ms, value.timing.post_headers_body_ms) {
+                (Some(headers), Some(body)) => Some(headers.saturating_add(body)),
+                _ => None,
+            }
+        })
     });
     optional_i64_to_i32(latency).unwrap_or(0)
 }
@@ -1850,7 +2646,7 @@ async fn run_proxy_connectivity_check(
     provider_type: &str,
 ) -> anyhow::Result<AdminProxyCheckResponse> {
     let target_url = match provider_type {
-        PROVIDER_CODEX => "https://chatgpt.com/backend-api/codex/v1/models".to_string(),
+        PROVIDER_CODEX => "https://chatgpt.com/backend-api/codex/models".to_string(),
         PROVIDER_KIRO => {
             "https://q.us-east-1.amazonaws.com/getUsageLimits?origin=AI_EDITOR&resourceType=AGENTIC_REQUEST"
                 .to_string()
@@ -2008,6 +2804,23 @@ fn normalize_key_patch(
         request_max_concurrency.flatten(),
         request_min_start_interval_ms.flatten(),
     )?;
+    if let Some(Some(raw)) = request.kiro_cache_policy_override_json.as_ref() {
+        parse_kiro_cache_policy_json(raw)
+            .map_err(|_| bad_request("kiro_cache_policy_override_json is invalid"))?;
+    }
+    let kiro_billable_model_multipliers_override_json =
+        match request.kiro_billable_model_multipliers_override_json {
+            Some(Some(raw)) => {
+                let normalized = parse_kiro_billable_model_multipliers_json(&raw)
+                    .and_then(|value| serde_json::to_string(&value).map_err(Into::into))
+                    .map_err(|_| {
+                        bad_request("kiro_billable_model_multipliers_override_json is invalid")
+                    })?;
+                Some(Some(normalized))
+            },
+            Some(None) => Some(None),
+            None => None,
+        };
     Ok(AdminKeyPatch {
         name,
         status,
@@ -2020,8 +2833,24 @@ fn normalize_key_patch(
         model_name_map: request.model_name_map.map(Some),
         request_max_concurrency,
         request_min_start_interval_ms,
+        kiro_request_validation_enabled: request.kiro_request_validation_enabled,
+        kiro_cache_estimation_enabled: request.kiro_cache_estimation_enabled,
+        kiro_zero_cache_debug_enabled: request.kiro_zero_cache_debug_enabled,
+        kiro_cache_policy_override_json: request.kiro_cache_policy_override_json,
+        kiro_billable_model_multipliers_override_json,
         updated_at_ms: now_ms(),
     })
+}
+
+fn normalize_kiro_key_patch(
+    mut request: PatchLlmGatewayKeyRequest,
+) -> Result<AdminKeyPatch, AdminHttpError> {
+    request.public_visible = None;
+    request.request_max_concurrency = None;
+    request.request_min_start_interval_ms = None;
+    request.request_max_concurrency_unlimited = false;
+    request.request_min_start_interval_ms_unlimited = false;
+    normalize_key_patch(request)
 }
 
 fn normalize_name(raw: &str) -> Result<String, AdminHttpError> {
@@ -2211,11 +3040,194 @@ fn normalize_account_patch(
     })
 }
 
+fn kiro_auth_from_manual_request(
+    request: CreateManualKiroAccountRequest,
+) -> Result<KiroAuthRecord, AdminHttpError> {
+    let name = normalize_account_name(&request.name)?;
+    validate_kiro_channel_limit_inputs(
+        request.kiro_channel_max_concurrency,
+        request.kiro_channel_min_start_interval_ms,
+    )?;
+    if let Some(value) = request.minimum_remaining_credits_before_block {
+        if !value.is_finite() || value < 0.0 {
+            return Err(bad_request("minimum_remaining_credits_before_block must be >= 0"));
+        }
+    }
+    Ok(KiroAuthRecord {
+        name,
+        access_token: normalize_optional_string_option(request.access_token.as_deref()),
+        refresh_token: normalize_optional_string_option(request.refresh_token.as_deref()),
+        profile_arn: normalize_optional_string_option(request.profile_arn.as_deref()),
+        expires_at: normalize_optional_string_option(request.expires_at.as_deref()),
+        auth_method: normalize_optional_string_option(request.auth_method.as_deref()),
+        client_id: normalize_optional_string_option(request.client_id.as_deref()),
+        client_secret: normalize_optional_string_option(request.client_secret.as_deref()),
+        region: normalize_optional_string_option(request.region.as_deref()),
+        auth_region: normalize_optional_string_option(request.auth_region.as_deref()),
+        api_region: normalize_optional_string_option(request.api_region.as_deref()),
+        machine_id: normalize_optional_string_option(request.machine_id.as_deref()),
+        provider: normalize_optional_string_option(request.provider.as_deref()),
+        email: normalize_optional_string_option(request.email.as_deref()),
+        subscription_title: normalize_optional_string_option(request.subscription_title.as_deref()),
+        kiro_channel_max_concurrency: request.kiro_channel_max_concurrency,
+        kiro_channel_min_start_interval_ms: request.kiro_channel_min_start_interval_ms,
+        minimum_remaining_credits_before_block: request.minimum_remaining_credits_before_block,
+        disabled: request.disabled,
+        disabled_reason: None,
+        source: Some("manual".to_string()),
+        last_imported_at: Some(now_ms()),
+        ..KiroAuthRecord::default()
+    }
+    .canonicalize())
+}
+
+fn new_admin_kiro_account_from_auth(
+    auth: KiroAuthRecord,
+    created_at_ms: i64,
+) -> Result<NewAdminKiroAccount, AdminHttpError> {
+    let name = auth.name.clone();
+    let auth_method = auth.auth_method().to_string();
+    let profile_arn = auth.profile_arn.clone();
+    let max_concurrency = auth.effective_kiro_channel_max_concurrency();
+    let min_start_interval_ms = auth.effective_kiro_channel_min_start_interval_ms();
+    let proxy_config_id = auth.proxy_selection().proxy_config_id;
+    let status = if auth.disabled { KEY_STATUS_DISABLED } else { KEY_STATUS_ACTIVE }.to_string();
+    let auth_json = serde_json::to_string(&auth)
+        .map_err(|_| internal_error("Failed to encode Kiro account auth"))?;
+    Ok(NewAdminKiroAccount {
+        name,
+        auth_method,
+        account_id: None,
+        profile_arn,
+        user_id: None,
+        status,
+        auth_json,
+        max_concurrency: Some(max_concurrency),
+        min_start_interval_ms: Some(min_start_interval_ms),
+        proxy_config_id,
+        created_at_ms,
+    })
+}
+
+async fn create_or_replace_kiro_account(state: HttpState, auth: KiroAuthRecord) -> Response {
+    let account = match new_admin_kiro_account_from_auth(auth, now_ms()) {
+        Ok(account) => account,
+        Err(response) => return response.into_response(),
+    };
+    match state
+        .admin_kiro_account_store
+        .create_admin_kiro_account(account)
+        .await
+    {
+        Ok(account) => {
+            prime_kiro_status_after_account_save(&state, &account.name).await;
+            Json(account).into_response()
+        },
+        Err(_) => internal_error("Failed to save Kiro account").into_response(),
+    }
+}
+
+async fn prime_kiro_status_after_account_save(state: &HttpState, account_name: &str) {
+    let route = match state
+        .admin_kiro_account_store
+        .resolve_admin_kiro_account_route(account_name)
+        .await
+    {
+        Ok(Some(route)) => route,
+        Ok(None) => return,
+        Err(err) => {
+            tracing::warn!(account_name = %account_name, "failed to load Kiro account route after save: {err:#}");
+            return;
+        },
+    };
+    let route_store = state.provider_state.route_store();
+    if let Err(err) =
+        kiro_status::refresh_and_persist_route_status(&route, route_store.as_ref(), false).await
+    {
+        tracing::warn!(account_name = %account_name, "failed to prime cached Kiro status after account save: {err:#}");
+    }
+}
+
+fn normalize_kiro_account_patch(
+    request: PatchKiroAccountRequest,
+) -> Result<core_store::AdminKiroAccountPatch, AdminHttpError> {
+    validate_kiro_channel_limit_inputs(
+        request.kiro_channel_max_concurrency,
+        request.kiro_channel_min_start_interval_ms,
+    )?;
+    if let Some(value) = request.minimum_remaining_credits_before_block {
+        if !value.is_finite() || value < 0.0 {
+            return Err(bad_request("minimum_remaining_credits_before_block must be >= 0"));
+        }
+    }
+    let proxy_mode = request
+        .proxy_mode
+        .as_deref()
+        .map(normalize_proxy_mode)
+        .transpose()?;
+    let proxy_config_id = request
+        .proxy_config_id
+        .as_deref()
+        .map(|value| normalize_optional_string_option(Some(value)));
+    if matches!(proxy_mode.as_deref(), Some("fixed"))
+        && proxy_config_id
+            .as_ref()
+            .and_then(|value| value.as_ref())
+            .is_none()
+    {
+        return Err(bad_request("fixed proxy_mode requires proxy_config_id"));
+    }
+    Ok(core_store::AdminKiroAccountPatch {
+        max_concurrency: request.kiro_channel_max_concurrency,
+        min_start_interval_ms: request.kiro_channel_min_start_interval_ms,
+        minimum_remaining_credits_before_block: request.minimum_remaining_credits_before_block,
+        proxy_mode,
+        proxy_config_id,
+        updated_at_ms: now_ms(),
+    })
+}
+
 fn normalize_proxy_mode(raw: &str) -> Result<String, AdminHttpError> {
     let trimmed = raw.trim();
     match trimmed {
         "inherit" | "fixed" | "none" => Ok(trimmed.to_string()),
         _ => Err(bad_request("proxy_mode must be `inherit`, `fixed`, or `none`")),
+    }
+}
+
+fn validate_kiro_channel_limit_inputs(
+    max_concurrency: Option<u64>,
+    min_start_interval_ms: Option<u64>,
+) -> Result<(), AdminHttpError> {
+    if let Some(value) = max_concurrency {
+        if value == 0 || value > MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY {
+            return Err(bad_request("kiro_channel_max_concurrency is out of range"));
+        }
+    }
+    if let Some(value) = min_start_interval_ms {
+        if value > MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS {
+            return Err(bad_request("kiro_channel_min_start_interval_ms is out of range"));
+        }
+    }
+    Ok(())
+}
+
+fn admin_kiro_balance_from_usage(
+    usage: &llm_access_kiro::wire::UsageLimitsResponse,
+) -> core_store::AdminKiroBalanceView {
+    let usage_limit = usage.usage_limit();
+    let current_usage = usage.current_usage();
+    core_store::AdminKiroBalanceView {
+        current_usage,
+        usage_limit,
+        remaining: (usage_limit - current_usage).max(0.0),
+        next_reset_at: usage
+            .usage_breakdown_list
+            .first()
+            .and_then(|item| item.next_date_reset.or(usage.next_date_reset))
+            .map(|value| value as i64),
+        subscription_title: usage.subscription_title().map(ToString::to_string),
+        user_id: usage.user_id().map(ToString::to_string),
     }
 }
 

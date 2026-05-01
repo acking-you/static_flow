@@ -9,16 +9,18 @@ use llm_access_core::{
         AdminAccountContributionRequest, AdminAccountContributionRequestsPage, AdminAccountGroup,
         AdminAccountGroupPatch, AdminAccountGroupStore, AdminCodexAccount, AdminCodexAccountPatch,
         AdminCodexAccountStore, AdminConfigStore, AdminKey, AdminKeyPatch, AdminKeyStore,
-        AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch, AdminProxyStore,
-        AdminReviewQueueAction, AdminReviewQueueQuery, AdminReviewQueueStore, AdminRuntimeConfig,
-        AdminSponsorRequest, AdminSponsorRequestsPage, AdminTokenRequest, AdminTokenRequestsPage,
-        AuthenticatedKey, CodexRateLimitStatus, ControlStore, NewAdminAccountGroup,
-        NewAdminCodexAccount, NewAdminKey, NewAdminProxyConfig,
-        NewPublicAccountContributionRequest, NewPublicSponsorRequest, NewPublicTokenRequest,
-        ProviderCodexRoute, ProviderKiroRoute, ProviderRouteStore, PublicAccessKey,
-        PublicAccessStore, PublicAccountContribution, PublicCommunityStore, PublicSponsor,
-        PublicStatusStore, PublicSubmissionStore, PublicUsageLookupKey, PublicUsageStore,
-        UsageEventSink, DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_STATUS_REFRESH_SECONDS,
+        AdminKiroAccount, AdminKiroAccountPatch, AdminKiroAccountStore, AdminKiroBalanceView,
+        AdminKiroStatusCacheUpdate, AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch,
+        AdminProxyStore, AdminReviewQueueAction, AdminReviewQueueQuery, AdminReviewQueueStore,
+        AdminRuntimeConfig, AdminSponsorRequest, AdminSponsorRequestsPage, AdminTokenRequest,
+        AdminTokenRequestsPage, AuthenticatedKey, CodexRateLimitStatus, ControlStore,
+        NewAdminAccountGroup, NewAdminCodexAccount, NewAdminKey, NewAdminKiroAccount,
+        NewAdminProxyConfig, NewPublicAccountContributionRequest, NewPublicSponsorRequest,
+        NewPublicTokenRequest, ProviderCodexAuthUpdate, ProviderCodexRoute, ProviderKiroAuthUpdate,
+        ProviderKiroRoute, ProviderRouteStore, PublicAccessKey, PublicAccessStore,
+        PublicAccountContribution, PublicCommunityStore, PublicSponsor, PublicStatusStore,
+        PublicSubmissionStore, PublicUsageLookupKey, PublicUsageStore, UsageEventSink,
+        DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_STATUS_REFRESH_SECONDS,
     },
     usage::UsageEvent,
 };
@@ -413,6 +415,132 @@ impl AdminCodexAccountStore for SqliteControlRepository {
         .await
         .context("sqlite control repository codex account refresh task failed")?
     }
+
+    async fn resolve_admin_codex_account_route(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+        let name = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.resolve_admin_codex_account_route(&name)
+        })
+        .await
+        .context("sqlite control repository codex account route task failed")?
+    }
+}
+
+#[async_trait]
+impl AdminKiroAccountStore for SqliteControlRepository {
+    async fn list_admin_kiro_accounts(&self) -> anyhow::Result<Vec<AdminKiroAccount>> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.list_admin_kiro_accounts()
+        })
+        .await
+        .context("sqlite control repository kiro account list task failed")?
+    }
+
+    async fn create_admin_kiro_account(
+        &self,
+        account: NewAdminKiroAccount,
+    ) -> anyhow::Result<AdminKiroAccount> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.create_admin_kiro_account(&account)
+        })
+        .await
+        .context("sqlite control repository kiro account create task failed")?
+    }
+
+    async fn patch_admin_kiro_account(
+        &self,
+        name: &str,
+        patch: AdminKiroAccountPatch,
+    ) -> anyhow::Result<Option<AdminKiroAccount>> {
+        let name = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.patch_admin_kiro_account(&name, &patch)
+        })
+        .await
+        .context("sqlite control repository kiro account patch task failed")?
+    }
+
+    async fn delete_admin_kiro_account(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<AdminKiroAccount>> {
+        let name = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.delete_admin_kiro_account(&name)
+        })
+        .await
+        .context("sqlite control repository kiro account delete task failed")?
+    }
+
+    async fn get_admin_kiro_balance(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<AdminKiroBalanceView>> {
+        let name = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.get_admin_kiro_balance(&name)
+        })
+        .await
+        .context("sqlite control repository kiro account balance task failed")?
+    }
+
+    async fn resolve_admin_kiro_account_route(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<ProviderKiroRoute>> {
+        let name = name.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.resolve_admin_kiro_account_route(&name)
+        })
+        .await
+        .context("sqlite control repository kiro account route task failed")?
+    }
+
+    async fn save_admin_kiro_status_cache(
+        &self,
+        update: AdminKiroStatusCacheUpdate,
+    ) -> anyhow::Result<()> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.save_admin_kiro_status_cache(&update)
+        })
+        .await
+        .context("sqlite control repository kiro status cache update task failed")?
+    }
 }
 
 #[async_trait]
@@ -475,6 +603,22 @@ impl ProviderRouteStore for SqliteControlRepository {
         .context("sqlite control repository provider codex route task failed")?
     }
 
+    async fn resolve_codex_route_candidates(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<Vec<ProviderCodexRoute>> {
+        let key = key.clone();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.resolve_provider_codex_routes(&key)
+        })
+        .await
+        .context("sqlite control repository provider codex route candidates task failed")?
+    }
+
     async fn resolve_kiro_route(
         &self,
         key: &AuthenticatedKey,
@@ -489,6 +633,80 @@ impl ProviderRouteStore for SqliteControlRepository {
         })
         .await
         .context("sqlite control repository provider kiro route task failed")?
+    }
+
+    async fn resolve_kiro_route_candidates(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<Vec<ProviderKiroRoute>> {
+        let key = key.clone();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.resolve_provider_kiro_routes(&key)
+        })
+        .await
+        .context("sqlite control repository provider kiro route candidates task failed")?
+    }
+
+    async fn save_kiro_auth_update(&self, update: ProviderKiroAuthUpdate) -> anyhow::Result<()> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.save_kiro_auth_update(&update)
+        })
+        .await
+        .context("sqlite control repository provider kiro auth update task failed")?
+    }
+
+    async fn save_codex_auth_update(&self, update: ProviderCodexAuthUpdate) -> anyhow::Result<()> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.save_codex_auth_update(&update)
+        })
+        .await
+        .context("sqlite control repository provider codex auth update task failed")?
+    }
+
+    async fn mark_kiro_account_quota_exhausted(
+        &self,
+        account_name: &str,
+        error_message: &str,
+        checked_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        let account_name = account_name.to_string();
+        let error_message = error_message.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.mark_kiro_account_quota_exhausted(&account_name, &error_message, checked_at_ms)
+        })
+        .await
+        .context("sqlite control repository provider kiro quota marker task failed")?
+    }
+
+    async fn save_kiro_status_cache_update(
+        &self,
+        update: AdminKiroStatusCacheUpdate,
+    ) -> anyhow::Result<()> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.save_admin_kiro_status_cache(&update)
+        })
+        .await
+        .context("sqlite control repository provider kiro status cache update task failed")?
     }
 }
 
@@ -880,12 +1098,17 @@ mod tests {
             key_id: key_id.to_string(),
             key_name: "repo key".to_string(),
             account_name: None,
+            account_group_id_at_event: None,
             route_strategy_at_event: Some(RouteStrategy::Auto),
+            request_method: "POST".to_string(),
+            request_url: "/v1/responses".to_string(),
             endpoint: "/v1/responses".to_string(),
             model: Some("gpt-5.3-codex".to_string()),
             mapped_model: Some("gpt-5.3-codex-spark".to_string()),
             status_code: 200,
             request_body_bytes: Some(512),
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
             input_uncached_tokens: 3,
             input_cached_tokens: 4,
             output_tokens: 5,
@@ -893,6 +1116,13 @@ mod tests {
             credit_usage: None,
             usage_missing: false,
             credit_usage_missing: true,
+            client_ip: "unknown".to_string(),
+            ip_region: "unknown".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: None,
+            client_request_body_json: None,
+            upstream_request_body_json: None,
+            full_request_json: None,
             timing: UsageTiming::default(),
         }
     }
@@ -990,6 +1220,8 @@ mod tests {
                 name: "test key".to_string(),
                 secret: "sfk_test".to_string(),
                 key_hash: "hash-test".to_string(),
+                provider_type: "codex".to_string(),
+                protocol_family: "openai".to_string(),
                 public_visible: true,
                 quota_billable_limit: 1000,
                 request_max_concurrency: Some(2),

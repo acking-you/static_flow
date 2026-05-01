@@ -17,7 +17,11 @@ use axum::{
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 pub(crate) use llm_access_kiro::anthropic::supported_model_ids;
-use llm_access_kiro::anthropic::{count_tokens_response, supported_models_response};
+use llm_access_kiro::anthropic::{
+    count_tokens_response,
+    stream::{KIRO_HIDDEN_PROMPT_BASELINE_TOKENS, KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS},
+    supported_models_response,
+};
 use serde::de::DeserializeOwned;
 use tokio::{
     sync::{oneshot, watch},
@@ -1303,7 +1307,15 @@ pub(super) fn resolve_input_tokens(
     let request_input = request_input_tokens.max(0);
     let context_input = context_input_tokens.unwrap_or_default().max(0);
     if context_input > 0 {
-        (context_input, KiroInputTokenSource::UpstreamContextUsage)
+        let resolved_context_input =
+            if request_input <= KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS {
+                context_input
+                    .saturating_sub(KIRO_HIDDEN_PROMPT_BASELINE_TOKENS)
+                    .max(request_input)
+            } else {
+                context_input
+            };
+        (resolved_context_input, KiroInputTokenSource::UpstreamContextUsage)
     } else {
         (request_input, KiroInputTokenSource::LocalRequestEstimateFallback)
     }
@@ -3820,11 +3832,39 @@ mod tests {
     }
 
     #[test]
+    fn resolve_input_tokens_discounts_kiro_hidden_prompt_for_small_requests() {
+        let request_input_tokens = 18;
+        let upstream_context_tokens = KIRO_HIDDEN_PROMPT_BASELINE_TOKENS + request_input_tokens;
+        let (input_tokens, source) =
+            resolve_input_tokens(request_input_tokens, Some(upstream_context_tokens));
+
+        assert_eq!(input_tokens, 18);
+        assert_eq!(source, KiroInputTokenSource::UpstreamContextUsage);
+    }
+
+    #[test]
+    fn resolve_input_tokens_keeps_corrected_context_when_it_exceeds_local_request() {
+        let (input_tokens, source) =
+            resolve_input_tokens(1_000, Some(KIRO_HIDDEN_PROMPT_BASELINE_TOKENS + 1_900));
+
+        assert_eq!(input_tokens, 1_900);
+        assert_eq!(source, KiroInputTokenSource::UpstreamContextUsage);
+    }
+
+    #[test]
+    fn resolve_input_tokens_keeps_upstream_context_for_large_requests() {
+        let (input_tokens, source) = resolve_input_tokens(60_000, Some(90_000));
+
+        assert_eq!(input_tokens, 90_000);
+        assert_eq!(source, KiroInputTokenSource::UpstreamContextUsage);
+    }
+
+    #[test]
     fn build_usage_summary_disables_cache_estimation_per_key() {
         let simulation = sample_simulation(KiroCacheSimulationMode::Formula, 0);
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
-            12_000,
+            KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS + 1,
             Some(90_000),
             400,
             Some(0.02),
@@ -3902,7 +3942,7 @@ mod tests {
         let simulation = sample_simulation(KiroCacheSimulationMode::Formula, 0);
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
-            12_000,
+            KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS + 1,
             Some(90_000),
             400,
             Some(0.02),
@@ -3978,7 +4018,7 @@ mod tests {
             as i32;
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
-            12_000,
+            KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS + 1,
             Some(100_000),
             400,
             Some(0.02),
@@ -3995,7 +4035,7 @@ mod tests {
         let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
-            12_000,
+            KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS + 1,
             Some(50_000),
             400,
             Some(1.75),
@@ -4027,7 +4067,7 @@ mod tests {
         let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
-            12_000,
+            KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS + 1,
             Some(100_000),
             400,
             Some(1.0),
@@ -4057,7 +4097,7 @@ mod tests {
 
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
-            12_000,
+            KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS + 1,
             Some(50_000),
             400,
             Some(1.8),
@@ -4087,7 +4127,7 @@ mod tests {
 
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
-            12_000,
+            KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS + 1,
             Some(100_000),
             400,
             Some(0.9),
@@ -4104,7 +4144,7 @@ mod tests {
         let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
-            12_000,
+            KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS + 1,
             Some(100_000),
             400,
             Some(1.75),
@@ -4121,7 +4161,7 @@ mod tests {
         let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
-            12_000,
+            KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS + 1,
             Some(100_000),
             400,
             Some(0.65),
@@ -4139,7 +4179,7 @@ mod tests {
         let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
-            12_000,
+            KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS + 1,
             Some(100_000),
             400,
             Some(0.3),
@@ -4156,7 +4196,7 @@ mod tests {
         let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
-            12_000,
+            KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS + 1,
             Some(100_000),
             400,
             Some(2.5),
@@ -4173,7 +4213,7 @@ mod tests {
         let simulation = sample_simulation(KiroCacheSimulationMode::PrefixTree, u64::MAX);
         let summary = build_kiro_usage_summary(
             "claude-opus-4-6",
-            12_000,
+            KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS + 1,
             Some(100_000),
             400,
             Some(0.29),

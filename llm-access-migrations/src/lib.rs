@@ -26,11 +26,18 @@ const SQLITE_MIGRATIONS: &[SqlMigration] = &[
     },
 ];
 
-const DUCKDB_MIGRATIONS: &[SqlMigration] = &[SqlMigration {
-    version: 1,
-    name: "init",
-    sql: include_str!("../migrations/duckdb/0001_init.sql"),
-}];
+const DUCKDB_MIGRATIONS: &[SqlMigration] = &[
+    SqlMigration {
+        version: 1,
+        name: "init",
+        sql: include_str!("../migrations/duckdb/0001_init.sql"),
+    },
+    SqlMigration {
+        version: 2,
+        name: "drop_explicit_art_indexes",
+        sql: include_str!("../migrations/duckdb/0002_drop_explicit_art_indexes.sql"),
+    },
+];
 
 /// Return target SQLite migrations in execution order.
 pub fn sqlite_migrations() -> &'static [SqlMigration] {
@@ -118,6 +125,27 @@ mod tests {
         assert!(migrations[1]
             .sql
             .contains("CREATE TABLE IF NOT EXISTS llm_codex_status_cache"));
+    }
+
+    #[test]
+    fn duckdb_migrations_drop_legacy_explicit_art_indexes() {
+        let migrations = super::duckdb_migrations();
+
+        assert_eq!(migrations.len(), 2);
+        assert_eq!(migrations[0].version, 1);
+        assert_eq!(migrations[0].name, "init");
+        assert!(!migrations[0]
+            .sql
+            .contains("CREATE INDEX IF NOT EXISTS idx_usage_events"));
+        assert!(!migrations[0]
+            .sql
+            .contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_events"));
+        assert_eq!(migrations[1].version, 2);
+        assert_eq!(migrations[1].name, "drop_explicit_art_indexes");
+        assert!(migrations[1]
+            .sql
+            .contains("DROP INDEX IF EXISTS idx_usage_events_source_event_id"));
+        assert!(!super::duckdb_schema_sql().contains("cdc_"));
     }
 
     #[test]

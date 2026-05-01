@@ -1,4 +1,4 @@
-//! Kiro local compatibility endpoints.
+//! Kiro local endpoints.
 
 use axum::{extract::Json as JsonExtractor, response::IntoResponse, Json};
 use llm_access_kiro::anthropic::{

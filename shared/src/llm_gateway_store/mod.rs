@@ -4,7 +4,6 @@
 //! runtime config, upstream proxy configs/bindings, and the public request
 //! queues shown in the admin UI.
 
-mod cdc;
 mod codec;
 mod kiro_cache_policy;
 mod schema;
@@ -28,7 +27,6 @@ use lancedb::{
 };
 
 use self::{
-    cdc::{DeletePayload, LlmGatewayCdcEntity, LlmGatewayCdcOperation, LlmGatewayCdcOutbox},
     codec::{
         batches_to_account_contribution_requests, batches_to_account_groups,
         batches_to_gpt2api_account_contribution_requests, batches_to_keys,
@@ -115,7 +113,6 @@ use crate::optimize::{
 /// Owns the LanceDB-backed storage layer for all LLM gateway admin data.
 pub struct LlmGatewayStore {
     db: Connection,
-    cdc_outbox: Option<LlmGatewayCdcOutbox>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -151,7 +148,6 @@ impl LlmGatewayStore {
             .context("failed to connect llm gateway LanceDB")?;
         let store = Self {
             db,
-            cdc_outbox: LlmGatewayCdcOutbox::from_env()?,
         };
         store.bootstrap_tables().await?;
         store.ensure_default_runtime_config().await?;
@@ -183,31 +179,6 @@ impl LlmGatewayStore {
             .execute()
             .await
             .with_context(|| format!("failed to open llm gateway table `{table_name}`"))
-    }
-
-    fn record_cdc_event<T: serde::Serialize + ?Sized>(
-        &self,
-        entity: LlmGatewayCdcEntity,
-        op: LlmGatewayCdcOperation,
-        primary_key: &str,
-        payload: &T,
-    ) -> Result<()> {
-        if let Some(outbox) = &self.cdc_outbox {
-            outbox.record(entity, op, primary_key, payload)?;
-        }
-        Ok(())
-    }
-
-    fn record_cdc_append_batch<T: serde::Serialize>(
-        &self,
-        entity: LlmGatewayCdcEntity,
-        records: &[T],
-        primary_key: impl Fn(&T) -> &str,
-    ) -> Result<()> {
-        if let Some(outbox) = &self.cdc_outbox {
-            outbox.record_append_batch(entity, records, primary_key)?;
-        }
-        Ok(())
     }
 
     async fn keys_table(&self) -> Result<Table> {
@@ -469,12 +440,6 @@ impl LlmGatewayStore {
             .execute(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
             .await
             .context("failed to upsert llm gateway runtime config")?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::RuntimeConfig,
-            LlmGatewayCdcOperation::Upsert,
-            &record.id,
-            record,
-        )?;
         Ok(())
     }
 
@@ -489,12 +454,6 @@ impl LlmGatewayStore {
             .execute()
             .await
             .context("failed to create llm gateway account group")?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::AccountGroup,
-            LlmGatewayCdcOperation::Upsert,
-            &record.id,
-            record,
-        )?;
         Ok(())
     }
 
@@ -511,12 +470,6 @@ impl LlmGatewayStore {
             .execute(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
             .await
             .context("failed to upsert llm gateway account group")?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::AccountGroup,
-            LlmGatewayCdcOperation::Upsert,
-            &record.id,
-            record,
-        )?;
         Ok(())
     }
 
@@ -588,14 +541,6 @@ impl LlmGatewayStore {
             .delete(&format!("id = '{escaped}'"))
             .await
             .with_context(|| format!("failed to delete llm gateway account group `{group_id}`"))?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::AccountGroup,
-            LlmGatewayCdcOperation::Delete,
-            group_id,
-            &DeletePayload {
-                primary_key: group_id,
-            },
-        )?;
         Ok(())
     }
 
@@ -610,12 +555,6 @@ impl LlmGatewayStore {
             .execute()
             .await
             .context("failed to create llm gateway proxy config")?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::ProxyConfig,
-            LlmGatewayCdcOperation::Upsert,
-            &record.id,
-            record,
-        )?;
         Ok(())
     }
 
@@ -632,12 +571,6 @@ impl LlmGatewayStore {
             .execute(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
             .await
             .context("failed to upsert llm gateway proxy config")?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::ProxyConfig,
-            LlmGatewayCdcOperation::Upsert,
-            &record.id,
-            record,
-        )?;
         Ok(())
     }
 
@@ -681,14 +614,6 @@ impl LlmGatewayStore {
             .delete(&format!("id = '{escaped}'"))
             .await
             .with_context(|| format!("failed to delete llm gateway proxy config `{proxy_id}`"))?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::ProxyConfig,
-            LlmGatewayCdcOperation::Delete,
-            proxy_id,
-            &DeletePayload {
-                primary_key: proxy_id,
-            },
-        )?;
         Ok(())
     }
 
@@ -737,12 +662,6 @@ impl LlmGatewayStore {
             .execute(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
             .await
             .context("failed to upsert llm gateway proxy binding")?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::ProxyBinding,
-            LlmGatewayCdcOperation::Upsert,
-            &record.provider_type,
-            record,
-        )?;
         Ok(())
     }
 
@@ -756,14 +675,6 @@ impl LlmGatewayStore {
             .with_context(|| {
                 format!("failed to delete llm gateway proxy binding for `{provider_type}`")
             })?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::ProxyBinding,
-            LlmGatewayCdcOperation::Delete,
-            provider_type,
-            &DeletePayload {
-                primary_key: provider_type,
-            },
-        )?;
         Ok(())
     }
 
@@ -783,12 +694,6 @@ impl LlmGatewayStore {
             .execute(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
             .await
             .context("failed to upsert llm gateway key")?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::Key,
-            LlmGatewayCdcOperation::Upsert,
-            &record.id,
-            record,
-        )?;
         self.optimize_key_table_indices().await?;
         Ok(())
     }
@@ -802,12 +707,6 @@ impl LlmGatewayStore {
     /// Insert a brand-new gateway API key.
     pub async fn create_key(&self, record: &LlmGatewayKeyRecord) -> Result<()> {
         self.create_key_raw(record).await?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::Key,
-            LlmGatewayCdcOperation::Upsert,
-            &record.id,
-            record,
-        )?;
         self.optimize_key_table_indices().await?;
         Ok(())
     }
@@ -825,26 +724,12 @@ impl LlmGatewayStore {
     pub async fn replace_key(&self, record: &LlmGatewayKeyRecord) -> Result<()> {
         self.delete_key_raw(&record.id).await?;
         self.create_key_raw(record).await?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::Key,
-            LlmGatewayCdcOperation::Upsert,
-            &record.id,
-            record,
-        )?;
         self.optimize_key_table_indices().await
     }
 
     /// Delete a gateway key by id and rebuild indices.
     pub async fn delete_key(&self, key_id: &str) -> Result<()> {
         self.delete_key_raw(key_id).await?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::Key,
-            LlmGatewayCdcOperation::Delete,
-            key_id,
-            &DeletePayload {
-                primary_key: key_id,
-            },
-        )?;
         self.optimize_key_table_indices().await?;
         Ok(())
     }
@@ -1035,9 +920,6 @@ impl LlmGatewayStore {
         if records.is_empty() {
             return Ok(());
         }
-        self.record_cdc_append_batch(LlmGatewayCdcEntity::UsageEvent, records, |record| {
-            record.id.as_str()
-        })?;
         let lock_path = local_table_access_lock_path(self.db.uri(), LLM_GATEWAY_USAGE_EVENTS_TABLE);
         let _file_guard = acquire_table_access_file_lock(&lock_path, TableAccessMode::Shared)
             .await
@@ -1289,12 +1171,6 @@ impl LlmGatewayStore {
             .execute(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
             .await
             .context("failed to upsert llm gateway token request")?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::TokenRequest,
-            LlmGatewayCdcOperation::Upsert,
-            &record.request_id,
-            record,
-        )?;
         Ok(())
     }
 
@@ -1409,12 +1285,6 @@ impl LlmGatewayStore {
             .execute(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
             .await
             .context("failed to upsert llm gateway account contribution request")?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::AccountContributionRequest,
-            LlmGatewayCdcOperation::Upsert,
-            &record.request_id,
-            record,
-        )?;
         Ok(())
     }
 
@@ -1556,12 +1426,6 @@ impl LlmGatewayStore {
             .execute(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
             .await
             .context("failed to upsert gpt2api account contribution request")?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::Gpt2ApiAccountContributionRequest,
-            LlmGatewayCdcOperation::Upsert,
-            &record.request_id,
-            record,
-        )?;
         Ok(())
     }
 
@@ -1686,12 +1550,6 @@ impl LlmGatewayStore {
             .execute(Box::new(batches) as Box<dyn RecordBatchReader + Send>)
             .await
             .context("failed to upsert llm gateway sponsor request")?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::SponsorRequest,
-            LlmGatewayCdcOperation::Upsert,
-            &record.request_id,
-            record,
-        )?;
         Ok(())
     }
 
@@ -1748,14 +1606,6 @@ impl LlmGatewayStore {
             .with_context(|| {
                 format!("failed to delete llm gateway sponsor request `{request_id}`")
             })?;
-        self.record_cdc_event(
-            LlmGatewayCdcEntity::SponsorRequest,
-            LlmGatewayCdcOperation::Delete,
-            request_id,
-            &DeletePayload {
-                primary_key: request_id,
-            },
-        )?;
         Ok(())
     }
 
