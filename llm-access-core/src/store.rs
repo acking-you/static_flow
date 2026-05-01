@@ -2533,6 +2533,14 @@ pub struct CodexCredits {
 pub trait PublicStatusStore: Send + Sync {
     /// Current cached Codex public rate-limit status.
     async fn codex_rate_limit_status(&self) -> anyhow::Result<CodexRateLimitStatus>;
+
+    /// Persist a refreshed Codex public rate-limit snapshot.
+    async fn save_codex_rate_limit_status(
+        &self,
+        _snapshot: CodexRateLimitStatus,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 /// Empty status store used by isolated unit tests.

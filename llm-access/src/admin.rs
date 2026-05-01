@@ -24,11 +24,18 @@ use llm_access_core::{
     },
     usage::UsageEvent,
 };
-use llm_access_kiro::{auth_file::KiroAuthRecord, local_import};
+use llm_access_kiro::{
+    auth_file::KiroAuthRecord,
+    cache_policy::{
+        parse_kiro_cache_policy_override_json, resolve_effective_kiro_cache_policy,
+        uses_global_kiro_cache_policy, KiroCachePolicy,
+    },
+    local_import,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{codex_refresh, kiro_refresh, kiro_status, HttpState};
+use crate::{codex_status, kiro_refresh, kiro_status, HttpState};
 
 const MAX_CODEX_CLIENT_VERSION_LEN: usize = 64;
 const MAX_RUNTIME_CACHE_TTL_SECONDS: u64 = 86_400;
@@ -482,33 +489,6 @@ impl IntoResponse for AdminHttpError {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct KiroCachePolicy {
-    small_input_high_credit_boost: KiroSmallInputHighCreditBoostPolicy,
-    prefix_tree_credit_ratio_bands: Vec<KiroCreditRatioBand>,
-    high_credit_diagnostic_threshold: f64,
-    #[serde(default)]
-    anthropic_cache_creation_input_ratio: f64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct KiroSmallInputHighCreditBoostPolicy {
-    target_input_tokens: u64,
-    credit_start: f64,
-    credit_end: f64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct KiroCreditRatioBand {
-    credit_start: f64,
-    credit_end: f64,
-    cache_ratio_start: f64,
-    cache_ratio_end: f64,
-}
-
 pub(crate) async fn get_llm_gateway_config(
     State(state): State<HttpState>,
     headers: HeaderMap,
@@ -559,13 +539,17 @@ pub(crate) async fn list_llm_gateway_keys(
         Ok(keys) => keys,
         Err(_) => return internal_error("Failed to list llm gateway keys").into_response(),
     };
-    let auth_cache_ttl_seconds = match state.admin_config_store.get_admin_runtime_config().await {
-        Ok(config) => config.auth_cache_ttl_seconds,
+    let config = match state.admin_config_store.get_admin_runtime_config().await {
+        Ok(config) => config,
         Err(_) => return internal_error("Failed to load llm gateway config").into_response(),
+    };
+    let keys = match apply_effective_kiro_cache_policies(keys, &config) {
+        Ok(keys) => keys,
+        Err(_) => return internal_error("Failed to resolve Kiro cache policy").into_response(),
     };
     Json(AdminKeysResponse {
         keys,
-        auth_cache_ttl_seconds,
+        auth_cache_ttl_seconds: config.auth_cache_ttl_seconds,
         generated_at: now_ms(),
     })
     .into_response()
@@ -637,7 +621,10 @@ pub(crate) async fn patch_llm_gateway_key(
         Err(response) => return response.into_response(),
     };
     match state.admin_key_store.patch_admin_key(&key_id, patch).await {
-        Ok(Some(key)) => Json(key).into_response(),
+        Ok(Some(key)) => match resolve_key_effective_kiro_cache_policy(&state, key).await {
+            Ok(key) => Json(key).into_response(),
+            Err(_) => internal_error("Failed to resolve Kiro cache policy").into_response(),
+        },
         Ok(None) => not_found("LLM gateway key not found").into_response(),
         Err(_) => internal_error("Failed to update llm gateway key").into_response(),
     }
@@ -1016,14 +1003,15 @@ pub(crate) async fn list_llm_gateway_usage_events(
         return response.into_response();
     }
     let query = normalize_usage_query(request);
+    let activity = state.request_activity.snapshot(query.key_id.as_deref());
     match state.usage_analytics_store.list_usage_events(query).await {
         Ok(page) => Json(AdminUsageEventsResponse {
             total: page.total,
             offset: page.offset,
             limit: page.limit,
             has_more: page.has_more,
-            current_rpm: 0,
-            current_in_flight: 0,
+            current_rpm: activity.rpm,
+            current_in_flight: activity.in_flight,
             events: page.events.iter().map(AdminUsageEventView::from).collect(),
             generated_at: now_ms(),
         })
@@ -1061,18 +1049,64 @@ pub(crate) async fn list_llm_gateway_accounts(
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    match state
+    let accounts = match state
         .admin_codex_account_store
         .list_admin_codex_accounts()
         .await
     {
-        Ok(accounts) => Json(AdminAccountsResponse {
-            accounts,
-            generated_at: now_ms(),
-        })
-        .into_response(),
-        Err(_) => internal_error("Failed to list llm gateway accounts").into_response(),
+        Ok(accounts) => accounts,
+        Err(_) => return internal_error("Failed to list llm gateway accounts").into_response(),
+    };
+    let status = match state.public_status_store.codex_rate_limit_status().await {
+        Ok(status) => Some(status),
+        Err(_) => {
+            return internal_error("Failed to load llm gateway account status").into_response();
+        },
+    };
+    Json(AdminAccountsResponse {
+        accounts: apply_cached_codex_status_to_admin_accounts(accounts, status),
+        generated_at: now_ms(),
+    })
+    .into_response()
+}
+
+fn apply_cached_codex_status_to_admin_accounts(
+    mut accounts: Vec<core_store::AdminCodexAccount>,
+    status: Option<core_store::CodexRateLimitStatus>,
+) -> Vec<core_store::AdminCodexAccount> {
+    let Some(status) = status else {
+        return accounts;
+    };
+    let mut status_by_name = status
+        .accounts
+        .into_iter()
+        .map(|account| (account.name.clone(), account))
+        .collect::<BTreeMap<_, _>>();
+    for account in &mut accounts {
+        let Some(status_account) = status_by_name.remove(&account.name) else {
+            continue;
+        };
+        apply_codex_public_status_to_admin_account(account, status_account, status.last_checked_at);
     }
+    accounts
+}
+
+fn apply_codex_public_status_to_admin_account(
+    account: &mut core_store::AdminCodexAccount,
+    status_account: core_store::CodexPublicAccountStatus,
+    status_last_checked_at: Option<i64>,
+) {
+    account.status = status_account.status;
+    account.plan_type = status_account.plan_type;
+    account.primary_remaining_percent = status_account.primary_remaining_percent;
+    account.secondary_remaining_percent = status_account.secondary_remaining_percent;
+    account.last_refresh = status_account
+        .last_usage_checked_at
+        .or(status_last_checked_at)
+        .or(account.last_refresh);
+    account.last_usage_checked_at = status_account.last_usage_checked_at;
+    account.last_usage_success_at = status_account.last_usage_success_at;
+    account.usage_error_message = status_account.usage_error_message;
 }
 
 pub(crate) async fn import_llm_gateway_account(
@@ -1210,37 +1244,37 @@ pub(crate) async fn refresh_llm_gateway_account(
         Ok(name) => name,
         Err(response) => return response.into_response(),
     };
-    let route = match state
-        .admin_codex_account_store
-        .resolve_admin_codex_account_route(&name)
-        .await
-    {
-        Ok(Some(route)) => route,
-        Ok(None) => return not_found("LLM gateway account not found").into_response(),
-        Err(_) => return internal_error("Failed to load llm gateway account").into_response(),
-    };
-    if let Err(err) = codex_refresh::ensure_context_for_route(
-        &route,
-        state.provider_state.route_store().as_ref(),
-        true,
+    let route_store = state.provider_state.route_store();
+    let refreshed_status = match codex_status::refresh_single_codex_account_status(
+        &state.admin_config_store,
+        &state.admin_codex_account_store,
+        &route_store,
+        &state.public_status_store,
+        &name,
     )
     .await
     {
-        return (
-            StatusCode::BAD_GATEWAY,
-            Json(ErrorResponse {
-                error: format!("Failed to refresh llm gateway account: {err}"),
-                code: StatusCode::BAD_GATEWAY.as_u16(),
-            }),
-        )
-            .into_response();
-    }
+        Ok(status) => status,
+        Err(err) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    error: format!("Failed to refresh llm gateway account: {err}"),
+                    code: StatusCode::BAD_GATEWAY.as_u16(),
+                }),
+            )
+                .into_response();
+        },
+    };
     match state
         .admin_codex_account_store
         .refresh_admin_codex_account(&name, now_ms())
         .await
     {
-        Ok(Some(account)) => Json(account).into_response(),
+        Ok(Some(mut account)) => {
+            apply_codex_public_status_to_admin_account(&mut account, refreshed_status, None);
+            Json(account).into_response()
+        },
         Ok(None) => not_found("LLM gateway account not found").into_response(),
         Err(_) => internal_error("Failed to refresh llm gateway account").into_response(),
     }
@@ -1260,13 +1294,17 @@ pub(crate) async fn list_admin_kiro_keys(
             .collect(),
         Err(_) => return internal_error("Failed to list Kiro gateway keys").into_response(),
     };
-    let auth_cache_ttl_seconds = match state.admin_config_store.get_admin_runtime_config().await {
-        Ok(config) => config.auth_cache_ttl_seconds,
+    let config = match state.admin_config_store.get_admin_runtime_config().await {
+        Ok(config) => config,
         Err(_) => return internal_error("Failed to load llm gateway config").into_response(),
+    };
+    let keys = match apply_effective_kiro_cache_policies(keys, &config) {
+        Ok(keys) => keys,
+        Err(_) => return internal_error("Failed to resolve Kiro cache policy").into_response(),
     };
     Json(AdminKeysResponse {
         keys,
-        auth_cache_ttl_seconds,
+        auth_cache_ttl_seconds: config.auth_cache_ttl_seconds,
         generated_at: now_ms(),
     })
     .into_response()
@@ -1326,7 +1364,12 @@ pub(crate) async fn patch_admin_kiro_key(
         Err(response) => return response.into_response(),
     };
     match state.admin_key_store.patch_admin_key(&key_id, patch).await {
-        Ok(Some(key)) if key.provider_type == PROVIDER_KIRO => Json(key).into_response(),
+        Ok(Some(key)) if key.provider_type == PROVIDER_KIRO => {
+            match resolve_key_effective_kiro_cache_policy(&state, key).await {
+                Ok(key) => Json(key).into_response(),
+                Err(_) => internal_error("Failed to resolve Kiro cache policy").into_response(),
+            }
+        },
         Ok(_) => not_found("Kiro gateway key not found").into_response(),
         Err(_) => internal_error("Failed to update Kiro gateway key").into_response(),
     }
@@ -1395,14 +1438,15 @@ pub(crate) async fn list_admin_kiro_usage_events(
         return response.into_response();
     }
     let query = normalize_provider_usage_query(request, PROVIDER_KIRO);
+    let activity = state.request_activity.snapshot(query.key_id.as_deref());
     match state.usage_analytics_store.list_usage_events(query).await {
         Ok(page) => Json(AdminUsageEventsResponse {
             total: page.total,
             offset: page.offset,
             limit: page.limit,
             has_more: page.has_more,
-            current_rpm: 0,
-            current_in_flight: 0,
+            current_rpm: activity.rpm,
+            current_in_flight: activity.in_flight,
             events: page.events.iter().map(AdminUsageEventView::from).collect(),
             generated_at: now_ms(),
         })
@@ -2763,6 +2807,35 @@ fn validate_kiro_prefix_cache_mode(mode: &str) -> Result<(), AdminHttpError> {
     }
 }
 
+async fn resolve_key_effective_kiro_cache_policy(
+    state: &HttpState,
+    key: core_store::AdminKey,
+) -> anyhow::Result<core_store::AdminKey> {
+    let config = state.admin_config_store.get_admin_runtime_config().await?;
+    let mut keys = apply_effective_kiro_cache_policies(vec![key], &config)?;
+    Ok(keys.pop().expect("single key should remain"))
+}
+
+fn apply_effective_kiro_cache_policies(
+    mut keys: Vec<core_store::AdminKey>,
+    config: &AdminRuntimeConfig,
+) -> anyhow::Result<Vec<core_store::AdminKey>> {
+    let runtime_policy = parse_kiro_cache_policy_json(&config.kiro_cache_policy_json)?;
+    for key in keys
+        .iter_mut()
+        .filter(|key| key.provider_type == PROVIDER_KIRO)
+    {
+        let effective = resolve_effective_kiro_cache_policy(
+            &runtime_policy,
+            key.kiro_cache_policy_override_json.as_deref(),
+        )?;
+        key.effective_kiro_cache_policy_json = serde_json::to_string(&effective)?;
+        key.uses_global_kiro_cache_policy =
+            uses_global_kiro_cache_policy(key.kiro_cache_policy_override_json.as_deref());
+    }
+    Ok(keys)
+}
+
 fn normalize_key_patch(
     request: PatchLlmGatewayKeyRequest,
 ) -> Result<AdminKeyPatch, AdminHttpError> {
@@ -2805,7 +2878,7 @@ fn normalize_key_patch(
         request_min_start_interval_ms.flatten(),
     )?;
     if let Some(Some(raw)) = request.kiro_cache_policy_override_json.as_ref() {
-        parse_kiro_cache_policy_json(raw)
+        parse_kiro_cache_policy_override_json(raw)
             .map_err(|_| bad_request("kiro_cache_policy_override_json is invalid"))?;
     }
     let kiro_billable_model_multipliers_override_json =
@@ -3502,5 +3575,159 @@ fn internal_error(message: &str) -> AdminHttpError {
     AdminHttpError {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         message: message.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_key_patch_request() -> PatchLlmGatewayKeyRequest {
+        PatchLlmGatewayKeyRequest {
+            name: None,
+            status: None,
+            public_visible: None,
+            quota_billable_limit: None,
+            route_strategy: None,
+            account_group_id: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            model_name_map: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            request_max_concurrency_unlimited: false,
+            request_min_start_interval_ms_unlimited: false,
+            kiro_request_validation_enabled: None,
+            kiro_cache_estimation_enabled: None,
+            kiro_zero_cache_debug_enabled: None,
+            kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
+        }
+    }
+
+    fn sample_kiro_key(policy_override_json: Option<String>) -> core_store::AdminKey {
+        core_store::AdminKey {
+            id: "kiro-key-test".to_string(),
+            name: "Kiro test".to_string(),
+            secret: "sk-test".to_string(),
+            key_hash: "hash-test".to_string(),
+            status: KEY_STATUS_ACTIVE.to_string(),
+            provider_type: PROVIDER_KIRO.to_string(),
+            public_visible: true,
+            quota_billable_limit: 1_000_000,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            remaining_billable: 1_000_000,
+            last_used_at: None,
+            created_at: 10,
+            updated_at: 10,
+            route_strategy: Some("auto".to_string()),
+            account_group_id: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            model_name_map: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            kiro_request_validation_enabled: true,
+            kiro_cache_estimation_enabled: true,
+            kiro_zero_cache_debug_enabled: false,
+            kiro_cache_policy_override_json: policy_override_json,
+            kiro_billable_model_multipliers_override_json: None,
+            effective_kiro_cache_policy_json: "{}".to_string(),
+            uses_global_kiro_cache_policy: true,
+            effective_kiro_billable_model_multipliers_json:
+                core_store::default_kiro_billable_model_multipliers_json(),
+            uses_global_kiro_billable_model_multipliers: true,
+        }
+    }
+
+    #[test]
+    fn normalize_key_patch_accepts_partial_kiro_cache_policy_override() {
+        let mut request = empty_key_patch_request();
+        request.kiro_cache_policy_override_json = Some(Some(
+            r#"{"small_input_high_credit_boost":{"target_input_tokens":50000}}"#.to_string(),
+        ));
+
+        let patch = normalize_key_patch(request).expect("partial override should be accepted");
+
+        assert!(patch
+            .kiro_cache_policy_override_json
+            .as_ref()
+            .and_then(|value| value.as_ref())
+            .is_some_and(|json| json.contains("target_input_tokens")));
+    }
+
+    #[test]
+    fn effective_kiro_policy_merges_partial_override_with_global_policy() {
+        let config = AdminRuntimeConfig::default();
+        let keys = vec![sample_kiro_key(Some(
+            r#"{"small_input_high_credit_boost":{"target_input_tokens":50000}}"#.to_string(),
+        ))];
+
+        let keys =
+            apply_effective_kiro_cache_policies(keys, &config).expect("effective policy merge");
+        let policy: serde_json::Value =
+            serde_json::from_str(&keys[0].effective_kiro_cache_policy_json)
+                .expect("effective policy json");
+
+        assert_eq!(policy["small_input_high_credit_boost"]["target_input_tokens"], 50_000);
+        assert_eq!(policy["small_input_high_credit_boost"]["credit_start"], 1.0);
+        assert!(!keys[0].uses_global_kiro_cache_policy);
+    }
+
+    #[test]
+    fn admin_codex_accounts_include_cached_rate_limits_and_usage_errors() {
+        let accounts = vec![core_store::AdminCodexAccount {
+            name: "alpha".to_string(),
+            status: "active".to_string(),
+            account_id: Some("acct-alpha".to_string()),
+            plan_type: None,
+            primary_remaining_percent: None,
+            secondary_remaining_percent: None,
+            map_gpt53_codex_to_spark: false,
+            request_max_concurrency: Some(3),
+            request_min_start_interval_ms: Some(1000),
+            proxy_mode: "inherit".to_string(),
+            proxy_config_id: None,
+            effective_proxy_source: "binding".to_string(),
+            effective_proxy_url: Some("http://127.0.0.1:11118".to_string()),
+            effective_proxy_config_name: Some("us-home1".to_string()),
+            last_refresh: Some(900),
+            last_usage_checked_at: None,
+            last_usage_success_at: None,
+            usage_error_message: None,
+        }];
+        let status = core_store::CodexRateLimitStatus {
+            status: "degraded".to_string(),
+            refresh_interval_seconds: 300,
+            last_checked_at: Some(1200),
+            last_success_at: Some(1100),
+            source_url: "https://chatgpt.com/backend-api/wham/usage".to_string(),
+            error_message: None,
+            accounts: vec![core_store::CodexPublicAccountStatus {
+                name: "alpha".to_string(),
+                status: "active".to_string(),
+                plan_type: Some("Pro".to_string()),
+                primary_remaining_percent: Some(62.0),
+                secondary_remaining_percent: Some(39.0),
+                last_usage_checked_at: Some(1200),
+                last_usage_success_at: Some(1100),
+                usage_error_message: Some("upstream 503".to_string()),
+            }],
+            buckets: Vec::new(),
+        };
+
+        let accounts = apply_cached_codex_status_to_admin_accounts(accounts, Some(status));
+
+        assert_eq!(accounts[0].plan_type.as_deref(), Some("Pro"));
+        assert_eq!(accounts[0].primary_remaining_percent, Some(62.0));
+        assert_eq!(accounts[0].secondary_remaining_percent, Some(39.0));
+        assert_eq!(accounts[0].last_refresh, Some(1200));
+        assert_eq!(accounts[0].last_usage_checked_at, Some(1200));
+        assert_eq!(accounts[0].last_usage_success_at, Some(1100));
+        assert_eq!(accounts[0].usage_error_message.as_deref(), Some("upstream 503"));
     }
 }

@@ -21,8 +21,11 @@ use llm_access_core::{
         PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
     },
 };
+use llm_access_kiro::cache_policy::{resolve_effective_kiro_cache_policy, KiroCachePolicy};
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+
+use crate::KeyUsageRollupSummary;
 
 /// SQLite-backed control-plane store.
 pub struct SqliteControlStore {
@@ -642,6 +645,10 @@ impl SqliteControlStore {
         )?;
         let route_strategy_at_event = route_strategy_from_config(&bundle.route)?;
         let account_group_id_at_event = bundle.route.account_group_id.clone();
+        let cache_policy_json = effective_kiro_cache_policy_json(
+            &runtime_config.kiro_cache_policy_json,
+            bundle.route.kiro_cache_policy_override_json.as_deref(),
+        )?;
         let mut routes = Vec::new();
         for account_name in account_names {
             let Some(record) = self.get_kiro_account(&account_name)? else {
@@ -695,11 +702,6 @@ impl SqliteControlStore {
                 .or_else(|| optional_json_string(&auth_json, "api_region"))
                 .or_else(|| optional_json_string(&auth_json, "region"))
                 .unwrap_or_else(|| "us-east-1".to_string());
-            let cache_policy_json = bundle
-                .route
-                .kiro_cache_policy_override_json
-                .clone()
-                .unwrap_or_else(|| runtime_config.kiro_cache_policy_json.clone());
             let billable_model_multipliers_json = bundle
                 .route
                 .kiro_billable_model_multipliers_override_json
@@ -737,7 +739,7 @@ impl SqliteControlStore {
                     .clone()
                     .unwrap_or_else(|| "{}".to_string()),
                 cache_kmodels_json: runtime_config.kiro_cache_kmodels_json.clone(),
-                cache_policy_json,
+                cache_policy_json: cache_policy_json.clone(),
                 prefix_cache_mode: runtime_config.kiro_prefix_cache_mode.clone(),
                 prefix_cache_max_tokens: runtime_config.kiro_prefix_cache_max_tokens.max(0) as u64,
                 prefix_cache_entry_ttl_seconds: runtime_config
@@ -2092,6 +2094,64 @@ impl SqliteControlStore {
         if changed == 0 {
             anyhow::bail!("usage rollup not found for key `{}`", event.key_id);
         }
+        Ok(())
+    }
+
+    /// Replace hot-path key usage rollups with aggregates derived from the
+    /// canonical DuckDB usage fact table.
+    pub fn replace_key_usage_rollups(
+        &mut self,
+        rollups: &[KeyUsageRollupSummary],
+        updated_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin key usage rollup rebuild")?;
+        tx.execute(
+            "UPDATE llm_key_usage_rollups
+             SET input_uncached_tokens = 0,
+                 input_cached_tokens = 0,
+                 output_tokens = 0,
+                 billable_tokens = 0,
+                 credit_total = '0',
+                 credit_missing_events = 0,
+                 last_used_at_ms = NULL,
+                 updated_at_ms = ?1",
+            params![updated_at_ms],
+        )
+        .context("reset key usage rollups")?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "UPDATE llm_key_usage_rollups
+                     SET input_uncached_tokens = ?2,
+                         input_cached_tokens = ?3,
+                         output_tokens = ?4,
+                         billable_tokens = ?5,
+                         credit_total = ?6,
+                         credit_missing_events = ?7,
+                         last_used_at_ms = ?8,
+                         updated_at_ms = ?9
+                     WHERE key_id = ?1",
+                )
+                .context("prepare key usage rollup rebuild")?;
+            for rollup in rollups {
+                stmt.execute(params![
+                    &rollup.key_id,
+                    rollup.input_uncached_tokens.max(0),
+                    rollup.input_cached_tokens.max(0),
+                    rollup.output_tokens.max(0),
+                    rollup.billable_tokens.max(0),
+                    &rollup.credit_total,
+                    rollup.credit_missing_events.max(0),
+                    rollup.last_used_at_ms,
+                    updated_at_ms,
+                ])
+                .with_context(|| format!("replace usage rollup for key `{}`", rollup.key_id))?;
+            }
+        }
+        tx.commit().context("commit key usage rollup rebuild")?;
         Ok(())
     }
 
@@ -3659,6 +3719,17 @@ fn route_strategy_from_config(route: &KeyRouteConfig) -> anyhow::Result<RouteStr
     }
 }
 
+fn effective_kiro_cache_policy_json(
+    runtime_policy_json: &str,
+    override_json: Option<&str>,
+) -> anyhow::Result<String> {
+    let runtime_policy = serde_json::from_str::<KiroCachePolicy>(runtime_policy_json)
+        .context("parse runtime kiro cache policy")?;
+    let effective_policy = resolve_effective_kiro_cache_policy(&runtime_policy, override_json)
+        .context("resolve effective kiro cache policy")?;
+    serde_json::to_string(&effective_policy).context("serialize effective kiro cache policy")
+}
+
 fn non_negative_i64_to_u64(value: i64) -> Option<u64> {
     u64::try_from(value.max(0)).ok()
 }
@@ -4668,6 +4739,9 @@ mod tests {
         crate::initialize_sqlite_target(&conn).expect("init schema");
         let repo = super::SqliteControlStore::new(conn);
 
+        let mut config = super::RuntimeConfigRecord::default();
+        config.kiro_cache_policy_json = llm_access_core::store::default_kiro_cache_policy_json();
+        repo.upsert_runtime_config(&config).expect("upsert config");
         repo.create_admin_proxy_config(&llm_access_core::store::NewAdminProxyConfig {
             id: "proxy-kiro-route".to_string(),
             name: "kiro proxy".to_string(),
@@ -4730,7 +4804,10 @@ mod tests {
                 kiro_request_validation_enabled: true,
                 kiro_cache_estimation_enabled: true,
                 kiro_zero_cache_debug_enabled: false,
-                kiro_cache_policy_override_json: None,
+                kiro_cache_policy_override_json: Some(
+                    r#"{"small_input_high_credit_boost":{"target_input_tokens":50000}}"#
+                        .to_string(),
+                ),
                 kiro_billable_model_multipliers_override_json: Some(r#"{"sonnet":2}"#.to_string()),
             },
             &super::KeyUsageRollup {
@@ -4774,6 +4851,16 @@ mod tests {
         assert_eq!(
             route.model_name_map_json,
             r#"{"claude-haiku-4-5-20251001":"claude-sonnet-4-6"}"#
+        );
+        let effective_cache_policy: serde_json::Value =
+            serde_json::from_str(&route.cache_policy_json).expect("parse effective cache policy");
+        assert_eq!(
+            effective_cache_policy["small_input_high_credit_boost"]["target_input_tokens"],
+            serde_json::json!(50000)
+        );
+        assert_eq!(
+            effective_cache_policy["small_input_high_credit_boost"]["credit_start"],
+            serde_json::json!(1.0)
         );
         assert_eq!(route.prefix_cache_mode, llm_access_core::store::DEFAULT_KIRO_PREFIX_CACHE_MODE);
         assert_eq!(route.billable_model_multipliers_json, r#"{"sonnet":2}"#);

@@ -1640,7 +1640,10 @@ async fn handle_messages(
     event_context.request_url.push_str(public_path);
     event_context.model = Some(payload.model.clone());
     event_context.last_message_content = extract_last_message_content(payload);
-    let pure_web_search = websearch::has_web_search_tool(payload);
+    let pure_web_search = websearch::should_route_mcp_web_search(payload);
+    if !pure_web_search {
+        websearch::remove_web_search_tools(payload);
+    }
     let tool_names = payload
         .tools
         .as_ref()

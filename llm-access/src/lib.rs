@@ -1,7 +1,9 @@
 //! Standalone HTTP service shell for LLM access.
 
+mod activity;
 mod admin;
 mod codex_refresh;
+mod codex_status;
 /// Command-line and environment configuration.
 pub mod config;
 /// Local Kiro endpoints.
@@ -47,6 +49,7 @@ pub(crate) static KIRO_UPSTREAM_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mute
 #[derive(Clone)]
 struct HttpState {
     provider_state: provider::ProviderState,
+    request_activity: Arc<activity::RequestActivityTracker>,
     admin_config_store: Arc<dyn AdminConfigStore>,
     admin_key_store: Arc<dyn AdminKeyStore>,
     admin_account_group_store: Arc<dyn AdminAccountGroupStore>,
@@ -94,13 +97,16 @@ pub fn bootstrap_storage(config: &StorageConfig) -> anyhow::Result<()> {
 
 /// Build the HTTP router.
 pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
-    let provider_state = provider::ProviderState::new_with_config_store(
+    let request_activity = Arc::new(activity::RequestActivityTracker::new());
+    let provider_state = provider::ProviderState::new_with_config_store_and_activity(
         runtime.control_store(),
         runtime.provider_route_store(),
         runtime.admin_config_store(),
+        Arc::clone(&request_activity),
     );
     let state = HttpState {
         provider_state,
+        request_activity,
         admin_config_store: runtime.admin_config_store(),
         admin_key_store: runtime.admin_key_store(),
         admin_account_group_store: runtime.admin_account_group_store(),
@@ -301,6 +307,7 @@ async fn provider_entry_handler(
 /// Run the HTTP server until interrupted.
 pub async fn serve(config: ServeConfig) -> anyhow::Result<()> {
     let service_runtime = runtime::LlmAccessRuntime::from_storage_config(&config.storage).await?;
+    codex_status::spawn_codex_status_refresher(&service_runtime);
     kiro_status::spawn_kiro_status_refresher(&service_runtime);
     let shutdown_runtime = service_runtime.clone();
     let listener = tokio::net::TcpListener::bind(config.bind_addr)

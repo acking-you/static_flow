@@ -138,6 +138,8 @@ impl LlmAccessRuntime {
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let duckdb_usage = Arc::new(DuckDbUsageRepository::open_path(&config.duckdb)?);
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+        rebuild_key_usage_rollups_from_duckdb(&repository, &duckdb_usage).await?;
+        #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let (batched_usage_sink, usage_event_flusher) =
             BatchedUsageEventSink::new(duckdb_usage.clone(), runtime_config.clone());
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -299,6 +301,28 @@ fn usage_flush_config(runtime_config: &AdminRuntimeConfig) -> UsageFlushConfig {
         ),
         max_buffer_bytes: runtime_config.usage_event_flush_max_buffer_bytes.max(1) as usize,
     }
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+async fn rebuild_key_usage_rollups_from_duckdb(
+    repository: &Arc<SqliteControlRepository>,
+    duckdb_usage: &Arc<DuckDbUsageRepository>,
+) -> anyhow::Result<()> {
+    let rollups = duckdb_usage.key_usage_rollups().await?;
+    let rollup_count = rollups.len();
+    repository
+        .replace_key_usage_rollups(rollups, now_ms())
+        .await?;
+    tracing::info!(rollup_count, "rebuilt SQLite key usage rollups from DuckDB usage events");
+    Ok(())
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]

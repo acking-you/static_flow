@@ -69,32 +69,100 @@ pub struct WebSearchResult {
     pub published_date: Option<i64>,
 }
 
+const WEB_SEARCH_QUERY_PREFIX: &str = "Perform a web search for the query: ";
+
 pub fn has_web_search_tool(req: &MessagesRequest) -> bool {
     req.tools.as_ref().is_some_and(|tools| {
         tools.len() == 1 && tools.first().is_some_and(|tool| tool.is_web_search())
     })
 }
 
+pub fn should_route_mcp_web_search(req: &MessagesRequest) -> bool {
+    has_web_search_tool(req)
+        && latest_message_is_user(req)
+        && (has_prefixed_search_query(req) || tool_choice_forces_web_search(req))
+}
+
+pub fn remove_web_search_tools(req: &mut MessagesRequest) -> bool {
+    let Some(tools) = req.tools.as_mut() else {
+        return false;
+    };
+    let original_len = tools.len();
+    tools.retain(|tool| !tool.is_web_search());
+    let removed = tools.len() != original_len;
+    if tools.is_empty() {
+        req.tools = None;
+    }
+    if removed && tool_choice_forces_web_search(req) {
+        req._tool_choice = None;
+    }
+    removed
+}
+
 pub fn extract_search_query(req: &MessagesRequest) -> Option<String> {
-    let first_msg = req.messages.first()?;
-    let text = match &first_msg.content {
-        serde_json::Value::String(s) => s.clone(),
+    let text = latest_user_message_text(req)?;
+
+    let query = if let Some(stripped) = text.strip_prefix(WEB_SEARCH_QUERY_PREFIX) {
+        stripped.to_string()
+    } else {
+        text
+    };
+    let query = query.trim().to_string();
+    (!query.is_empty()).then_some(query)
+}
+
+fn latest_message_is_user(req: &MessagesRequest) -> bool {
+    req.messages
+        .last()
+        .is_some_and(|message| message.role == "user")
+}
+
+fn latest_user_message_text(req: &MessagesRequest) -> Option<String> {
+    let message = req
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")?;
+    message_text(message)
+}
+
+fn message_text(message: &super::types::Message) -> Option<String> {
+    match &message.content {
+        serde_json::Value::String(s) => Some(s.clone()),
         serde_json::Value::Array(arr) => {
             let first_block = arr.first()?;
             if first_block.get("type")?.as_str()? == "text" {
-                first_block.get("text")?.as_str()?.to_string()
+                Some(first_block.get("text")?.as_str()?.to_string())
             } else {
-                return None;
+                None
             }
         },
-        _ => return None,
-    };
+        _ => None,
+    }
+}
 
-    const PREFIX: &str = "Perform a web search for the query: ";
-    let query =
-        if let Some(stripped) = text.strip_prefix(PREFIX) { stripped.to_string() } else { text };
-    let query = query.trim().to_string();
-    (!query.is_empty()).then_some(query)
+fn has_prefixed_search_query(req: &MessagesRequest) -> bool {
+    latest_user_message_text(req)
+        .as_deref()
+        .is_some_and(|text| text.trim_start().starts_with(WEB_SEARCH_QUERY_PREFIX))
+}
+
+fn tool_choice_forces_web_search(req: &MessagesRequest) -> bool {
+    let Some(tool_choice) = req
+        ._tool_choice
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+    else {
+        return false;
+    };
+    match tool_choice.get("type").and_then(serde_json::Value::as_str) {
+        Some("tool") => tool_choice
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|name| name == "web_search"),
+        Some("any") => true,
+        _ => false,
+    }
 }
 
 pub fn create_mcp_request(query: &str) -> (String, McpRequest) {
@@ -385,6 +453,156 @@ mod tests {
             serde_json::json!("test"),
         );
         assert!(has_web_search_tool(&req));
+    }
+
+    #[test]
+    fn auto_web_search_tool_does_not_route_to_mcp() {
+        let mut req = base_request(
+            Some(vec![Tool {
+                tool_type: Some("web_search_20250305".to_string()),
+                name: "web_search".to_string(),
+                description: String::new(),
+                input_schema: Default::default(),
+                max_uses: Some(8),
+            }]),
+            serde_json::json!([{"type": "text", "text": "answer from your model normally"}]),
+        );
+        req._tool_choice = Some(serde_json::json!({"type": "auto"}));
+        assert!(!should_route_mcp_web_search(&req));
+    }
+
+    #[test]
+    fn prefixed_web_search_request_routes_to_mcp() {
+        let req = base_request(
+            Some(vec![Tool {
+                tool_type: Some("web_search_20250305".to_string()),
+                name: "web_search".to_string(),
+                description: String::new(),
+                input_schema: Default::default(),
+                max_uses: Some(8),
+            }]),
+            serde_json::json!([{
+                "type": "text",
+                "text": "Perform a web search for the query: static flow kiro"
+            }]),
+        );
+        assert!(should_route_mcp_web_search(&req));
+    }
+
+    #[test]
+    fn forced_web_search_tool_choice_routes_to_mcp() {
+        let mut req = base_request(
+            Some(vec![Tool {
+                tool_type: Some("web_search_20250305".to_string()),
+                name: "web_search".to_string(),
+                description: String::new(),
+                input_schema: Default::default(),
+                max_uses: Some(8),
+            }]),
+            serde_json::json!([{"type": "text", "text": "static flow kiro"}]),
+        );
+        req._tool_choice = Some(serde_json::json!({"type": "tool", "name": "web_search"}));
+        assert!(should_route_mcp_web_search(&req));
+    }
+
+    #[test]
+    fn existing_server_web_search_transcript_does_not_route_to_mcp_again() {
+        let mut req = base_request(
+            Some(vec![Tool {
+                tool_type: Some("web_search_20250305".to_string()),
+                name: "web_search".to_string(),
+                description: String::new(),
+                input_schema: Default::default(),
+                max_uses: Some(8),
+            }]),
+            serde_json::json!([{
+                "type": "text",
+                "text": "Perform a web search for the query: static flow kiro"
+            }]),
+        );
+        req.messages.push(Message {
+            role: "assistant".to_string(),
+            content: serde_json::json!([{
+                "type": "server_tool_use",
+                "name": "web_search",
+                "id": "srvtoolu_test",
+                "input": {"query": "static flow kiro"}
+            }]),
+        });
+        assert!(!should_route_mcp_web_search(&req));
+    }
+
+    #[test]
+    fn latest_user_prefixed_search_routes_after_prior_server_transcript() {
+        let mut req = base_request(
+            Some(vec![Tool {
+                tool_type: Some("web_search_20250305".to_string()),
+                name: "web_search".to_string(),
+                description: String::new(),
+                input_schema: Default::default(),
+                max_uses: Some(8),
+            }]),
+            serde_json::json!("first turn"),
+        );
+        req.messages.push(Message {
+            role: "assistant".to_string(),
+            content: serde_json::json!([
+                {"type": "server_tool_use", "name": "web_search", "id": "srvtoolu_test", "input": {"query": "old query"}},
+                {"type": "web_search_tool_result", "content": []}
+            ]),
+        });
+        req.messages.push(Message {
+            role: "user".to_string(),
+            content: serde_json::json!([{
+                "type": "text",
+                "text": "Perform a web search for the query: new query"
+            }]),
+        });
+
+        assert!(should_route_mcp_web_search(&req));
+    }
+
+    #[test]
+    fn extracts_query_from_latest_user_turn() {
+        let mut req = base_request(
+            None,
+            serde_json::json!([{
+                "type": "text",
+                "text": "Perform a web search for the query: old query"
+            }]),
+        );
+        req.messages.push(Message {
+            role: "assistant".to_string(),
+            content: serde_json::json!("old answer"),
+        });
+        req.messages.push(Message {
+            role: "user".to_string(),
+            content: serde_json::json!([{
+                "type": "text",
+                "text": "Perform a web search for the query: new query"
+            }]),
+        });
+
+        assert_eq!(extract_search_query(&req).as_deref(), Some("new query"));
+    }
+
+    #[test]
+    fn remove_web_search_tools_clears_empty_tools_and_forced_choice() {
+        let mut req = base_request(
+            Some(vec![Tool {
+                tool_type: Some("web_search_20250305".to_string()),
+                name: "web_search".to_string(),
+                description: String::new(),
+                input_schema: Default::default(),
+                max_uses: Some(8),
+            }]),
+            serde_json::json!("test"),
+        );
+        req._tool_choice = Some(serde_json::json!({"type": "tool", "name": "web_search"}));
+
+        assert!(remove_web_search_tools(&mut req));
+        assert!(req.tools.is_none());
+        assert!(req._tool_choice.is_none());
     }
 
     #[test]

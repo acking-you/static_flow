@@ -28,7 +28,7 @@ use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use tokio::task;
 
-use crate::sqlite::SqliteControlStore;
+use crate::{sqlite::SqliteControlStore, KeyUsageRollupSummary};
 
 /// Thread-safe SQLite control repository.
 pub struct SqliteControlRepository {
@@ -51,12 +51,37 @@ impl SqliteControlRepository {
         })?;
         Ok(Self::new(conn))
     }
+
+    /// Replace SQLite key rollups with aggregates loaded from analytics
+    /// storage.
+    pub async fn replace_key_usage_rollups(
+        &self,
+        rollups: Vec<KeyUsageRollupSummary>,
+        updated_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let mut store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.replace_key_usage_rollups(&rollups, updated_at_ms)
+        })
+        .await
+        .context("sqlite control repository key usage rollup rebuild task failed")?
+    }
 }
 
 fn hash_bearer_secret(secret: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(secret.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
 }
 
 #[async_trait]
@@ -1070,6 +1095,22 @@ impl PublicStatusStore for SqliteControlRepository {
         })
         .await
         .context("sqlite control repository codex status task failed")?
+    }
+
+    async fn save_codex_rate_limit_status(
+        &self,
+        snapshot: CodexRateLimitStatus,
+    ) -> anyhow::Result<()> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            let updated_at_ms = snapshot.last_checked_at.unwrap_or_else(now_ms);
+            store.upsert_codex_rate_limit_status(&snapshot, updated_at_ms)
+        })
+        .await
+        .context("sqlite control repository codex status save task failed")?
     }
 }
 

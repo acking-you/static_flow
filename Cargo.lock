@@ -6141,6 +6141,7 @@ dependencies = [
  "async-trait",
  "duckdb",
  "llm-access-core",
+ "llm-access-kiro",
  "llm-access-migrations",
  "rusqlite",
  "serde",

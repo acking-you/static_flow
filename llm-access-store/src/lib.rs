@@ -11,6 +11,28 @@ use std::path::Path;
 
 use anyhow::Context;
 
+/// Aggregated usage counters for one API key, derived from the DuckDB usage
+/// fact table and written back into SQLite's operational rollup table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyUsageRollupSummary {
+    /// API key id.
+    pub key_id: String,
+    /// Total uncached input tokens.
+    pub input_uncached_tokens: i64,
+    /// Total cached input tokens.
+    pub input_cached_tokens: i64,
+    /// Total output tokens.
+    pub output_tokens: i64,
+    /// Total billable tokens.
+    pub billable_tokens: i64,
+    /// Total provider credit usage as a decimal string.
+    pub credit_total: String,
+    /// Number of usage events without provider credit usage.
+    pub credit_missing_events: i64,
+    /// Latest usage event timestamp.
+    pub last_used_at_ms: Option<i64>,
+}
+
 /// Initialize a SQLite control-plane database at `path`.
 pub fn initialize_sqlite_target_path(path: impl AsRef<Path>) -> anyhow::Result<()> {
     let path = path.as_ref();

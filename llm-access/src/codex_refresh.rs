@@ -252,7 +252,9 @@ fn optional_string(value: &Value, fields: &[&str]) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn provider_client(proxy: Option<&ProviderProxyConfig>) -> anyhow::Result<reqwest::Client> {
+pub(crate) fn provider_client(
+    proxy: Option<&ProviderProxyConfig>,
+) -> anyhow::Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder();
     if let Some(proxy_config) = proxy {
         let mut proxy = reqwest::Proxy::all(&proxy_config.proxy_url)?;

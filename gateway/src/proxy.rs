@@ -1,6 +1,14 @@
 //! Gateway proxy runtime.
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 
 use async_trait::async_trait;
 use pingora_core::{upstreams::peer::HttpPeer, Error, ErrorType::InternalError, Result};
@@ -13,8 +21,34 @@ use crate::{
     config::{GatewayConfig, GatewayConfigStore},
 };
 
+static ROUTING_COUNTER: AtomicU64 = AtomicU64::new(1);
+
 fn internal_error(message: impl Into<String>) -> pingora_core::BError {
     Error::explain(InternalError, message.into())
+}
+
+fn request_routing_key(
+    request_id: &str,
+    trace_id: &str,
+    remote_addr: &str,
+    method: &str,
+    path: &str,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    request_id.hash(&mut hasher);
+    trace_id.hash(&mut hasher);
+    remote_addr.hash(&mut hasher);
+    method.hash(&mut hasher);
+    path.hash(&mut hasher);
+    ROUTING_COUNTER
+        .fetch_add(1, Ordering::Relaxed)
+        .hash(&mut hasher);
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Per-request proxy metadata carried across Pingora filter phases.
@@ -73,8 +107,6 @@ impl ProxyHttp for StaticFlowGateway {
 
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
         ctx.config = self.config.snapshot();
-        ctx.active_upstream = ctx.config.active_upstream_name().to_string();
-        ctx.upstream_addr = ctx.config.active_upstream_addr().unwrap_or("").to_string();
         let req = session.req_header();
         ctx.request_id = read_or_generate_id(
             req.headers
@@ -95,6 +127,19 @@ impl ProxyHttp for StaticFlowGateway {
         ctx.method = req.method.as_str().to_string();
         ctx.path = req.uri.path().to_string();
         ctx.started_at = Instant::now();
+        let route_key = request_routing_key(
+            &ctx.request_id,
+            &ctx.trace_id,
+            &ctx.remote_addr,
+            &ctx.method,
+            &ctx.path,
+        );
+        let selected = ctx
+            .config
+            .select_upstream(route_key)
+            .map_err(|err| internal_error(err.to_string()))?;
+        ctx.active_upstream = selected.name;
+        ctx.upstream_addr = selected.addr;
         Ok(false)
     }
 
@@ -103,12 +148,14 @@ impl ProxyHttp for StaticFlowGateway {
         _session: &mut Session,
         ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
-        ctx.active_upstream = ctx.config.active_upstream_name().to_string();
-        ctx.upstream_addr = ctx
-            .config
-            .active_upstream_addr()
-            .map_err(|err| internal_error(err.to_string()))?
-            .to_string();
+        if ctx.upstream_addr.is_empty() {
+            let selected = ctx
+                .config
+                .select_upstream(0)
+                .map_err(|err| internal_error(err.to_string()))?;
+            ctx.active_upstream = selected.name;
+            ctx.upstream_addr = selected.addr;
+        }
 
         let mut peer = Box::new(HttpPeer::new(ctx.upstream_addr.as_str(), false, String::new()));
         peer.options.connection_timeout = Some(ctx.config.connect_timeout());

@@ -376,6 +376,40 @@ fn normalize_message(
                     continue;
                 }
 
+                if message.role == "assistant" && block_type == "server_tool_use" {
+                    push_normalization_event(
+                        events,
+                        message_index,
+                        &message.role,
+                        Some(block_index),
+                        Some(block_type),
+                        "drop_content_block",
+                        "server_tool_use_not_representable_in_kiro_history",
+                    );
+                    normalized_any = true;
+                    continue;
+                }
+
+                if message.role == "assistant" && block_type == "web_search_tool_result" {
+                    if let Some(text) = web_search_tool_result_text(obj) {
+                        retained_items.push(serde_json::json!({
+                            "type": "text",
+                            "text": text
+                        }));
+                    }
+                    push_normalization_event(
+                        events,
+                        message_index,
+                        &message.role,
+                        Some(block_index),
+                        Some(block_type),
+                        "rewrite_content_block",
+                        "web_search_tool_result_converted_to_text",
+                    );
+                    normalized_any = true;
+                    continue;
+                }
+
                 let drop_reason = match block_type {
                     "text" => obj
                         .get("text")
@@ -437,6 +471,46 @@ fn normalize_message(
         },
         _ => Ok(Some(message.clone())),
     }
+}
+
+fn web_search_tool_result_text(
+    block: &serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
+    let content = block.get("content")?;
+    let Some(items) = content.as_array() else {
+        return Some(format!("Web search results:\n{content}"));
+    };
+    let mut lines = Vec::new();
+    for item in items {
+        let Some(object) = item.as_object() else {
+            continue;
+        };
+        if object.get("type").and_then(serde_json::Value::as_str) != Some("web_search_result") {
+            continue;
+        }
+        let title = object
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Untitled");
+        let url = object
+            .get("url")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let snippet = object
+            .get("encrypted_content")
+            .or_else(|| object.get("snippet"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let mut entry = format!("Result: {title}");
+        if !url.is_empty() {
+            entry.push_str(&format!("\nURL: {url}"));
+        }
+        if !snippet.is_empty() {
+            entry.push_str(&format!("\nSnippet: {snippet}"));
+        }
+        lines.push(entry);
+    }
+    (!lines.is_empty()).then(|| format!("Web search results:\n{}", lines.join("\n\n")))
 }
 
 fn normalize_user_document_block(
@@ -3382,6 +3456,51 @@ mod tests {
         assert!(current.content.is_empty());
         assert_eq!(current.user_input_message_context.tool_results.len(), 1);
         assert_eq!(current.user_input_message_context.tool_results[0].tool_use_id, "tool-1");
+    }
+
+    #[test]
+    fn convert_request_normalizes_server_web_search_history() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Find StaticFlow"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {"type": "text", "text": "I'll search for StaticFlow."},
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_test",
+                        "name": "web_search",
+                        "input": {"query": "StaticFlow"}
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "content": [{
+                            "type": "web_search_result",
+                            "title": "StaticFlow",
+                            "url": "https://example.com/staticflow",
+                            "encrypted_content": "StaticFlow result summary"
+                        }]
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Use that result."),
+            },
+        ]);
+
+        let result = convert_request(&req).expect("server web_search history should normalize");
+        assert_eq!(result.conversation_state.history.len(), 2);
+        let assistant = match &result.conversation_state.history[1] {
+            Message::Assistant(message) => &message.assistant_response_message,
+            other => panic!("expected assistant history entry, got {other:?}"),
+        };
+        assert!(assistant.content.contains("I'll search for StaticFlow."));
+        assert!(assistant.content.contains("StaticFlow result summary"));
+        assert!(assistant.tool_uses.is_none());
     }
 
     #[test]

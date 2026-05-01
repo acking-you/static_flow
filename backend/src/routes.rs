@@ -13,8 +13,8 @@ use tower_http::{
 };
 
 use crate::{
-    behavior_analytics, gpt2api_rs, handlers, health, kiro_gateway, llm_gateway, request_context,
-    seo, state::AppState,
+    behavior_analytics, gpt2api_rs, handlers, health, kiro_gateway, llm_access_proxy, llm_gateway,
+    request_context, seo, state::AppState,
 };
 
 #[cfg(feature = "local-media")]
@@ -688,6 +688,7 @@ pub fn create_router(state: AppState) -> Router {
         .merge(seo_router)
         .merge(gpt2api_frontend_router)
         .fallback_service(spa_fallback.fallback(get(spa_index_fallback)))
+        .layer(middleware::from_fn(llm_access_proxy::proxy_middleware))
         .layer(middleware::from_fn(request_context::request_context_middleware))
         .layer(middleware::from_fn_with_state(
             behavior_state,

@@ -554,6 +554,7 @@ impl AppState {
             kiro_conversation_anchor_ttl_seconds,
         }));
         let auths_dir = crate::llm_gateway::resolve_auths_dir();
+        let external_llm_access = crate::llm_access_proxy::is_external_mode_enabled();
         let account_pool = Arc::new(crate::llm_gateway::AccountPool::new(auths_dir.clone()));
         let loaded_accounts = account_pool.load_all().await.unwrap_or_else(|err| {
             tracing::warn!("failed to load codex accounts from {}: {err:#}", auths_dir.display());
@@ -562,6 +563,7 @@ impl AppState {
         tracing::info!(
             auths_dir = %auths_dir.display(),
             loaded_accounts,
+            external_llm_access,
             "initialized codex account pool"
         );
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -572,8 +574,14 @@ impl AppState {
             upstream_proxy_registry.clone(),
             shutdown_rx.clone(),
         )?);
-        llm_gateway.rebuild_usage_rollups().await?;
-        llm_gateway.rebuild_usage_event_counts().await?;
+        if external_llm_access {
+            tracing::info!(
+                "external llm-access mode enabled; skipping backend-local usage rollup rebuild"
+            );
+        } else {
+            llm_gateway.rebuild_usage_rollups().await?;
+            llm_gateway.rebuild_usage_event_counts().await?;
+        }
         let kiro_gateway = Arc::new(
             KiroGatewayRuntimeState::new(
                 llm_gateway_store.clone(),
@@ -635,65 +643,71 @@ impl AppState {
         );
         #[cfg(feature = "local-media")]
         let media_proxy = MediaProxyState::from_env()?;
-        let llm_gateway_warmup = llm_gateway.clone();
-        let llm_gateway_warmup_runtime_config = llm_gateway_runtime_config.clone();
-        let llm_gateway_warmup_proxy_registry = upstream_proxy_registry.clone();
-        let mut llm_gateway_warmup_shutdown_rx = shutdown_rx.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                _ = llm_gateway_warmup_shutdown_rx.changed() => {
-                    if *llm_gateway_warmup_shutdown_rx.borrow() {
-                        tracing::info!("Initial LLM gateway warmup cancelled during shutdown");
+        if external_llm_access {
+            tracing::info!(
+                "external llm-access mode enabled; skipping backend-local Codex/Kiro refresh tasks"
+            );
+        } else {
+            let llm_gateway_warmup = llm_gateway.clone();
+            let llm_gateway_warmup_runtime_config = llm_gateway_runtime_config.clone();
+            let llm_gateway_warmup_proxy_registry = upstream_proxy_registry.clone();
+            let mut llm_gateway_warmup_shutdown_rx = shutdown_rx.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = llm_gateway_warmup_shutdown_rx.changed() => {
+                        if *llm_gateway_warmup_shutdown_rx.borrow() {
+                            tracing::info!("Initial LLM gateway warmup cancelled during shutdown");
+                        }
                     }
+                    _ = async {
+                        if let Err(err) = crate::llm_gateway::token_refresh::refresh_all_accounts_once(
+                            llm_gateway_warmup.account_pool.as_ref(),
+                            llm_gateway_warmup_proxy_registry.as_ref(),
+                            llm_gateway_warmup_runtime_config.as_ref(),
+                        )
+                        .await
+                        {
+                            tracing::warn!("Initial Codex account usage refresh failed: {err:#}");
+                        }
+                        if let Err(err) =
+                            crate::llm_gateway::refresh_public_rate_limit_status(&llm_gateway_warmup)
+                                .await
+                        {
+                            tracing::warn!("Initial LLM gateway rate-limit refresh failed: {err:#}");
+                        }
+                    } => {}
                 }
-                _ = async {
-                    if let Err(err) = crate::llm_gateway::token_refresh::refresh_all_accounts_once(
-                        llm_gateway_warmup.account_pool.as_ref(),
-                        llm_gateway_warmup_proxy_registry.as_ref(),
-                        llm_gateway_warmup_runtime_config.as_ref(),
-                    )
-                    .await
-                    {
-                        tracing::warn!("Initial Codex account usage refresh failed: {err:#}");
+            });
+            crate::llm_gateway::spawn_public_rate_limit_refresher(
+                llm_gateway.clone(),
+                shutdown_rx.clone(),
+            );
+            let kiro_gateway_warmup = kiro_gateway.clone();
+            let mut kiro_gateway_warmup_shutdown_rx = shutdown_rx.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = kiro_gateway_warmup_shutdown_rx.changed() => {
+                        if *kiro_gateway_warmup_shutdown_rx.borrow() {
+                            tracing::info!("Initial Kiro warmup cancelled during shutdown");
+                        }
                     }
-                    if let Err(err) =
-                        crate::llm_gateway::refresh_public_rate_limit_status(&llm_gateway_warmup)
-                            .await
-                    {
-                        tracing::warn!("Initial LLM gateway rate-limit refresh failed: {err:#}");
-                    }
-                } => {}
-            }
-        });
-        crate::llm_gateway::spawn_public_rate_limit_refresher(
-            llm_gateway.clone(),
-            shutdown_rx.clone(),
-        );
-        let kiro_gateway_warmup = kiro_gateway.clone();
-        let mut kiro_gateway_warmup_shutdown_rx = shutdown_rx.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                _ = kiro_gateway_warmup_shutdown_rx.changed() => {
-                    if *kiro_gateway_warmup_shutdown_rx.borrow() {
-                        tracing::info!("Initial Kiro warmup cancelled during shutdown");
-                    }
+                    _ = async {
+                        if let Err(err) =
+                            crate::kiro_gateway::refresh_cached_status(&kiro_gateway_warmup).await
+                        {
+                            tracing::warn!("Initial Kiro cached status refresh failed: {err:#}");
+                        }
+                    } => {}
                 }
-                _ = async {
-                    if let Err(err) =
-                        crate::kiro_gateway::refresh_cached_status(&kiro_gateway_warmup).await
-                    {
-                        tracing::warn!("Initial Kiro cached status refresh failed: {err:#}");
-                    }
-                } => {}
-            }
-        });
-        crate::kiro_gateway::spawn_status_refresher(kiro_gateway.clone(), shutdown_rx.clone());
-        crate::llm_gateway::spawn_account_refresh_task(
-            account_pool,
-            upstream_proxy_registry.clone(),
-            llm_gateway_runtime_config.clone(),
-            shutdown_rx.clone(),
-        );
+            });
+            crate::kiro_gateway::spawn_status_refresher(kiro_gateway.clone(), shutdown_rx.clone());
+            crate::llm_gateway::spawn_account_refresh_task(
+                account_pool,
+                upstream_proxy_registry.clone(),
+                llm_gateway_runtime_config.clone(),
+                shutdown_rx.clone(),
+            );
+        }
 
         table_maintenance::spawn_table_maintenance_loop(
             TableCompactorStores {

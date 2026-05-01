@@ -34,6 +34,7 @@ fn main() -> Result<()> {
         println!("read_idle_timeout_ms={}", gateway_config.read_idle_timeout_ms());
         println!("write_idle_timeout_ms={}", gateway_config.write_idle_timeout_ms());
         println!("downstream_h2c={}", gateway_config.downstream_h2c());
+        println!("routing_policy={}", gateway_config.routing_policy_name());
         println!(
             "log_root={}",
             std::env::var("STATICFLOW_LOG_DIR").unwrap_or_else(|_| "tmp/runtime-logs".to_string())
@@ -61,6 +62,7 @@ fn main() -> Result<()> {
     let read_idle_timeout_ms = gateway_config.read_idle_timeout_ms();
     let write_idle_timeout_ms = gateway_config.write_idle_timeout_ms();
     let downstream_h2c = gateway_config.downstream_h2c();
+    let routing_policy = gateway_config.routing_policy_name();
     let retry_count = gateway_config.retry_count();
     let gateway_config = Arc::new(GatewayConfigStore::load(&conf_path)?);
     install_reload_signal_handler(Arc::clone(&gateway_config))?;
@@ -73,6 +75,7 @@ fn main() -> Result<()> {
         read_idle_timeout_ms,
         write_idle_timeout_ms,
         downstream_h2c,
+        routing_policy,
         retry_count,
         max_proxy_tries,
         external_supervisor,
@@ -113,6 +116,7 @@ fn install_reload_signal_handler(config_store: Arc<GatewayConfigStore>) -> Resul
                                 read_idle_timeout_ms = config.read_idle_timeout_ms(),
                                 write_idle_timeout_ms = config.write_idle_timeout_ms(),
                                 downstream_h2c = config.downstream_h2c(),
+                                routing_policy = config.routing_policy_name(),
                                 retry_count = config.retry_count(),
                                 conf = %config_store.path().display(),
                                 "reloaded gateway config from disk"

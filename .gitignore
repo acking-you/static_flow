@@ -1,5 +1,6 @@
 # Rust 构建产物
 target/
+/target
 **/target/
 
 # Trunk 构建产物

@@ -73,7 +73,7 @@ use llm_access_kiro::{
 };
 use serde_json::Value;
 
-use crate::{codex_refresh, kiro_refresh, kiro_status};
+use crate::{activity::RequestActivityTracker, codex_refresh, kiro_refresh, kiro_status};
 
 const MAX_PROVIDER_PROXY_BODY_BYTES: usize = 32 * 1024 * 1024;
 const DEFAULT_WIRE_ORIGINATOR: &str = "codex_cli_rs";
@@ -208,6 +208,7 @@ pub struct ProviderState {
     kiro_cache_simulator: Arc<KiroCacheSimulator>,
     request_limiter: Arc<RequestLimiter>,
     kiro_request_scheduler: Arc<KiroRequestScheduler>,
+    request_activity: Arc<RequestActivityTracker>,
 }
 
 /// Runtime dependencies passed from the authenticated provider entrypoint into
@@ -238,11 +239,26 @@ impl ProviderState {
         route_store: Arc<dyn ProviderRouteStore>,
         admin_config_store: Arc<dyn AdminConfigStore>,
     ) -> Self {
+        Self::new_with_config_store_and_activity(
+            control_store,
+            route_store,
+            admin_config_store,
+            Arc::new(RequestActivityTracker::new()),
+        )
+    }
+
+    pub(crate) fn new_with_config_store_and_activity(
+        control_store: Arc<dyn ControlStore>,
+        route_store: Arc<dyn ProviderRouteStore>,
+        admin_config_store: Arc<dyn AdminConfigStore>,
+        request_activity: Arc<RequestActivityTracker>,
+    ) -> Self {
         Self::with_dispatcher_and_config_store(
             control_store,
             route_store,
             admin_config_store,
             Arc::new(DefaultProviderDispatcher),
+            request_activity,
         )
     }
 
@@ -257,6 +273,7 @@ impl ProviderState {
             route_store,
             Arc::new(EmptyAdminConfigStore),
             dispatcher,
+            Arc::new(RequestActivityTracker::new()),
         )
     }
 
@@ -265,6 +282,7 @@ impl ProviderState {
         route_store: Arc<dyn ProviderRouteStore>,
         admin_config_store: Arc<dyn AdminConfigStore>,
         dispatcher: Arc<dyn ProviderDispatcher>,
+        request_activity: Arc<RequestActivityTracker>,
     ) -> Self {
         Self {
             control_store,
@@ -274,6 +292,7 @@ impl ProviderState {
             kiro_cache_simulator: Arc::new(KiroCacheSimulator::default()),
             request_limiter: Arc::new(RequestLimiter::default()),
             kiro_request_scheduler: KiroRequestScheduler::new(),
+            request_activity,
         }
     }
 
@@ -1250,6 +1269,10 @@ async fn dispatch_kiro_proxy(
         );
     }
     let effective_model = payload.model.clone();
+    let route_mcp_web_search = websearch::should_route_mcp_web_search(&payload);
+    if !route_mcp_web_search {
+        websearch::remove_web_search_tools(&mut payload);
+    }
     let request_input_tokens = token::count_all_tokens(
         payload.model.clone(),
         payload.system.clone(),
@@ -1257,7 +1280,7 @@ async fn dispatch_kiro_proxy(
         payload.tools.clone(),
     ) as i32;
     override_kiro_thinking_from_model_name(&mut payload);
-    if websearch::has_web_search_tool(&payload) {
+    if route_mcp_web_search {
         return dispatch_kiro_websearch(KiroWebsearchDispatch {
             key,
             payload,
@@ -3350,6 +3373,7 @@ pub async fn provider_entry(state: ProviderState, request: Request<Body>) -> Res
         return quota_exhausted_response(&key);
     }
 
+    let _activity_guard = state.request_activity.start(&key.key_id);
     state
         .dispatcher
         .dispatch(key, request, state.dispatch_deps())
@@ -3477,7 +3501,7 @@ fn normalize_codex_client_version(raw: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
-fn resolve_codex_client_version(raw: Option<&str>) -> String {
+pub(crate) fn resolve_codex_client_version(raw: Option<&str>) -> String {
     raw.and_then(normalize_codex_client_version)
         .unwrap_or_else(|| llm_access_core::store::DEFAULT_CODEX_CLIENT_VERSION.to_string())
 }
@@ -4289,6 +4313,7 @@ mod tests {
         },
     };
     use serde_json::json;
+    use tokio::sync::Notify;
 
     use super::ProviderDispatcher;
 
@@ -4396,6 +4421,12 @@ mod tests {
     #[derive(Default)]
     struct CapturingDispatcher {
         seen: Mutex<Vec<(String, String)>>,
+    }
+
+    #[derive(Default)]
+    struct BlockingDispatcher {
+        entered: Notify,
+        release: Notify,
     }
 
     #[derive(Clone)]
@@ -4574,6 +4605,20 @@ mod tests {
                 .lock()
                 .expect("dispatcher state")
                 .push((key.key_id, request.uri().path().to_string()));
+            (StatusCode::ACCEPTED, "dispatched").into_response()
+        }
+    }
+
+    #[async_trait]
+    impl ProviderDispatcher for BlockingDispatcher {
+        async fn dispatch(
+            &self,
+            _key: AuthenticatedKey,
+            _request: Request<Body>,
+            _deps: super::ProviderDispatchDeps,
+        ) -> Response {
+            self.entered.notify_one();
+            self.release.notified().await;
             (StatusCode::ACCEPTED, "dispatched").into_response()
         }
     }
@@ -5262,6 +5307,31 @@ mod tests {
             super::provider_entry(state, request_with_bearer(Some("Bearer valid-secret"))).await;
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn provider_entry_tracks_rpm_and_in_flight_for_authenticated_requests() {
+        let dispatcher = Arc::new(BlockingDispatcher::default());
+        let state = test_state_with_dispatcher(dispatcher.clone());
+        let request =
+            request_with_x_api_key_to_path("/api/kiro-gateway/v1/messages", Some("valid-secret"));
+        let task_state = state.clone();
+
+        let handle = tokio::spawn(async move { super::provider_entry(task_state, request).await });
+        dispatcher.entered.notified().await;
+
+        let total = state.request_activity.snapshot(None);
+        let key = state.request_activity.snapshot(Some("key-1"));
+        assert_eq!(total.rpm, 1);
+        assert_eq!(total.in_flight, 1);
+        assert_eq!(key.rpm, 1);
+        assert_eq!(key.in_flight, 1);
+
+        dispatcher.release.notify_one();
+        let response = handle.await.expect("provider task");
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(state.request_activity.snapshot(Some("key-1")).in_flight, 0);
+        assert_eq!(state.request_activity.snapshot(Some("key-1")).rpm, 1);
     }
 
     #[tokio::test]

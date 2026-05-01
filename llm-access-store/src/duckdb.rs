@@ -18,6 +18,9 @@ use llm_access_core::{
 #[cfg(feature = "duckdb-runtime")]
 use tokio::task;
 
+#[cfg(feature = "duckdb-runtime")]
+use crate::KeyUsageRollupSummary;
+
 /// One row for the DuckDB `usage_events` wide fact table.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageEventRow {
@@ -369,6 +372,49 @@ impl DuckDbUsageRepository {
     fn open_conn(path: &Path) -> anyhow::Result<duckdb::Connection> {
         duckdb::Connection::open(path)
             .with_context(|| format!("failed to open duckdb database `{}`", path.display()))
+    }
+
+    /// Aggregate all persisted usage events into per-key operational rollups.
+    pub async fn key_usage_rollups(&self) -> anyhow::Result<Vec<KeyUsageRollupSummary>> {
+        let path = self.path.clone();
+        task::spawn_blocking(move || {
+            let conn = Self::open_conn(&path)?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT
+                        key_id,
+                        CAST(COALESCE(sum(input_uncached_tokens), 0) AS BIGINT),
+                        CAST(COALESCE(sum(input_cached_tokens), 0) AS BIGINT),
+                        CAST(COALESCE(sum(output_tokens), 0) AS BIGINT),
+                        CAST(COALESCE(sum(billable_tokens), 0) AS BIGINT),
+                        CAST(COALESCE(sum(COALESCE(try_cast(credit_usage AS DOUBLE), 0)), 0) AS \
+                     VARCHAR),
+                        CAST(COALESCE(sum(CASE WHEN credit_usage_missing THEN 1 ELSE 0 END), 0) AS \
+                     BIGINT),
+                        max(created_at_ms)
+                     FROM usage_events
+                     GROUP BY key_id",
+                )
+                .context("prepare duckdb key usage rollup query")?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(KeyUsageRollupSummary {
+                        key_id: row.get(0)?,
+                        input_uncached_tokens: row.get(1)?,
+                        input_cached_tokens: row.get(2)?,
+                        output_tokens: row.get(3)?,
+                        billable_tokens: row.get(4)?,
+                        credit_total: row.get(5)?,
+                        credit_missing_events: row.get(6)?,
+                        last_used_at_ms: row.get(7)?,
+                    })
+                })
+                .context("query duckdb key usage rollups")?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .context("collect duckdb key usage rollups")
+        })
+        .await
+        .context("duckdb key usage rollup task failed")?
     }
 }
 
@@ -853,6 +899,47 @@ mod tests {
         assert_eq!(page.events.len(), 2);
         assert_usage_event_summary_round_trips(&page.events[0], &second);
         assert_usage_event_summary_round_trips(&page.events[1], &first);
+
+        std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn duckdb_repository_summarizes_key_usage_rollups() {
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-duckdb-test-{}-key-rollups", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create duckdb test directory");
+        let db_path = root.join("usage.duckdb");
+        let repo = super::DuckDbUsageRepository::open_path(&db_path).expect("open duckdb usage db");
+        let mut first = test_usage_event();
+        first.event_id = "rollup-first".to_string();
+        first.created_at_ms = 1_700_000_000_000;
+        first.credit_usage = Some("0.5".to_string());
+        let mut second = test_usage_event();
+        second.event_id = "rollup-second".to_string();
+        second.created_at_ms = 1_700_000_060_000;
+        second.credit_usage = Some("0.25".to_string());
+        second.credit_usage_missing = true;
+
+        repo.append_usage_events(&[first.clone(), second.clone()])
+            .await
+            .expect("append duckdb usage event batch");
+
+        let rollups = repo
+            .key_usage_rollups()
+            .await
+            .expect("summarize key usage rollups");
+
+        assert_eq!(rollups.len(), 1);
+        assert_eq!(rollups[0].key_id, first.key_id);
+        assert_eq!(rollups[0].input_uncached_tokens, 20);
+        assert_eq!(rollups[0].input_cached_tokens, 40);
+        assert_eq!(rollups[0].output_tokens, 60);
+        assert_eq!(rollups[0].billable_tokens, 80);
+        assert_eq!(rollups[0].credit_total, "0.75");
+        assert_eq!(rollups[0].credit_missing_events, 1);
+        assert_eq!(rollups[0].last_used_at_ms, Some(second.created_at_ms));
 
         std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
     }

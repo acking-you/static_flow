@@ -1922,6 +1922,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                 <div class={classes!("mt-2", "flex", "items-center", "gap-4", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
                     <span>{ format!("remaining {}", format_number_i64(props.key_item.remaining_billable)) }</span>
                     <span>{ format!("limit {}", format_number_u64(props.key_item.quota_billable_limit)) }</span>
+                    <span>{ format!("输入 {}", format_number_u64(props.key_item.usage_input_uncached_tokens)) }</span>
+                    <span>{ format!("缓存 {}", format_number_u64(props.key_item.usage_input_cached_tokens)) }</span>
+                    <span>{ format!("输出 {}", format_number_u64(props.key_item.usage_output_tokens)) }</span>
                 </div>
                 <div class={classes!("mt-2", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
                     { candidate_credit_summary_text }

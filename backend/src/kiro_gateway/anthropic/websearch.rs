@@ -38,10 +38,12 @@ type McpRequest = runtime_websearch::McpRequest;
 type McpResponse = runtime_websearch::McpResponse;
 type WebSearchResults = runtime_websearch::WebSearchResults;
 
-/// Returns `true` if the request has exactly one tool and it is a web_search
-/// tool. Used to decide whether to short-circuit through the MCP shim.
-pub fn has_web_search_tool(req: &MessagesRequest) -> bool {
-    runtime_websearch::has_web_search_tool(req)
+pub fn should_route_mcp_web_search(req: &MessagesRequest) -> bool {
+    runtime_websearch::should_route_mcp_web_search(req)
+}
+
+pub fn remove_web_search_tools(req: &mut MessagesRequest) -> bool {
+    runtime_websearch::remove_web_search_tools(req)
 }
 
 /// Handles a pure web_search request by calling Kiro's MCP endpoint and
@@ -408,7 +410,7 @@ mod tests {
             }]),
             serde_json::json!("test"),
         );
-        assert!(has_web_search_tool(&req));
+        assert!(runtime_websearch::has_web_search_tool(&req));
     }
 
     #[test]
@@ -432,7 +434,7 @@ mod tests {
             ]),
             serde_json::json!("test"),
         );
-        assert!(!has_web_search_tool(&req));
+        assert!(!runtime_websearch::has_web_search_tool(&req));
     }
 
     #[test]
