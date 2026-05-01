@@ -6061,6 +6061,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "static-flow-runtime",
  "static-flow-shared",
  "tokio",
  "tower 0.5.2",
@@ -9869,13 +9870,13 @@ dependencies = [
  "serde_json",
  "sha2",
  "static-flow-media-types",
+ "static-flow-runtime",
  "static-flow-shared",
  "tempfile",
  "tokio",
  "tower 0.4.13",
  "tower-http 0.5.2",
  "tracing",
- "tracing-subscriber",
  "url",
  "urlencoding",
  "uuid",
@@ -9944,6 +9945,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "static-flow-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "static-flow-shared"
 version = "0.1.0"
 dependencies = [
@@ -9960,10 +9971,9 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "static-flow-runtime",
  "tokio",
  "tracing",
- "tracing-appender",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -9985,6 +9995,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "signal-hook",
+ "static-flow-runtime",
  "static-flow-shared",
  "tempfile",
  "tokio",

@@ -14,10 +14,8 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use static_flow_shared::{
-    lancedb_api::NewApiBehaviorEventInput,
-    request_ids::{REQUEST_ID_HEADER, TRACE_ID_HEADER},
-};
+use static_flow_runtime::request_ids::{REQUEST_ID_HEADER, TRACE_ID_HEADER};
+use static_flow_shared::lancedb_api::NewApiBehaviorEventInput;
 use tokio::sync::Semaphore;
 
 use crate::state::AppState;

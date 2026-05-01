@@ -16,6 +16,7 @@ signal-hook = "0.3"
 tokio = { workspace = true }
 tracing = { workspace = true }
 static-flow-shared = { path = "../shared" }
+static-flow-runtime = { path = "../runtime" }
 pingora = { path = "../deps/pingora/pingora", features = ["proxy"] }
 pingora-core = { path = "../deps/pingora/pingora-core" }
 pingora-http = { path = "../deps/pingora/pingora-http" }

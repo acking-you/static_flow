@@ -73,7 +73,7 @@ use llm_access_kiro::{
 };
 use serde_json::Value;
 
-use crate::{activity::RequestActivityTracker, codex_refresh, kiro_refresh, kiro_status};
+use crate::{activity::RequestActivityTracker, codex_refresh, kiro_refresh};
 
 const MAX_PROVIDER_PROXY_BODY_BYTES: usize = 32 * 1024 * 1024;
 const DEFAULT_WIRE_ORIGINATOR: &str = "codex_cli_rs";
@@ -1195,7 +1195,7 @@ async fn dispatch_kiro_proxy(
         request.uri(),
         request.headers(),
     );
-    let mut routes = match route_store.resolve_kiro_route_candidates(&key).await {
+    let routes = match route_store.resolve_kiro_route_candidates(&key).await {
         Ok(routes) if !routes.is_empty() => routes,
         Ok(_) => {
             return (StatusCode::SERVICE_UNAVAILABLE, "kiro route is not configured")
@@ -1216,23 +1216,6 @@ async fn dispatch_kiro_proxy(
     if request.method() != Method::POST {
         return (StatusCode::METHOD_NOT_ALLOWED, "unsupported kiro method").into_response();
     }
-    if routes.iter().any(|route| route.cached_status.is_none()) {
-        kiro_status::ensure_missing_route_statuses(&routes, route_store.as_ref()).await;
-        match route_store.resolve_kiro_route_candidates(&key).await {
-            Ok(refreshed) if !refreshed.is_empty() => {
-                routes = refreshed;
-            },
-            Ok(_) => {},
-            Err(err) => {
-                tracing::warn!(
-                    key_id = %key.key_id,
-                    error = %err,
-                    "failed to reload Kiro routes after request-time status refresh"
-                );
-            },
-        }
-    }
-
     let request_headers = request.headers().clone();
     let body_read_started = Instant::now();
     let body = match to_bytes(request.into_body(), MAX_PROVIDER_PROXY_BODY_BYTES).await {
@@ -4289,6 +4272,11 @@ fn now_seconds() -> i64 {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "provider tests serialize process-wide upstream env var overrides across awaited \
+              requests"
+)]
 mod tests {
     use std::{
         sync::{Arc, Mutex},
@@ -5532,8 +5520,10 @@ mod tests {
         });
         std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
 
-        let mut config = AdminRuntimeConfig::default();
-        config.codex_client_version = "0.125.0".to_string();
+        let config = AdminRuntimeConfig {
+            codex_client_version: "0.125.0".to_string(),
+            ..AdminRuntimeConfig::default()
+        };
         let state = super::ProviderState::new_with_config_store(
             Arc::new(TestStore),
             static_codex_route_store(),
@@ -5763,7 +5753,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn kiro_dispatch_refreshes_missing_status_before_upstream_selection() {
+    async fn kiro_dispatch_does_not_refresh_missing_status_on_request_path() {
         let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
             .lock()
             .expect("kiro upstream env lock");
@@ -5812,21 +5802,13 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let updates = route_store.updates.lock().expect("updates");
-        assert_eq!(updates.len(), 1);
-        assert_eq!(updates[0].cache.status, "ready");
-        assert_eq!(
-            updates[0]
-                .balance
-                .as_ref()
-                .and_then(|balance| balance.user_id.as_deref()),
-            Some("upstream-user-1")
-        );
+        assert!(updates.is_empty());
         let requests = captured.requests.lock().expect("captured requests");
         let paths = requests
             .iter()
             .map(|request| request.path.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(paths, vec!["/getUsageLimits", "/generateAssistantResponse"]);
+        assert_eq!(paths, vec!["/generateAssistantResponse"]);
     }
 
     #[tokio::test]

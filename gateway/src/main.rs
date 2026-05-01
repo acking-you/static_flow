@@ -7,7 +7,7 @@ use pingora::server::{configuration::Opt, Server};
 use pingora_core::{apps::HttpServerOptions, server::configuration::ServerConf};
 use pingora_proxy::http_proxy_service;
 use signal_hook::{consts::signal::SIGHUP, iterator::Signals};
-use static_flow_shared::runtime_logging::init_runtime_logging;
+use static_flow_runtime::runtime_logging::init_runtime_logging;
 use staticflow_pingora_gateway::{
     config::{load_gateway_config_from_str, GatewayConfigStore},
     proxy::StaticFlowGateway,

@@ -28,7 +28,7 @@ use std::{env, net::SocketAddr, time::Duration};
 use anyhow::Result;
 use better_mimalloc_rs::MiMalloc;
 use memory_profiler::ProfiledMiMalloc;
-use static_flow_shared::runtime_logging::init_runtime_logging;
+use static_flow_runtime::runtime_logging::init_runtime_logging;
 
 const DEFAULT_LOG_FILTER: &str =
     "warn,static_flow_backend=info,static_flow_shared::lancedb_api=info";

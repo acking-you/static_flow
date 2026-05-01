@@ -13,6 +13,7 @@ mod kiro_status;
 /// Provider request entrypoints.
 pub mod provider;
 mod public;
+mod request_context;
 /// LLM-owned route classification.
 pub mod routes;
 /// Runtime startup validation.
@@ -30,6 +31,7 @@ use axum::{
     body::Body,
     extract::State,
     http::Request,
+    middleware,
     response::Response,
     routing::{any, get, post},
     Json, Router,
@@ -294,6 +296,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         .route("/api/kiro-gateway/*path", any(provider_entry_handler))
         .route("/api/codex-gateway/*path", any(provider_entry_handler))
         .route("/api/llm-access/*path", any(provider_entry_handler))
+        .layer(middleware::from_fn(request_context::request_context_middleware))
         .with_state(state)
 }
 
@@ -313,10 +316,13 @@ pub async fn serve(config: ServeConfig) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(config.bind_addr)
         .await
         .with_context(|| format!("failed to bind {}", config.bind_addr))?;
-    let result = axum::serve(listener, router(service_runtime))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("llm-access server failed");
+    let result = axum::serve(
+        listener,
+        router(service_runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("llm-access server failed");
     shutdown_runtime.shutdown_usage_events().await;
     result
 }
@@ -354,6 +360,10 @@ async fn version() -> Json<VersionResponse> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "router tests serialize process-wide support and Kiro upstream env var overrides"
+)]
 mod tests {
     use std::{
         path::PathBuf,
@@ -445,6 +455,32 @@ mod tests {
                 .expect("serve fake Kiro upstream");
         });
         upstream_base
+    }
+
+    #[tokio::test]
+    async fn router_attaches_request_and_trace_headers() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .header("x-request-id", "req-existing")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("x-request-id"),
+            Some(&header::HeaderValue::from_static("req-existing"))
+        );
+        let trace_id = response
+            .headers()
+            .get("x-trace-id")
+            .and_then(|value| value.to_str().ok())
+            .expect("trace header");
+        assert!(trace_id.starts_with("trace-"));
     }
 
     #[tokio::test]

@@ -50,32 +50,6 @@ pub(crate) fn spawn_kiro_status_refresher(runtime: &LlmAccessRuntime) {
     });
 }
 
-/// Refresh and persist status for routes missing a status-cache entry before
-/// the hot request path tries to select an account.
-pub(crate) async fn ensure_missing_route_statuses(
-    routes: &[ProviderKiroRoute],
-    route_store: &dyn ProviderRouteStore,
-) {
-    for route in routes.iter().filter(|route| route.cached_status.is_none()) {
-        match refresh_and_persist_route_status(route, route_store, false).await {
-            Ok(update) => {
-                tracing::info!(
-                    account_name = %route.account_name,
-                    status = %update.cache.status,
-                    "refreshed missing Kiro status before request selection"
-                );
-            },
-            Err(err) => {
-                tracing::warn!(
-                    account_name = %route.account_name,
-                    error = %err,
-                    "failed to persist missing Kiro status before request selection"
-                );
-            },
-        }
-    }
-}
-
 async fn refresh_all_kiro_statuses(
     config_store: &Arc<dyn AdminConfigStore>,
     account_store: &Arc<dyn AdminKiroAccountStore>,

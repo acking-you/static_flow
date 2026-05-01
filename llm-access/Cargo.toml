@@ -34,6 +34,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 static-flow-shared = { path = "../shared" }
+static-flow-runtime = { path = "../runtime" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 url = "2.5"

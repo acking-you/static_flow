@@ -32,6 +32,25 @@ pub struct SqliteControlStore {
     conn: Connection,
 }
 
+type KiroCachedStatusParts = (Option<AdminKiroBalanceView>, AdminKiroCacheView);
+
+struct KiroAdminAccountViewContext {
+    default_cache: AdminKiroCacheView,
+    status_by_account: BTreeMap<String, KiroCachedStatusParts>,
+    proxy_configs_by_id: BTreeMap<String, AdminProxyConfig>,
+    kiro_proxy_binding: AdminProxyBinding,
+}
+
+struct CodexAdminAccountViewContext {
+    proxy_configs_by_id: BTreeMap<String, AdminProxyConfig>,
+    codex_proxy_binding: AdminProxyBinding,
+}
+
+struct ProviderProxyResolutionContext {
+    proxy_configs_by_id: BTreeMap<String, AdminProxyConfig>,
+    binding: AdminProxyBinding,
+}
+
 /// Complete key state loaded from the control-plane store.
 pub struct KeyBundle {
     /// API key row.
@@ -566,30 +585,37 @@ impl SqliteControlStore {
             return Ok(Vec::new());
         }
 
+        let records = self.list_codex_accounts()?;
         let account_names = self.resolve_route_account_names(
             core_store::PROVIDER_CODEX,
             &bundle.route,
-            self.list_codex_accounts()?
-                .into_iter()
+            records
+                .iter()
                 .filter(|record| record.status == core_store::KEY_STATUS_ACTIVE)
-                .map(|record| record.account_name)
+                .map(|record| record.account_name.clone())
                 .collect(),
         )?;
         let route_strategy_at_event = route_strategy_from_config(&bundle.route)?;
         let account_group_id_at_event = bundle.route.account_group_id.clone();
+        let records_by_name = records
+            .into_iter()
+            .map(|record| (record.account_name.clone(), record))
+            .collect::<BTreeMap<_, _>>();
+        let proxy_context =
+            self.load_provider_proxy_resolution_context(core_store::PROVIDER_CODEX)?;
         let mut routes = Vec::new();
         for account_name in account_names {
-            let Some(record) = self.get_codex_account(&account_name)? else {
+            let Some(record) = records_by_name.get(&account_name).cloned() else {
                 continue;
             };
             if record.status != core_store::KEY_STATUS_ACTIVE {
                 continue;
             }
             let settings = decode_codex_account_settings(&record.settings_json)?;
-            let proxy = self.resolve_provider_proxy_config(
-                core_store::PROVIDER_CODEX,
+            let proxy = resolve_provider_proxy_config_from_context(
                 &settings.proxy_mode,
                 settings.proxy_config_id.as_deref(),
+                &proxy_context,
             )?;
             routes.push(ProviderCodexRoute {
                 account_name: record.account_name,
@@ -634,13 +660,14 @@ impl SqliteControlStore {
         }
 
         let runtime_config = self.get_runtime_config_or_default()?;
+        let records = self.list_kiro_accounts()?;
         let account_names = self.resolve_route_account_names(
             core_store::PROVIDER_KIRO,
             &bundle.route,
-            self.list_kiro_accounts()?
-                .into_iter()
+            records
+                .iter()
                 .filter(|record| record.status == core_store::KEY_STATUS_ACTIVE)
-                .map(|record| record.account_name)
+                .map(|record| record.account_name.clone())
                 .collect(),
         )?;
         let route_strategy_at_event = route_strategy_from_config(&bundle.route)?;
@@ -649,9 +676,16 @@ impl SqliteControlStore {
             &runtime_config.kiro_cache_policy_json,
             bundle.route.kiro_cache_policy_override_json.as_deref(),
         )?;
+        let records_by_name = records
+            .into_iter()
+            .map(|record| (record.account_name.clone(), record))
+            .collect::<BTreeMap<_, _>>();
+        let status_by_account = self.list_kiro_cached_status_parts()?;
+        let proxy_context =
+            self.load_provider_proxy_resolution_context(core_store::PROVIDER_KIRO)?;
         let mut routes = Vec::new();
         for account_name in account_names {
-            let Some(record) = self.get_kiro_account(&account_name)? else {
+            let Some(record) = records_by_name.get(&account_name).cloned() else {
                 continue;
             };
             if record.status != core_store::KEY_STATUS_ACTIVE {
@@ -668,7 +702,7 @@ impl SqliteControlStore {
             ])
             .unwrap_or(0.0)
             .max(0.0);
-            let cached_status = self.get_kiro_cached_status_parts(&record.account_name)?;
+            let cached_status = status_by_account.get(&record.account_name).cloned();
             if let Some((balance, cache)) = &cached_status {
                 if matches!(cache.status.as_str(), "disabled" | "quota_exhausted") {
                     continue;
@@ -718,10 +752,10 @@ impl SqliteControlStore {
             let proxy_config_id = record.proxy_config_id.clone().or_else(|| {
                 optional_json_string_any(&auth_json, &["proxyConfigId", "proxy_config_id"])
             });
-            let proxy = self.resolve_provider_proxy_config(
-                core_store::PROVIDER_KIRO,
+            let proxy = resolve_provider_proxy_config_from_context(
                 &proxy_mode,
                 proxy_config_id.as_deref(),
+                &proxy_context,
             )?;
             routes.push(core_store::ProviderKiroRoute {
                 account_name: record.account_name,
@@ -1396,12 +1430,103 @@ impl SqliteControlStore {
         }
     }
 
+    fn load_provider_proxy_resolution_context(
+        &self,
+        provider_type: &str,
+    ) -> anyhow::Result<ProviderProxyResolutionContext> {
+        let proxy_configs_by_id = self
+            .list_admin_proxy_configs()?
+            .into_iter()
+            .map(|proxy| (proxy.id.clone(), proxy))
+            .collect::<BTreeMap<_, _>>();
+        let binding =
+            self.load_admin_proxy_binding_from_configs(provider_type, &proxy_configs_by_id)?;
+        Ok(ProviderProxyResolutionContext {
+            proxy_configs_by_id,
+            binding,
+        })
+    }
+
+    fn load_admin_proxy_binding_from_configs(
+        &self,
+        provider_type: &str,
+        proxy_configs_by_id: &BTreeMap<String, AdminProxyConfig>,
+    ) -> anyhow::Result<AdminProxyBinding> {
+        let binding = self
+            .conn
+            .query_row(
+                "SELECT provider_type, proxy_config_id, updated_at_ms
+                 FROM llm_proxy_bindings
+                 WHERE provider_type = ?1",
+                [provider_type],
+                |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+                },
+            )
+            .optional()
+            .context("load proxy binding row")?;
+        let Some((provider_type, proxy_config_id, updated_at_ms)) = binding else {
+            return Ok(core_store::default_proxy_bindings()
+                .into_iter()
+                .find(|binding| binding.provider_type == provider_type)
+                .unwrap_or_else(|| AdminProxyBinding {
+                    provider_type: provider_type.to_string(),
+                    effective_source: "none".to_string(),
+                    bound_proxy_config_id: None,
+                    effective_proxy_config_name: None,
+                    effective_proxy_url: None,
+                    effective_proxy_username: None,
+                    effective_proxy_password: None,
+                    binding_updated_at: None,
+                    error_message: None,
+                }));
+        };
+        let Some(proxy) = proxy_configs_by_id.get(&proxy_config_id).cloned() else {
+            return Ok(AdminProxyBinding {
+                provider_type,
+                effective_source: "invalid".to_string(),
+                bound_proxy_config_id: Some(proxy_config_id),
+                effective_proxy_config_name: None,
+                effective_proxy_url: None,
+                effective_proxy_username: None,
+                effective_proxy_password: None,
+                binding_updated_at: Some(updated_at_ms),
+                error_message: Some("bound proxy config is missing".to_string()),
+            });
+        };
+        if proxy.status != core_store::KEY_STATUS_ACTIVE {
+            return Ok(AdminProxyBinding {
+                provider_type,
+                effective_source: "invalid".to_string(),
+                bound_proxy_config_id: Some(proxy.id),
+                effective_proxy_config_name: Some(proxy.name),
+                effective_proxy_url: None,
+                effective_proxy_username: None,
+                effective_proxy_password: None,
+                binding_updated_at: Some(updated_at_ms),
+                error_message: Some("bound proxy config is disabled".to_string()),
+            });
+        }
+        Ok(AdminProxyBinding {
+            provider_type,
+            effective_source: "binding".to_string(),
+            bound_proxy_config_id: Some(proxy.id),
+            effective_proxy_config_name: Some(proxy.name),
+            effective_proxy_url: Some(proxy.proxy_url),
+            effective_proxy_username: proxy.proxy_username,
+            effective_proxy_password: proxy.proxy_password,
+            binding_updated_at: Some(updated_at_ms),
+            error_message: None,
+        })
+    }
+
     /// List imported Codex accounts for the admin UI.
     pub fn list_admin_codex_accounts(&self) -> anyhow::Result<Vec<AdminCodexAccount>> {
         let records = self.list_codex_accounts()?;
+        let context = self.load_codex_admin_account_view_context()?;
         records
             .iter()
-            .map(|record| self.admin_codex_account_from_record(record))
+            .map(|record| self.admin_codex_account_from_record_with_context(record, &context))
             .collect()
     }
 
@@ -1561,9 +1686,18 @@ impl SqliteControlStore {
         &self,
         record: &CodexAccountRecord,
     ) -> anyhow::Result<AdminCodexAccount> {
+        let context = self.load_codex_admin_account_view_context()?;
+        self.admin_codex_account_from_record_with_context(record, &context)
+    }
+
+    fn admin_codex_account_from_record_with_context(
+        &self,
+        record: &CodexAccountRecord,
+        context: &CodexAdminAccountViewContext,
+    ) -> anyhow::Result<AdminCodexAccount> {
         let settings = decode_codex_account_settings(&record.settings_json)?;
         let (effective_proxy_source, effective_proxy_url, effective_proxy_config_name) =
-            self.resolve_codex_account_proxy_view(&settings)?;
+            self.resolve_codex_account_proxy_view_with_context(&settings, context);
         Ok(AdminCodexAccount {
             name: record.account_name.clone(),
             status: record.status.clone(),
@@ -1586,41 +1720,63 @@ impl SqliteControlStore {
         })
     }
 
-    fn resolve_codex_account_proxy_view(
+    fn load_codex_admin_account_view_context(
+        &self,
+    ) -> anyhow::Result<CodexAdminAccountViewContext> {
+        let proxy_configs_by_id = self
+            .list_admin_proxy_configs()?
+            .into_iter()
+            .map(|proxy| (proxy.id.clone(), proxy))
+            .collect::<BTreeMap<_, _>>();
+        let codex_proxy_binding = self.load_admin_proxy_binding_from_configs(
+            core_store::PROVIDER_CODEX,
+            &proxy_configs_by_id,
+        )?;
+        Ok(CodexAdminAccountViewContext {
+            proxy_configs_by_id,
+            codex_proxy_binding,
+        })
+    }
+
+    fn resolve_codex_account_proxy_view_with_context(
         &self,
         settings: &CodexAccountSettings,
-    ) -> anyhow::Result<(String, Option<String>, Option<String>)> {
+        context: &CodexAdminAccountViewContext,
+    ) -> (String, Option<String>, Option<String>) {
         match settings.proxy_mode.as_str() {
-            "none" => Ok(("none".to_string(), None, None)),
+            "none" => ("none".to_string(), None, None),
             "fixed" => {
                 let Some(proxy_id) = settings.proxy_config_id.as_deref() else {
-                    return Ok(("invalid".to_string(), None, None));
+                    return ("invalid".to_string(), None, None);
                 };
-                match self.get_admin_proxy_config(proxy_id)? {
-                    Some(proxy) if proxy.status == core_store::KEY_STATUS_ACTIVE => {
-                        Ok(("fixed".to_string(), Some(proxy.proxy_url), Some(proxy.name)))
-                    },
-                    Some(proxy) => Ok(("invalid".to_string(), None, Some(proxy.name))),
-                    None => Ok(("invalid".to_string(), None, None)),
+                match context.proxy_configs_by_id.get(proxy_id) {
+                    Some(proxy) if proxy.status == core_store::KEY_STATUS_ACTIVE => (
+                        "fixed".to_string(),
+                        Some(proxy.proxy_url.clone()),
+                        Some(proxy.name.clone()),
+                    ),
+                    Some(proxy) => ("invalid".to_string(), None, Some(proxy.name.clone())),
+                    None => ("invalid".to_string(), None, None),
                 }
             },
-            _ => {
-                let binding = self.load_admin_proxy_binding(core_store::PROVIDER_CODEX)?;
-                Ok((
-                    binding.effective_source,
-                    binding.effective_proxy_url,
-                    binding.effective_proxy_config_name,
-                ))
-            },
+            _ => (
+                context.codex_proxy_binding.effective_source.clone(),
+                context.codex_proxy_binding.effective_proxy_url.clone(),
+                context
+                    .codex_proxy_binding
+                    .effective_proxy_config_name
+                    .clone(),
+            ),
         }
     }
 
     /// List persisted Kiro accounts for the admin UI.
     pub fn list_admin_kiro_accounts(&self) -> anyhow::Result<Vec<AdminKiroAccount>> {
         let records = self.list_kiro_accounts()?;
+        let context = self.load_kiro_admin_account_view_context()?;
         records
             .iter()
-            .map(|record| self.admin_kiro_account_from_record(record))
+            .map(|record| self.admin_kiro_account_from_record_with_context(record, &context))
             .collect()
     }
 
@@ -1893,20 +2049,22 @@ impl SqliteControlStore {
         &self,
         record: &KiroAccountRecord,
     ) -> anyhow::Result<AdminKiroAccount> {
+        let context = self.load_kiro_admin_account_view_context()?;
+        self.admin_kiro_account_from_record_with_context(record, &context)
+    }
+
+    fn admin_kiro_account_from_record_with_context(
+        &self,
+        record: &KiroAccountRecord,
+        context: &KiroAdminAccountViewContext,
+    ) -> anyhow::Result<AdminKiroAccount> {
         let auth = serde_json::from_str::<serde_json::Value>(&record.auth_json)
             .context("parse kiro auth json for admin view")?;
-        let (balance, cache) = self
-            .get_kiro_cached_status_parts(&record.account_name)?
-            .unwrap_or_else(|| {
-                let refresh_interval_seconds = self
-                    .get_runtime_config_or_default()
-                    .map(|config| config.kiro_status_refresh_max_interval_seconds.max(0) as u64)
-                    .unwrap_or(core_store::DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS);
-                (None, AdminKiroCacheView {
-                    refresh_interval_seconds,
-                    ..AdminKiroCacheView::default()
-                })
-            });
+        let (balance, cache) = context
+            .status_by_account
+            .get(&record.account_name)
+            .cloned()
+            .unwrap_or_else(|| (None, context.default_cache.clone()));
         let proxy_mode = optional_json_string_any(&auth, &["proxyMode", "proxy_mode"])
             .unwrap_or_else(|| {
                 if record.proxy_config_id.is_some() {
@@ -1919,8 +2077,12 @@ impl SqliteControlStore {
             .proxy_config_id
             .clone()
             .or_else(|| optional_json_string_any(&auth, &["proxyConfigId", "proxy_config_id"]));
-        let (effective_proxy_source, effective_proxy_url, effective_proxy_config_name) =
-            self.resolve_kiro_account_proxy_view(&proxy_mode, proxy_config_id.as_deref())?;
+        let (effective_proxy_source, effective_proxy_url, effective_proxy_config_name) = self
+            .resolve_kiro_account_proxy_view_with_context(
+                &proxy_mode,
+                proxy_config_id.as_deref(),
+                context,
+            );
         let disabled_json = optional_json_bool_any(&auth, &["disabled"]).unwrap_or(false);
         let disabled = disabled_json || record.status != core_store::KEY_STATUS_ACTIVE;
         let disabled_reason =
@@ -1997,6 +2159,61 @@ impl SqliteControlStore {
         })
     }
 
+    fn load_kiro_admin_account_view_context(&self) -> anyhow::Result<KiroAdminAccountViewContext> {
+        let refresh_interval_seconds = self
+            .get_runtime_config_or_default()
+            .map(|config| config.kiro_status_refresh_max_interval_seconds.max(0) as u64)
+            .unwrap_or(core_store::DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS);
+        let default_cache = AdminKiroCacheView {
+            refresh_interval_seconds,
+            ..AdminKiroCacheView::default()
+        };
+        let status_by_account = self.list_kiro_cached_status_parts()?;
+        let proxy_configs_by_id = self
+            .list_admin_proxy_configs()?
+            .into_iter()
+            .map(|proxy| (proxy.id.clone(), proxy))
+            .collect();
+        let kiro_proxy_binding = self.load_admin_proxy_binding_from_configs(
+            core_store::PROVIDER_KIRO,
+            &proxy_configs_by_id,
+        )?;
+        Ok(KiroAdminAccountViewContext {
+            default_cache,
+            status_by_account,
+            proxy_configs_by_id,
+            kiro_proxy_binding,
+        })
+    }
+
+    fn list_kiro_cached_status_parts(
+        &self,
+    ) -> anyhow::Result<BTreeMap<String, KiroCachedStatusParts>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT account_name, balance_json, cache_json
+                 FROM llm_kiro_status_cache",
+            )
+            .context("prepare kiro cached status list")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+            })
+            .context("query kiro cached status list")?;
+        let mut status_by_account = BTreeMap::new();
+        for row in rows {
+            let (account_name, balance_json, cache_json) =
+                row.context("collect kiro cached status row")?;
+            let balance = serde_json::from_str::<Option<AdminKiroBalanceView>>(&balance_json)
+                .context("decode kiro cached balance")?;
+            let cache = serde_json::from_str::<AdminKiroCacheView>(&cache_json)
+                .context("decode kiro cached cache view")?;
+            status_by_account.insert(account_name, (balance, cache));
+        }
+        Ok(status_by_account)
+    }
+
     fn get_kiro_cached_status_parts(
         &self,
         account_name: &str,
@@ -2025,33 +2242,36 @@ impl SqliteControlStore {
             .transpose()
     }
 
-    fn resolve_kiro_account_proxy_view(
+    fn resolve_kiro_account_proxy_view_with_context(
         &self,
         proxy_mode: &str,
         proxy_config_id: Option<&str>,
-    ) -> anyhow::Result<(String, Option<String>, Option<String>)> {
+        context: &KiroAdminAccountViewContext,
+    ) -> (String, Option<String>, Option<String>) {
         match proxy_mode {
-            "none" | "direct" => Ok(("none".to_string(), None, None)),
+            "none" | "direct" => ("none".to_string(), None, None),
             "fixed" => {
                 let Some(proxy_id) = proxy_config_id else {
-                    return Ok(("invalid".to_string(), None, None));
+                    return ("invalid".to_string(), None, None);
                 };
-                match self.get_admin_proxy_config(proxy_id)? {
-                    Some(proxy) if proxy.status == core_store::KEY_STATUS_ACTIVE => {
-                        Ok(("fixed".to_string(), Some(proxy.proxy_url), Some(proxy.name)))
-                    },
-                    Some(proxy) => Ok(("invalid".to_string(), None, Some(proxy.name))),
-                    None => Ok(("invalid".to_string(), None, None)),
+                match context.proxy_configs_by_id.get(proxy_id) {
+                    Some(proxy) if proxy.status == core_store::KEY_STATUS_ACTIVE => (
+                        "fixed".to_string(),
+                        Some(proxy.proxy_url.clone()),
+                        Some(proxy.name.clone()),
+                    ),
+                    Some(proxy) => ("invalid".to_string(), None, Some(proxy.name.clone())),
+                    None => ("invalid".to_string(), None, None),
                 }
             },
-            _ => {
-                let binding = self.load_admin_proxy_binding(core_store::PROVIDER_KIRO)?;
-                Ok((
-                    binding.effective_source,
-                    binding.effective_proxy_url,
-                    binding.effective_proxy_config_name,
-                ))
-            },
+            _ => (
+                context.kiro_proxy_binding.effective_source.clone(),
+                context.kiro_proxy_binding.effective_proxy_url.clone(),
+                context
+                    .kiro_proxy_binding
+                    .effective_proxy_config_name
+                    .clone(),
+            ),
         }
     }
 
@@ -3812,6 +4032,41 @@ fn decode_kiro_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<KiroAccountR
     })
 }
 
+fn resolve_provider_proxy_config_from_context(
+    proxy_mode: &str,
+    proxy_config_id: Option<&str>,
+    context: &ProviderProxyResolutionContext,
+) -> anyhow::Result<Option<ProviderProxyConfig>> {
+    match proxy_mode {
+        "none" | "direct" => Ok(None),
+        "fixed" => {
+            let Some(proxy_id) = proxy_config_id else {
+                anyhow::bail!("fixed proxy mode requires proxy_config_id");
+            };
+            let Some(proxy) = context.proxy_configs_by_id.get(proxy_id).cloned() else {
+                anyhow::bail!("fixed proxy config `{proxy_id}` is missing");
+            };
+            if proxy.status != core_store::KEY_STATUS_ACTIVE {
+                anyhow::bail!("fixed proxy config `{}` is disabled", proxy.name);
+            }
+            Ok(Some(provider_proxy_from_admin_proxy(proxy)))
+        },
+        _ => {
+            if let Some(message) = context.binding.error_message.clone() {
+                anyhow::bail!("provider proxy binding is invalid: {message}");
+            }
+            match context.binding.effective_proxy_url.clone() {
+                Some(proxy_url) => Ok(Some(ProviderProxyConfig {
+                    proxy_url,
+                    proxy_username: context.binding.effective_proxy_username.clone(),
+                    proxy_password: context.binding.effective_proxy_password.clone(),
+                })),
+                None => Ok(None),
+            }
+        },
+    }
+}
+
 fn decode_runtime_config(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeConfigRecord> {
     Ok(RuntimeConfigRecord {
         id: row.get(0)?,
@@ -4739,8 +4994,10 @@ mod tests {
         crate::initialize_sqlite_target(&conn).expect("init schema");
         let repo = super::SqliteControlStore::new(conn);
 
-        let mut config = super::RuntimeConfigRecord::default();
-        config.kiro_cache_policy_json = llm_access_core::store::default_kiro_cache_policy_json();
+        let config = super::RuntimeConfigRecord {
+            kiro_cache_policy_json: llm_access_core::store::default_kiro_cache_policy_json(),
+            ..super::RuntimeConfigRecord::default()
+        };
         repo.upsert_runtime_config(&config).expect("upsert config");
         repo.create_admin_proxy_config(&llm_access_core::store::NewAdminProxyConfig {
             id: "proxy-kiro-route".to_string(),
@@ -4945,6 +5202,81 @@ mod tests {
         assert!(auth_json.get("proxyUrl").is_none());
         assert_eq!(auth_json["proxyMode"], "fixed");
         assert_eq!(auth_json["proxyConfigId"], proxy.id);
+    }
+
+    #[test]
+    fn admin_kiro_account_list_includes_cached_status_and_proxy_view() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlStore::new(conn);
+
+        let proxy = repo
+            .create_admin_proxy_config(&llm_access_core::store::NewAdminProxyConfig {
+                id: "proxy-kiro".to_string(),
+                name: "Kiro Proxy".to_string(),
+                proxy_url: "http://127.0.0.1:11114".to_string(),
+                proxy_username: None,
+                proxy_password: None,
+                created_at_ms: 10,
+            })
+            .expect("create proxy");
+        repo.upsert_kiro_account(&super::KiroAccountRecord {
+            account_name: "kiro-a".to_string(),
+            auth_method: "idc".to_string(),
+            account_id: Some("kiro-account".to_string()),
+            profile_arn: Some("arn:aws:kiro:test".to_string()),
+            user_id: Some("user-1".to_string()),
+            status: "active".to_string(),
+            auth_json: format!(
+                r#"{{"accessToken":"a","proxyMode":"fixed","proxyConfigId":"{}"}}"#,
+                proxy.id
+            ),
+            max_concurrency: Some(2),
+            min_start_interval_ms: Some(100),
+            proxy_config_id: Some(proxy.id.clone()),
+            last_refresh_at_ms: Some(200),
+            last_error: None,
+            created_at_ms: 30,
+            updated_at_ms: 40,
+        })
+        .expect("upsert kiro account");
+        repo.save_admin_kiro_status_cache(&llm_access_core::store::AdminKiroStatusCacheUpdate {
+            account_name: "kiro-a".to_string(),
+            balance: Some(llm_access_core::store::AdminKiroBalanceView {
+                current_usage: 12.0,
+                usage_limit: 100.0,
+                remaining: 88.0,
+                next_reset_at: Some(1_777_000_000_000),
+                subscription_title: Some("Pro".to_string()),
+                user_id: Some("upstream-user".to_string()),
+            }),
+            cache: llm_access_core::store::AdminKiroCacheView {
+                status: "ready".to_string(),
+                refresh_interval_seconds: 300,
+                last_checked_at: Some(1_776_000_000_000),
+                last_success_at: Some(1_776_000_000_000),
+                error_message: None,
+            },
+            refreshed_at_ms: 1_776_000_000_000,
+            expires_at_ms: 1_776_000_300_000,
+            last_error: None,
+        })
+        .expect("save status cache");
+
+        let accounts = repo
+            .list_admin_kiro_accounts()
+            .expect("list admin kiro accounts");
+
+        assert_eq!(accounts.len(), 1);
+        let account = &accounts[0];
+        assert_eq!(account.name, "kiro-a");
+        assert_eq!(account.effective_proxy_source, "fixed");
+        assert_eq!(account.effective_proxy_url.as_deref(), Some("http://127.0.0.1:11114"));
+        assert_eq!(account.effective_proxy_config_name.as_deref(), Some("Kiro Proxy"));
+        assert_eq!(account.cache.status, "ready");
+        assert_eq!(account.balance.as_ref().map(|balance| balance.remaining), Some(88.0));
+        assert_eq!(account.upstream_user_id.as_deref(), Some("upstream-user"));
+        assert_eq!(account.subscription_title.as_deref(), Some("Pro"));
     }
 
     #[test]

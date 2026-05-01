@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use pingora_core::{upstreams::peer::HttpPeer, Error, ErrorType::InternalError, Result};
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::{ProxyHttp, Session};
-use static_flow_shared::request_ids::read_or_generate_id;
+use static_flow_runtime::request_ids::read_or_generate_id;
 
 use crate::{
     access_log::emit_gateway_access_log,

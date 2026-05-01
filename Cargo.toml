@@ -8,6 +8,7 @@ members = [
     "media-service",
     "media-types",
     "gateway",
+    "runtime",
     "llm-access",
     "llm-access-core",
     "llm-access-codex",

@@ -1,3 +1,5 @@
+//! Request context and access logging middleware for standalone llm-access.
+
 use std::{net::SocketAddr, time::Instant};
 
 use axum::{
@@ -9,10 +11,8 @@ use axum::{
 use static_flow_runtime::request_ids::{read_or_generate_id, REQUEST_ID_HEADER, TRACE_ID_HEADER};
 use tracing::Instrument;
 
-#[derive(Clone, Copy, Debug)]
-pub struct RequestReceivedAt(pub Instant);
-
-pub async fn request_context_middleware(mut request: Request, next: Next) -> Response {
+/// Attach stable request/trace ids and emit one access log line per request.
+pub(crate) async fn request_context_middleware(request: Request, next: Next) -> Response {
     let request_id = read_or_generate_id(
         request
             .headers()
@@ -36,12 +36,9 @@ pub async fn request_context_middleware(mut request: Request, next: Next) -> Res
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
     let started_at = Instant::now();
-    request
-        .extensions_mut()
-        .insert(RequestReceivedAt(started_at));
 
     let span = tracing::info_span!(
-        "http_request",
+        "llm_access_http_request",
         request_id = %request_id,
         trace_id = %trace_id,
         method = %method,
@@ -63,7 +60,7 @@ pub async fn request_context_middleware(mut request: Request, next: Next) -> Res
         path = %path,
         status = response.status().as_u16(),
         elapsed_ms = started_at.elapsed().as_millis(),
-        "backend access"
+        "llm-access access"
     );
 
     response
