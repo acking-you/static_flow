@@ -40,7 +40,7 @@ use tokio::{
 use crate::config::StorageConfig;
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-const USAGE_EVENT_CHANNEL_CAPACITY: usize = 4_096;
+const USAGE_EVENT_CHANNEL_CAPACITY: usize = 1_024;
 
 /// Runtime dependencies shared by provider routes.
 #[derive(Clone)]
@@ -647,6 +647,7 @@ fn spawn_usage_event_flusher(
         let mut buffer = Vec::with_capacity(initial_config.batch_size);
         let mut analytics_retry_buffer = Vec::new();
         let mut buffered_bytes = 0usize;
+        let mut analytics_retry_bytes = 0usize;
         let mut flush_count: u64 = 0;
         let mut retry_failed_batch_on_timer = false;
 
@@ -678,6 +679,8 @@ fn spawn_usage_event_flusher(
                                     buffer: &mut buffer,
                                     analytics_retry_buffer: &mut analytics_retry_buffer,
                                     buffered_bytes: &mut buffered_bytes,
+                                    analytics_retry_bytes: &mut analytics_retry_bytes,
+                                    max_buffer_bytes: flush_config.max_buffer_bytes,
                                     flush_count: &mut flush_count,
                                 },
                                 "final usage event flush failed during shutdown",
@@ -698,6 +701,8 @@ fn spawn_usage_event_flusher(
                                 buffer: &mut buffer,
                                 analytics_retry_buffer: &mut analytics_retry_buffer,
                                 buffered_bytes: &mut buffered_bytes,
+                                analytics_retry_bytes: &mut analytics_retry_bytes,
+                                max_buffer_bytes: flush_config.max_buffer_bytes,
                                 flush_count: &mut flush_count,
                             },
                             "usage event retry flush failed",
@@ -725,6 +730,8 @@ fn spawn_usage_event_flusher(
                                 buffer: &mut buffer,
                                 analytics_retry_buffer: &mut analytics_retry_buffer,
                                 buffered_bytes: &mut buffered_bytes,
+                                analytics_retry_bytes: &mut analytics_retry_bytes,
+                                max_buffer_bytes: flush_config.max_buffer_bytes,
                                 flush_count: &mut flush_count,
                             },
                             "final usage event flush failed during shutdown",
@@ -765,6 +772,8 @@ fn spawn_usage_event_flusher(
                                         buffer: &mut buffer,
                                         analytics_retry_buffer: &mut analytics_retry_buffer,
                                         buffered_bytes: &mut buffered_bytes,
+                                        analytics_retry_bytes: &mut analytics_retry_bytes,
+                                        max_buffer_bytes: flush_config.max_buffer_bytes,
                                         flush_count: &mut flush_count,
                                     },
                                     "usage event batch flush failed",
@@ -783,6 +792,8 @@ fn spawn_usage_event_flusher(
                                     buffer: &mut buffer,
                                     analytics_retry_buffer: &mut analytics_retry_buffer,
                                     buffered_bytes: &mut buffered_bytes,
+                                    analytics_retry_bytes: &mut analytics_retry_bytes,
+                                    max_buffer_bytes: flush_config.max_buffer_bytes,
                                     flush_count: &mut flush_count,
                                 },
                                 "final usage event flush failed",
@@ -805,6 +816,8 @@ fn spawn_usage_event_flusher(
                                 buffer: &mut buffer,
                                 analytics_retry_buffer: &mut analytics_retry_buffer,
                                 buffered_bytes: &mut buffered_bytes,
+                                analytics_retry_bytes: &mut analytics_retry_bytes,
+                                max_buffer_bytes: flush_config.max_buffer_bytes,
                                 flush_count: &mut flush_count,
                             },
                             "usage event timed flush failed",
@@ -853,13 +866,15 @@ struct UsageEventFlushState<'a> {
     buffer: &'a mut Vec<UsageEvent>,
     analytics_retry_buffer: &'a mut Vec<UsageEvent>,
     buffered_bytes: &'a mut usize,
+    analytics_retry_bytes: &'a mut usize,
+    max_buffer_bytes: usize,
     flush_count: &'a mut u64,
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 async fn flush_usage_event_buffer(
     targets: UsageEventFlushTargets<'_>,
-    state: UsageEventFlushState<'_>,
+    mut state: UsageEventFlushState<'_>,
     error_message: &'static str,
 ) -> bool {
     let mut retry = false;
@@ -876,7 +891,7 @@ async fn flush_usage_event_buffer(
                          {err:#}"
                     );
                 }
-                state.analytics_retry_buffer.extend(batch);
+                append_analytics_retry_events(&mut state, batch);
             },
             Err(err) => {
                 tracing::error!(count, "{}: {err:#}", error_message);
@@ -888,6 +903,7 @@ async fn flush_usage_event_buffer(
     }
     if !state.analytics_retry_buffer.is_empty() {
         let analytics_batch = std::mem::take(state.analytics_retry_buffer);
+        *state.analytics_retry_bytes = 0;
         let count = analytics_batch.len();
         match targets
             .analytics_sink
@@ -903,12 +919,33 @@ async fn flush_usage_event_buffer(
             },
             Err(err) => {
                 tracing::error!(count, "{}: {err:#}", error_message);
-                *state.analytics_retry_buffer = analytics_batch;
-                retry = true;
+                append_analytics_retry_events(&mut state, analytics_batch);
+                retry = !state.analytics_retry_buffer.is_empty();
             },
         }
     }
     retry
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+fn append_analytics_retry_events(state: &mut UsageEventFlushState<'_>, events: Vec<UsageEvent>) {
+    let mut dropped = 0usize;
+    for event in events {
+        let event_bytes = estimate_usage_event_bytes(&event);
+        if state.analytics_retry_bytes.saturating_add(event_bytes) > state.max_buffer_bytes {
+            dropped = dropped.saturating_add(1);
+            continue;
+        }
+        *state.analytics_retry_bytes = state.analytics_retry_bytes.saturating_add(event_bytes);
+        state.analytics_retry_buffer.push(event);
+    }
+    if dropped > 0 {
+        tracing::warn!(
+            dropped,
+            max_buffer_bytes = state.max_buffer_bytes,
+            "dropped llm access analytics retry events after rollups were persisted"
+        );
+    }
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]

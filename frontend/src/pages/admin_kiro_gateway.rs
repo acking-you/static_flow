@@ -13,12 +13,13 @@ use crate::{
     api::{
         create_admin_kiro_account_group, create_admin_kiro_key, create_admin_kiro_manual_account,
         delete_admin_kiro_account, delete_admin_kiro_account_group, delete_admin_kiro_key,
-        fetch_admin_kiro_account_groups, fetch_admin_kiro_accounts, fetch_admin_kiro_keys,
-        fetch_admin_kiro_usage_events, fetch_admin_llm_gateway_config,
-        fetch_admin_llm_gateway_proxy_bindings, fetch_admin_llm_gateway_proxy_configs,
-        fetch_kiro_models, import_admin_kiro_account, patch_admin_kiro_account,
-        patch_admin_kiro_account_group, patch_admin_kiro_key, refresh_admin_kiro_account_balance,
-        update_admin_llm_gateway_config, AdminAccountGroupView, AdminLlmGatewayKeyView,
+        fetch_admin_kiro_account_groups, fetch_admin_kiro_accounts, fetch_admin_kiro_cache_stats,
+        fetch_admin_kiro_keys, fetch_admin_kiro_usage_event_detail, fetch_admin_kiro_usage_events,
+        fetch_admin_llm_gateway_config, fetch_admin_llm_gateway_proxy_bindings,
+        fetch_admin_llm_gateway_proxy_configs, fetch_kiro_models, import_admin_kiro_account,
+        patch_admin_kiro_account, patch_admin_kiro_account_group, patch_admin_kiro_key,
+        refresh_admin_kiro_account_balance, update_admin_llm_gateway_config, AdminAccountGroupView,
+        AdminKiroCacheStatsResponse, AdminLlmGatewayKeyView, AdminLlmGatewayUsageEventDetailView,
         AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery,
         AdminUpstreamProxyBindingView, AdminUpstreamProxyConfigView, CreateAdminAccountGroupInput,
         CreateManualKiroAccountInput, KiroAccountView, KiroBalanceView, KiroModelView,
@@ -92,6 +93,29 @@ fn format_timestamp_opt(ts: Option<i64>) -> String {
 
 fn format_float4(value: f64) -> String {
     format!("{value:.4}")
+}
+
+fn kiro_cache_token_percent(resident_tokens: u64, max_tokens: u64) -> f64 {
+    if max_tokens == 0 {
+        return 0.0;
+    }
+    (resident_tokens as f64 / max_tokens as f64 * 100.0).clamp(0.0, 100.0)
+}
+
+fn format_compact_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let value = bytes as f64;
+    if value >= GIB {
+        format!("{:.1} GiB", value / GIB)
+    } else if value >= MIB {
+        format!("{:.1} MiB", value / MIB)
+    } else if value >= KIB {
+        format!("{:.1} KiB", value / KIB)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn format_json_for_textarea(raw: &str) -> String {
@@ -1402,6 +1426,8 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         use_state(|| props.key_item.kiro_request_validation_enabled);
     let kiro_cache_estimation_enabled = use_state(|| props.key_item.kiro_cache_estimation_enabled);
     let kiro_zero_cache_debug_enabled = use_state(|| props.key_item.kiro_zero_cache_debug_enabled);
+    let kiro_full_request_logging_enabled =
+        use_state(|| props.key_item.kiro_full_request_logging_enabled);
     let policy_override_enabled = use_state(|| initial_override_enabled);
     let key_policy_form = use_state(|| initial_effective_policy_form.clone());
     let key_policy_effective_baseline = use_state(|| initial_effective_policy_form.clone());
@@ -1430,6 +1456,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let kiro_request_validation_enabled = kiro_request_validation_enabled.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
         let kiro_zero_cache_debug_enabled = kiro_zero_cache_debug_enabled.clone();
+        let kiro_full_request_logging_enabled = kiro_full_request_logging_enabled.clone();
         let policy_override_enabled = policy_override_enabled.clone();
         let key_policy_form = key_policy_form.clone();
         let key_policy_effective_baseline = key_policy_effective_baseline.clone();
@@ -1459,6 +1486,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             kiro_request_validation_enabled.set(key_item.kiro_request_validation_enabled);
             kiro_cache_estimation_enabled.set(key_item.kiro_cache_estimation_enabled);
             kiro_zero_cache_debug_enabled.set(key_item.kiro_zero_cache_debug_enabled);
+            kiro_full_request_logging_enabled.set(key_item.kiro_full_request_logging_enabled);
             policy_override_enabled.set(initial_override_enabled);
             key_policy_form.set(initial_effective_policy_form.clone());
             key_policy_effective_baseline.set(initial_effective_policy_form.clone());
@@ -1493,6 +1521,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let kiro_request_validation_enabled = kiro_request_validation_enabled.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
         let kiro_zero_cache_debug_enabled = kiro_zero_cache_debug_enabled.clone();
+        let kiro_full_request_logging_enabled = kiro_full_request_logging_enabled.clone();
         let policy_override_enabled = policy_override_enabled.clone();
         let key_policy_form = key_policy_form.clone();
         let billable_multiplier_override_enabled = billable_multiplier_override_enabled.clone();
@@ -1519,6 +1548,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let kiro_request_validation_enabled_value = *kiro_request_validation_enabled;
             let kiro_cache_estimation_enabled_value = *kiro_cache_estimation_enabled;
             let kiro_zero_cache_debug_enabled_value = *kiro_zero_cache_debug_enabled;
+            let kiro_full_request_logging_enabled_value = *kiro_full_request_logging_enabled;
             let policy_override_enabled_value = *policy_override_enabled;
             let key_policy_form_value = (*key_policy_form).clone();
             let billable_multiplier_override_enabled_value = *billable_multiplier_override_enabled;
@@ -1591,6 +1621,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     kiro_request_validation_enabled: Some(kiro_request_validation_enabled_value),
                     kiro_cache_estimation_enabled: Some(kiro_cache_estimation_enabled_value),
                     kiro_zero_cache_debug_enabled: Some(kiro_zero_cache_debug_enabled_value),
+                    kiro_full_request_logging_enabled: Some(
+                        kiro_full_request_logging_enabled_value,
+                    ),
                     kiro_cache_policy_override_json: policy_override_json
                         .as_ref()
                         .map(|value| value.as_deref()),
@@ -1629,6 +1662,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let model_name_map = model_name_map.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
         let kiro_zero_cache_debug_enabled = kiro_zero_cache_debug_enabled.clone();
+        let kiro_full_request_logging_enabled = kiro_full_request_logging_enabled.clone();
         let saving = saving.clone();
         let feedback = feedback.clone();
         let on_flash = props.on_flash.clone();
@@ -1643,6 +1677,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let model_name_map_value = (*model_name_map).clone();
             let kiro_cache_estimation_enabled_value = *kiro_cache_estimation_enabled;
             let kiro_zero_cache_debug_enabled_value = *kiro_zero_cache_debug_enabled;
+            let kiro_full_request_logging_enabled_value = *kiro_full_request_logging_enabled;
             let saving = saving.clone();
             let feedback = feedback.clone();
             let on_flash = on_flash.clone();
@@ -1674,6 +1709,9 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     kiro_request_validation_enabled: None,
                     kiro_cache_estimation_enabled: Some(kiro_cache_estimation_enabled_value),
                     kiro_zero_cache_debug_enabled: Some(kiro_zero_cache_debug_enabled_value),
+                    kiro_full_request_logging_enabled: Some(
+                        kiro_full_request_logging_enabled_value,
+                    ),
                     kiro_cache_policy_override_json: None,
                     kiro_billable_model_multipliers_override_json: None,
                     request_max_concurrency_unlimited: false,
@@ -2044,6 +2082,26 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                         <strong>{ "0 Cache 诊断" }</strong>
                         <span class={classes!("block", "mt-1", "text-xs", "text-[var(--muted)]")}>
                             { "开启后，这个 key 的成功请求如果最终 cache_read_input_tokens 为 0，会把完整 client/upstream request 写入 usage event 详情，并在 0-cache 日志里带上完整请求数据。关闭时仍会记录 0-cache 元信息日志，但不会保存完整请求体。" }
+                        </span>
+                    </span>
+                </label>
+                <label class={classes!("md:col-span-2", "flex", "cursor-pointer", "items-start", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "text-sm")}>
+                    <input
+                        type="checkbox"
+                        checked={*kiro_full_request_logging_enabled}
+                        onchange={{
+                            let kiro_full_request_logging_enabled =
+                                kiro_full_request_logging_enabled.clone();
+                            Callback::from(move |event: Event| {
+                                let input: HtmlInputElement = event.target_unchecked_into();
+                                kiro_full_request_logging_enabled.set(input.checked());
+                            })
+                        }}
+                    />
+                    <span>
+                        <strong>{ "完整请求记录" }</strong>
+                        <span class={classes!("block", "mt-1", "text-xs", "text-[var(--muted)]")}>
+                            { "默认关闭。开启后，这个 key 的每次 Kiro 请求都会在 usage event 详情里保留完整 client/upstream request，用于协议兼容和异常排查。" }
                         </span>
                     </span>
                 </label>
@@ -2673,9 +2731,13 @@ pub fn admin_kiro_gateway_page() -> Html {
     let usage_events = use_state(Vec::<AdminLlmGatewayUsageEventView>::new);
     let usage_loading = use_state(|| false);
     let usage_error = use_state(|| None::<String>);
+    let selected_usage_event = use_state(|| None::<AdminLlmGatewayUsageEventDetailView>);
+    let usage_detail_loading = use_state(|| false);
     let proxy_configs = use_state(Vec::<AdminUpstreamProxyConfigView>::new);
     let proxy_bindings = use_state(Vec::<AdminUpstreamProxyBindingView>::new);
     let runtime_config = use_state(|| None::<LlmGatewayRuntimeConfig>);
+    let kiro_cache_stats = use_state(|| None::<AdminKiroCacheStatsResponse>);
+    let kiro_cache_stats_error = use_state(|| None::<String>);
     let kiro_cache_policy_form = use_state(KiroCachePolicyForm::default);
     let persisted_kiro_cache_policy_form = use_state(KiroCachePolicyForm::default);
     let kiro_cache_kmodels_json = use_state(String::new);
@@ -2752,6 +2814,32 @@ pub fn admin_kiro_gateway_page() -> Html {
     let creating_account_group = use_state(|| false);
     let account_group_form_expanded = use_state(|| false);
 
+    let open_usage_detail = {
+        let selected_usage_event = selected_usage_event.clone();
+        let usage_detail_loading = usage_detail_loading.clone();
+        let usage_error = usage_error.clone();
+        Callback::from(move |event_id: String| {
+            let selected_usage_event = selected_usage_event.clone();
+            let usage_detail_loading = usage_detail_loading.clone();
+            let usage_error = usage_error.clone();
+            selected_usage_event.set(None);
+            usage_detail_loading.set(true);
+            usage_error.set(None);
+            wasm_bindgen_futures::spawn_local(async move {
+                match fetch_admin_kiro_usage_event_detail(&event_id).await {
+                    Ok(detail) => selected_usage_event.set(Some(detail)),
+                    Err(err) => usage_error.set(Some(err)),
+                }
+                usage_detail_loading.set(false);
+            });
+        })
+    };
+
+    let close_usage_detail = {
+        let selected_usage_event = selected_usage_event.clone();
+        Callback::from(move |_| selected_usage_event.set(None))
+    };
+
     let reload_usage = {
         let usage_events = usage_events.clone();
         let usage_loading = usage_loading.clone();
@@ -2789,6 +2877,8 @@ pub fn admin_kiro_gateway_page() -> Html {
         let proxy_configs = proxy_configs.clone();
         let proxy_bindings = proxy_bindings.clone();
         let runtime_config = runtime_config.clone();
+        let kiro_cache_stats = kiro_cache_stats.clone();
+        let kiro_cache_stats_error = kiro_cache_stats_error.clone();
         let kiro_cache_policy_form = kiro_cache_policy_form.clone();
         let persisted_kiro_cache_policy_form = persisted_kiro_cache_policy_form.clone();
         let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
@@ -2810,6 +2900,8 @@ pub fn admin_kiro_gateway_page() -> Html {
             let proxy_configs = proxy_configs.clone();
             let proxy_bindings = proxy_bindings.clone();
             let runtime_config = runtime_config.clone();
+            let kiro_cache_stats = kiro_cache_stats.clone();
+            let kiro_cache_stats_error = kiro_cache_stats_error.clone();
             let kiro_cache_policy_form = kiro_cache_policy_form.clone();
             let persisted_kiro_cache_policy_form = persisted_kiro_cache_policy_form.clone();
             let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
@@ -2834,6 +2926,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                     models_result,
                     proxy_configs_result,
                     proxy_bindings_result,
+                    cache_stats_result,
                 ) = futures::join!(
                     fetch_admin_llm_gateway_config(),
                     fetch_admin_kiro_accounts(),
@@ -2842,6 +2935,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                     fetch_kiro_models(),
                     fetch_admin_llm_gateway_proxy_configs(),
                     fetch_admin_llm_gateway_proxy_bindings(),
+                    fetch_admin_kiro_cache_stats(),
                 );
                 match (
                     config_result,
@@ -2906,6 +3000,16 @@ pub fn admin_kiro_gateway_page() -> Html {
                         kiro_models.set(models_resp.data);
                         proxy_configs.set(proxy_configs_resp.proxy_configs);
                         proxy_bindings.set(proxy_bindings_resp.bindings);
+                        match cache_stats_result {
+                            Ok(cache_stats_resp) => {
+                                kiro_cache_stats.set(Some(cache_stats_resp));
+                                kiro_cache_stats_error.set(None);
+                            },
+                            Err(err) => {
+                                kiro_cache_stats.set(None);
+                                kiro_cache_stats_error.set(Some(err));
+                            },
+                        }
                     },
                     (Err(err), _, _, _, _, _, _)
                     | (_, Err(err), _, _, _, _, _)
@@ -3622,10 +3726,77 @@ pub fn admin_kiro_gateway_page() -> Html {
                         onclick={on_save_kiro_cache_kmodels}
                     >
                         { if *saving_kmodel_config { "Saving..." } else { "Save Cache Settings" } }
-                    </button>
-                </div>
-                <div class={classes!("mt-4", "grid", "gap-3", "lg:grid-cols-2")}>
-                    <div class={classes!("lg:col-span-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "space-y-3")}>
+                        </button>
+                    </div>
+                    {
+                        if let Some(stats) = (*kiro_cache_stats).clone() {
+                            let token_percent = kiro_cache_token_percent(
+                                stats.prefix_tree.resident_tokens,
+                                stats.prefix_tree.max_tokens,
+                            );
+                            let estimated_bytes = stats
+                                .prefix_tree
+                                .estimated_memory_bytes
+                                .saturating_add(stats.conversation_anchors.estimated_memory_bytes);
+                            html! {
+                                <div class={classes!("mt-4", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3")}>
+                                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                        <div>
+                                            <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Runtime Cache Footprint" }</div>
+                                            <div class={classes!("mt-1", "font-mono", "text-sm", "text-[var(--text)]")}>
+                                                { format!("mode={} · page={} tokens", stats.mode, stats.page_size_tokens) }
+                                            </div>
+                                        </div>
+                                        <div class={classes!("font-mono", "text-sm", "font-semibold", "text-[var(--text)]")}>
+                                            { format!("{:.2}% tokens", token_percent) }
+                                        </div>
+                                    </div>
+                                    <div class={classes!("mt-3", "h-2", "overflow-hidden", "rounded-full", "bg-[var(--border)]")}>
+                                        <div
+                                            class={classes!("h-full", "bg-emerald-500")}
+                                            style={format!("width: {:.2}%;", token_percent)}
+                                        />
+                                    </div>
+                                    <div class={classes!("mt-3", "grid", "gap-2", "sm:grid-cols-2", "xl:grid-cols-5")}>
+                                        <div class={classes!("font-mono", "text-xs")}>
+                                            <div class={classes!("text-[var(--muted)]")}>{ "resident / max" }</div>
+                                            <div>{ format!("{} / {}", format_number_u64(stats.prefix_tree.resident_tokens), format_number_u64(stats.prefix_tree.max_tokens)) }</div>
+                                        </div>
+                                        <div class={classes!("font-mono", "text-xs")}>
+                                            <div class={classes!("text-[var(--muted)]")}>{ "estimated memory" }</div>
+                                            <div>{ format_compact_bytes(estimated_bytes) }</div>
+                                        </div>
+                                        <div class={classes!("font-mono", "text-xs")}>
+                                            <div class={classes!("text-[var(--muted)]")}>{ "nodes / leaves" }</div>
+                                            <div>{ format!("{} / {}", format_number_u64(stats.prefix_tree.node_count as u64), format_number_u64(stats.prefix_tree.leaf_count as u64)) }</div>
+                                        </div>
+                                        <div class={classes!("font-mono", "text-xs")}>
+                                            <div class={classes!("text-[var(--muted)]")}>{ "anchors" }</div>
+                                            <div>{ format!("{} / {}", format_number_u64(stats.conversation_anchors.entries as u64), format_number_u64(stats.conversation_anchors.max_entries as u64)) }</div>
+                                        </div>
+                                        <div class={classes!("font-mono", "text-xs")}>
+                                            <div class={classes!("text-[var(--muted)]")}>{ "process rss" }</div>
+                                            <div>{ stats.process_memory.rss_bytes.map(format_compact_bytes).unwrap_or_else(|| "-".to_string()) }</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        } else if let Some(err) = (*kiro_cache_stats_error).clone() {
+                            html! {
+                                <div class={classes!("mt-4", "rounded-lg", "border", "border-dashed", "border-red-400/50", "bg-red-500/10", "px-3", "py-3", "font-mono", "text-xs", "text-red-700", "dark:text-red-200")}>
+                                    { format!("Runtime cache stats unavailable: {err}") }
+                                </div>
+                            }
+                        } else {
+                            html! {
+                                <div class={classes!("mt-4", "rounded-lg", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "font-mono", "text-xs", "text-[var(--muted)]")}>
+                                    { "Runtime cache stats are loading." }
+                                </div>
+                            }
+                        }
+                    }
+                    <div class={classes!("mt-4", "grid", "gap-3", "lg:grid-cols-2")}>
+                        <div class={classes!("lg:col-span-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "space-y-3")}>
                         <div class={classes!("space-y-1")}>
                             <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Global Cache Policy" }</div>
                             <div class={classes!("text-sm", "text-[var(--muted)]")}>
@@ -4291,15 +4462,28 @@ pub fn admin_kiro_gateway_page() -> Html {
                             let credit_text = event.credit_usage
                                 .map(|c| format!("{c:.4}"))
                                 .unwrap_or_else(|| "-".to_string());
+                            let event_id = event.id.clone();
+                            let on_detail = {
+                                let open_usage_detail = open_usage_detail.clone();
+                                let event_id = event_id.clone();
+                                Callback::from(move |_| open_usage_detail.emit(event_id.clone()))
+                            };
                             html! {
                                 <div class={classes!("flex", "items-center", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-xs", "flex-wrap")}>
                                     <span class={classes!("grid", "gap-1", "text-[var(--muted)]")}>
                                         <span>{ format_ms(event.created_at) }</span>
-                                        <span class={classes!("max-w-[10rem]", "truncate", "text-[11px]")} title={event.id.clone()}>{ event.id.clone() }</span>
+                                        <span class={classes!("max-w-[10rem]", "truncate", "text-[11px]")} title={event_id.clone()}>{ event_id.clone() }</span>
                                     </span>
                                     <span class={classes!("font-semibold", "text-[var(--text)]")}>{ event.key_name.clone() }</span>
                                     <span class={classes!("text-[var(--muted)]")}>{ event.model.clone().unwrap_or_else(|| "-".to_string()) }</span>
                                     <span class={classes!("ml-auto", "text-[var(--text)]")}>{ format!("credit {credit_text}") }</span>
+                                    <button
+                                        type="button"
+                                        class={classes!("btn-terminal", "btn-terminal-muted", "px-2", "py-1", "text-[11px]")}
+                                        onclick={on_detail}
+                                    >
+                                        { "详情" }
+                                    </button>
                                 </div>
                             }
                         }) }
@@ -4307,6 +4491,58 @@ pub fn admin_kiro_gateway_page() -> Html {
                 }
             </section>
             } // end TAB_USAGE
+
+            {
+                if *usage_detail_loading {
+                    html! {
+                        <div class={classes!("fixed", "inset-0", "z-[95]", "flex", "items-center", "justify-center", "bg-black/45", "px-4")}>
+                            <div class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-5", "py-4", "font-mono", "text-sm", "text-[var(--text)]", "shadow-xl")}>
+                                <i class={classes!("fas", "fa-spinner", "animate-spin", "mr-2")} />
+                                { "加载 usage 详情" }
+                            </div>
+                        </div>
+                    }
+                } else if let Some(detail) = (*selected_usage_event).clone() {
+                    let close_usage_detail = close_usage_detail.clone();
+                    html! {
+                        <div class={classes!("fixed", "inset-0", "z-[95]", "flex", "items-center", "justify-center", "bg-black/45", "px-4")}>
+                            <div class={classes!("max-h-[86vh]", "w-[min(64rem,100%)]", "overflow-hidden", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "shadow-xl")}>
+                                <div class={classes!("flex", "items-center", "justify-between", "gap-3", "border-b", "border-[var(--border)]", "px-4", "py-3")}>
+                                    <div class={classes!("min-w-0")}>
+                                        <div class={classes!("font-mono", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Usage Detail" }</div>
+                                        <div class={classes!("truncate", "font-mono", "text-sm", "font-semibold", "text-[var(--text)]")} title={detail.id.clone()}>{ detail.id.clone() }</div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        class={classes!("btn-terminal", "btn-terminal-muted")}
+                                        onclick={close_usage_detail}
+                                    >
+                                        { "关闭" }
+                                    </button>
+                                </div>
+                                <div class={classes!("max-h-[72vh]", "overflow-auto", "px-4", "py-4", "space-y-3")}>
+                                    <div class={classes!("grid", "gap-3", "sm:grid-cols-2", "lg:grid-cols-4")}>
+                                        { usage_detail_kv("key", detail.key_name.clone()) }
+                                        { usage_detail_kv("account", detail.account_name.clone().unwrap_or_else(|| "-".to_string())) }
+                                        { usage_detail_kv("model", detail.model.clone().unwrap_or_else(|| "-".to_string())) }
+                                        { usage_detail_kv("status", detail.status_code.to_string()) }
+                                        { usage_detail_kv("input", format_number_u64(detail.input_uncached_tokens)) }
+                                        { usage_detail_kv("cached", format_number_u64(detail.input_cached_tokens)) }
+                                        { usage_detail_kv("output", format_number_u64(detail.output_tokens)) }
+                                        { usage_detail_kv("billable", format_number_u64(detail.billable_tokens)) }
+                                    </div>
+                                    { usage_detail_pre("request headers", detail.request_headers_json.clone()) }
+                                    { usage_detail_pre("client request", detail.client_request_body_json.clone().unwrap_or_else(|| "-".to_string())) }
+                                    { usage_detail_pre("upstream request", detail.upstream_request_body_json.clone().unwrap_or_else(|| "-".to_string())) }
+                                    { usage_detail_pre("full request", detail.full_request_json.clone().unwrap_or_else(|| "-".to_string())) }
+                                </div>
+                            </div>
+                        </div>
+                    }
+                } else {
+                    Html::default()
+                }
+            }
 
             if let Some((message, is_error)) = (*toast).clone() {
                 <div class={classes!(
@@ -4352,6 +4588,24 @@ fn text_input(label: &str, state: &UseStateHandle<String>, extra_class: Option<&
                 })}
             />
         </label>
+    }
+}
+
+fn usage_detail_kv(label: &str, value: String) -> Html {
+    html! {
+        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-xs")}>
+            <div class={classes!("uppercase", "tracking-[0.14em]", "text-[var(--muted)]")}>{ label }</div>
+            <div class={classes!("mt-1", "truncate", "text-[var(--text)]")} title={value.clone()}>{ value }</div>
+        </div>
+    }
+}
+
+fn usage_detail_pre(label: &str, value: String) -> Html {
+    html! {
+        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2")}>
+            <div class={classes!("mb-2", "font-mono", "text-xs", "uppercase", "tracking-[0.14em]", "text-[var(--muted)]")}>{ label }</div>
+            <pre class={classes!("m-0", "max-h-64", "overflow-auto", "whitespace-pre-wrap", "break-words", "font-mono", "text-xs", "leading-5", "text-[var(--text)]")}>{ value }</pre>
+        </div>
     }
 }
 
@@ -4401,9 +4655,10 @@ mod tests {
     use super::{
         build_kiro_billable_multiplier_override_json,
         build_kiro_billable_multiplier_override_patch, build_kiro_cache_policy_override_json,
-        build_kiro_cache_policy_override_patch, format_kiro_cache_policy_summary,
-        kiro_account_status_cta_text, kiro_account_status_route, kiro_key_candidate_credit_summary,
-        kiro_key_route_summary, parse_kiro_cache_policy_form_json, sanitize_kiro_account_group_id,
+        build_kiro_cache_policy_override_patch, format_compact_bytes,
+        format_kiro_cache_policy_summary, kiro_account_status_cta_text, kiro_account_status_route,
+        kiro_cache_token_percent, kiro_key_candidate_credit_summary, kiro_key_route_summary,
+        parse_kiro_cache_policy_form_json, sanitize_kiro_account_group_id,
         should_load_kiro_usage_preview, should_reset_kiro_cache_policy_editor, TAB_GROUPS,
         TAB_KEYS, TAB_OVERVIEW, TAB_USAGE,
     };
@@ -4900,6 +5155,18 @@ mod tests {
         assert!(!should_load_kiro_usage_preview(TAB_OVERVIEW));
         assert!(!should_load_kiro_usage_preview(TAB_KEYS));
         assert!(!should_load_kiro_usage_preview(TAB_GROUPS));
+    }
+
+    #[test]
+    fn kiro_cache_token_percent_handles_empty_limit() {
+        assert_eq!(kiro_cache_token_percent(12, 0), 0.0);
+    }
+
+    #[test]
+    fn format_compact_bytes_formats_runtime_cache_memory() {
+        assert_eq!(format_compact_bytes(512), "512 B");
+        assert_eq!(format_compact_bytes(1536), "1.5 KiB");
+        assert_eq!(format_compact_bytes(2 * 1024 * 1024), "2.0 MiB");
     }
 
     fn test_account(name: &str, balance: Option<(f64, f64)>) -> KiroAccountView {

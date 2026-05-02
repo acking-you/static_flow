@@ -251,6 +251,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
             "/admin/kiro-gateway/accounts/statuses",
             get(admin::list_admin_kiro_account_statuses),
         )
+        .route("/admin/kiro-gateway/cache-stats", get(admin::get_admin_kiro_cache_stats))
         .route(
             "/admin/kiro-gateway/accounts",
             get(admin::list_admin_kiro_accounts).post(admin::create_admin_kiro_manual_account),
@@ -802,6 +803,32 @@ mod tests {
         assert_eq!(value["max_request_body_bytes"], 8 * 1024 * 1024);
         assert_eq!(value["codex_client_version"], "0.124.0");
         assert_eq!(value["kiro_prefix_cache_mode"], "prefix_tree");
+    }
+
+    #[tokio::test]
+    async fn router_serves_admin_kiro_cache_stats_for_local_request() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/kiro-gateway/cache-stats")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(value["mode"], "prefix_tree");
+        assert_eq!(value["page_size_tokens"], 64);
+        assert_eq!(value["prefix_tree"]["max_tokens"], 4_000_000);
+        assert_eq!(value["prefix_tree"]["resident_tokens"], 0);
+        assert_eq!(value["conversation_anchors"]["entries"], 0);
+        assert!(value["generated_at"].as_i64().unwrap_or_default() > 0);
     }
 
     #[tokio::test]

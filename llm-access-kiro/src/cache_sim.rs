@@ -144,7 +144,8 @@ impl PromptProjection {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum KiroCacheSimulationMode {
     Formula,
     PrefixTree,
@@ -172,6 +173,32 @@ pub struct KiroCacheSimulationConfig {
 pub struct PrefixCacheMatch {
     pub matched_pages: usize,
     pub matched_tokens: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct KiroCacheRuntimeStats {
+    pub mode: KiroCacheSimulationMode,
+    pub page_size_tokens: usize,
+    pub prefix_tree: PrefixTreeRuntimeStats,
+    pub conversation_anchors: ConversationAnchorRuntimeStats,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+pub struct PrefixTreeRuntimeStats {
+    pub resident_tokens: u64,
+    pub max_tokens: u64,
+    pub node_count: usize,
+    pub leaf_count: usize,
+    pub edge_count: usize,
+    pub child_capacity: usize,
+    pub estimated_memory_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+pub struct ConversationAnchorRuntimeStats {
+    pub entries: usize,
+    pub max_entries: usize,
+    pub estimated_memory_bytes: u64,
 }
 
 #[derive(Default)]
@@ -240,6 +267,30 @@ impl KiroCacheSimulator {
             config.conversation_anchor_ttl,
             config.conversation_anchor_max_entries,
         );
+    }
+
+    pub fn snapshot_stats(
+        &self,
+        config: KiroCacheSimulationConfig,
+        now: Instant,
+    ) -> KiroCacheRuntimeStats {
+        let prefix_tree = {
+            let mut tree = self.prefix_tree.lock();
+            tree.prune_expired(now, config.prefix_cache_entry_ttl);
+            tree.snapshot_stats(config.prefix_cache_max_tokens)
+        };
+        let conversation_anchors = {
+            let mut index = self.anchor_index.lock();
+            index.ensure_capacity(config.conversation_anchor_max_entries);
+            index.remove_expired(now, config.conversation_anchor_ttl);
+            index.snapshot_stats(config.conversation_anchor_max_entries)
+        };
+        KiroCacheRuntimeStats {
+            mode: config.mode,
+            page_size_tokens: PREFIX_CACHE_PAGE_SIZE,
+            prefix_tree,
+            conversation_anchors,
+        }
     }
 }
 
@@ -340,6 +391,35 @@ impl PrefixTree {
         let removed = prune_expired_children(&mut self.root, now, ttl);
         self.resident_tokens = self.resident_tokens.saturating_sub(removed);
     }
+
+    fn snapshot_stats(&self, max_tokens: u64) -> PrefixTreeRuntimeStats {
+        let mut node_count = 0usize;
+        let mut leaf_count = 0usize;
+        let mut edge_count = 0usize;
+        let mut child_capacity = 0usize;
+        let mut stack = vec![(&self.root, true)];
+
+        while let Some((node, is_root)) = stack.pop() {
+            node_count = node_count.saturating_add(1);
+            edge_count = edge_count.saturating_add(node.children.len());
+            child_capacity = child_capacity.saturating_add(node.children.capacity());
+            if node.children.is_empty() && !is_root {
+                leaf_count = leaf_count.saturating_add(1);
+            }
+            stack.extend(node.children.values().map(|child| (child, false)));
+        }
+
+        let estimated_memory_bytes = estimate_prefix_tree_memory_bytes(node_count, child_capacity);
+        PrefixTreeRuntimeStats {
+            resident_tokens: self.resident_tokens,
+            max_tokens,
+            node_count,
+            leaf_count,
+            edge_count,
+            child_capacity,
+            estimated_memory_bytes,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -423,6 +503,29 @@ impl ConversationAnchorIndex {
             let _ = cache.pop_lru();
         }
     }
+
+    fn snapshot_stats(&self, max_entries: usize) -> ConversationAnchorRuntimeStats {
+        let entries = self.cache.as_ref().map_or(0, LruCache::len);
+        ConversationAnchorRuntimeStats {
+            entries,
+            max_entries: max_entries.max(1),
+            estimated_memory_bytes: estimate_anchor_index_memory_bytes(entries),
+        }
+    }
+}
+
+fn estimate_prefix_tree_memory_bytes(node_count: usize, child_capacity: usize) -> u64 {
+    let root_bytes = if node_count == 0 { 0 } else { std::mem::size_of::<PrefixNode>() };
+    let edge_bytes = child_capacity.saturating_mul(
+        std::mem::size_of::<u128>().saturating_add(std::mem::size_of::<PrefixNode>()),
+    );
+    root_bytes.saturating_add(edge_bytes) as u64
+}
+
+fn estimate_anchor_index_memory_bytes(entries: usize) -> u64 {
+    let entry_bytes = std::mem::size_of::<ConversationAnchorEntry>();
+    let key_bytes = std::mem::size_of::<String>();
+    entries.saturating_mul(entry_bytes.saturating_add(key_bytes)) as u64
 }
 
 fn insert_prefix_path(node: &mut PrefixNode, pages: &[CanonicalTokenPage], now: Instant) -> u64 {
@@ -1442,6 +1545,43 @@ mod tests {
                 now + Duration::from_secs(1)
             ),
             Some("real-conv".to_string())
+        );
+    }
+
+    #[test]
+    fn cache_simulator_snapshot_reports_prefix_tree_and_anchor_usage() {
+        let state = ConversationState::new("conv-1")
+            .with_history(vec![history_user(&"stable prefix ".repeat(256))])
+            .with_current_message(CurrentMessage::new(UserInputMessage::new(
+                "continue analysis",
+                "ignored-model",
+            )));
+        let projection = PromptProjection::from_conversation_state(&state);
+        let assistant = AssistantMessage::new("assistant reply");
+        let simulator = KiroCacheSimulator::default();
+        let config = KiroCacheSimulationConfig {
+            mode: KiroCacheSimulationMode::PrefixTree,
+            prefix_cache_max_tokens: 100_000,
+            prefix_cache_entry_ttl: Duration::from_secs(300),
+            conversation_anchor_max_entries: 32,
+            conversation_anchor_ttl: Duration::from_secs(300),
+        };
+        let now = Instant::now();
+
+        simulator.record_success(&projection, &assistant, "real-conv", true, config, now);
+        let snapshot = simulator.snapshot_stats(config, now + Duration::from_secs(1));
+
+        assert_eq!(snapshot.mode, KiroCacheSimulationMode::PrefixTree);
+        assert_eq!(snapshot.page_size_tokens, PREFIX_CACHE_PAGE_SIZE);
+        assert_eq!(snapshot.prefix_tree.resident_tokens, projection.stable_prefix_token_count());
+        assert_eq!(snapshot.prefix_tree.max_tokens, config.prefix_cache_max_tokens);
+        assert_eq!(snapshot.prefix_tree.node_count, projection.stable_prefix_pages.len() + 1);
+        assert_eq!(snapshot.prefix_tree.leaf_count, 1);
+        assert!(snapshot.prefix_tree.estimated_memory_bytes > 0);
+        assert_eq!(snapshot.conversation_anchors.entries, 1);
+        assert_eq!(
+            snapshot.conversation_anchors.max_entries,
+            config.conversation_anchor_max_entries
         );
     }
 

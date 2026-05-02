@@ -310,9 +310,9 @@ fn upsert_key(tx: &Transaction<'_>, key: &LlmGatewayKeyRecord) -> Result<()> {
             account_group_id, model_name_map_json, request_max_concurrency,
             request_min_start_interval_ms, kiro_request_validation_enabled,
             kiro_cache_estimation_enabled, kiro_zero_cache_debug_enabled,
-            kiro_cache_policy_override_json,
+            kiro_full_request_logging_enabled, kiro_cache_policy_override_json,
             kiro_billable_model_multipliers_override_json
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             &key.id,
             &key.route_strategy,
@@ -325,6 +325,7 @@ fn upsert_key(tx: &Transaction<'_>, key: &LlmGatewayKeyRecord) -> Result<()> {
             key.kiro_request_validation_enabled as i64,
             key.kiro_cache_estimation_enabled as i64,
             key.kiro_zero_cache_debug_enabled as i64,
+            0_i64,
             &key.kiro_cache_policy_override_json,
             &key.kiro_billable_model_multipliers_override_json,
         ],

@@ -113,6 +113,8 @@ pub struct KeyRouteConfig {
     pub kiro_cache_estimation_enabled: bool,
     /// Whether zero-cache diagnostic capture is enabled.
     pub kiro_zero_cache_debug_enabled: bool,
+    /// Whether every Kiro request should retain full request payloads.
+    pub kiro_full_request_logging_enabled: bool,
     /// Optional Kiro cache policy override JSON.
     pub kiro_cache_policy_override_json: Option<String>,
     /// Optional Kiro billable multiplier override JSON.
@@ -361,9 +363,9 @@ impl SqliteControlStore {
                 account_group_id, model_name_map_json, request_max_concurrency,
                 request_min_start_interval_ms, kiro_request_validation_enabled,
                 kiro_cache_estimation_enabled, kiro_zero_cache_debug_enabled,
-                kiro_cache_policy_override_json,
+                kiro_full_request_logging_enabled, kiro_cache_policy_override_json,
                 kiro_billable_model_multipliers_override_json
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
             ON CONFLICT(key_id) DO UPDATE SET
                 route_strategy = excluded.route_strategy,
                 fixed_account_name = excluded.fixed_account_name,
@@ -375,6 +377,8 @@ impl SqliteControlStore {
                 kiro_request_validation_enabled = excluded.kiro_request_validation_enabled,
                 kiro_cache_estimation_enabled = excluded.kiro_cache_estimation_enabled,
                 kiro_zero_cache_debug_enabled = excluded.kiro_zero_cache_debug_enabled,
+                kiro_full_request_logging_enabled =
+                    excluded.kiro_full_request_logging_enabled,
                 kiro_cache_policy_override_json = excluded.kiro_cache_policy_override_json,
                 kiro_billable_model_multipliers_override_json =
                     excluded.kiro_billable_model_multipliers_override_json",
@@ -390,6 +394,7 @@ impl SqliteControlStore {
                 route.kiro_request_validation_enabled as i64,
                 route.kiro_cache_estimation_enabled as i64,
                 route.kiro_zero_cache_debug_enabled as i64,
+                route.kiro_full_request_logging_enabled as i64,
                 &route.kiro_cache_policy_override_json,
                 &route.kiro_billable_model_multipliers_override_json,
             ],
@@ -439,7 +444,8 @@ impl SqliteControlStore {
                     r.account_group_id, r.model_name_map_json,
                     r.request_max_concurrency, r.request_min_start_interval_ms,
                     r.kiro_request_validation_enabled, r.kiro_cache_estimation_enabled,
-                    r.kiro_zero_cache_debug_enabled, r.kiro_cache_policy_override_json,
+                    r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
+                    r.kiro_cache_policy_override_json,
                     r.kiro_billable_model_multipliers_override_json,
                     u.input_uncached_tokens, u.input_cached_tokens, u.output_tokens,
                     u.billable_tokens, u.credit_total, u.credit_missing_events,
@@ -467,7 +473,8 @@ impl SqliteControlStore {
                     r.account_group_id, r.model_name_map_json,
                     r.request_max_concurrency, r.request_min_start_interval_ms,
                     r.kiro_request_validation_enabled, r.kiro_cache_estimation_enabled,
-                    r.kiro_zero_cache_debug_enabled, r.kiro_cache_policy_override_json,
+                    r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
+                    r.kiro_cache_policy_override_json,
                     r.kiro_billable_model_multipliers_override_json,
                     u.input_uncached_tokens, u.input_cached_tokens, u.output_tokens,
                     u.billable_tokens, u.credit_total, u.credit_missing_events,
@@ -496,7 +503,8 @@ impl SqliteControlStore {
                     r.account_group_id, r.model_name_map_json,
                     r.request_max_concurrency, r.request_min_start_interval_ms,
                     r.kiro_request_validation_enabled, r.kiro_cache_estimation_enabled,
-                    r.kiro_zero_cache_debug_enabled, r.kiro_cache_policy_override_json,
+                    r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
+                    r.kiro_cache_policy_override_json,
                     r.kiro_billable_model_multipliers_override_json,
                     u.input_uncached_tokens, u.input_cached_tokens, u.output_tokens,
                     u.billable_tokens, u.credit_total, u.credit_missing_events,
@@ -545,6 +553,7 @@ impl SqliteControlStore {
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,
+            kiro_full_request_logging_enabled: false,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
         };
@@ -767,6 +776,7 @@ impl SqliteControlStore {
                 request_validation_enabled: bundle.route.kiro_request_validation_enabled,
                 cache_estimation_enabled: bundle.route.kiro_cache_estimation_enabled,
                 zero_cache_debug_enabled: bundle.route.kiro_zero_cache_debug_enabled,
+                full_request_logging_enabled: bundle.route.kiro_full_request_logging_enabled,
                 model_name_map_json: bundle
                     .route
                     .model_name_map_json
@@ -930,6 +940,9 @@ impl SqliteControlStore {
         }
         if let Some(value) = patch.kiro_zero_cache_debug_enabled {
             bundle.route.kiro_zero_cache_debug_enabled = value;
+        }
+        if let Some(value) = patch.kiro_full_request_logging_enabled {
+            bundle.route.kiro_full_request_logging_enabled = value;
         }
         if let Some(value) = patch.kiro_cache_policy_override_json.as_ref() {
             bundle.route.kiro_cache_policy_override_json = value.clone();
@@ -1947,6 +1960,7 @@ impl SqliteControlStore {
             request_validation_enabled: true,
             cache_estimation_enabled: true,
             zero_cache_debug_enabled: false,
+            full_request_logging_enabled: false,
             model_name_map_json: "{}".to_string(),
             cache_kmodels_json: runtime_config.kiro_cache_kmodels_json,
             cache_policy_json: runtime_config.kiro_cache_policy_json,
@@ -3763,10 +3777,10 @@ impl SqliteControlStore {
 
 fn decode_key_bundle(row: &rusqlite::Row<'_>) -> rusqlite::Result<KeyBundle> {
     let key_id: String = row.get(0)?;
-    let credit_total_raw: String = row.get(27)?;
+    let credit_total_raw: String = row.get(28)?;
     let credit_total = credit_total_raw
         .parse::<f64>()
-        .map_err(|err| rusqlite::Error::FromSqlConversionFailure(27, Type::Text, Box::new(err)))?;
+        .map_err(|err| rusqlite::Error::FromSqlConversionFailure(28, Type::Text, Box::new(err)))?;
     Ok(KeyBundle {
         key: KeyRecord {
             key_id: key_id.clone(),
@@ -3793,19 +3807,20 @@ fn decode_key_bundle(row: &rusqlite::Row<'_>) -> rusqlite::Result<KeyBundle> {
             kiro_request_validation_enabled: row.get::<_, Option<i64>>(18)?.unwrap_or(0) != 0,
             kiro_cache_estimation_enabled: row.get::<_, Option<i64>>(19)?.unwrap_or(0) != 0,
             kiro_zero_cache_debug_enabled: row.get::<_, Option<i64>>(20)?.unwrap_or(0) != 0,
-            kiro_cache_policy_override_json: row.get(21)?,
-            kiro_billable_model_multipliers_override_json: row.get(22)?,
+            kiro_full_request_logging_enabled: row.get::<_, Option<i64>>(21)?.unwrap_or(0) != 0,
+            kiro_cache_policy_override_json: row.get(22)?,
+            kiro_billable_model_multipliers_override_json: row.get(23)?,
         },
         rollup: KeyUsageRollup {
             key_id,
-            input_uncached_tokens: row.get(23)?,
-            input_cached_tokens: row.get(24)?,
-            output_tokens: row.get(25)?,
-            billable_tokens: row.get(26)?,
+            input_uncached_tokens: row.get(24)?,
+            input_cached_tokens: row.get(25)?,
+            output_tokens: row.get(26)?,
+            billable_tokens: row.get(27)?,
             credit_total,
-            credit_missing_events: row.get(28)?,
-            last_used_at_ms: row.get(29)?,
-            updated_at_ms: row.get(30)?,
+            credit_missing_events: row.get(29)?,
+            last_used_at_ms: row.get(30)?,
+            updated_at_ms: row.get(31)?,
         },
     })
 }
@@ -3847,6 +3862,7 @@ fn admin_key_from_bundle(bundle: &KeyBundle) -> AdminKey {
         kiro_request_validation_enabled: bundle.route.kiro_request_validation_enabled,
         kiro_cache_estimation_enabled: bundle.route.kiro_cache_estimation_enabled,
         kiro_zero_cache_debug_enabled: bundle.route.kiro_zero_cache_debug_enabled,
+        kiro_full_request_logging_enabled: bundle.route.kiro_full_request_logging_enabled,
         kiro_cache_policy_override_json: bundle.route.kiro_cache_policy_override_json.clone(),
         kiro_billable_model_multipliers_override_json: bundle
             .route
@@ -4415,6 +4431,7 @@ mod tests {
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,
+            kiro_full_request_logging_enabled: true,
             kiro_cache_policy_override_json: Some(r#"{"enabled":true}"#.to_string()),
             kiro_billable_model_multipliers_override_json: None,
         };
@@ -4443,6 +4460,7 @@ mod tests {
         assert!(loaded.route.kiro_request_validation_enabled);
         assert!(loaded.route.kiro_cache_estimation_enabled);
         assert!(!loaded.route.kiro_zero_cache_debug_enabled);
+        assert!(loaded.route.kiro_full_request_logging_enabled);
         assert_eq!(loaded.rollup.output_tokens, 33);
     }
 
@@ -4476,6 +4494,7 @@ mod tests {
             kiro_request_validation_enabled: false,
             kiro_cache_estimation_enabled: false,
             kiro_zero_cache_debug_enabled: false,
+            kiro_full_request_logging_enabled: false,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
         };
@@ -4533,6 +4552,7 @@ mod tests {
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,
+            kiro_full_request_logging_enabled: false,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
         };
@@ -5126,6 +5146,7 @@ mod tests {
                 kiro_request_validation_enabled: true,
                 kiro_cache_estimation_enabled: true,
                 kiro_zero_cache_debug_enabled: false,
+                kiro_full_request_logging_enabled: false,
                 kiro_cache_policy_override_json: Some(
                     r#"{"small_input_high_credit_boost":{"target_input_tokens":50000}}"#
                         .to_string(),

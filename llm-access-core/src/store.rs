@@ -328,6 +328,9 @@ pub struct AdminKey {
     pub kiro_cache_estimation_enabled: bool,
     /// Whether Kiro zero-cache diagnostics are enabled.
     pub kiro_zero_cache_debug_enabled: bool,
+    /// Whether every Kiro request should retain full request payload
+    /// diagnostics.
+    pub kiro_full_request_logging_enabled: bool,
     /// Kiro cache policy override JSON.
     pub kiro_cache_policy_override_json: Option<String>,
     /// Kiro billable multiplier override JSON.
@@ -400,6 +403,8 @@ pub struct AdminKeyPatch {
     pub kiro_cache_estimation_enabled: Option<bool>,
     /// New Kiro zero-cache diagnostic toggle.
     pub kiro_zero_cache_debug_enabled: Option<bool>,
+    /// New Kiro full request logging toggle.
+    pub kiro_full_request_logging_enabled: Option<bool>,
     /// New Kiro cache policy override JSON.
     pub kiro_cache_policy_override_json: Option<Option<String>>,
     /// New Kiro billable model multiplier override JSON.
@@ -870,6 +875,8 @@ pub struct ProviderKiroRoute {
     pub cache_estimation_enabled: bool,
     /// Whether zero-cache successes should retain diagnostic request bodies.
     pub zero_cache_debug_enabled: bool,
+    /// Whether all successful Kiro requests should retain full request bodies.
+    pub full_request_logging_enabled: bool,
     /// JSON object mapping public model names to upstream Kiro model names.
     pub model_name_map_json: String,
     /// Effective Kiro cache k-model JSON for this key.
@@ -2035,6 +2042,7 @@ impl AdminKeyStore for EmptyAdminKeyStore {
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,
+            kiro_full_request_logging_enabled: false,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
             effective_kiro_cache_policy_json: default_kiro_cache_policy_json(),

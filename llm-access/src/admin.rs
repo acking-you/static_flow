@@ -2,6 +2,7 @@
 
 use std::{
     collections::BTreeMap,
+    fs,
     net::IpAddr,
     path::PathBuf,
     time::{Duration, Instant},
@@ -30,6 +31,7 @@ use llm_access_kiro::{
         parse_kiro_cache_policy_override_json, resolve_effective_kiro_cache_policy,
         uses_global_kiro_cache_policy, KiroCachePolicy,
     },
+    cache_sim::{KiroCacheRuntimeStats, KiroCacheSimulationConfig, KiroCacheSimulationMode},
     local_import,
 };
 use serde::{Deserialize, Serialize};
@@ -119,6 +121,20 @@ struct AdminKiroAccountStatusesResponse {
     limit: usize,
     offset: usize,
     generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminKiroCacheStatsResponse {
+    #[serde(flatten)]
+    stats: KiroCacheRuntimeStats,
+    process_memory: AdminProcessMemoryStats,
+    generated_at: i64,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct AdminProcessMemoryStats {
+    rss_bytes: Option<u64>,
+    virtual_bytes: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -329,6 +345,8 @@ pub(crate) struct PatchLlmGatewayKeyRequest {
     kiro_cache_estimation_enabled: Option<bool>,
     #[serde(default)]
     kiro_zero_cache_debug_enabled: Option<bool>,
+    #[serde(default)]
+    kiro_full_request_logging_enabled: Option<bool>,
     #[serde(default)]
     kiro_cache_policy_override_json: Option<Option<String>>,
     #[serde(default)]
@@ -1552,6 +1570,65 @@ pub(crate) async fn list_admin_kiro_account_statuses(
         generated_at: now_ms(),
     })
     .into_response()
+}
+
+pub(crate) async fn get_admin_kiro_cache_stats(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let config = match state.admin_config_store.get_admin_runtime_config().await {
+        Ok(config) => config,
+        Err(_) => {
+            return internal_error("Failed to load llm gateway runtime config").into_response()
+        },
+    };
+    Json(AdminKiroCacheStatsResponse {
+        stats: state
+            .provider_state
+            .kiro_cache_stats(kiro_cache_simulation_config_from_admin_config(&config)),
+        process_memory: read_process_memory_stats(),
+        generated_at: now_ms(),
+    })
+    .into_response()
+}
+
+fn read_process_memory_stats() -> AdminProcessMemoryStats {
+    let Ok(status) = fs::read_to_string("/proc/self/status") else {
+        return AdminProcessMemoryStats::default();
+    };
+    let mut stats = AdminProcessMemoryStats::default();
+    for line in status.lines() {
+        if let Some(bytes) = parse_proc_status_kib_line(line, "VmRSS:") {
+            stats.rss_bytes = Some(bytes);
+        } else if let Some(bytes) = parse_proc_status_kib_line(line, "VmSize:") {
+            stats.virtual_bytes = Some(bytes);
+        }
+    }
+    stats
+}
+
+fn parse_proc_status_kib_line(line: &str, prefix: &str) -> Option<u64> {
+    let rest = line.strip_prefix(prefix)?.trim();
+    let raw_kib = rest.split_whitespace().next()?.parse::<u64>().ok()?;
+    raw_kib.checked_mul(1024)
+}
+
+fn kiro_cache_simulation_config_from_admin_config(
+    config: &AdminRuntimeConfig,
+) -> KiroCacheSimulationConfig {
+    KiroCacheSimulationConfig {
+        mode: KiroCacheSimulationMode::from_runtime_value(&config.kiro_prefix_cache_mode),
+        prefix_cache_max_tokens: config.kiro_prefix_cache_max_tokens,
+        prefix_cache_entry_ttl: Duration::from_secs(config.kiro_prefix_cache_entry_ttl_seconds),
+        conversation_anchor_max_entries: usize::try_from(
+            config.kiro_conversation_anchor_max_entries,
+        )
+        .unwrap_or(usize::MAX),
+        conversation_anchor_ttl: Duration::from_secs(config.kiro_conversation_anchor_ttl_seconds),
+    }
 }
 
 pub(crate) async fn import_admin_kiro_account(
@@ -2952,6 +3029,7 @@ fn normalize_key_patch(
         kiro_request_validation_enabled: request.kiro_request_validation_enabled,
         kiro_cache_estimation_enabled: request.kiro_cache_estimation_enabled,
         kiro_zero_cache_debug_enabled: request.kiro_zero_cache_debug_enabled,
+        kiro_full_request_logging_enabled: request.kiro_full_request_logging_enabled,
         kiro_cache_policy_override_json: request.kiro_cache_policy_override_json,
         kiro_billable_model_multipliers_override_json,
         updated_at_ms: now_ms(),
@@ -3643,6 +3721,7 @@ mod tests {
             kiro_request_validation_enabled: None,
             kiro_cache_estimation_enabled: None,
             kiro_zero_cache_debug_enabled: None,
+            kiro_full_request_logging_enabled: None,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
         }
@@ -3677,6 +3756,7 @@ mod tests {
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,
+            kiro_full_request_logging_enabled: false,
             kiro_cache_policy_override_json: policy_override_json,
             kiro_billable_model_multipliers_override_json: None,
             effective_kiro_cache_policy_json: "{}".to_string(),
@@ -3685,6 +3765,12 @@ mod tests {
                 core_store::default_kiro_billable_model_multipliers_json(),
             uses_global_kiro_billable_model_multipliers: true,
         }
+    }
+
+    #[test]
+    fn parse_proc_status_kib_line_converts_to_bytes() {
+        assert_eq!(parse_proc_status_kib_line("VmRSS:\t  1234 kB", "VmRSS:"), Some(1_263_616));
+        assert_eq!(parse_proc_status_kib_line("VmSize: none", "VmRSS:"), None);
     }
 
     #[test]
@@ -3701,6 +3787,16 @@ mod tests {
             .as_ref()
             .and_then(|value| value.as_ref())
             .is_some_and(|json| json.contains("target_input_tokens")));
+    }
+
+    #[test]
+    fn normalize_key_patch_accepts_kiro_full_request_logging_toggle() {
+        let mut request = empty_key_patch_request();
+        request.kiro_full_request_logging_enabled = Some(true);
+
+        let patch = normalize_key_patch(request).expect("full request logging toggle");
+
+        assert_eq!(patch.kiro_full_request_logging_enabled, Some(true));
     }
 
     #[test]

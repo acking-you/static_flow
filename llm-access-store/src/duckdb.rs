@@ -369,6 +369,7 @@ pub fn initialize_duckdb_target_path(path: impl AsRef<Path>) -> anyhow::Result<(
     }
     let conn = duckdb::Connection::open(path)
         .with_context(|| format!("failed to open duckdb database `{}`", path.display()))?;
+    configure_duckdb_usage_connection(&conn)?;
     crate::initialize_duckdb_target(&conn)
 }
 
@@ -419,6 +420,29 @@ struct ArchivedUsageSegment {
 
 #[cfg(feature = "duckdb-runtime")]
 #[derive(Debug, Clone)]
+enum TieredUsagePartitionKind {
+    Active,
+    Archive,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug, Clone)]
+struct TieredUsagePartition {
+    path: PathBuf,
+    count: usize,
+    kind: TieredUsagePartitionKind,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TieredUsagePageFetch {
+    partition_index: usize,
+    local_newest_offset: usize,
+    limit: usize,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug, Clone)]
 struct SegmentKeyRollup {
     key_id: String,
     provider_type: String,
@@ -447,6 +471,12 @@ const DUCKDB_COMPACT_MEMORY_LIMIT: &str = "1536MB";
 
 #[cfg(feature = "duckdb-runtime")]
 const DUCKDB_COMPACT_MAX_TEMP_DIRECTORY_SIZE: &str = "8GB";
+
+#[cfg(feature = "duckdb-runtime")]
+const DUCKDB_USAGE_CONNECTION_MEMORY_LIMIT: &str = "512MB";
+
+#[cfg(feature = "duckdb-runtime")]
+const DUCKDB_USAGE_CONNECTION_MAX_TEMP_DIRECTORY_SIZE: &str = "2GB";
 
 #[cfg(feature = "duckdb-runtime")]
 impl DuckDbUsageRepository {
@@ -502,17 +532,21 @@ impl DuckDbUsageRepository {
     }
 
     fn open_conn(path: &Path) -> anyhow::Result<duckdb::Connection> {
-        duckdb::Connection::open(path)
-            .with_context(|| format!("failed to open duckdb database `{}`", path.display()))
+        let conn = duckdb::Connection::open(path)
+            .with_context(|| format!("failed to open duckdb database `{}`", path.display()))?;
+        configure_duckdb_usage_connection(&conn)?;
+        Ok(conn)
     }
 
     fn open_read_only_conn(path: &Path) -> anyhow::Result<duckdb::Connection> {
         let config = duckdb::Config::default()
             .access_mode(duckdb::AccessMode::ReadOnly)
             .context("failed to configure duckdb read-only access")?;
-        duckdb::Connection::open_with_flags(path, config).with_context(|| {
+        let conn = duckdb::Connection::open_with_flags(path, config).with_context(|| {
             format!("failed to open read-only duckdb database `{}`", path.display())
-        })
+        })?;
+        configure_duckdb_usage_connection(&conn)?;
+        Ok(conn)
     }
 
     /// Aggregate all persisted usage events into per-key operational rollups.
@@ -576,6 +610,35 @@ fn remove_file_if_exists(path: &Path) -> anyhow::Result<()> {
 #[cfg(feature = "duckdb-runtime")]
 fn duckdb_string_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn duckdb_usage_temp_dir() -> PathBuf {
+    std::env::temp_dir().join("staticflow-llm-access-duckdb")
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn configure_duckdb_usage_connection(conn: &duckdb::Connection) -> anyhow::Result<()> {
+    let temp_dir = duckdb_usage_temp_dir();
+    fs::create_dir_all(&temp_dir).with_context(|| {
+        format!("failed to create duckdb usage temp directory `{}`", temp_dir.display())
+    })?;
+    let temp_dir_str = temp_dir
+        .to_str()
+        .ok_or_else(|| anyhow!("duckdb usage temp directory path is not valid UTF-8"))?;
+    let sql = format!(
+        "
+        SET memory_limit={};
+        SET threads=1;
+        SET temp_directory={};
+        SET max_temp_directory_size={};
+        ",
+        duckdb_string_literal(DUCKDB_USAGE_CONNECTION_MEMORY_LIMIT),
+        duckdb_string_literal(temp_dir_str),
+        duckdb_string_literal(DUCKDB_USAGE_CONNECTION_MAX_TEMP_DIRECTORY_SIZE),
+    );
+    conn.execute_batch(&sql)
+        .context("failed to configure duckdb usage connection")
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1496,62 +1559,70 @@ fn list_usage_events_from_tiered(
 ) -> anyhow::Result<UsageEventPage> {
     let safe_limit = query.limit.min(USAGE_EVENT_ONLINE_MAX_LIMIT);
     let safe_offset = query.offset.min(USAGE_EVENT_ONLINE_MAX_OFFSET);
-    let fetch_budget = safe_offset.saturating_add(safe_limit);
     let mut total = 0usize;
+    let mut partitions = Vec::new();
     let mut events = Vec::new();
 
     if query.source.includes_hot() {
-        let state = state
-            .lock()
-            .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
-        let conn = DuckDbUsageRepository::open_conn(&state.active_path)?;
-        total = total.saturating_add(count_usage_events_from_conn(&conn, query)?);
-        if fetch_budget > 0 {
-            let active_total = count_usage_events_from_conn(&conn, query)?;
-            let fetch_count = active_total.min(fetch_budget);
-            let reverse_offset = active_total.saturating_sub(fetch_count);
-            let mut active_events =
-                fetch_usage_event_summaries_from_conn(&conn, query, fetch_count, reverse_offset)?;
-            active_events.reverse();
-            events.extend(active_events);
+        let active_path = {
+            let state = state
+                .lock()
+                .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
+            state.active_path.clone()
+        };
+        let conn = DuckDbUsageRepository::open_conn(&active_path)?;
+        let count = count_usage_events_from_conn(&conn, query)?;
+        total = total.saturating_add(count);
+        if count > 0 {
+            partitions.push(TieredUsagePartition {
+                path: active_path,
+                count,
+                kind: TieredUsagePartitionKind::Active,
+            });
         }
     }
 
     if query.source.includes_archive() {
         let segments = archived_segments_for_query(config, query)?;
-        total = total.saturating_add(archived_usage_count(config, query, &segments)?);
-        if fetch_budget > 0 {
-            for segment in segments {
-                let conn = DuckDbUsageRepository::open_read_only_conn(&segment.archive_path)?;
-                let segment_total = count_usage_events_from_conn(&conn, query)?;
-                if segment_total == 0 {
-                    continue;
-                }
-                let fetch_count = segment_total.min(fetch_budget);
-                let reverse_offset = segment_total.saturating_sub(fetch_count);
-                let mut segment_events = fetch_usage_event_summaries_from_conn(
-                    &conn,
-                    query,
-                    fetch_count,
-                    reverse_offset,
-                )?;
-                segment_events.reverse();
-                events.extend(segment_events);
+        for segment in segments {
+            let count = archived_segment_usage_count(config, query, &segment)?;
+            total = total.saturating_add(count);
+            if count > 0 {
+                partitions.push(TieredUsagePartition {
+                    path: segment.archive_path,
+                    count,
+                    kind: TieredUsagePartitionKind::Archive,
+                });
             }
         }
     }
 
-    events.sort_by(|left, right| {
-        right
-            .created_at_ms
-            .cmp(&left.created_at_ms)
-            .then_with(|| right.event_id.cmp(&left.event_id))
-    });
-    let events = events
-        .into_iter()
-        .skip(safe_offset)
-        .take(safe_limit)
-        .collect::<Vec<_>>();
+    if safe_limit > 0 && safe_offset < total {
+        let plan = plan_tiered_usage_page_fetches(
+            partitions.iter().map(|partition| partition.count),
+            safe_offset,
+            safe_limit,
+        );
+        for fetch in plan {
+            let partition = &partitions[fetch.partition_index];
+            let conn = match partition.kind {
+                TieredUsagePartitionKind::Active => {
+                    DuckDbUsageRepository::open_conn(&partition.path)?
+                },
+                TieredUsagePartitionKind::Archive => {
+                    DuckDbUsageRepository::open_read_only_conn(&partition.path)?
+                },
+            };
+            let reverse_offset = partition
+                .count
+                .saturating_sub(fetch.local_newest_offset.saturating_add(fetch.limit));
+            let mut partition_events =
+                fetch_usage_event_summaries_from_conn(&conn, query, fetch.limit, reverse_offset)?;
+            partition_events.reverse();
+            events.extend(partition_events);
+        }
+    }
+
     Ok(UsageEventPage {
         total,
         offset: safe_offset,
@@ -1559,6 +1630,48 @@ fn list_usage_events_from_tiered(
         has_more: safe_offset.saturating_add(events.len()) < total,
         events,
     })
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn plan_tiered_usage_page_fetches<I>(
+    partition_counts: I,
+    offset: usize,
+    limit: usize,
+) -> Vec<TieredUsagePageFetch>
+where
+    I: IntoIterator<Item = usize>,
+{
+    if limit == 0 {
+        return Vec::new();
+    }
+    let mut remaining_offset = offset;
+    let mut remaining_limit = limit;
+    let mut fetches = Vec::new();
+
+    for (partition_index, count) in partition_counts.into_iter().enumerate() {
+        if count == 0 {
+            continue;
+        }
+        if remaining_offset >= count {
+            remaining_offset -= count;
+            continue;
+        }
+
+        let available = count - remaining_offset;
+        let fetch_limit = available.min(remaining_limit);
+        fetches.push(TieredUsagePageFetch {
+            partition_index,
+            local_newest_offset: remaining_offset,
+            limit: fetch_limit,
+        });
+        remaining_limit -= fetch_limit;
+        remaining_offset = 0;
+        if remaining_limit == 0 {
+            break;
+        }
+    }
+
+    fetches
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1594,38 +1707,16 @@ fn archived_segments_for_query(
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn archived_usage_count(
+fn archived_segment_usage_count(
     config: &TieredDuckDbUsageConfig,
     query: &UsageEventQuery,
-    segments: &[ArchivedUsageSegment],
+    segment: &ArchivedUsageSegment,
 ) -> anyhow::Result<usize> {
-    if query.start_ms.is_none() && query.end_ms.is_none() {
-        return archived_usage_count_from_catalog(config, query, segments);
+    if query.start_ms.is_none() && query.end_ms.is_none() || segment_fully_inside(segment, query) {
+        return archived_segment_count_from_catalog(config, query, segment);
     }
-    let mut total = 0usize;
-    for segment in segments {
-        if segment_fully_inside(segment, query) {
-            total =
-                total.saturating_add(archived_segment_count_from_catalog(config, query, segment)?);
-        } else {
-            let conn = DuckDbUsageRepository::open_read_only_conn(&segment.archive_path)?;
-            total = total.saturating_add(count_usage_events_from_conn(&conn, query)?);
-        }
-    }
-    Ok(total)
-}
-
-#[cfg(feature = "duckdb-runtime")]
-fn archived_usage_count_from_catalog(
-    config: &TieredDuckDbUsageConfig,
-    query: &UsageEventQuery,
-    segments: &[ArchivedUsageSegment],
-) -> anyhow::Result<usize> {
-    let mut total = 0usize;
-    for segment in segments {
-        total = total.saturating_add(archived_segment_count_from_catalog(config, query, segment)?);
-    }
-    Ok(total)
+    let conn = DuckDbUsageRepository::open_read_only_conn(&segment.archive_path)?;
+    count_usage_events_from_conn(&conn, query)
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -2370,6 +2461,32 @@ mod tests {
     }
 
     #[cfg(feature = "duckdb-runtime")]
+    #[test]
+    fn tiered_usage_page_plan_skips_whole_sources_and_fetches_only_page_rows() {
+        let plan = super::plan_tiered_usage_page_fetches([50, 80, 80], 55, 20);
+
+        assert_eq!(plan, vec![super::TieredUsagePageFetch {
+            partition_index: 1,
+            local_newest_offset: 5,
+            limit: 20,
+        }]);
+
+        let cross_partition_plan = super::plan_tiered_usage_page_fetches([5, 10], 3, 10);
+        assert_eq!(cross_partition_plan, vec![
+            super::TieredUsagePageFetch {
+                partition_index: 0,
+                local_newest_offset: 3,
+                limit: 2,
+            },
+            super::TieredUsagePageFetch {
+                partition_index: 1,
+                local_newest_offset: 0,
+                limit: 8,
+            },
+        ]);
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
     #[tokio::test]
     async fn duckdb_tiered_repository_rolls_over_without_blocking_active_appends() {
         let root = std::env::temp_dir()
@@ -2416,6 +2533,23 @@ mod tests {
         assert_eq!(page.events.len(), 2);
         assert_eq!(page.events[0].event_id, second.event_id);
         assert_eq!(page.events[1].event_id, first.event_id);
+
+        let second_page = repo
+            .list_usage_events(UsageEventQuery {
+                key_id: Some(first.key_id.clone()),
+                provider_type: None,
+                source: UsageEventSource::All,
+                start_ms: None,
+                end_ms: None,
+                limit: 1,
+                offset: 1,
+            })
+            .await
+            .expect("list second tiered usage page");
+        assert_eq!(second_page.total, 2);
+        assert_eq!(second_page.events.len(), 1);
+        assert_eq!(second_page.events[0].event_id, first.event_id);
+        assert!(!second_page.has_more);
 
         let archived_detail = repo
             .get_usage_event(&first.event_id)

@@ -63,7 +63,8 @@ use llm_access_kiro::{
         KiroCachePolicy,
     },
     cache_sim::{
-        KiroCacheSimulationConfig, KiroCacheSimulationMode, KiroCacheSimulator, PromptProjection,
+        KiroCacheRuntimeStats, KiroCacheSimulationConfig, KiroCacheSimulationMode,
+        KiroCacheSimulator, PromptProjection,
     },
     machine_id,
     parser::decoder::EventStreamDecoder,
@@ -199,6 +200,18 @@ impl ProviderUsageMetadata {
     }
 }
 
+fn capture_client_request_body_json(meta: &mut ProviderUsageMetadata, body: &[u8]) {
+    if meta.client_request_body_json.is_none() {
+        meta.client_request_body_json = Some(String::from_utf8_lossy(body).into_owned());
+    }
+}
+
+fn capture_upstream_request_body_json(meta: &mut ProviderUsageMetadata, body: &[u8]) {
+    if meta.upstream_request_body_json.is_none() {
+        meta.upstream_request_body_json = Some(String::from_utf8_lossy(body).into_owned());
+    }
+}
+
 /// Shared provider request state.
 #[derive(Clone)]
 pub struct ProviderState {
@@ -299,6 +312,14 @@ impl ProviderState {
 
     pub(crate) fn route_store(&self) -> Arc<dyn ProviderRouteStore> {
         Arc::clone(&self.route_store)
+    }
+
+    pub(crate) fn kiro_cache_stats(
+        &self,
+        config: KiroCacheSimulationConfig,
+    ) -> KiroCacheRuntimeStats {
+        self.kiro_cache_simulator
+            .snapshot_stats(config, Instant::now())
     }
 
     fn dispatch_deps(&self) -> ProviderDispatchDeps {
@@ -1244,7 +1265,6 @@ async fn dispatch_kiro_proxy(
     };
     usage_meta.mark_pre_handler_done(clamp_duration_ms(parse_started.elapsed()));
     usage_meta.last_message_content = extract_last_message_from_kiro_messages(&payload);
-    usage_meta.client_request_body_json = Some(String::from_utf8_lossy(&body).into_owned());
     if let Err(err) = apply_kiro_model_mapping(&routes[0].model_name_map_json, &mut payload) {
         return kiro_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1265,6 +1285,9 @@ async fn dispatch_kiro_proxy(
     ) as i32;
     override_kiro_thinking_from_model_name(&mut payload);
     if route_mcp_web_search {
+        if routes[0].full_request_logging_enabled {
+            capture_client_request_body_json(&mut usage_meta, &body);
+        }
         return dispatch_kiro_websearch(KiroWebsearchDispatch {
             key,
             payload,
@@ -1282,6 +1305,7 @@ async fn dispatch_kiro_proxy(
         Ok(normalized) => normalized,
         Err(err) => {
             let response = kiro_conversion_error_response(err);
+            capture_client_request_body_json(&mut usage_meta, &body);
             record_kiro_preflight_failure(KiroPreflightFailureRecord {
                 control_store: control_store.as_ref(),
                 key: &key,
@@ -1306,6 +1330,7 @@ async fn dispatch_kiro_proxy(
         Ok(conversion) => conversion,
         Err(err) => {
             let response = kiro_conversion_error_response(err);
+            capture_client_request_body_json(&mut usage_meta, &body);
             record_kiro_preflight_failure(KiroPreflightFailureRecord {
                 control_store: control_store.as_ref(),
                 key: &key,
@@ -1329,6 +1354,7 @@ async fn dispatch_kiro_proxy(
         &conversion.session_tracking,
     ) {
         let response = kiro_json_error(StatusCode::BAD_REQUEST, "invalid_request_error", &message);
+        capture_client_request_body_json(&mut usage_meta, &body);
         record_kiro_preflight_failure(KiroPreflightFailureRecord {
             control_store: control_store.as_ref(),
             key: &key,
@@ -1402,9 +1428,13 @@ async fn dispatch_kiro_proxy(
                 )
             },
         };
-        usage_meta.upstream_request_body_json =
-            Some(String::from_utf8_lossy(&request_body).into_owned());
+        if route.zero_cache_debug_enabled || route.full_request_logging_enabled {
+            capture_client_request_body_json(&mut usage_meta, &body);
+            capture_upstream_request_body_json(&mut usage_meta, &request_body);
+        }
         if request_body.len() > KIRO_GENERATE_REQUEST_MAX_BODY_BYTES {
+            capture_client_request_body_json(&mut usage_meta, &body);
+            capture_upstream_request_body_json(&mut usage_meta, &request_body);
             usage_meta.mark_stream_finish();
             if let Err(err) = record_kiro_usage(KiroUsageRecord {
                 control_store: control_store.as_ref(),
@@ -1442,7 +1472,7 @@ async fn dispatch_kiro_proxy(
             &route,
             route_store.as_ref(),
             upstream_url,
-            request_body,
+            &request_body,
         )
         .await
         {
@@ -1506,6 +1536,8 @@ async fn dispatch_kiro_proxy(
                     continue;
                 }
                 let status = failure.status;
+                capture_client_request_body_json(&mut usage_meta, &body);
+                capture_upstream_request_body_json(&mut usage_meta, &request_body);
                 usage_meta.mark_stream_finish();
                 let error_response = failure.into_response();
                 let usage = build_kiro_usage_summary(
@@ -1544,6 +1576,8 @@ async fn dispatch_kiro_proxy(
         };
         if !response.status().is_success() {
             let status = response.status();
+            capture_client_request_body_json(&mut usage_meta, &body);
+            capture_upstream_request_body_json(&mut usage_meta, &request_body);
             usage_meta.mark_stream_finish();
             let usage = build_kiro_usage_summary(
                 &effective_model,
@@ -1692,9 +1726,15 @@ async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
         };
         usage_meta.add_routing_wait(clamp_duration_ms(route_started.elapsed()));
         let mut route_usage_meta = usage_meta.clone();
-        route_usage_meta.upstream_request_body_json = Some(request_body.clone());
         match call_kiro_mcp_for_route(&route, route_store.as_ref(), &request_body).await {
             Ok(mcp_response) => {
+                let capture_request_details = route.full_request_logging_enabled;
+                if capture_request_details {
+                    capture_upstream_request_body_json(
+                        &mut route_usage_meta,
+                        request_body.as_bytes(),
+                    );
+                }
                 route_usage_meta.mark_upstream_headers();
                 route_usage_meta.mark_post_headers_body();
                 route_usage_meta.mark_stream_finish();
@@ -1709,6 +1749,7 @@ async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
                     status: StatusCode::OK,
                     control_store,
                     usage_meta: route_usage_meta,
+                    capture_request_details,
                     _key_permit: key_permit
                         .take()
                         .expect("kiro key permit should be held until response is returned"),
@@ -1781,6 +1822,7 @@ async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
                 if websearch::should_propagate_mcp_error_text(&message) {
                     return kiro_json_error(StatusCode::BAD_GATEWAY, "api_error", &message);
                 }
+                capture_upstream_request_body_json(&mut route_usage_meta, request_body.as_bytes());
                 route_usage_meta.mark_stream_finish();
                 return build_kiro_websearch_response(WebsearchResponseInput {
                     key,
@@ -1793,6 +1835,7 @@ async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
                     status: StatusCode::OK,
                     control_store,
                     usage_meta: route_usage_meta,
+                    capture_request_details: true,
                     _key_permit: key_permit
                         .take()
                         .expect("kiro key permit should be held until response is returned"),
@@ -1815,6 +1858,7 @@ struct WebsearchResponseInput {
     status: StatusCode,
     control_store: Arc<dyn ControlStore>,
     usage_meta: ProviderUsageMetadata,
+    capture_request_details: bool,
     _key_permit: LimitPermit,
     _account_permit: KiroRequestLease,
 }
@@ -1829,15 +1873,16 @@ async fn build_kiro_websearch_response(input: WebsearchResponseInput) -> Respons
         credit_usage: None,
         credit_usage_missing: true,
     };
-    if let Err(err) = record_kiro_websearch_usage(
-        input.control_store.as_ref(),
-        &input.key,
-        &input.route,
-        &input.payload.model,
-        input.status,
+    if let Err(err) = record_kiro_websearch_usage(KiroWebsearchUsageRecord {
+        control_store: input.control_store.as_ref(),
+        key: &input.key,
+        route: &input.route,
+        model: &input.payload.model,
+        status: input.status,
         usage,
-        &input.usage_meta,
-    )
+        meta: &input.usage_meta,
+        capture_request_details: input.capture_request_details,
+    })
     .await
     {
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to record kiro usage: {err}"))
@@ -1970,7 +2015,7 @@ async fn call_kiro_generate_for_route(
     route: &ProviderKiroRoute,
     route_store: &dyn ProviderRouteStore,
     upstream_url: String,
-    request_body: Vec<u8>,
+    request_body: &[u8],
 ) -> Result<reqwest::Response, KiroRouteFailure> {
     let mut force_refresh = false;
     let mut last_failure: Option<KiroRouteFailure> = None;
@@ -1990,7 +2035,7 @@ async fn call_kiro_generate_for_route(
             route,
             &call_ctx,
             upstream_url.clone(),
-            request_body.clone(),
+            request_body.to_vec(),
         )
         .await
         {
@@ -2447,16 +2492,17 @@ async fn buffered_kiro_stream_response(
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to record kiro usage: {err}"))
             .into_response();
     }
-    let body = sse_events
-        .into_iter()
-        .map(|event| event.to_sse_string())
-        .collect::<String>();
+    let body_stream = futures_util::stream::iter(
+        sse_events
+            .into_iter()
+            .map(|event| Ok::<Bytes, std::io::Error>(Bytes::from(event.to_sse_string()))),
+    );
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::CONNECTION, "keep-alive")
-        .body(Body::from(body))
+        .body(Body::from_stream(body_stream))
         .unwrap_or_else(|_| {
             (StatusCode::BAD_GATEWAY, "kiro buffered response build failed").into_response()
         })
@@ -3183,6 +3229,7 @@ async fn record_kiro_preflight_failure(record: KiroPreflightFailureRecord<'_>) {
 async fn record_kiro_usage(record: KiroUsageRecord<'_>) -> anyhow::Result<()> {
     let billable_tokens = kiro_billable_tokens(record.model, record.usage, record.cache_ctx);
     let capture_request_details = record.status.as_u16() >= 400
+        || record.route.full_request_logging_enabled
         || (record.route.zero_cache_debug_enabled
             && record.status.is_success()
             && record.usage.input_cached_tokens <= 0);
@@ -3242,57 +3289,75 @@ async fn record_kiro_usage(record: KiroUsageRecord<'_>) -> anyhow::Result<()> {
     record.control_store.apply_usage_rollup(&event).await
 }
 
-async fn record_kiro_websearch_usage(
-    control_store: &dyn ControlStore,
-    key: &AuthenticatedKey,
-    route: &ProviderKiroRoute,
-    model: &str,
+struct KiroWebsearchUsageRecord<'a> {
+    control_store: &'a dyn ControlStore,
+    key: &'a AuthenticatedKey,
+    route: &'a ProviderKiroRoute,
+    model: &'a str,
     status: StatusCode,
     usage: KiroUsageSummary,
-    meta: &ProviderUsageMetadata,
-) -> anyhow::Result<()> {
+    meta: &'a ProviderUsageMetadata,
+    capture_request_details: bool,
+}
+
+async fn record_kiro_websearch_usage(record: KiroWebsearchUsageRecord<'_>) -> anyhow::Result<()> {
     let multipliers =
-        parse_kiro_billable_model_multipliers_json(&route.billable_model_multipliers_json)?;
+        parse_kiro_billable_model_multipliers_json(&record.route.billable_model_multipliers_json)?;
     let event = UsageEvent {
         event_id: format!("llm-usage-{}", uuid::Uuid::new_v4()),
         created_at_ms: now_millis(),
         provider_type: ProviderType::Kiro,
         protocol_family: ProtocolFamily::Anthropic,
-        key_id: key.key_id.clone(),
-        key_name: key.key_name.clone(),
-        account_name: Some(route.account_name.clone()),
-        account_group_id_at_event: route.account_group_id_at_event.clone(),
-        route_strategy_at_event: Some(route.route_strategy_at_event),
-        request_method: meta.request_method.clone(),
-        request_url: meta.request_url.clone(),
+        key_id: record.key.key_id.clone(),
+        key_name: record.key.key_name.clone(),
+        account_name: Some(record.route.account_name.clone()),
+        account_group_id_at_event: record.route.account_group_id_at_event.clone(),
+        route_strategy_at_event: Some(record.route.route_strategy_at_event),
+        request_method: record.meta.request_method.clone(),
+        request_url: record.meta.request_url.clone(),
         endpoint: "/mcp".to_string(),
-        model: Some(model.to_string()),
+        model: Some(record.model.to_string()),
         mapped_model: None,
-        status_code: status.as_u16() as i64,
-        request_body_bytes: meta.request_body_bytes,
-        quota_failover_count: meta.quota_failover_count,
-        routing_diagnostics_json: meta.routing_diagnostics_json.clone(),
-        input_uncached_tokens: i64::from(usage.input_uncached_tokens.max(0)),
-        input_cached_tokens: i64::from(usage.input_cached_tokens.max(0)),
-        output_tokens: i64::from(usage.output_tokens.max(0)),
+        status_code: record.status.as_u16() as i64,
+        request_body_bytes: record.meta.request_body_bytes,
+        quota_failover_count: record.meta.quota_failover_count,
+        routing_diagnostics_json: record.meta.routing_diagnostics_json.clone(),
+        input_uncached_tokens: i64::from(record.usage.input_uncached_tokens.max(0)),
+        input_cached_tokens: i64::from(record.usage.input_cached_tokens.max(0)),
+        output_tokens: i64::from(record.usage.output_tokens.max(0)),
         billable_tokens: clamp_u64_to_i64(kiro_billable_tokens_with_multipliers(
-            model,
-            usage,
+            record.model,
+            record.usage,
             &multipliers,
         )),
         credit_usage: None,
         usage_missing: false,
         credit_usage_missing: true,
-        client_ip: meta.client_ip.clone(),
-        ip_region: meta.ip_region.clone(),
-        request_headers_json: meta.request_headers_json.clone(),
-        last_message_content: meta.last_message_content.clone(),
-        client_request_body_json: meta.client_request_body_json.clone(),
-        upstream_request_body_json: meta.upstream_request_body_json.clone(),
-        full_request_json: meta.full_request_json.clone(),
-        timing: meta.to_timing(),
+        client_ip: record.meta.client_ip.clone(),
+        ip_region: record.meta.ip_region.clone(),
+        request_headers_json: record.meta.request_headers_json.clone(),
+        last_message_content: record.meta.last_message_content.clone(),
+        client_request_body_json: record
+            .capture_request_details
+            .then(|| record.meta.client_request_body_json.clone())
+            .flatten(),
+        upstream_request_body_json: record
+            .capture_request_details
+            .then(|| record.meta.upstream_request_body_json.clone())
+            .flatten(),
+        full_request_json: record
+            .capture_request_details
+            .then(|| {
+                record
+                    .meta
+                    .full_request_json
+                    .clone()
+                    .or_else(|| record.meta.client_request_body_json.clone())
+            })
+            .flatten(),
+        timing: record.meta.to_timing(),
     };
-    control_store.apply_usage_rollup(&event).await
+    record.control_store.apply_usage_rollup(&event).await
 }
 
 fn kiro_billable_tokens(model: &str, usage: KiroUsageSummary, cache_ctx: &KiroCacheContext) -> u64 {
@@ -4668,6 +4733,7 @@ mod tests {
             request_validation_enabled: true,
             cache_estimation_enabled: true,
             zero_cache_debug_enabled: false,
+            full_request_logging_enabled: false,
             model_name_map_json: "{}".to_string(),
             cache_kmodels_json: llm_access_core::store::default_kiro_cache_kmodels_json(),
             cache_policy_json: llm_access_core::store::default_kiro_cache_policy_json(),
@@ -6144,6 +6210,142 @@ mod tests {
             super::kiro_billable_tokens_with_multipliers("claude-sonnet-4-6", usage, &multipliers);
 
         assert_eq!(billable, (100 + 1_000 / 10 + 4 * 5) * 2);
+    }
+
+    #[tokio::test]
+    async fn kiro_websearch_usage_omits_heavy_payload_on_success() {
+        let store = RecordingControlStore::default();
+        let key = AuthenticatedKey {
+            key_id: "kiro-key".to_string(),
+            key_name: "Kiro key".to_string(),
+            provider_type: "kiro".to_string(),
+            protocol_family: "anthropic".to_string(),
+            status: "active".to_string(),
+            quota_billable_limit: 1_000,
+            billable_tokens_used: 0,
+        };
+        let meta = super::ProviderUsageMetadata {
+            started_at: Instant::now(),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
+            request_body_bytes: Some(128),
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: Some("search query".to_string()),
+            client_request_body_json: Some(r#"{"client":true}"#.to_string()),
+            upstream_request_body_json: Some(r#"{"mcp":true}"#.to_string()),
+            full_request_json: Some(r#"{"full":true}"#.to_string()),
+        };
+
+        let route = static_kiro_route();
+        super::record_kiro_websearch_usage(super::KiroWebsearchUsageRecord {
+            control_store: &store,
+            key: &key,
+            route: &route,
+            model: "claude-sonnet-4-6",
+            status: StatusCode::OK,
+            usage: super::KiroUsageSummary {
+                input_uncached_tokens: 10,
+                input_cached_tokens: 0,
+                output_tokens: 3,
+                credit_usage: None,
+                credit_usage_missing: true,
+            },
+            meta: &meta,
+            capture_request_details: false,
+        })
+        .await
+        .expect("record websearch usage");
+
+        let events = store.usage_events.lock().expect("usage events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].endpoint, "/mcp");
+        assert_eq!(events[0].last_message_content.as_deref(), Some("search query"));
+        assert_eq!(events[0].client_request_body_json, None);
+        assert_eq!(events[0].upstream_request_body_json, None);
+        assert_eq!(events[0].full_request_json, None);
+    }
+
+    #[tokio::test]
+    async fn kiro_usage_captures_full_payload_when_key_full_request_logging_enabled() {
+        let store = RecordingControlStore::default();
+        let key = AuthenticatedKey {
+            key_id: "kiro-key".to_string(),
+            key_name: "Kiro key".to_string(),
+            provider_type: "kiro".to_string(),
+            protocol_family: "anthropic".to_string(),
+            status: "active".to_string(),
+            quota_billable_limit: 1_000,
+            billable_tokens_used: 0,
+        };
+        let mut route = static_kiro_route();
+        route.full_request_logging_enabled = true;
+        let conversation_state =
+            llm_access_kiro::wire::ConversationState::new("diag-conversation".to_string());
+        let cache_simulator = llm_access_kiro::cache_sim::KiroCacheSimulator::default();
+        let cache_ctx =
+            super::build_kiro_cache_context(&route, &conversation_state, &cache_simulator)
+                .expect("cache context");
+        let meta = super::ProviderUsageMetadata {
+            started_at: Instant::now(),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
+            request_body_bytes: Some(128),
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: Some("normal cached request".to_string()),
+            client_request_body_json: Some(r#"{"client":true}"#.to_string()),
+            upstream_request_body_json: Some(r#"{"upstream":true}"#.to_string()),
+            full_request_json: Some(r#"{"full":true}"#.to_string()),
+        };
+
+        super::record_kiro_usage(super::KiroUsageRecord {
+            control_store: &store,
+            key: &key,
+            route: &route,
+            endpoint: "/v1/messages",
+            model: "claude-sonnet-4-6",
+            status: StatusCode::OK,
+            usage: super::KiroUsageSummary {
+                input_uncached_tokens: 10,
+                input_cached_tokens: 200,
+                output_tokens: 3,
+                credit_usage: None,
+                credit_usage_missing: true,
+            },
+            cache_ctx: &cache_ctx,
+            meta: &meta,
+        })
+        .await
+        .expect("record kiro usage");
+
+        let events = store.usage_events.lock().expect("usage events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].client_request_body_json.as_deref(), Some(r#"{"client":true}"#));
+        assert_eq!(events[0].upstream_request_body_json.as_deref(), Some(r#"{"upstream":true}"#));
+        assert_eq!(events[0].full_request_json.as_deref(), Some(r#"{"full":true}"#));
     }
 
     #[tokio::test]

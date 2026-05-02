@@ -5927,6 +5927,8 @@ pub struct AdminLlmGatewayKeyView {
     #[serde(default)]
     pub kiro_zero_cache_debug_enabled: bool,
     #[serde(default)]
+    pub kiro_full_request_logging_enabled: bool,
+    #[serde(default)]
     pub kiro_cache_policy_override_json: Option<String>,
     #[serde(default)]
     pub kiro_billable_model_multipliers_override_json: Option<String>,
@@ -7860,6 +7862,7 @@ pub async fn create_admin_llm_gateway_key(
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,
+            kiro_full_request_logging_enabled: false,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
             effective_kiro_cache_policy_json: String::new(),
@@ -7913,6 +7916,7 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub kiro_request_validation_enabled: Option<bool>,
     pub kiro_cache_estimation_enabled: Option<bool>,
     pub kiro_zero_cache_debug_enabled: Option<bool>,
+    pub kiro_full_request_logging_enabled: Option<bool>,
     pub kiro_cache_policy_override_json: Option<Option<&'a str>>,
     pub kiro_billable_model_multipliers_override_json: Option<Option<&'a str>>,
     pub request_max_concurrency_unlimited: bool,
@@ -7941,6 +7945,7 @@ pub async fn patch_admin_llm_gateway_key(
             request.kiro_request_validation_enabled,
             request.kiro_cache_estimation_enabled,
             request.kiro_zero_cache_debug_enabled,
+            request.kiro_full_request_logging_enabled,
             request.kiro_cache_policy_override_json,
             request.kiro_billable_model_multipliers_override_json,
             request.request_max_concurrency_unlimited,
@@ -8039,6 +8044,12 @@ pub async fn patch_admin_llm_gateway_key(
             body.insert(
                 "kiro_zero_cache_debug_enabled".to_string(),
                 serde_json::Value::Bool(kiro_zero_cache_debug_enabled),
+            );
+        }
+        if let Some(kiro_full_request_logging_enabled) = request.kiro_full_request_logging_enabled {
+            body.insert(
+                "kiro_full_request_logging_enabled".to_string(),
+                serde_json::Value::Bool(kiro_full_request_logging_enabled),
             );
         }
         if let Some(kiro_cache_policy_override_json) = request.kiro_cache_policy_override_json {
@@ -8759,6 +8770,44 @@ pub struct KiroCacheView {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(default)]
+pub struct KiroPrefixTreeRuntimeStats {
+    pub resident_tokens: u64,
+    pub max_tokens: u64,
+    pub node_count: usize,
+    pub leaf_count: usize,
+    pub edge_count: usize,
+    pub child_capacity: usize,
+    pub estimated_memory_bytes: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct KiroConversationAnchorRuntimeStats {
+    pub entries: usize,
+    pub max_entries: usize,
+    pub estimated_memory_bytes: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct KiroProcessMemoryRuntimeStats {
+    pub rss_bytes: Option<u64>,
+    pub virtual_bytes: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminKiroCacheStatsResponse {
+    pub mode: String,
+    pub page_size_tokens: usize,
+    pub prefix_tree: KiroPrefixTreeRuntimeStats,
+    pub conversation_anchors: KiroConversationAnchorRuntimeStats,
+    pub process_memory: KiroProcessMemoryRuntimeStats,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
 pub struct KiroAccountView {
     pub name: String,
     pub auth_method: String,
@@ -8864,6 +8913,15 @@ fn build_admin_kiro_account_statuses_url(query: &AdminKiroAccountStatusesQuery) 
         url.push_str(&params.join("&"));
     }
     url
+}
+
+#[cfg(any(not(feature = "mock"), test))]
+fn build_admin_kiro_cache_stats_url_for_ts(ts: u64) -> String {
+    format!("{}/admin/kiro-gateway/cache-stats?_ts={ts}", admin_base())
+}
+
+fn build_admin_kiro_usage_event_detail_url(event_id: &str) -> String {
+    format!("{}/admin/kiro-gateway/usage/{}", admin_base(), urlencoding::encode(event_id))
 }
 
 pub async fn fetch_kiro_access() -> Result<KiroAccessResponse, String> {
@@ -9156,6 +9214,7 @@ pub async fn create_admin_kiro_key(
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,
+            kiro_full_request_logging_enabled: false,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
             effective_kiro_cache_policy_json: String::new(),
@@ -9211,6 +9270,7 @@ pub async fn patch_admin_kiro_key(
             request.kiro_request_validation_enabled,
             request.kiro_cache_estimation_enabled,
             request.kiro_zero_cache_debug_enabled,
+            request.kiro_full_request_logging_enabled,
             request.kiro_cache_policy_override_json,
             request.kiro_billable_model_multipliers_override_json,
             request.request_max_concurrency_unlimited,
@@ -9297,6 +9357,12 @@ pub async fn patch_admin_kiro_key(
             body.insert(
                 "kiro_zero_cache_debug_enabled".to_string(),
                 serde_json::Value::Bool(kiro_zero_cache_debug_enabled),
+            );
+        }
+        if let Some(kiro_full_request_logging_enabled) = request.kiro_full_request_logging_enabled {
+            body.insert(
+                "kiro_full_request_logging_enabled".to_string(),
+                serde_json::Value::Bool(kiro_full_request_logging_enabled),
             );
         }
         if let Some(kiro_cache_policy_override_json) = request.kiro_cache_policy_override_json {
@@ -9421,6 +9487,33 @@ pub async fn fetch_admin_kiro_usage_events(
     }
 }
 
+pub async fn fetch_admin_kiro_usage_event_detail(
+    event_id: &str,
+) -> Result<AdminLlmGatewayUsageEventDetailView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = event_id;
+        Ok(AdminLlmGatewayUsageEventDetailView::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = build_admin_kiro_usage_event_detail_url(event_id);
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
 pub async fn fetch_admin_kiro_accounts() -> Result<AdminKiroAccountsResponse, String> {
     #[cfg(feature = "mock")]
     {
@@ -9466,6 +9559,36 @@ pub async fn fetch_admin_kiro_account_statuses(
     {
         let url = build_admin_kiro_account_statuses_url(query);
         let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_kiro_cache_stats() -> Result<AdminKiroCacheStatsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminKiroCacheStatsResponse {
+            mode: "prefix_tree".to_string(),
+            page_size_tokens: 64,
+            ..AdminKiroCacheStatsResponse::default()
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = build_admin_kiro_cache_stats_url_for_ts(Date::now() as u64);
+        let response = api_get(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -9673,6 +9796,27 @@ mod tests {
     }
 
     #[test]
+    fn admin_kiro_cache_stats_response_defaults_are_empty() {
+        let response: AdminKiroCacheStatsResponse =
+            serde_json::from_str(r#"{"mode":"prefix_tree"}"#).expect("response should parse");
+
+        assert_eq!(response.mode, "prefix_tree");
+        assert_eq!(response.page_size_tokens, 0);
+        assert_eq!(response.prefix_tree.resident_tokens, 0);
+        assert_eq!(response.conversation_anchors.entries, 0);
+        assert_eq!(response.process_memory.rss_bytes, None);
+    }
+
+    #[test]
+    fn admin_gateway_key_view_defaults_full_request_logging_off() {
+        let key: AdminLlmGatewayKeyView =
+            serde_json::from_str(r#"{"id":"k","name":"K","provider_type":"kiro"}"#)
+                .expect("key should parse");
+
+        assert!(!key.kiro_full_request_logging_enabled);
+    }
+
+    #[test]
     fn build_admin_kiro_account_statuses_url_encodes_prefix_and_window() {
         let url = build_admin_kiro_account_statuses_url(&AdminKiroAccountStatusesQuery {
             prefix: Some("alpha team".to_string()),
@@ -9684,6 +9828,21 @@ mod tests {
         assert!(url.contains("prefix=alpha%20team"));
         assert!(url.contains("limit=24"));
         assert!(url.contains("offset=48"));
+    }
+
+    #[test]
+    fn build_admin_kiro_cache_stats_url_uses_admin_prefix_and_cache_buster() {
+        let url = build_admin_kiro_cache_stats_url_for_ts(123);
+
+        assert!(url.contains("/admin/kiro-gateway/cache-stats"));
+        assert!(url.contains("_ts=123"));
+    }
+
+    #[test]
+    fn build_admin_kiro_usage_event_detail_url_encodes_event_id() {
+        let url = build_admin_kiro_usage_event_detail_url("llm usage/one");
+
+        assert!(url.contains("/admin/kiro-gateway/usage/llm%20usage%2Fone"));
     }
 
     #[test]

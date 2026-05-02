@@ -24,6 +24,11 @@ const SQLITE_MIGRATIONS: &[SqlMigration] = &[
         name: "codex_status_cache",
         sql: include_str!("../migrations/sqlite/0002_codex_status_cache.sql"),
     },
+    SqlMigration {
+        version: 3,
+        name: "kiro_full_request_logging",
+        sql: include_str!("../migrations/sqlite/0003_kiro_full_request_logging.sql"),
+    },
 ];
 
 const DUCKDB_MIGRATIONS: &[SqlMigration] = &[
@@ -114,7 +119,7 @@ mod tests {
     fn sqlite_migrations_are_file_backed_and_versioned() {
         let migrations = super::sqlite_migrations();
 
-        assert_eq!(migrations.len(), 2);
+        assert_eq!(migrations.len(), 3);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(migrations[0].name, "init");
         assert!(migrations[0]
@@ -125,6 +130,11 @@ mod tests {
         assert!(migrations[1]
             .sql
             .contains("CREATE TABLE IF NOT EXISTS llm_codex_status_cache"));
+        assert_eq!(migrations[2].version, 3);
+        assert_eq!(migrations[2].name, "kiro_full_request_logging");
+        assert!(migrations[2]
+            .sql
+            .contains("kiro_full_request_logging_enabled"));
     }
 
     #[test]
@@ -158,6 +168,17 @@ mod tests {
         let applied_count: i64 = conn
             .query_row("SELECT count(*) FROM llm_access_schema_migrations", [], |row| row.get(0))
             .expect("count migrations");
-        assert_eq!(applied_count, 2);
+        assert_eq!(applied_count, 3);
+
+        let full_logging_column_count: i64 = conn
+            .query_row(
+                "SELECT count(*)
+                 FROM pragma_table_info('llm_key_route_config')
+                 WHERE name = 'kiro_full_request_logging_enabled'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("inspect route config columns");
+        assert_eq!(full_logging_column_count, 1);
     }
 }
