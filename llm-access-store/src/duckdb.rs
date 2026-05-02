@@ -31,6 +31,9 @@ use tokio::task;
 #[cfg(feature = "duckdb-runtime")]
 use crate::KeyUsageRollupSummary;
 
+#[cfg(feature = "duckdb-runtime")]
+static TIERED_SEGMENT_SEALER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// One row for the DuckDB `usage_events` wide fact table.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageEventRow {
@@ -435,6 +438,7 @@ struct SegmentStats {
     start_ms: Option<i64>,
     end_ms: Option<i64>,
     row_count: usize,
+    event_id_count: usize,
     rollups: Vec<SegmentKeyRollup>,
 }
 
@@ -462,6 +466,12 @@ impl DuckDbUsageRepository {
                 tiered_pending_dir(&config).display()
             )
         })?;
+        fs::create_dir_all(tiered_compacting_dir(&config)).with_context(|| {
+            format!(
+                "failed to create compacting duckdb directory `{}`",
+                tiered_compacting_dir(&config).display()
+            )
+        })?;
         fs::create_dir_all(&config.archive_dir).with_context(|| {
             format!("failed to create archive duckdb directory `{}`", config.archive_dir.display())
         })?;
@@ -469,6 +479,7 @@ impl DuckDbUsageRepository {
             format!("failed to create duckdb catalog directory `{}`", config.catalog_dir.display())
         })?;
         initialize_tiered_catalog(&config)?;
+        clear_stale_compacting_files(&config)?;
         spawn_existing_pending_sealers(config.clone())?;
 
         let (active_path, next_sequence) = choose_active_segment(&config)?;
@@ -523,6 +534,63 @@ fn tiered_catalog_path(config: &TieredDuckDbUsageConfig) -> PathBuf {
 #[cfg(feature = "duckdb-runtime")]
 fn tiered_pending_dir(config: &TieredDuckDbUsageConfig) -> PathBuf {
     config.active_dir.join("pending")
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn tiered_compacting_dir(config: &TieredDuckDbUsageConfig) -> PathBuf {
+    config.active_dir.join("compacting")
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn compacting_segment_path(config: &TieredDuckDbUsageConfig, segment_id: &str) -> PathBuf {
+    tiered_compacting_dir(config).join(format!("{segment_id}.tmp.duckdb"))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn archive_segment_path(config: &TieredDuckDbUsageConfig, segment_id: &str) -> PathBuf {
+    config.archive_dir.join(format!("{segment_id}.duckdb"))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn uploading_archive_segment_path(config: &TieredDuckDbUsageConfig, segment_id: &str) -> PathBuf {
+    config
+        .archive_dir
+        .join(format!("{segment_id}.uploading.duckdb"))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn remove_file_if_exists(path: &Path) -> anyhow::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("failed to remove file `{}`", path.display())),
+    }
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn duckdb_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn clear_stale_compacting_files(config: &TieredDuckDbUsageConfig) -> anyhow::Result<()> {
+    let compacting_dir = tiered_compacting_dir(config);
+    for entry in fs::read_dir(&compacting_dir).with_context(|| {
+        format!("failed to read compacting duckdb directory `{}`", compacting_dir.display())
+    })? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if path.is_file()
+            && (file_name.ends_with(".tmp.duckdb") || file_name.ends_with(".tmp.duckdb.wal"))
+        {
+            remove_file_if_exists(&path)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -681,6 +749,14 @@ fn spawn_segment_sealer(
     let _ = thread::Builder::new()
         .name("llm-access-duckdb-sealer".to_string())
         .spawn(move || {
+            let Ok(_sealer_guard) = TIERED_SEGMENT_SEALER_LOCK.lock() else {
+                eprintln!(
+                    "failed to archive llm-access duckdb segment `{segment_id}` from `{}`: sealer \
+                     lock poisoned",
+                    pending_path.display()
+                );
+                return;
+            };
             let mut last_err = None;
             for attempt in 0..5 {
                 match publish_pending_segment(&config, &pending_path, &segment_id) {
@@ -709,12 +785,22 @@ fn publish_pending_segment(
     fs::create_dir_all(&config.archive_dir).with_context(|| {
         format!("failed to create archive directory `{}`", config.archive_dir.display())
     })?;
-    let stats = collect_segment_stats(pending_path)?;
-    let archive_path = config.archive_dir.join(format!("{segment_id}.duckdb"));
-    fs::copy(pending_path, &archive_path).with_context(|| {
+    let compact_path = compact_pending_segment_to_local_file(config, pending_path, segment_id)?;
+    let stats = validate_compacted_segment_matches_source(pending_path, &compact_path)?;
+    let uploading_path = uploading_archive_segment_path(config, segment_id);
+    let archive_path = archive_segment_path(config, segment_id);
+    remove_file_if_exists(&uploading_path)?;
+    fs::copy(&compact_path, &uploading_path).with_context(|| {
         format!(
-            "failed to copy pending duckdb segment `{}` to `{}`",
-            pending_path.display(),
+            "failed to copy compacted duckdb segment `{}` to uploading archive `{}`",
+            compact_path.display(),
+            uploading_path.display()
+        )
+    })?;
+    fs::rename(&uploading_path, &archive_path).with_context(|| {
+        format!(
+            "failed to publish uploading archive `{}` to `{}`",
+            uploading_path.display(),
             archive_path.display()
         )
     })?;
@@ -722,21 +808,24 @@ fn publish_pending_segment(
         .with_context(|| format!("failed to stat archived segment `{}`", archive_path.display()))?
         .len();
     publish_segment_catalog(config, segment_id, &archive_path, &stats, size_bytes)?;
-    fs::remove_file(pending_path).with_context(|| {
-        format!("failed to remove archived pending segment `{}`", pending_path.display())
-    })?;
+    remove_file_if_exists(pending_path)?;
+    remove_file_if_exists(&compact_path)?;
     Ok(())
 }
 
 #[cfg(feature = "duckdb-runtime")]
 fn collect_segment_stats(path: &Path) -> anyhow::Result<SegmentStats> {
     let conn = DuckDbUsageRepository::open_read_only_conn(path)?;
-    let (row_count, start_ms, end_ms): (i64, Option<i64>, Option<i64>) = conn
+    let (row_count, event_id_count, start_ms, end_ms): (i64, i64, Option<i64>, Option<i64>) = conn
         .query_row(
-            "SELECT CAST(count(*) AS BIGINT), min(created_at_ms), max(created_at_ms)
+            "SELECT
+                CAST(count(*) AS BIGINT),
+                CAST(count(event_id) AS BIGINT),
+                min(created_at_ms),
+                max(created_at_ms)
              FROM usage_events",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .context("query duckdb segment stats")?;
     let mut stmt = conn
@@ -778,8 +867,86 @@ fn collect_segment_stats(path: &Path) -> anyhow::Result<SegmentStats> {
         start_ms,
         end_ms,
         row_count: i64_to_usize(row_count),
+        event_id_count: i64_to_usize(event_id_count),
         rollups,
     })
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn compact_pending_segment_to_local_file(
+    config: &TieredDuckDbUsageConfig,
+    pending_path: &Path,
+    segment_id: &str,
+) -> anyhow::Result<PathBuf> {
+    fs::create_dir_all(tiered_compacting_dir(config)).with_context(|| {
+        format!(
+            "failed to create compacting duckdb directory `{}`",
+            tiered_compacting_dir(config).display()
+        )
+    })?;
+    let compact_path = compacting_segment_path(config, segment_id);
+    remove_file_if_exists(&compact_path)?;
+
+    let conn = DuckDbUsageRepository::open_conn(&compact_path)?;
+    conn.execute_batch("SET memory_limit='768MB';")
+        .context("failed to set duckdb compact memory limit")?;
+    crate::initialize_duckdb_target(&conn)?;
+    let pending_path_str = pending_path
+        .to_str()
+        .ok_or_else(|| anyhow!("pending duckdb segment path is not valid UTF-8"))?;
+    let attach_sql = format!(
+        "ATTACH DATABASE {} AS pending_segment (READ_ONLY);",
+        duckdb_string_literal(pending_path_str)
+    );
+    conn.execute_batch(&attach_sql).with_context(|| {
+        format!("failed to attach pending duckdb segment `{}`", pending_path.display())
+    })?;
+    conn.execute_batch(
+        "
+        INSERT INTO usage_events SELECT * FROM pending_segment.usage_events;
+        INSERT INTO usage_event_details SELECT * FROM pending_segment.usage_event_details;
+        INSERT INTO usage_rollups_hourly SELECT * FROM pending_segment.usage_rollups_hourly;
+        INSERT INTO usage_rollups_daily SELECT * FROM pending_segment.usage_rollups_daily;
+        DETACH pending_segment;
+        CHECKPOINT;
+        ",
+    )
+    .with_context(|| {
+        format!(
+            "failed to compact pending duckdb segment `{}` into `{}`",
+            pending_path.display(),
+            compact_path.display()
+        )
+    })?;
+    Ok(compact_path)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn validate_compacted_segment_matches_source(
+    source: &Path,
+    compacted: &Path,
+) -> anyhow::Result<SegmentStats> {
+    let source_stats = collect_segment_stats(source)?;
+    let compacted_stats = collect_segment_stats(compacted)?;
+    if source_stats.row_count != compacted_stats.row_count
+        || source_stats.event_id_count != compacted_stats.event_id_count
+        || source_stats.start_ms != compacted_stats.start_ms
+        || source_stats.end_ms != compacted_stats.end_ms
+    {
+        return Err(anyhow!(
+            "compacted duckdb segment mismatch: source rows={} event_ids={} start={:?} end={:?}, \
+             compacted rows={} event_ids={} start={:?} end={:?}",
+            source_stats.row_count,
+            source_stats.event_id_count,
+            source_stats.start_ms,
+            source_stats.end_ms,
+            compacted_stats.row_count,
+            compacted_stats.event_id_count,
+            compacted_stats.start_ms,
+            compacted_stats.end_ms
+        ));
+    }
+    Ok(compacted_stats)
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -2195,6 +2362,89 @@ mod tests {
         assert_usage_event_round_trips(&archived_detail, &first);
 
         std::fs::remove_dir_all(&root).expect("cleanup tiered duckdb test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[test]
+    fn duckdb_tiered_publish_rewrites_segment_with_current_schema() {
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-duckdb-test-{}-compact-publish", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create compact publish test directory");
+        let config = super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            catalog_dir: root.join("catalog"),
+            rollover_bytes: 1,
+        };
+        super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
+
+        let pending_path = root.join("pending-source.duckdb");
+        {
+            let conn = duckdb::Connection::open(&pending_path).expect("open pending source");
+            crate::initialize_duckdb_target(&conn).expect("initialize pending source");
+            let mut writer = super::DuckDbUsageWriter::new(conn).expect("open pending writer");
+            let mut event = test_usage_event();
+            event.event_id = "compact-publish-event".to_string();
+            event.created_at_ms = 1_700_000_000_000;
+            writer
+                .insert_usage_events(&[super::UsageEventRow::from_usage_event(&event)])
+                .expect("insert pending event");
+        }
+        {
+            let conn = duckdb::Connection::open(&pending_path).expect("reopen pending source");
+            conn.execute_batch(
+                "
+                CREATE INDEX IF NOT EXISTS idx_usage_events_created_date
+                    ON usage_events(created_at_ms);
+                CHECKPOINT;
+                ",
+            )
+            .expect("create legacy source index");
+        }
+
+        super::publish_pending_segment(&config, &pending_path, "usage-compact-test-000001")
+            .expect("publish compacted segment");
+
+        let archive_path = config.archive_dir.join("usage-compact-test-000001.duckdb");
+        assert!(archive_path.exists(), "archived compact segment should exist");
+        assert!(
+            !pending_path.exists(),
+            "pending segment should be removed only after catalog publication"
+        );
+        assert!(
+            !super::compacting_segment_path(&config, "usage-compact-test-000001").exists(),
+            "local compact temp file should be removed after publication"
+        );
+        assert!(
+            !config
+                .archive_dir
+                .join("usage-compact-test-000001.uploading.duckdb")
+                .exists(),
+            "uploading archive temp file should not remain after publication"
+        );
+
+        let archived = super::DuckDbUsageRepository::open_read_only_conn(&archive_path)
+            .expect("open archived compact segment");
+        let indexes = archived
+            .prepare("SELECT index_name FROM duckdb_indexes() ORDER BY index_name")
+            .expect("prepare index query")
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query indexes")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read indexes");
+        assert!(
+            indexes.is_empty(),
+            "archive should be rewritten with current schema and no legacy explicit indexes: \
+             {indexes:?}"
+        );
+
+        let count: i64 = archived
+            .query_row("SELECT CAST(count(*) AS BIGINT) FROM usage_events", [], |row| row.get(0))
+            .expect("count archived rows");
+        assert_eq!(count, 1);
+
+        std::fs::remove_dir_all(&root).expect("cleanup compact publish test directory");
     }
 
     #[cfg(feature = "duckdb-runtime")]
