@@ -23,6 +23,12 @@ Restart=always
 RestartSec=3
 NoNewPrivileges=true
 StateDirectory=staticflow/llm-access
+MemoryAccounting=yes
+MemoryHigh=2200M
+MemoryMax=3072M
+MemorySwapMax=0
+TasksMax=256
+OOMPolicy=kill
 # Do not add ProtectSystem/ReadWritePaths/PrivateTmp for this unit when
 # /mnt/llm-access is a JuiceFS FUSE mount with default_permissions. Those
 # systemd mount namespace features can fail before ExecStart with 226/NAMESPACE.
