@@ -8,6 +8,8 @@ use std::{
 
 use anyhow::{anyhow, Context};
 
+const DEFAULT_TIERED_DUCKDB_ROLLOVER_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Storage paths used by `llm-access`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageConfig {
@@ -235,7 +237,9 @@ fn parse_tiered_duckdb_config(
             .ok_or_else(|| anyhow!("--duckdb-archive-dir is required for tiered DuckDB storage"))?,
         catalog_dir: catalog_dir
             .ok_or_else(|| anyhow!("--duckdb-catalog-dir is required for tiered DuckDB storage"))?,
-        rollover_bytes: rollover_bytes.unwrap_or(1024 * 1024 * 1024).max(1),
+        rollover_bytes: rollover_bytes
+            .unwrap_or(DEFAULT_TIERED_DUCKDB_ROLLOVER_BYTES)
+            .max(1),
     }))
 }
 

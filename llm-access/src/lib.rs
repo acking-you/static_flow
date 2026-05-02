@@ -44,6 +44,7 @@ use llm_access_core::store::{
     UsageAnalyticsStore,
 };
 use serde::Serialize;
+use tokio::sync::Semaphore;
 
 #[cfg(test)]
 pub(crate) static KIRO_UPSTREAM_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -63,6 +64,7 @@ struct HttpState {
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
     usage_analytics_store: Arc<dyn UsageAnalyticsStore>,
+    admin_usage_query_gate: Arc<Semaphore>,
     public_submission_store: Arc<dyn PublicSubmissionStore>,
     public_submit_guard: Arc<submission::PublicSubmitGuard>,
     public_status_store: Arc<dyn PublicStatusStore>,
@@ -131,6 +133,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         public_community_store: runtime.public_community_store(),
         public_usage_store: runtime.public_usage_store(),
         usage_analytics_store: runtime.usage_analytics_store(),
+        admin_usage_query_gate: Arc::new(Semaphore::new(1)),
         public_submission_store: runtime.public_submission_store(),
         public_submit_guard: Arc::new(submission::PublicSubmitGuard::default()),
         public_status_store: runtime.public_status_store(),
@@ -379,7 +382,10 @@ async fn version() -> Json<VersionResponse> {
 mod tests {
     use std::{
         path::PathBuf,
-        sync::{Arc, Mutex},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        },
     };
 
     use async_trait::async_trait;
@@ -389,7 +395,10 @@ mod tests {
         routing::get,
         Json, Router,
     };
-    use llm_access_core::store::{AuthenticatedKey, ControlStore};
+    use llm_access_core::store::{
+        AuthenticatedKey, ControlStore, UsageAnalyticsStore, UsageChartPoint, UsageEventPage,
+        UsageEventQuery,
+    };
     use serde_json::json;
     use tower::util::ServiceExt;
 
@@ -417,6 +426,56 @@ mod tests {
 
     fn test_router() -> axum::Router {
         let runtime = crate::runtime::LlmAccessRuntime::new(Arc::new(EmptyStore));
+        super::router(runtime)
+    }
+
+    struct BlockingUsageStore {
+        calls: Arc<AtomicUsize>,
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl UsageAnalyticsStore for BlockingUsageStore {
+        async fn list_usage_events(
+            &self,
+            query: UsageEventQuery,
+        ) -> anyhow::Result<UsageEventPage> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(UsageEventPage {
+                total: 0,
+                offset: query.offset,
+                limit: query.limit,
+                has_more: false,
+                events: Vec::new(),
+            })
+        }
+
+        async fn get_usage_event(
+            &self,
+            _event_id: &str,
+        ) -> anyhow::Result<Option<llm_access_core::usage::UsageEvent>> {
+            Ok(None)
+        }
+
+        async fn usage_chart_points(
+            &self,
+            _key_id: &str,
+            _start_ms: i64,
+            _bucket_ms: i64,
+            _bucket_count: usize,
+        ) -> anyhow::Result<Vec<UsageChartPoint>> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn test_router_with_usage_store(usage_store: Arc<dyn UsageAnalyticsStore>) -> axum::Router {
+        let runtime = crate::runtime::LlmAccessRuntime::new_with_usage_analytics_store_for_tests(
+            Arc::new(EmptyStore),
+            usage_store,
+        );
         super::router(runtime)
     }
 
@@ -1344,6 +1403,55 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
         assert_eq!(value["total"], 0);
         assert_eq!(value["events"].as_array().expect("events array").len(), 0);
+    }
+
+    #[tokio::test]
+    async fn router_rejects_concurrent_admin_usage_list_queries() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let usage_store = Arc::new(BlockingUsageStore {
+            calls: Arc::clone(&calls),
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+        });
+        let app = test_router_with_usage_store(usage_store);
+
+        let first_app = app.clone();
+        let first = tokio::spawn(async move {
+            first_app
+                .oneshot(
+                    Request::builder()
+                        .uri("/admin/llm-gateway/usage")
+                        .header(header::HOST, "localhost")
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("first response")
+        });
+        entered.notified().await;
+
+        let second = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            app.oneshot(
+                Request::builder()
+                    .uri("/admin/llm-gateway/usage")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            ),
+        )
+        .await
+        .expect("concurrent usage query should return immediately")
+        .expect("second response");
+
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        release.notify_one();
+        let first = first.await.expect("first task");
+        assert_eq!(first.status(), StatusCode::OK);
     }
 
     #[tokio::test]

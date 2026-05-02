@@ -36,6 +36,7 @@ use llm_access_kiro::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::sync::OwnedSemaphorePermit;
 
 use crate::{codex_status, kiro_refresh, kiro_status, HttpState};
 
@@ -1033,6 +1034,10 @@ pub(crate) async fn list_llm_gateway_usage_events(
         Ok(query) => query,
         Err(response) => return response.into_response(),
     };
+    let _permit = match acquire_admin_usage_query_permit(&state) {
+        Ok(permit) => permit,
+        Err(response) => return response.into_response(),
+    };
     let activity = state.request_activity.snapshot(query.key_id.as_deref());
     match state.usage_analytics_store.list_usage_events(query).await {
         Ok(page) => Json(AdminUsageEventsResponse {
@@ -1058,6 +1063,10 @@ pub(crate) async fn get_llm_gateway_usage_event(
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
+    let _permit = match acquire_admin_usage_query_permit(&state) {
+        Ok(permit) => permit,
+        Err(response) => return response.into_response(),
+    };
     match state.usage_analytics_store.get_usage_event(&event_id).await {
         Ok(Some(event)) => Json(AdminUsageEventDetailView {
             event: AdminUsageEventView::from(&event),
@@ -1471,6 +1480,10 @@ pub(crate) async fn list_admin_kiro_usage_events(
         Ok(query) => query,
         Err(response) => return response.into_response(),
     };
+    let _permit = match acquire_admin_usage_query_permit(&state) {
+        Ok(permit) => permit,
+        Err(response) => return response.into_response(),
+    };
     let activity = state.request_activity.snapshot(query.key_id.as_deref());
     match state.usage_analytics_store.list_usage_events(query).await {
         Ok(page) => Json(AdminUsageEventsResponse {
@@ -1496,6 +1509,10 @@ pub(crate) async fn get_admin_kiro_usage_event(
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
+    let _permit = match acquire_admin_usage_query_permit(&state) {
+        Ok(permit) => permit,
+        Err(response) => return response.into_response(),
+    };
     match state.usage_analytics_store.get_usage_event(&event_id).await {
         Ok(Some(event)) if event.provider_type.as_storage_str() == PROVIDER_KIRO => {
             Json(AdminUsageEventDetailView {
@@ -2698,6 +2715,14 @@ fn normalize_provider_usage_query(
     })
 }
 
+fn acquire_admin_usage_query_permit(
+    state: &HttpState,
+) -> Result<OwnedSemaphorePermit, AdminHttpError> {
+    std::sync::Arc::clone(&state.admin_usage_query_gate)
+        .try_acquire_owned()
+        .map_err(|_| too_many_requests("Another admin usage query is already running"))
+}
+
 fn normalize_usage_time_range(
     start_ms: Option<i64>,
     end_ms: Option<i64>,
@@ -3681,6 +3706,13 @@ fn forbidden(message: &str) -> AdminHttpError {
 fn conflict(message: &str) -> AdminHttpError {
     AdminHttpError {
         status: StatusCode::CONFLICT,
+        message: message.to_string(),
+    }
+}
+
+fn too_many_requests(message: &str) -> AdminHttpError {
+    AdminHttpError {
+        status: StatusCode::TOO_MANY_REQUESTS,
         message: message.to_string(),
     }
 }

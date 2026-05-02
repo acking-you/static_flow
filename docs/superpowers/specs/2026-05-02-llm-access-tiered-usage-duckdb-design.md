@@ -89,7 +89,7 @@ The online write path must stay short:
 The request path must not wait for JuiceFS copy, R2 upload, archive checkpoint,
 or cold catalog publication.
 
-Recommended initial rollover threshold: `512MiB`. Start smaller than `2GiB` so
+Recommended initial rollover threshold: `256MiB`. Start smaller than `2GiB` so
 crash recovery, local compaction, and cold-query candidate files stay cheap.
 
 ## Asynchronous Archive Path

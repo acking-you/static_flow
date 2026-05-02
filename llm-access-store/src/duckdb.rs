@@ -406,6 +406,7 @@ pub struct TieredDuckDbUsageConfig {
 struct TieredDuckDbUsageState {
     active_path: PathBuf,
     next_sequence: u64,
+    active_has_rows: bool,
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -519,6 +520,7 @@ impl DuckDbUsageRepository {
         spawn_existing_pending_sealers(config.clone())?;
 
         let (active_path, next_sequence) = choose_active_segment(&config)?;
+        let active_has_rows = active_path.exists();
         initialize_duckdb_target_path(&active_path)?;
         Ok(Self {
             inner: Arc::new(DuckDbUsageRepositoryInner::Tiered {
@@ -526,6 +528,7 @@ impl DuckDbUsageRepository {
                 state: Mutex::new(TieredDuckDbUsageState {
                     active_path,
                     next_sequence,
+                    active_has_rows,
                 }),
             }),
         })
@@ -546,6 +549,17 @@ impl DuckDbUsageRepository {
             format!("failed to open read-only duckdb database `{}`", path.display())
         })?;
         configure_duckdb_usage_connection(&conn)?;
+        Ok(conn)
+    }
+
+    fn open_checkpoint_conn(path: &Path) -> anyhow::Result<duckdb::Connection> {
+        let conn = duckdb::Connection::open(path)
+            .with_context(|| format!("failed to open duckdb database `{}`", path.display()))?;
+        let temp_dir = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("checkpointing");
+        configure_duckdb_compact_connection(&conn, &temp_dir)?;
         Ok(conn)
     }
 
@@ -630,6 +644,7 @@ fn configure_duckdb_usage_connection(conn: &duckdb::Connection) -> anyhow::Resul
         "
         SET memory_limit={};
         SET threads=1;
+        SET preserve_insertion_order=false;
         SET temp_directory={};
         SET max_temp_directory_size={};
         ",
@@ -1315,18 +1330,36 @@ fn append_usage_events_to_tiered(
     let mut state = state
         .lock()
         .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
+    if state.active_has_rows
+        && active_segment_disk_bytes(&state.active_path) >= config.rollover_bytes.max(1)
+    {
+        rollover_active_segment(config, &mut state)?;
+    }
     {
         let mut writer =
             DuckDbUsageWriter::new(DuckDbUsageRepository::open_conn(&state.active_path)?)?;
         writer.insert_usage_events(rows)?;
     }
-    let active_size = fs::metadata(&state.active_path)
-        .map(|meta| meta.len())
-        .unwrap_or(0);
-    if active_size >= config.rollover_bytes.max(1) {
+    state.active_has_rows = true;
+    if active_segment_disk_bytes(&state.active_path) >= config.rollover_bytes.max(1) {
         rollover_active_segment(config, &mut state)?;
     }
     Ok(())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn active_segment_disk_bytes(path: &Path) -> u64 {
+    fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)
+        + fs::metadata(duckdb_wal_path(path))
+            .map(|meta| meta.len())
+            .unwrap_or(0)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn duckdb_wal_path(path: &Path) -> PathBuf {
+    let mut path = path.as_os_str().to_os_string();
+    path.push(".wal");
+    PathBuf::from(path)
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1349,13 +1382,14 @@ fn rollover_active_segment(
     state.next_sequence = state.next_sequence.saturating_add(1);
     initialize_duckdb_target_path(&new_active_path)?;
     state.active_path = new_active_path;
+    state.active_has_rows = false;
     spawn_segment_sealer(config.clone(), pending_path, segment_id);
     Ok(())
 }
 
 #[cfg(feature = "duckdb-runtime")]
 fn checkpoint_duckdb_path(path: &Path) -> anyhow::Result<()> {
-    let conn = DuckDbUsageRepository::open_conn(path)?;
+    let conn = DuckDbUsageRepository::open_checkpoint_conn(path)?;
     conn.execute_batch("CHECKPOINT;")
         .with_context(|| format!("failed to checkpoint duckdb database `{}`", path.display()))?;
     Ok(())
@@ -2559,6 +2593,72 @@ mod tests {
         assert_usage_event_round_trips(&archived_detail, &first);
 
         std::fs::remove_dir_all(&root).expect("cleanup tiered duckdb test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn duckdb_tiered_rolls_over_existing_oversized_active_before_append() {
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-duckdb-test-{}-tiered-pre-rollover", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create tiered pre-rollover test directory");
+        let config = super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            catalog_dir: root.join("catalog"),
+            rollover_bytes: u64::MAX,
+        };
+        let repo = super::DuckDbUsageRepository::open_tiered(config.clone())
+            .expect("open tiered duckdb usage db");
+        let mut first = test_usage_event();
+        first.event_id = "tiered-existing-active-first".to_string();
+        first.created_at_ms = 1_700_000_000_000;
+        repo.append_usage_event(&first)
+            .await
+            .expect("append existing active event");
+        drop(repo);
+
+        let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
+            rollover_bytes: 1,
+            ..config
+        })
+        .expect("reopen tiered duckdb usage db with smaller rollover threshold");
+        let mut second = test_usage_event();
+        second.event_id = "tiered-new-active-second".to_string();
+        second.created_at_ms = 1_700_000_060_000;
+        repo.append_usage_event(&second)
+            .await
+            .expect("append should pre-rollover existing active segment");
+
+        wait_for_archived_duckdb_file_count(&root.join("archive"), 2).await;
+        let archived = std::fs::read_dir(root.join("archive"))
+            .expect("read archive directory")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("duckdb"))
+            .count();
+        assert_eq!(
+            archived, 2,
+            "pre-rollover should archive the existing active separately from the new append"
+        );
+
+        let page = repo
+            .list_usage_events(UsageEventQuery {
+                key_id: Some(first.key_id.clone()),
+                provider_type: None,
+                source: UsageEventSource::All,
+                start_ms: None,
+                end_ms: None,
+                limit: 10,
+                offset: 0,
+            })
+            .await
+            .expect("list tiered usage events");
+        assert_eq!(page.total, 2);
+        assert_eq!(page.events.len(), 2);
+        assert_eq!(page.events[0].event_id, second.event_id);
+        assert_eq!(page.events[1].event_id, first.event_id);
+
+        std::fs::remove_dir_all(&root).expect("cleanup tiered pre-rollover test directory");
     }
 
     #[cfg(feature = "duckdb-runtime")]

@@ -17,7 +17,7 @@ Environment=LLM_ACCESS_DUCKDB_ACTIVE_DIR=/var/lib/staticflow/llm-access/analytic
 # so DuckDB rewrite work stays on local block storage instead of JuiceFS.
 Environment=LLM_ACCESS_DUCKDB_ARCHIVE_DIR=/mnt/llm-access/analytics/segments
 Environment=LLM_ACCESS_DUCKDB_CATALOG_DIR=/mnt/llm-access/analytics/catalog
-Environment=LLM_ACCESS_DUCKDB_ROLLOVER_BYTES=536870912
+Environment=LLM_ACCESS_DUCKDB_ROLLOVER_BYTES=268435456
 WorkingDirectory=/mnt/llm-access
 ExecStartPre=/usr/local/bin/staticflow-wait-llm-access-state
 ExecStart=/usr/local/bin/llm-access serve --bind ${LLM_ACCESS_BIND_ADDR} --state-root ${LLM_ACCESS_STATE_ROOT} --sqlite-control ${LLM_ACCESS_SQLITE_CONTROL} --duckdb ${LLM_ACCESS_DUCKDB} --duckdb-active-dir ${LLM_ACCESS_DUCKDB_ACTIVE_DIR} --duckdb-archive-dir ${LLM_ACCESS_DUCKDB_ARCHIVE_DIR} --duckdb-catalog-dir ${LLM_ACCESS_DUCKDB_CATALOG_DIR} --duckdb-rollover-bytes ${LLM_ACCESS_DUCKDB_ROLLOVER_BYTES}
@@ -28,7 +28,7 @@ StateDirectory=staticflow/llm-access
 MemoryAccounting=yes
 MemoryHigh=2200M
 MemoryMax=3072M
-MemorySwapMax=0
+MemorySwapMax=1024M
 TasksMax=256
 OOMPolicy=kill
 # Do not add ProtectSystem/ReadWritePaths/PrivateTmp for this unit when

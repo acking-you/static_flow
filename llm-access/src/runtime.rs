@@ -110,6 +110,32 @@ impl LlmAccessRuntime {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_with_usage_analytics_store_for_tests(
+        control_store: Arc<dyn ControlStore>,
+        usage_analytics_store: Arc<dyn UsageAnalyticsStore>,
+    ) -> Self {
+        Self::with_stores(LlmAccessStores {
+            control_store,
+            provider_route_store: Arc::new(EmptyProviderRouteStore),
+            admin_config_store: Arc::new(EmptyAdminConfigStore),
+            admin_key_store: Arc::new(EmptyAdminKeyStore),
+            admin_account_group_store: Arc::new(EmptyAdminAccountGroupStore),
+            admin_proxy_store: Arc::new(EmptyAdminProxyStore),
+            admin_codex_account_store: Arc::new(EmptyAdminCodexAccountStore),
+            admin_kiro_account_store: Arc::new(EmptyAdminKiroAccountStore),
+            admin_review_queue_store: Arc::new(EmptyAdminReviewQueueStore),
+            public_access_store: Arc::new(EmptyPublicAccessStore),
+            public_community_store: Arc::new(EmptyPublicCommunityStore),
+            public_usage_store: Arc::new(EmptyPublicUsageStore),
+            usage_analytics_store,
+            public_submission_store: Arc::new(EmptyPublicSubmissionStore),
+            public_status_store: Arc::new(EmptyPublicStatusStore),
+            #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+            usage_event_flusher: None,
+        })
+    }
+
     /// Create runtime dependencies from explicit storage adapters.
     fn with_stores(stores: LlmAccessStores) -> Self {
         Self {
