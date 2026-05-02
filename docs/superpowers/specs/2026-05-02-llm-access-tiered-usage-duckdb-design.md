@@ -29,6 +29,8 @@ Use three distinct areas:
 
 - Local active directory on VM block storage:
   `/var/lib/staticflow/llm-access/analytics-active`
+- Local compact work directory on VM block storage:
+  `/var/lib/staticflow/llm-access/analytics-active/compacting`
 - JuiceFS archive directory:
   `/mnt/llm-access/analytics/segments`
 - JuiceFS catalog directory:
@@ -46,8 +48,8 @@ Sealed archive files use stable names:
 /mnt/llm-access/analytics/segments/usage-20260502-000123.duckdb
 ```
 
-Catalog data records segment metadata and lookup aids. The catalog may start as
-SQLite or JSONL, but its contract must be explicit:
+The catalog is a SQLite database under the catalog directory. It records segment
+metadata and lookup aids with this explicit contract:
 
 - `segment_id`
 - `archive_path`
@@ -87,20 +89,29 @@ The online write path must stay short:
 The request path must not wait for JuiceFS copy, R2 upload, archive checkpoint,
 or cold catalog publication.
 
-Recommended initial rollover threshold: `512MiB` or `1GiB`. Start smaller than
-`2GiB` so crash recovery and cold-query candidate files stay cheap.
+Recommended initial rollover threshold: `512MiB`. Start smaller than `2GiB` so
+crash recovery, local compaction, and cold-query candidate files stay cheap.
 
 ## Asynchronous Archive Path
 
 A background sealer consumes `pending_seal` segments:
 
-1. Open the pending segment in a controlled background task.
-2. Run a final checkpoint if needed.
-3. Verify minimal integrity metadata: row count, min/max timestamp, size.
-4. Copy or move the closed file to JuiceFS `segments`.
-5. Build or update catalog entries for the segment.
-6. Atomically publish the segment as `archived`.
-7. Delete the local pending file after publication succeeds.
+1. Open the pending segment read-only in a controlled background task.
+2. Run a final checkpoint before sealing if the segment has not already been
+   checkpointed.
+3. Create a fresh DuckDB file in the local compact work directory.
+4. Initialize the fresh file with the current `llm-access` DuckDB schema.
+5. Attach the pending segment read-only and copy table contents into the fresh
+   file with DuckDB SQL. Rust must not materialize rows for this copy.
+6. Run `CHECKPOINT` on the compacted file.
+7. Verify integrity metadata on the compacted file: row count, min/max
+   timestamp, and event-id count must match the pending segment.
+8. Copy the compacted file to a temporary archive path on JuiceFS `segments`.
+9. Atomically rename the temporary archive path to its final immutable segment
+   path.
+10. Build or update catalog entries for the final archived segment.
+11. Atomically publish the segment as `archived`.
+12. Delete the local pending and compact work files after publication succeeds.
 
 Failure is retried with backoff. Archive lag is surfaced in admin/runtime
 status, but it does not fail user requests.
@@ -108,6 +119,66 @@ status, but it does not fail user requests.
 The sealer must never copy a DuckDB file that is still being written. Async
 archive means archive publication is asynchronous; it does not mean copying a
 live mutable database file.
+
+The sealer must also never archive the original pending file directly. DuckDB
+files can contain large reusable free-block regions after appends, checkpoints,
+failed writes, and schema/index churn. Direct file copy preserves that physical
+slack and makes object storage permanently inherit the hot file's bloat. The
+archive object should be a fresh compacted DuckDB database whose physical bytes
+come from a logical rewrite of the intended schema.
+
+## Compact-Then-Archive Contract
+
+Compaction is a local background operation, not a request-path operation:
+
+```text
+active write file
+  -> pending closed file on local disk
+  -> compacted temporary DuckDB on local disk
+  -> temporary JuiceFS archive object
+  -> immutable JuiceFS archive object
+  -> catalog publication
+```
+
+The compacted file must preserve the logical contract of `usage_events` and
+related usage tables, but it must not preserve obsolete physical layout,
+free-block regions, or legacy explicit indexes. The destination database is
+created from the current migration SQL and populated from the pending source.
+This keeps archive files aligned with the current storage contract even if an
+older pending segment was produced before index cleanup.
+
+Catalog publication is the commit point. Before catalog publication, any
+failure leaves the pending file retryable. After catalog publication, the
+archive file is immutable and discoverable by normal query paths. If the
+archive copy succeeds but catalog publication fails, retry may reuse or replace
+the same final archive file only after validating that its row count and time
+range match the pending segment.
+
+Temporary names are required:
+
+```text
+/var/lib/staticflow/llm-access/analytics-active/compacting/<segment>.tmp.duckdb
+/mnt/llm-access/analytics/segments/<segment>.uploading.duckdb
+/mnt/llm-access/analytics/segments/<segment>.duckdb
+```
+
+Startup recovery should remove stale local compact temporary files and retry
+any pending segment files. It should ignore `.uploading.duckdb` archive files
+unless an operator explicitly chooses to inspect or remove them.
+
+The sealer concurrency is one. Multiple concurrent compactions can multiply
+DuckDB memory use and JuiceFS cache pressure on the 2c8g cloud host. Rollover
+may enqueue many pending segments, but only one sealer should be actively
+compacting or uploading at a time.
+
+The compact connection should use a bounded DuckDB memory setting. The exact
+SQL should be verified against the linked DuckDB crate during implementation;
+the intended operational default is to keep compaction below the service
+memory high watermark rather than relying only on systemd to kill the process.
+
+The catalog should keep `size_bytes` as the final archived file size. Additive
+columns may record `source_size_bytes` and `compacted_size_bytes` for
+observability, but query correctness must not depend on those columns.
 
 ## Query Model
 
