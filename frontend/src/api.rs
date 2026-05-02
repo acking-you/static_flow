@@ -5748,6 +5748,8 @@ pub struct PublicLlmGatewayUsageLookupRequest {
     pub api_key: String,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+    pub start_ms: Option<i64>,
+    pub end_ms: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -6064,6 +6066,8 @@ pub struct AdminLlmGatewayUsageEventsResponse {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct AdminLlmGatewayUsageEventsQuery {
     pub key_id: Option<String>,
+    pub start_ms: Option<i64>,
+    pub end_ms: Option<i64>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -8340,6 +8344,12 @@ pub async fn fetch_admin_llm_gateway_usage_events(
         {
             params.push(format!("key_id={}", urlencoding::encode(key_id)));
         }
+        if let Some(start_ms) = query.start_ms {
+            params.push(format!("start_ms={start_ms}"));
+        }
+        if let Some(end_ms) = query.end_ms {
+            params.push(format!("end_ms={end_ms}"));
+        }
         if let Some(limit) = query.limit {
             params.push(format!("limit={limit}"));
         }
@@ -9362,6 +9372,12 @@ pub async fn fetch_admin_kiro_usage_events(
         let mut params = Vec::new();
         if let Some(key_id) = query.key_id.as_deref() {
             params.push(format!("key_id={}", urlencoding::encode(key_id)));
+        }
+        if let Some(start_ms) = query.start_ms {
+            params.push(format!("start_ms={start_ms}"));
+        }
+        if let Some(end_ms) = query.end_ms {
+            params.push(format!("end_ms={end_ms}"));
         }
         if let Some(limit) = query.limit {
             params.push(format!("limit={limit}"));

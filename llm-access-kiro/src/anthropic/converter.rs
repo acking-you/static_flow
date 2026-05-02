@@ -275,7 +275,7 @@ fn trailing_user_message_start(
     messages: &[super::types::Message],
 ) -> Result<usize, ConversionError> {
     let Some(mut start) = messages.iter().rposition(|message| message.role == "user") else {
-        return Err(ConversionError::EmptyMessages);
+        return Err(no_user_message_error(messages));
     };
     while start > 0 && messages[start - 1].role == "user" {
         start -= 1;
@@ -290,9 +290,17 @@ pub fn current_user_message_range(
         .iter()
         .rposition(|message| message.role == "user")
         .map(|index| index + 1)
-        .ok_or(ConversionError::EmptyMessages)?;
+        .ok_or_else(|| no_user_message_error(messages))?;
     let start = trailing_user_message_start(&messages[..end])?;
     Ok(start..end)
+}
+
+fn no_user_message_error(messages: &[super::types::Message]) -> ConversionError {
+    if messages.is_empty() {
+        ConversionError::EmptyMessages
+    } else {
+        invalid_request("messages must include at least one user message before assistant prefill")
+    }
 }
 
 #[derive(Debug)]
@@ -972,7 +980,7 @@ pub fn normalize_request(req: &MessagesRequest) -> Result<NormalizedRequest, Con
         .messages
         .iter()
         .rposition(|message| message.role == "user")
-        .ok_or(ConversionError::EmptyMessages)?;
+        .ok_or_else(|| no_user_message_error(&req.messages))?;
     let mut events = Vec::new();
     let mut normalized_messages = Vec::with_capacity(last_user_idx + 1);
     let mut message_index_map = Vec::with_capacity(last_user_idx + 1);
@@ -2557,6 +2565,21 @@ mod tests {
             "actual current user"
         );
         assert_eq!(result.conversation_state.history.len(), 2);
+    }
+
+    #[test]
+    fn convert_request_rejects_assistant_only_prefill_with_specific_error() {
+        let req = base_request(vec![AnthropicMessage {
+            role: "assistant".to_string(),
+            content: serde_json::json!("{"),
+        }]);
+
+        let err = convert_request(&req).expect_err("assistant-only prefill is not representable");
+
+        assert_eq!(
+            err.to_string(),
+            "messages must include at least one user message before assistant prefill"
+        );
     }
 
     #[test]

@@ -9,7 +9,11 @@ Type=simple
 User=llm-access
 Group=llm-access
 EnvironmentFile=/etc/llm-access/llm-access.env
+Environment=STATICFLOW_LOG_DIR=/var/log/staticflow-runtime
+Environment=STATICFLOW_LOG_SERVICE=llm-access
+Environment=STATICFLOW_LOG_STDOUT=0
 WorkingDirectory=/mnt/llm-access
+ExecStartPre=/usr/local/bin/staticflow-wait-llm-access-state
 ExecStart=/usr/local/bin/llm-access serve --bind ${LLM_ACCESS_BIND_ADDR} --state-root ${LLM_ACCESS_STATE_ROOT} --sqlite-control ${LLM_ACCESS_SQLITE_CONTROL} --duckdb ${LLM_ACCESS_DUCKDB}
 Restart=always
 RestartSec=3

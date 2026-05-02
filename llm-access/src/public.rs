@@ -20,8 +20,9 @@ use crate::HttpState;
 
 const MAX_PUBLIC_ACCOUNT_CONTRIBUTIONS: usize = 24;
 const MAX_PUBLIC_SPONSORS: usize = 36;
-const PUBLIC_USAGE_LOOKUP_DEFAULT_LIMIT: usize = 50;
-const PUBLIC_USAGE_LOOKUP_MAX_LIMIT: usize = 200;
+const PUBLIC_USAGE_LOOKUP_DEFAULT_LIMIT: usize = 20;
+const PUBLIC_USAGE_LOOKUP_MAX_LIMIT: usize = 20;
+const PUBLIC_USAGE_LOOKUP_MAX_OFFSET: usize = 200;
 const PUBLIC_USAGE_LOOKUP_CHART_BUCKETS: usize = 24;
 const PUBLIC_USAGE_LOOKUP_BUCKET_MS: i64 = 60 * 60 * 1000;
 
@@ -68,6 +69,10 @@ pub(crate) struct PublicLlmGatewayUsageLookupRequest {
     limit: Option<usize>,
     #[serde(default)]
     offset: Option<usize>,
+    #[serde(default)]
+    start_ms: Option<i64>,
+    #[serde(default)]
+    end_ms: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -422,7 +427,11 @@ pub(crate) async fn post_llm_gateway_public_usage_query(
         Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "public usage store error"),
     };
     let now = now_ms();
-    let offset = request.offset.unwrap_or(0);
+    let offset = request
+        .offset
+        .unwrap_or(0)
+        .min(PUBLIC_USAGE_LOOKUP_MAX_OFFSET);
+    let (start_ms, end_ms) = normalize_usage_time_range(request.start_ms, request.end_ms);
     let limit = request
         .limit
         .unwrap_or(PUBLIC_USAGE_LOOKUP_DEFAULT_LIMIT)
@@ -453,6 +462,8 @@ pub(crate) async fn post_llm_gateway_public_usage_query(
         .list_usage_events(UsageEventQuery {
             key_id: Some(key_id),
             provider_type: None,
+            start_ms,
+            end_ms,
             limit,
             offset,
         })
@@ -706,6 +717,18 @@ fn public_usage_chart_window_start(now_ms: i64) -> i64 {
         (PUBLIC_USAGE_LOOKUP_CHART_BUCKETS.saturating_sub(1) as i64)
             .saturating_mul(PUBLIC_USAGE_LOOKUP_BUCKET_MS),
     )
+}
+
+fn normalize_usage_time_range(
+    start_ms: Option<i64>,
+    end_ms: Option<i64>,
+) -> (Option<i64>, Option<i64>) {
+    let start_ms = start_ms.filter(|value| *value > 0);
+    let end_ms = end_ms.filter(|value| *value > 0);
+    match (start_ms, end_ms) {
+        (Some(start), Some(end)) if start >= end => (Some(start), Some(start.saturating_add(1))),
+        other => other,
+    }
 }
 
 fn external_origin(headers: &HeaderMap) -> Option<String> {

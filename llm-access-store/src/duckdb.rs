@@ -203,28 +203,36 @@ pub fn insert_usage_event_sql() -> &'static str {
 }
 
 #[cfg(feature = "duckdb-runtime")]
-const USAGE_EVENT_SUMMARY_LAST_MESSAGE_MAX_CHARS: usize = 2_048;
+const USAGE_EVENT_ONLINE_MAX_LIMIT: usize = 20;
+#[cfg(feature = "duckdb-runtime")]
+const USAGE_EVENT_ONLINE_MAX_OFFSET: usize = 200;
+
+#[cfg(feature = "duckdb-runtime")]
+const COUNT_USAGE_EVENTS_SQL: &str = "SELECT count(*)
+    FROM usage_events
+    WHERE (?1 IS NULL OR key_id = ?1)
+      AND (?2 IS NULL OR provider_type = ?2)
+      AND (?3 IS NULL OR created_at_ms >= ?3)
+      AND (?4 IS NULL OR created_at_ms < ?4)";
 
 #[cfg(feature = "duckdb-runtime")]
 const LIST_USAGE_EVENT_SUMMARIES_SQL: &str = "SELECT event_id, created_at_ms,
         provider_type, protocol_family, key_id, key_name, account_name,
         account_group_id_at_event, route_strategy_at_event, request_method,
         request_url, endpoint, model, mapped_model, status_code,
-        request_body_bytes, quota_failover_count, routing_diagnostics_json,
+        request_body_bytes, quota_failover_count, NULL AS routing_diagnostics_json,
         input_uncached_tokens, input_cached_tokens, output_tokens,
         billable_tokens, CAST(credit_usage AS VARCHAR), usage_missing,
         credit_usage_missing, latency_ms, routing_wait_ms, upstream_headers_ms,
         post_headers_body_ms, request_body_read_ms, request_json_parse_ms,
         pre_handler_ms, first_sse_write_ms, stream_finish_ms, client_ip,
-        ip_region,
-        CASE
-            WHEN last_message_content IS NULL THEN NULL
-            ELSE left(last_message_content, ?5)
-        END AS last_message_content
+        ip_region, NULL AS last_message_content
     FROM usage_events
     WHERE (?1 IS NULL OR key_id = ?1)
       AND (?2 IS NULL OR provider_type = ?2)
-    LIMIT ?3 OFFSET ?4";
+      AND (?3 IS NULL OR created_at_ms >= ?3)
+      AND (?4 IS NULL OR created_at_ms < ?4)
+    LIMIT ?5 OFFSET ?6";
 
 #[cfg(feature = "duckdb-runtime")]
 const GET_USAGE_EVENT_DETAIL_SQL: &str = "SELECT event_id, created_at_ms,
@@ -452,27 +460,38 @@ impl UsageAnalyticsStore for DuckDbUsageRepository {
             let conn = Self::open_conn(&path)?;
             let key_filter = query.key_id.as_deref();
             let provider_filter = query.provider_type.as_deref();
+            let start_ms = query.start_ms;
+            let end_ms = query.end_ms;
+            let safe_limit = query.limit.min(USAGE_EVENT_ONLINE_MAX_LIMIT);
+            let safe_offset = query.offset.min(USAGE_EVENT_ONLINE_MAX_OFFSET);
             let total: i64 = conn
                 .query_row(
-                    "SELECT count(*) FROM usage_events
-                     WHERE (?1 IS NULL OR key_id = ?1)
-                       AND (?2 IS NULL OR provider_type = ?2)",
-                    duckdb::params![key_filter, provider_filter],
+                    COUNT_USAGE_EVENTS_SQL,
+                    duckdb::params![key_filter, provider_filter, start_ms, end_ms],
                     |row| row.get(0),
                 )
                 .context("count duckdb usage events")?;
             let total = total.max(0) as usize;
-            if query.limit == 0 || query.offset >= total {
+            if safe_limit == 0 {
                 return Ok(UsageEventPage {
                     total,
-                    offset: query.offset,
-                    limit: query.limit,
+                    offset: safe_offset,
+                    limit: safe_limit,
                     has_more: false,
                     events: Vec::new(),
                 });
             }
-            let fetch_count = total.saturating_sub(query.offset).min(query.limit);
-            let reverse_offset = total.saturating_sub(query.offset.saturating_add(fetch_count));
+            if safe_offset >= total {
+                return Ok(UsageEventPage {
+                    total,
+                    offset: safe_offset,
+                    limit: safe_limit,
+                    has_more: false,
+                    events: Vec::new(),
+                });
+            }
+            let fetch_count = total.saturating_sub(safe_offset).min(safe_limit);
+            let reverse_offset = total.saturating_sub(safe_offset.saturating_add(fetch_count));
             let mut stmt = conn
                 .prepare(LIST_USAGE_EVENT_SUMMARIES_SQL)
                 .context("prepare duckdb usage event summary query")?;
@@ -481,20 +500,21 @@ impl UsageAnalyticsStore for DuckDbUsageRepository {
                     duckdb::params![
                         key_filter,
                         provider_filter,
+                        start_ms,
+                        end_ms,
                         fetch_count as i64,
-                        reverse_offset as i64,
-                        USAGE_EVENT_SUMMARY_LAST_MESSAGE_MAX_CHARS as i64
+                        reverse_offset as i64
                     ],
                     decode_usage_event_summary_row,
                 )
                 .context("query duckdb usage events")?;
             let mut events = rows.collect::<Result<Vec<_>, _>>()?;
-            events.sort_by(|left, right| right.created_at_ms.cmp(&left.created_at_ms));
+            events.reverse();
             Ok(UsageEventPage {
                 total,
-                offset: query.offset,
-                limit: query.limit,
-                has_more: query.offset.saturating_add(events.len()) < total,
+                offset: safe_offset,
+                limit: safe_limit,
+                has_more: safe_offset.saturating_add(events.len()) < total,
                 events,
             })
         })
@@ -757,13 +777,8 @@ mod tests {
     fn assert_usage_event_summary_round_trips(actual: &UsageEvent, expected: &UsageEvent) {
         let mut expected_summary = expected.clone();
         expected_summary.request_headers_json = "{}".to_string();
-        expected_summary.last_message_content =
-            expected_summary.last_message_content.map(|value| {
-                value
-                    .chars()
-                    .take(super::USAGE_EVENT_SUMMARY_LAST_MESSAGE_MAX_CHARS)
-                    .collect()
-            });
+        expected_summary.routing_diagnostics_json = None;
+        expected_summary.last_message_content = None;
         expected_summary.client_request_body_json = None;
         expected_summary.upstream_request_body_json = None;
         expected_summary.full_request_json = None;
@@ -818,8 +833,8 @@ mod tests {
         let db_path = root.join("usage.duckdb");
         let repo = super::DuckDbUsageRepository::open_path(&db_path).expect("open duckdb usage db");
         let mut event = test_usage_event();
-        event.last_message_content =
-            Some("x".repeat(super::USAGE_EVENT_SUMMARY_LAST_MESSAGE_MAX_CHARS.saturating_add(10)));
+        event.routing_diagnostics_json = Some(r#"{"route":"diagnostic"}"#.to_string());
+        event.last_message_content = Some("x".repeat(4096));
 
         repo.append_usage_event(&event)
             .await
@@ -829,6 +844,8 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(event.key_id.clone()),
                 provider_type: None,
+                start_ms: None,
+                end_ms: None,
                 limit: 10,
                 offset: 0,
             })
@@ -838,13 +855,8 @@ mod tests {
         assert_eq!(page.events.len(), 1);
         assert_usage_event_summary_round_trips(&page.events[0], &event);
         assert_eq!(page.events[0].request_headers_json, "{}");
-        assert_eq!(
-            page.events[0]
-                .last_message_content
-                .as_ref()
-                .map(String::len),
-            Some(super::USAGE_EVENT_SUMMARY_LAST_MESSAGE_MAX_CHARS)
-        );
+        assert_eq!(page.events[0].routing_diagnostics_json, None);
+        assert_eq!(page.events[0].last_message_content, None);
         assert_eq!(page.events[0].client_request_body_json, None);
         assert_eq!(page.events[0].upstream_request_body_json, None);
         assert_eq!(page.events[0].full_request_json, None);
@@ -890,6 +902,8 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(first.key_id.clone()),
                 provider_type: None,
+                start_ms: None,
+                end_ms: None,
                 limit: 10,
                 offset: 0,
             })
@@ -971,6 +985,8 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(first.key_id.clone()),
                 provider_type: None,
+                start_ms: None,
+                end_ms: None,
                 limit: 1,
                 offset: 0,
             })
@@ -986,6 +1002,8 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(first.key_id.clone()),
                 provider_type: None,
+                start_ms: None,
+                end_ms: None,
                 limit: 1,
                 offset: 1,
             })
@@ -996,6 +1014,78 @@ mod tests {
         assert_eq!(second_page.limit, 1);
         assert!(!second_page.has_more);
         assert_eq!(second_page.events[0].event_id, first.event_id);
+
+        let time_filtered_page = repo
+            .list_usage_events(UsageEventQuery {
+                key_id: Some(first.key_id.clone()),
+                provider_type: None,
+                start_ms: Some(second.created_at_ms),
+                end_ms: Some(second.created_at_ms.saturating_add(1)),
+                limit: 10,
+                offset: 0,
+            })
+            .await
+            .expect("list time-filtered page");
+        assert_eq!(time_filtered_page.total, 1);
+        assert_eq!(time_filtered_page.events.len(), 1);
+        assert_eq!(time_filtered_page.events[0].event_id, second.event_id);
+
+        std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn duckdb_repository_clamps_online_usage_event_pages() {
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-duckdb-test-{}-online-page-clamp", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create duckdb test directory");
+        let db_path = root.join("usage.duckdb");
+        let repo = super::DuckDbUsageRepository::open_path(&db_path).expect("open duckdb usage db");
+
+        for index in 0..25 {
+            let mut event = test_usage_event();
+            event.event_id = format!("online-clamp-{index:02}");
+            event.created_at_ms = 1_700_000_000_000 + i64::from(index);
+            repo.append_usage_event(&event)
+                .await
+                .expect("append duckdb usage event");
+        }
+
+        let page = repo
+            .list_usage_events(UsageEventQuery {
+                key_id: None,
+                provider_type: None,
+                start_ms: None,
+                end_ms: None,
+                limit: 100,
+                offset: 1_000,
+            })
+            .await
+            .expect("list clamped page");
+
+        assert_eq!(page.limit, super::USAGE_EVENT_ONLINE_MAX_LIMIT);
+        assert_eq!(page.offset, super::USAGE_EVENT_ONLINE_MAX_OFFSET);
+        assert_eq!(page.total, 25);
+        assert!(page.events.is_empty());
+        assert!(!page.has_more);
+
+        let first_page = repo
+            .list_usage_events(UsageEventQuery {
+                key_id: None,
+                provider_type: None,
+                start_ms: None,
+                end_ms: None,
+                limit: 100,
+                offset: 0,
+            })
+            .await
+            .expect("list first clamped page");
+        assert_eq!(first_page.limit, super::USAGE_EVENT_ONLINE_MAX_LIMIT);
+        assert_eq!(first_page.total, 25);
+        assert_eq!(first_page.events.len(), super::USAGE_EVENT_ONLINE_MAX_LIMIT);
+        assert!(first_page.has_more);
+        assert_eq!(first_page.events[0].event_id, "online-clamp-24");
 
         std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
     }

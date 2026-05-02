@@ -2765,6 +2765,8 @@ pub fn admin_kiro_gateway_page() -> Html {
             wasm_bindgen_futures::spawn_local(async move {
                 match fetch_admin_kiro_usage_events(&AdminLlmGatewayUsageEventsQuery {
                     key_id: None,
+                    start_ms: None,
+                    end_ms: None,
                     limit: Some(5),
                     offset: Some(0),
                 })
@@ -4290,7 +4292,10 @@ pub fn admin_kiro_gateway_page() -> Html {
                                 .unwrap_or_else(|| "-".to_string());
                             html! {
                                 <div class={classes!("flex", "items-center", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-xs", "flex-wrap")}>
-                                    <span class={classes!("text-[var(--muted)]")}>{ format_ms(event.created_at) }</span>
+                                    <span class={classes!("grid", "gap-1", "text-[var(--muted)]")}>
+                                        <span>{ format_ms(event.created_at) }</span>
+                                        <span class={classes!("max-w-[10rem]", "truncate", "text-[11px]")} title={event.id.clone()}>{ event.id.clone() }</span>
+                                    </span>
                                     <span class={classes!("font-semibold", "text-[var(--text)]")}>{ event.key_name.clone() }</span>
                                     <span class={classes!("text-[var(--muted)]")}>{ event.model.clone().unwrap_or_else(|| "-".to_string()) }</span>
                                     <span class={classes!("ml-auto", "text-[var(--text)]")}>{ format!("credit {credit_text}") }</span>

@@ -6047,6 +6047,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "better_mimalloc_rs",
  "chrono",
  "eventsource-stream",
  "futures-util",

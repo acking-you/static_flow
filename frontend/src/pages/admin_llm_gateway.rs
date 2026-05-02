@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use gloo_timers::callback::Timeout;
+use js_sys::Date;
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlElement, HtmlInputElement, HtmlSelectElement};
 use yew::prelude::*;
@@ -48,6 +49,12 @@ use crate::{
 };
 
 const USAGE_PAGE_SIZE: usize = 20;
+const USAGE_MAX_OFFSET: usize = 200;
+const USAGE_MAX_PAGES: usize = (USAGE_MAX_OFFSET / USAGE_PAGE_SIZE) + 1;
+const USAGE_TIME_RANGE_ALL: &str = "all";
+const USAGE_TIME_RANGE_1H: &str = "1h";
+const USAGE_TIME_RANGE_24H: &str = "24h";
+const USAGE_TIME_RANGE_7D: &str = "7d";
 const TOKEN_REQUEST_PAGE_SIZE: usize = 20;
 const ACCOUNT_CONTRIBUTION_REQUEST_PAGE_SIZE: usize = 20;
 const SPONSOR_REQUEST_PAGE_SIZE: usize = 20;
@@ -298,6 +305,25 @@ fn filter_gateway_keys_for_query(
         .filter(|key_item| gateway_key_matches_query(key_item, &query_lower))
         .cloned()
         .collect()
+}
+
+fn usage_time_range_bounds(value: &str) -> (Option<i64>, Option<i64>) {
+    let now = Date::now() as i64;
+    match value {
+        USAGE_TIME_RANGE_1H => (Some(now.saturating_sub(60 * 60 * 1000)), Some(now)),
+        USAGE_TIME_RANGE_24H => (Some(now.saturating_sub(24 * 60 * 60 * 1000)), Some(now)),
+        USAGE_TIME_RANGE_7D => (Some(now.saturating_sub(7 * 24 * 60 * 60 * 1000)), Some(now)),
+        _ => (None, None),
+    }
+}
+
+fn usage_time_range_label(value: &str) -> &'static str {
+    match value {
+        USAGE_TIME_RANGE_1H => "最近 1 小时",
+        USAGE_TIME_RANGE_24H => "最近 24 小时",
+        USAGE_TIME_RANGE_7D => "最近 7 天",
+        _ => "全部时间",
+    }
 }
 
 fn sanitize_auto_account_names(names: &[String], accounts: &[AccountSummaryView]) -> Vec<String> {
@@ -1670,6 +1696,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let usage_error = use_state(|| None::<String>);
     let usage_key_filter = use_state(String::new);
     let usage_key_search = use_state(String::new);
+    let usage_time_range = use_state(|| USAGE_TIME_RANGE_ALL.to_string());
     let token_requests = use_state(Vec::<AdminLlmGatewayTokenRequestView>::new);
     let token_request_total = use_state(|| 0_usize);
     let token_request_page = use_state(|| 1_usize);
@@ -1796,42 +1823,57 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_loading = usage_loading.clone();
         let usage_error = usage_error.clone();
         let usage_key_filter = usage_key_filter.clone();
-        Callback::from(move |(requested_page, override_key_id): (Option<usize>, Option<String>)| {
-            let usage_events = usage_events.clone();
-            let usage_total = usage_total.clone();
-            let usage_page = usage_page.clone();
-            let usage_current_rpm = usage_current_rpm.clone();
-            let usage_current_in_flight = usage_current_in_flight.clone();
-            let usage_loading = usage_loading.clone();
-            let usage_error = usage_error.clone();
-            let usage_key_filter = usage_key_filter.clone();
-            let page = requested_page.unwrap_or(*usage_page).max(1);
-            let selected_key_id = override_key_id.unwrap_or_else(|| (*usage_key_filter).clone());
-            usage_loading.set(true);
-            usage_error.set(None);
-            wasm_bindgen_futures::spawn_local(async move {
-                let query = AdminLlmGatewayUsageEventsQuery {
-                    key_id: (!selected_key_id.is_empty()).then_some(selected_key_id),
-                    limit: Some(USAGE_PAGE_SIZE),
-                    offset: Some((page - 1) * USAGE_PAGE_SIZE),
-                };
-                match fetch_admin_llm_gateway_usage_events(&query).await {
-                    Ok(resp) => {
-                        usage_total.set(resp.total);
-                        usage_current_rpm.set(resp.current_rpm);
-                        usage_current_in_flight.set(resp.current_in_flight);
-                        usage_events.set(resp.events);
-                        usage_page.set(page);
-                    },
-                    Err(err) => {
-                        usage_current_rpm.set(0);
-                        usage_current_in_flight.set(0);
-                        usage_error.set(Some(err));
-                    },
-                }
-                usage_loading.set(false);
-            });
-        })
+        let usage_time_range = usage_time_range.clone();
+        Callback::from(
+            move |(requested_page, override_key_id, override_time_range): (
+                Option<usize>,
+                Option<String>,
+                Option<String>,
+            )| {
+                let usage_events = usage_events.clone();
+                let usage_total = usage_total.clone();
+                let usage_page = usage_page.clone();
+                let usage_current_rpm = usage_current_rpm.clone();
+                let usage_current_in_flight = usage_current_in_flight.clone();
+                let usage_loading = usage_loading.clone();
+                let usage_error = usage_error.clone();
+                let usage_key_filter = usage_key_filter.clone();
+                let usage_time_range = usage_time_range.clone();
+                let page = requested_page.unwrap_or(*usage_page).max(1);
+                let selected_key_id =
+                    override_key_id.unwrap_or_else(|| (*usage_key_filter).clone());
+                let selected_time_range =
+                    override_time_range.unwrap_or_else(|| (*usage_time_range).clone());
+                let (start_ms, end_ms) = usage_time_range_bounds(&selected_time_range);
+                usage_loading.set(true);
+                usage_error.set(None);
+                wasm_bindgen_futures::spawn_local(async move {
+                    let query = AdminLlmGatewayUsageEventsQuery {
+                        key_id: (!selected_key_id.is_empty()).then_some(selected_key_id),
+                        start_ms,
+                        end_ms,
+                        limit: Some(USAGE_PAGE_SIZE),
+                        offset: Some((page - 1) * USAGE_PAGE_SIZE),
+                    };
+                    match fetch_admin_llm_gateway_usage_events(&query).await {
+                        Ok(resp) => {
+                            usage_total.set(resp.total);
+                            usage_current_rpm.set(resp.current_rpm);
+                            usage_current_in_flight.set(resp.current_in_flight);
+                            usage_events.set(resp.events);
+                            let actual_page = (resp.offset / resp.limit.max(1)).saturating_add(1);
+                            usage_page.set(actual_page.max(1));
+                        },
+                        Err(err) => {
+                            usage_current_rpm.set(0);
+                            usage_current_in_flight.set(0);
+                            usage_error.set(Some(err));
+                        },
+                    }
+                    usage_loading.set(false);
+                });
+            },
+        )
     };
 
     let reload_token_requests = {
@@ -2152,7 +2194,11 @@ pub fn admin_llm_gateway_page() -> Html {
                         account_request_max_inputs.set(next_request_max_inputs);
                         account_request_min_inputs.set(next_request_min_inputs);
                         load_error.set(None);
-                        reload_usage.emit((Some(current_page), Some(usage_filter_for_reload)));
+                        reload_usage.emit((
+                            Some(current_page),
+                            Some(usage_filter_for_reload),
+                            None,
+                        ));
                     },
                     Err(err) => load_error.set(Some(err)),
                 }
@@ -2704,7 +2750,7 @@ pub fn admin_llm_gateway_page() -> Html {
             }
             usage_key_filter.set(selected_key_id.clone());
             usage_page.set(1);
-            reload_usage.emit((Some(1), Some(selected_key_id)));
+            reload_usage.emit((Some(1), Some(selected_key_id), None));
         })
     };
 
@@ -2722,12 +2768,24 @@ pub fn admin_llm_gateway_page() -> Html {
         Callback::from(move |value: String| usage_key_search.set(value))
     };
 
+    let on_usage_time_range_change = {
+        let usage_time_range = usage_time_range.clone();
+        let reload_usage = reload_usage.clone();
+        Callback::from(move |event: Event| {
+            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                let selected = target.value();
+                usage_time_range.set(selected.clone());
+                reload_usage.emit((Some(1), None, Some(selected)));
+            }
+        })
+    };
+
     let on_usage_page_change = {
         let usage_page = usage_page.clone();
         let reload_usage = reload_usage.clone();
         Callback::from(move |page: usize| {
             usage_page.set(page);
-            reload_usage.emit((Some(page), None));
+            reload_usage.emit((Some(page), None, None));
         })
     };
 
@@ -2801,7 +2859,10 @@ pub fn admin_llm_gateway_page() -> Html {
         });
     }
 
-    let usage_total_pages = (*usage_total).max(1).div_ceil(USAGE_PAGE_SIZE);
+    let usage_total_pages = (*usage_total)
+        .max(1)
+        .div_ceil(USAGE_PAGE_SIZE)
+        .min(USAGE_MAX_PAGES);
     let token_request_total_pages = (*token_request_total)
         .max(1)
         .div_ceil(TOKEN_REQUEST_PAGE_SIZE);
@@ -5314,7 +5375,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                 aria-label="刷新事件"
                                 onclick={{
                                     let reload_usage = reload_usage.clone();
-                                    Callback::from(move |_| reload_usage.emit((None, None)))
+                                    Callback::from(move |_| reload_usage.emit((None, None, None)))
                                 }}
                                 disabled={*usage_loading}
                             >
@@ -5323,7 +5384,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
                     </div>
 
-                    <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-[minmax(16rem,1fr)_minmax(14rem,18rem)_auto_auto]", "items-end")}>
+                    <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-[minmax(16rem,1fr)_minmax(14rem,18rem)_minmax(10rem,12rem)_auto_auto]", "items-end")}>
                         <label class={classes!("text-sm")}>
                             <span class={classes!("text-[var(--muted)]")}>{ "搜索 Key" }</span>
                             <div class={classes!("mt-1")}>
@@ -5369,8 +5430,21 @@ pub fn admin_llm_gateway_page() -> Html {
                                 }) }
                             </select>
                         </label>
+                        <label class={classes!("text-sm")}>
+                            <span class={classes!("text-[var(--muted)]")}>{ "时间范围" }</span>
+                            <select
+                                key={format!("usage-time-range-{}", (*usage_time_range).clone())}
+                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                onchange={on_usage_time_range_change}
+                            >
+                                <option value={USAGE_TIME_RANGE_ALL} selected={*usage_time_range == USAGE_TIME_RANGE_ALL}>{ "全部时间" }</option>
+                                <option value={USAGE_TIME_RANGE_1H} selected={*usage_time_range == USAGE_TIME_RANGE_1H}>{ "最近 1 小时" }</option>
+                                <option value={USAGE_TIME_RANGE_24H} selected={*usage_time_range == USAGE_TIME_RANGE_24H}>{ "最近 24 小时" }</option>
+                                <option value={USAGE_TIME_RANGE_7D} selected={*usage_time_range == USAGE_TIME_RANGE_7D}>{ "最近 7 天" }</option>
+                            </select>
+                        </label>
                         <span class={classes!("text-sm", "font-semibold", "text-[var(--muted)]")}>
-                            { format!("{} 条", *usage_total) }
+                            { format!("{} · {} 条", usage_time_range_label(&usage_time_range), *usage_total) }
                         </span>
                         <span class={classes!("text-sm", "font-semibold", "text-[var(--muted)]")}>
                             { format!("第 {} 页", *usage_page) }
@@ -5478,7 +5552,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         <table class={classes!("min-w-[110rem]", "w-full", "text-sm")}>
                             <thead>
                                 <tr class={classes!("text-left", "text-[var(--muted)]")}>
-                                    <th class={classes!("py-2", "pr-3")}>{ "时间" }</th>
+                                    <th class={classes!("py-2", "pr-3")}>{ "时间 / Event ID" }</th>
                                     <th class={classes!("py-2", "pr-3")}>{ "Key" }</th>
                                     <th class={classes!("py-2", "pr-3")}>{ "号池" }</th>
                                     <th class={classes!("py-2", "pr-3")}>{ "URL / Route" }</th>
@@ -5523,7 +5597,15 @@ pub fn admin_llm_gateway_page() -> Html {
                                         let sse_applicable = event.first_sse_write_ms.is_some();
                                         html! {
                                             <tr class={classes!("border-t", "border-[var(--border)]", "align-top")}>
-                                                <td class={classes!("py-3", "pr-3", "whitespace-nowrap")}>{ format_ms(event.created_at) }</td>
+                                                <td class={classes!("py-3", "pr-3", "min-w-[13rem]", "whitespace-nowrap")}>
+                                                    <div>{ format_ms(event.created_at) }</div>
+                                                    <div class={classes!("mt-1", "flex", "items-center", "gap-2")}>
+                                                        <span class={classes!("max-w-[10rem]", "truncate", "font-mono", "text-[11px]", "text-[var(--muted)]")} title={event.id.clone()}>
+                                                            { event.id.clone() }
+                                                        </span>
+                                                        { copy_icon_button(&event.id, &on_copy) }
+                                                    </div>
+                                                </td>
                                                 <td class={classes!("py-3", "pr-3", "min-w-[13rem]")}>
                                                     <div class={classes!("font-semibold", "text-[var(--text)]")}>{ event.key_name.clone() }</div>
                                                     <div class={classes!("mt-1", "font-mono", "text-xs", "text-[var(--muted)]")}>{ event.key_id.clone() }</div>

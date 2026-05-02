@@ -1,4 +1,5 @@
-use web_sys::{HtmlInputElement, KeyboardEvent};
+use js_sys::Date;
+use web_sys::{HtmlInputElement, HtmlSelectElement, KeyboardEvent};
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
@@ -12,7 +13,33 @@ use crate::{
     router::Route,
 };
 
-const PUBLIC_USAGE_PAGE_LIMIT: usize = 50;
+const PUBLIC_USAGE_PAGE_LIMIT: usize = 20;
+const PUBLIC_USAGE_MAX_OFFSET: usize = 200;
+const PUBLIC_USAGE_MAX_PAGES: usize = (PUBLIC_USAGE_MAX_OFFSET / PUBLIC_USAGE_PAGE_LIMIT) + 1;
+const PUBLIC_USAGE_TIME_RANGE_ALL: &str = "all";
+const PUBLIC_USAGE_TIME_RANGE_24H: &str = "24h";
+const PUBLIC_USAGE_TIME_RANGE_7D: &str = "7d";
+const PUBLIC_USAGE_TIME_RANGE_30D: &str = "30d";
+
+fn public_usage_time_range_bounds(value: &str) -> (Option<i64>, Option<i64>) {
+    let now = Date::now() as i64;
+    let start = match value {
+        PUBLIC_USAGE_TIME_RANGE_24H => Some(now.saturating_sub(24 * 60 * 60 * 1000)),
+        PUBLIC_USAGE_TIME_RANGE_7D => Some(now.saturating_sub(7 * 24 * 60 * 60 * 1000)),
+        PUBLIC_USAGE_TIME_RANGE_30D => Some(now.saturating_sub(30 * 24 * 60 * 60 * 1000)),
+        _ => None,
+    };
+    (start, start.map(|_| now))
+}
+
+fn public_usage_time_range_label(value: &str) -> &'static str {
+    match value {
+        PUBLIC_USAGE_TIME_RANGE_24H => "最近 24 小时",
+        PUBLIC_USAGE_TIME_RANGE_7D => "最近 7 天",
+        PUBLIC_USAGE_TIME_RANGE_30D => "最近 30 天",
+        _ => "全部时间",
+    }
+}
 
 fn provider_badge_label(provider_type: &str) -> String {
     let trimmed = provider_type.trim();
@@ -49,51 +76,69 @@ pub fn llm_access_usage_page() -> Html {
     let error = use_state(|| None::<String>);
     let current_page = use_state(|| 1usize);
     let show_key = use_state(|| false);
+    let active_time_range = use_state(|| PUBLIC_USAGE_TIME_RANGE_ALL.to_string());
 
     let perform_lookup = {
         let active_key = active_key.clone();
+        let active_time_range = active_time_range.clone();
         let lookup = lookup.clone();
         let loading = loading.clone();
         let error = error.clone();
         let current_page = current_page.clone();
-        Callback::from(move |(api_key, page, clear_existing): (String, usize, bool)| {
-            let trimmed = api_key.trim().to_string();
-            if trimmed.is_empty() {
-                error.set(Some("请输入要查询的 key".to_string()));
-                return;
-            }
-
-            if clear_existing {
-                lookup.set(None);
-            }
-            active_key.set(Some(trimmed.clone()));
-            current_page.set(page);
-            loading.set(true);
-            error.set(None);
-
-            let lookup = lookup.clone();
-            let loading = loading.clone();
-            let error = error.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                let request = PublicLlmGatewayUsageLookupRequest {
-                    api_key: trimmed,
-                    limit: Some(PUBLIC_USAGE_PAGE_LIMIT),
-                    offset: Some((page.saturating_sub(1)).saturating_mul(PUBLIC_USAGE_PAGE_LIMIT)),
-                };
-                match fetch_public_llm_gateway_usage(&request).await {
-                    Ok(response) => lookup.set(Some(response)),
-                    Err(err) => error.set(Some(normalize_public_lookup_error(&err))),
+        Callback::from(
+            move |(api_key, page, clear_existing, time_range_override): (
+                String,
+                usize,
+                bool,
+                Option<String>,
+            )| {
+                let trimmed = api_key.trim().to_string();
+                if trimmed.is_empty() {
+                    error.set(Some("请输入要查询的 key".to_string()));
+                    return;
                 }
-                loading.set(false);
-            });
-        })
+
+                let selected_time_range =
+                    time_range_override.unwrap_or_else(|| (*active_time_range).clone());
+                let (start_ms, end_ms) = public_usage_time_range_bounds(&selected_time_range);
+
+                if clear_existing {
+                    lookup.set(None);
+                }
+                active_key.set(Some(trimmed.clone()));
+                active_time_range.set(selected_time_range);
+                current_page.set(page);
+                loading.set(true);
+                error.set(None);
+
+                let lookup = lookup.clone();
+                let loading = loading.clone();
+                let error = error.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let request = PublicLlmGatewayUsageLookupRequest {
+                        api_key: trimmed,
+                        limit: Some(PUBLIC_USAGE_PAGE_LIMIT),
+                        offset: Some(
+                            (page.saturating_sub(1)).saturating_mul(PUBLIC_USAGE_PAGE_LIMIT),
+                        ),
+                        start_ms,
+                        end_ms,
+                    };
+                    match fetch_public_llm_gateway_usage(&request).await {
+                        Ok(response) => lookup.set(Some(response)),
+                        Err(err) => error.set(Some(normalize_public_lookup_error(&err))),
+                    }
+                    loading.set(false);
+                });
+            },
+        )
     };
 
     let on_submit = {
         let key_input = key_input.clone();
         let perform_lookup = perform_lookup.clone();
         Callback::from(move |_| {
-            perform_lookup.emit(((*key_input).clone(), 1, true));
+            perform_lookup.emit(((*key_input).clone(), 1, true, None));
         })
     };
 
@@ -117,7 +162,7 @@ pub fn llm_access_usage_page() -> Html {
         let perform_lookup = perform_lookup.clone();
         Callback::from(move |page: usize| {
             if let Some(api_key) = (*active_key).clone() {
-                perform_lookup.emit((api_key, page, false));
+                perform_lookup.emit((api_key, page, false, None));
             }
         })
     };
@@ -128,7 +173,23 @@ pub fn llm_access_usage_page() -> Html {
         let perform_lookup = perform_lookup.clone();
         Callback::from(move |_| {
             if let Some(api_key) = (*active_key).clone() {
-                perform_lookup.emit((api_key, *current_page, false));
+                perform_lookup.emit((api_key, *current_page, false, None));
+            }
+        })
+    };
+
+    let on_time_range_change = {
+        let active_key = active_key.clone();
+        let active_time_range = active_time_range.clone();
+        let lookup = lookup.clone();
+        let perform_lookup = perform_lookup.clone();
+        Callback::from(move |event: Event| {
+            let selected = event.target_unchecked_into::<HtmlSelectElement>().value();
+            active_time_range.set(selected.clone());
+            if let Some(api_key) = (*active_key).clone() {
+                perform_lookup.emit((api_key, 1, false, Some(selected)));
+            } else {
+                lookup.set(None);
             }
         })
     };
@@ -136,7 +197,7 @@ pub fn llm_access_usage_page() -> Html {
     let total_pages = (*lookup).as_ref().map_or(1, |response| {
         let total = response.total.max(1);
         let limit = response.limit.max(1);
-        total.div_ceil(limit)
+        total.div_ceil(limit).min(PUBLIC_USAGE_MAX_PAGES)
     });
 
     html! {
@@ -168,7 +229,7 @@ pub fn llm_access_usage_page() -> Html {
                     </div>
                 </div>
 
-                <div class={classes!("mt-5", "grid", "gap-3", "lg:grid-cols-[minmax(0,1fr)_auto]")}>
+                <div class={classes!("mt-5", "grid", "gap-3", "lg:grid-cols-[minmax(0,1fr)_13rem_auto]")}>
                     <div class={classes!("flex", "items-stretch", "gap-2", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-2")}>
                         <input
                             type={if *show_key { "text" } else { "password" }}
@@ -200,6 +261,18 @@ pub fn llm_access_usage_page() -> Html {
                             <i class={classes!("fas", if *show_key { "fa-eye-slash" } else { "fa-eye" })}></i>
                         </button>
                     </div>
+                    <label class={classes!("text-sm")}>
+                        <span class={classes!("sr-only")}>{ "时间范围" }</span>
+                        <select
+                            class={classes!("h-full", "w-full", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
+                            onchange={on_time_range_change}
+                        >
+                            <option value={PUBLIC_USAGE_TIME_RANGE_ALL} selected={*active_time_range == PUBLIC_USAGE_TIME_RANGE_ALL}>{ "全部时间" }</option>
+                            <option value={PUBLIC_USAGE_TIME_RANGE_24H} selected={*active_time_range == PUBLIC_USAGE_TIME_RANGE_24H}>{ "最近 24 小时" }</option>
+                            <option value={PUBLIC_USAGE_TIME_RANGE_7D} selected={*active_time_range == PUBLIC_USAGE_TIME_RANGE_7D}>{ "最近 7 天" }</option>
+                            <option value={PUBLIC_USAGE_TIME_RANGE_30D} selected={*active_time_range == PUBLIC_USAGE_TIME_RANGE_30D}>{ "最近 30 天" }</option>
+                        </select>
+                    </label>
                     <div class={classes!("flex", "items-center", "gap-2")}>
                         <button
                             type="button"
@@ -281,7 +354,7 @@ pub fn llm_access_usage_page() -> Html {
                                 { "Usage 日志" }
                             </h2>
                             <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
-                                { format!("共 {} 条，当前第 {} 页", response.total, *current_page) }
+                                { format!("{} · 共 {} 条，当前第 {} 页", public_usage_time_range_label(&active_time_range), response.total, *current_page) }
                             </p>
                         </div>
                         <div class={classes!("grid", "gap-1", "font-mono", "text-xs", "text-[var(--muted)]")}>
@@ -300,7 +373,7 @@ pub fn llm_access_usage_page() -> Html {
                             <table class={classes!("min-w-full", "border-collapse", "text-left", "text-sm")}>
                                 <thead class={classes!("border-b", "border-[var(--border)]", "font-mono", "text-[11px]", "uppercase", "tracking-[0.12em]", "text-[var(--muted)]")}>
                                     <tr>
-                                        <th class={classes!("py-2", "pr-3")}>{ "时间" }</th>
+                                        <th class={classes!("py-2", "pr-3")}>{ "时间 / Event ID" }</th>
                                         <th class={classes!("py-2", "pr-3")}>{ "账号" }</th>
                                         <th class={classes!("py-2", "pr-3")}>{ "请求" }</th>
                                         <th class={classes!("py-2", "pr-3")}>{ "模型 / 状态" }</th>
@@ -313,8 +386,11 @@ pub fn llm_access_usage_page() -> Html {
                                     { for response.events.iter().map(|event| {
                                         html! {
                                             <tr key={event.id.clone()} class={classes!("border-b", "border-[var(--border)]", "align-top")}>
-                                                <td class={classes!("py-3", "pr-3", "whitespace-nowrap", "font-mono", "text-xs")}>
-                                                    { format_ms(event.created_at) }
+                                                <td class={classes!("py-3", "pr-3", "min-w-[13rem]", "whitespace-nowrap", "font-mono", "text-xs")}>
+                                                    <div>{ format_ms(event.created_at) }</div>
+                                                    <div class={classes!("mt-1", "max-w-[10rem]", "truncate", "text-[11px]", "text-[var(--muted)]")} title={event.id.clone()}>
+                                                        { event.id.clone() }
+                                                    </div>
                                                 </td>
                                                 <td class={classes!("py-3", "pr-3", "min-w-[10rem]")}>
                                                     <span class={classes!("inline-flex", "rounded-full", "border", "border-emerald-500/20", "bg-emerald-500/10", "px-2.5", "py-1", "text-xs", "font-semibold", "text-emerald-700", "dark:text-emerald-200")}>

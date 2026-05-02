@@ -19,6 +19,7 @@ async-stream = "0.3"
 async-trait = { workspace = true }
 axum = { workspace = true }
 base64 = "0.22.1"
+better_mimalloc_rs = { workspace = true }
 chrono = { workspace = true }
 eventsource-stream = "0.2"
 futures-util = "0.3"

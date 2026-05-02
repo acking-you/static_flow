@@ -1301,6 +1301,10 @@ pub struct UsageEventQuery {
     pub key_id: Option<String>,
     /// Optional provider filter.
     pub provider_type: Option<String>,
+    /// Optional inclusive lower creation timestamp bound in Unix milliseconds.
+    pub start_ms: Option<i64>,
+    /// Optional exclusive upper creation timestamp bound in Unix milliseconds.
+    pub end_ms: Option<i64>,
     /// Page limit.
     pub limit: usize,
     /// Page offset.
