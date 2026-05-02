@@ -1,6 +1,7 @@
 //! Runtime startup validation for the standalone LLM access service.
 
 use std::{
+    collections::HashMap,
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -20,7 +21,10 @@ use llm_access_core::store::{
     UsageAnalyticsStore,
 };
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-use llm_access_core::store::{AdminRuntimeConfig, UsageEventSink};
+use llm_access_core::store::{
+    AdminKey, AdminKeyPatch, AdminRuntimeConfig, AuthenticatedKey, NewAdminKey, PublicAccessKey,
+    PublicUsageLookupKey, UsageEventSink,
+};
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 use llm_access_core::usage::UsageEvent;
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -138,17 +142,13 @@ impl LlmAccessRuntime {
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let duckdb_usage = Arc::new(open_duckdb_usage_repository(config)?);
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-        rebuild_key_usage_rollups_from_duckdb(&repository, &duckdb_usage).await?;
+        let (usage_accounting, usage_event_flusher) =
+            UsageAccounting::new(repository.clone(), duckdb_usage.clone(), runtime_config.clone());
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-        let (batched_usage_sink, usage_event_flusher) =
-            BatchedUsageEventSink::new(duckdb_usage.clone(), runtime_config.clone());
-        #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-        let usage_event_sink: Arc<dyn UsageEventSink> = Arc::new(batched_usage_sink);
-        #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-        let control_store: Arc<dyn ControlStore> = Arc::new(RecordingControlStore {
-            control_store: repository.clone(),
-            usage_event_sink,
-        });
+        let control_store: Arc<dyn ControlStore> = Arc::new(UsageAccountingControlStore::new(
+            repository.clone(),
+            usage_accounting.clone(),
+        ));
         #[cfg(not(any(feature = "duckdb-runtime", feature = "duckdb-bundled")))]
         let control_store: Arc<dyn ControlStore> = repository.clone();
         let provider_route_store: Arc<dyn ProviderRouteStore> = repository.clone();
@@ -159,14 +159,34 @@ impl LlmAccessRuntime {
         });
         #[cfg(not(any(feature = "duckdb-runtime", feature = "duckdb-bundled")))]
         let admin_config_store: Arc<dyn AdminConfigStore> = repository.clone();
+        #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+        let admin_key_store: Arc<dyn AdminKeyStore> = Arc::new(UsageAccountingAdminKeyStore {
+            admin_key_store: repository.clone(),
+            usage_accounting: usage_accounting.clone(),
+        });
+        #[cfg(not(any(feature = "duckdb-runtime", feature = "duckdb-bundled")))]
         let admin_key_store: Arc<dyn AdminKeyStore> = repository.clone();
         let admin_account_group_store: Arc<dyn AdminAccountGroupStore> = repository.clone();
         let admin_proxy_store: Arc<dyn AdminProxyStore> = repository.clone();
         let admin_codex_account_store: Arc<dyn AdminCodexAccountStore> = repository.clone();
         let admin_kiro_account_store: Arc<dyn AdminKiroAccountStore> = repository.clone();
         let admin_review_queue_store: Arc<dyn AdminReviewQueueStore> = repository.clone();
+        #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+        let public_access_store: Arc<dyn PublicAccessStore> =
+            Arc::new(UsageAccountingPublicAccessStore {
+                public_access_store: repository.clone(),
+                usage_accounting: usage_accounting.clone(),
+            });
+        #[cfg(not(any(feature = "duckdb-runtime", feature = "duckdb-bundled")))]
         let public_access_store: Arc<dyn PublicAccessStore> = repository.clone();
         let public_community_store: Arc<dyn PublicCommunityStore> = repository.clone();
+        #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+        let public_usage_store: Arc<dyn PublicUsageStore> =
+            Arc::new(UsageAccountingPublicUsageStore {
+                public_usage_store: repository.clone(),
+                usage_accounting,
+            });
+        #[cfg(not(any(feature = "duckdb-runtime", feature = "duckdb-bundled")))]
         let public_usage_store: Arc<dyn PublicUsageStore> = repository.clone();
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let usage_analytics_store: Arc<dyn UsageAnalyticsStore> = duckdb_usage;
@@ -316,29 +336,6 @@ fn usage_flush_config(runtime_config: &AdminRuntimeConfig) -> UsageFlushConfig {
     }
 }
 
-#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
-        .unwrap_or(0)
-}
-
-#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-async fn rebuild_key_usage_rollups_from_duckdb(
-    repository: &Arc<SqliteControlRepository>,
-    duckdb_usage: &Arc<DuckDbUsageRepository>,
-) -> anyhow::Result<()> {
-    let rollups = duckdb_usage.key_usage_rollups().await?;
-    let rollup_count = rollups.len();
-    repository
-        .replace_key_usage_rollups(rollups, now_ms())
-        .await?;
-    tracing::info!(rollup_count, "rebuilt SQLite key usage rollups from DuckDB usage events");
-    Ok(())
-}
-
-#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 fn estimate_usage_event_bytes(event: &UsageEvent) -> usize {
     event.event_id.len()
         + event.provider_type.as_storage_str().len()
@@ -379,35 +376,234 @@ fn estimate_usage_event_bytes(event: &UsageEvent) -> usize {
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-struct BatchedUsageEventSink {
-    tx: mpsc::Sender<UsageEvent>,
+#[derive(Debug, Clone, Default)]
+struct UsageRollupDelta {
+    input_uncached_tokens: i64,
+    input_cached_tokens: i64,
+    output_tokens: i64,
+    billable_tokens: i64,
+    credit_total: f64,
+    credit_missing_events: i64,
+    last_used_at_ms: Option<i64>,
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-impl BatchedUsageEventSink {
+impl UsageRollupDelta {
+    fn from_event(event: &UsageEvent) -> anyhow::Result<Self> {
+        let credit_total = event
+            .credit_usage
+            .as_deref()
+            .unwrap_or("0")
+            .parse::<f64>()
+            .context("parse usage event credit usage")?;
+        Ok(Self {
+            input_uncached_tokens: event.input_uncached_tokens.max(0),
+            input_cached_tokens: event.input_cached_tokens.max(0),
+            output_tokens: event.output_tokens.max(0),
+            billable_tokens: event.billable_tokens.max(0),
+            credit_total,
+            credit_missing_events: event.credit_usage_missing as i64,
+            last_used_at_ms: Some(event.created_at_ms),
+        })
+    }
+
+    fn add(&mut self, other: &Self) {
+        self.input_uncached_tokens = self
+            .input_uncached_tokens
+            .saturating_add(other.input_uncached_tokens);
+        self.input_cached_tokens = self
+            .input_cached_tokens
+            .saturating_add(other.input_cached_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.billable_tokens = self.billable_tokens.saturating_add(other.billable_tokens);
+        self.credit_total += other.credit_total;
+        self.credit_missing_events = self
+            .credit_missing_events
+            .saturating_add(other.credit_missing_events);
+        self.last_used_at_ms = match (self.last_used_at_ms, other.last_used_at_ms) {
+            (Some(current), Some(next)) => Some(current.max(next)),
+            (None, next) => next,
+            (current, None) => current,
+        };
+    }
+
+    fn subtract(&mut self, other: &Self) {
+        self.input_uncached_tokens = self
+            .input_uncached_tokens
+            .saturating_sub(other.input_uncached_tokens);
+        self.input_cached_tokens = self
+            .input_cached_tokens
+            .saturating_sub(other.input_cached_tokens);
+        self.output_tokens = self.output_tokens.saturating_sub(other.output_tokens);
+        self.billable_tokens = self.billable_tokens.saturating_sub(other.billable_tokens);
+        self.credit_total = (self.credit_total - other.credit_total).max(0.0);
+        self.credit_missing_events = self
+            .credit_missing_events
+            .saturating_sub(other.credit_missing_events);
+        if self.last_used_at_ms == other.last_used_at_ms {
+            self.last_used_at_ms = None;
+        }
+    }
+
+    fn is_zero(&self) -> bool {
+        self.input_uncached_tokens == 0
+            && self.input_cached_tokens == 0
+            && self.output_tokens == 0
+            && self.billable_tokens == 0
+            && self.credit_total == 0.0
+            && self.credit_missing_events == 0
+    }
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+#[derive(Default)]
+struct PendingUsageRollups {
+    rollups: RwLock<HashMap<String, UsageRollupDelta>>,
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+impl PendingUsageRollups {
+    fn add_event(&self, event: &UsageEvent) -> anyhow::Result<()> {
+        let delta = UsageRollupDelta::from_event(event)?;
+        let mut rollups = self
+            .rollups
+            .write()
+            .map_err(|_| anyhow!("pending usage rollups lock poisoned"))?;
+        rollups.entry(event.key_id.clone()).or_default().add(&delta);
+        Ok(())
+    }
+
+    fn subtract_events(&self, events: &[UsageEvent]) -> anyhow::Result<()> {
+        let mut deltas = HashMap::<String, UsageRollupDelta>::new();
+        for event in events {
+            let delta = UsageRollupDelta::from_event(event)?;
+            deltas.entry(event.key_id.clone()).or_default().add(&delta);
+        }
+        let mut rollups = self
+            .rollups
+            .write()
+            .map_err(|_| anyhow!("pending usage rollups lock poisoned"))?;
+        for (key_id, delta) in deltas {
+            if let Some(entry) = rollups.get_mut(&key_id) {
+                entry.subtract(&delta);
+                if entry.is_zero() {
+                    rollups.remove(&key_id);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn delta_for_key(&self, key_id: &str) -> Option<UsageRollupDelta> {
+        self.rollups
+            .read()
+            .ok()
+            .and_then(|rollups| rollups.get(key_id).cloned())
+    }
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+struct UsageAccounting {
+    tx: mpsc::Sender<UsageEvent>,
+    pending_rollups: Arc<PendingUsageRollups>,
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+impl UsageAccounting {
     fn new(
-        inner: Arc<dyn UsageEventSink>,
+        rollup_sink: Arc<dyn UsageEventSink>,
+        analytics_sink: Arc<dyn UsageEventSink>,
         runtime_config: Arc<RwLock<AdminRuntimeConfig>>,
-    ) -> (Self, Arc<UsageEventFlusherHandle>) {
+    ) -> (Arc<Self>, Arc<UsageEventFlusherHandle>) {
         let (tx, rx) = mpsc::channel::<UsageEvent>(USAGE_EVENT_CHANNEL_CAPACITY);
-        let handle = spawn_usage_event_flusher(inner, runtime_config, rx);
+        let pending_rollups = Arc::new(PendingUsageRollups::default());
+        let handle = spawn_usage_event_flusher(
+            rollup_sink,
+            analytics_sink,
+            pending_rollups.clone(),
+            runtime_config,
+            rx,
+        );
         (
-            Self {
+            Arc::new(Self {
                 tx,
-            },
+                pending_rollups,
+            }),
             handle,
         )
+    }
+
+    fn overlay_authenticated_key(&self, mut key: AuthenticatedKey) -> AuthenticatedKey {
+        if let Some(delta) = self.pending_rollups.delta_for_key(&key.key_id) {
+            key.billable_tokens_used = key
+                .billable_tokens_used
+                .saturating_add(delta.billable_tokens);
+        }
+        key
+    }
+
+    fn overlay_admin_key(&self, mut key: AdminKey) -> AdminKey {
+        if let Some(delta) = self.pending_rollups.delta_for_key(&key.id) {
+            key.usage_input_uncached_tokens =
+                add_i64_to_u64(key.usage_input_uncached_tokens, delta.input_uncached_tokens);
+            key.usage_input_cached_tokens =
+                add_i64_to_u64(key.usage_input_cached_tokens, delta.input_cached_tokens);
+            key.usage_output_tokens = add_i64_to_u64(key.usage_output_tokens, delta.output_tokens);
+            key.usage_credit_total += delta.credit_total;
+            key.usage_credit_missing_events =
+                add_i64_to_u64(key.usage_credit_missing_events, delta.credit_missing_events);
+            key.remaining_billable = key.remaining_billable.saturating_sub(delta.billable_tokens);
+            key.last_used_at = max_optional_ms(key.last_used_at, delta.last_used_at_ms);
+        }
+        key
+    }
+
+    fn overlay_public_access_key(&self, mut key: PublicAccessKey) -> PublicAccessKey {
+        if let Some(delta) = self.pending_rollups.delta_for_key(&key.key_id) {
+            key.usage_input_uncached_tokens =
+                add_i64_to_u64(key.usage_input_uncached_tokens, delta.input_uncached_tokens);
+            key.usage_input_cached_tokens =
+                add_i64_to_u64(key.usage_input_cached_tokens, delta.input_cached_tokens);
+            key.usage_output_tokens = add_i64_to_u64(key.usage_output_tokens, delta.output_tokens);
+            key.usage_billable_tokens =
+                add_i64_to_u64(key.usage_billable_tokens, delta.billable_tokens);
+            key.last_used_at_ms = max_optional_ms(key.last_used_at_ms, delta.last_used_at_ms);
+        }
+        key
+    }
+
+    fn overlay_public_usage_key(&self, mut key: PublicUsageLookupKey) -> PublicUsageLookupKey {
+        if let Some(delta) = self.pending_rollups.delta_for_key(&key.key_id) {
+            key.usage_input_uncached_tokens =
+                add_i64_to_u64(key.usage_input_uncached_tokens, delta.input_uncached_tokens);
+            key.usage_input_cached_tokens =
+                add_i64_to_u64(key.usage_input_cached_tokens, delta.input_cached_tokens);
+            key.usage_output_tokens = add_i64_to_u64(key.usage_output_tokens, delta.output_tokens);
+            key.usage_billable_tokens =
+                add_i64_to_u64(key.usage_billable_tokens, delta.billable_tokens);
+            key.usage_credit_total += delta.credit_total;
+            key.usage_credit_missing_events =
+                add_i64_to_u64(key.usage_credit_missing_events, delta.credit_missing_events);
+            key.last_used_at_ms = max_optional_ms(key.last_used_at_ms, delta.last_used_at_ms);
+        }
+        key
     }
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 #[async_trait]
-impl UsageEventSink for BatchedUsageEventSink {
+impl UsageEventSink for UsageAccounting {
     async fn append_usage_event(&self, event: &UsageEvent) -> anyhow::Result<()> {
+        self.pending_rollups.add_event(event)?;
         self.tx
             .send(event.clone())
             .await
             .context("failed to enqueue llm access usage event")
+            .inspect_err(|_err| {
+                let _ = self
+                    .pending_rollups
+                    .subtract_events(std::slice::from_ref(event));
+            })
     }
 
     async fn append_usage_events(&self, events: &[UsageEvent]) -> anyhow::Result<()> {
@@ -419,8 +615,24 @@ impl UsageEventSink for BatchedUsageEventSink {
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+fn add_i64_to_u64(value: u64, delta: i64) -> u64 {
+    value.saturating_add(delta.max(0) as u64)
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+fn max_optional_ms(current: Option<i64>, next: Option<i64>) -> Option<i64> {
+    match (current, next) {
+        (Some(current), Some(next)) => Some(current.max(next)),
+        (None, next) => next,
+        (current, None) => current,
+    }
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 fn spawn_usage_event_flusher(
-    inner: Arc<dyn UsageEventSink>,
+    rollup_sink: Arc<dyn UsageEventSink>,
+    analytics_sink: Arc<dyn UsageEventSink>,
+    pending_rollups: Arc<PendingUsageRollups>,
     runtime_config: Arc<RwLock<AdminRuntimeConfig>>,
     mut rx: mpsc::Receiver<UsageEvent>,
 ) -> Arc<UsageEventFlusherHandle> {
@@ -433,6 +645,7 @@ fn spawn_usage_event_flusher(
             usage_flush_config(&config)
         };
         let mut buffer = Vec::with_capacity(initial_config.batch_size);
+        let mut analytics_retry_buffer = Vec::new();
         let mut buffered_bytes = 0usize;
         let mut flush_count: u64 = 0;
         let mut retry_failed_batch_on_timer = false;
@@ -445,7 +658,9 @@ fn spawn_usage_event_flusher(
                 usage_flush_config(&config)
             };
 
-            if retry_failed_batch_on_timer && !buffer.is_empty() {
+            if retry_failed_batch_on_timer
+                && (!buffer.is_empty() || !analytics_retry_buffer.is_empty())
+            {
                 tokio::select! {
                     _ = shutdown_rx.changed() => {
                         if *shutdown_rx.borrow() {
@@ -454,10 +669,17 @@ fn spawn_usage_event_flusher(
                                 buffer.push(event);
                             }
                             let _ = flush_usage_event_buffer(
-                                inner.as_ref(),
-                                &mut buffer,
-                                &mut buffered_bytes,
-                                &mut flush_count,
+                                UsageEventFlushTargets {
+                                    rollup_sink: rollup_sink.as_ref(),
+                                    analytics_sink: analytics_sink.as_ref(),
+                                    pending_rollups: pending_rollups.as_ref(),
+                                },
+                                UsageEventFlushState {
+                                    buffer: &mut buffer,
+                                    analytics_retry_buffer: &mut analytics_retry_buffer,
+                                    buffered_bytes: &mut buffered_bytes,
+                                    flush_count: &mut flush_count,
+                                },
                                 "final usage event flush failed during shutdown",
                             )
                             .await;
@@ -467,10 +689,17 @@ fn spawn_usage_event_flusher(
                     }
                     _ = time::sleep(flush_config.flush_interval) => {
                         retry_failed_batch_on_timer = flush_usage_event_buffer(
-                            inner.as_ref(),
-                            &mut buffer,
-                            &mut buffered_bytes,
-                            &mut flush_count,
+                            UsageEventFlushTargets {
+                                rollup_sink: rollup_sink.as_ref(),
+                                analytics_sink: analytics_sink.as_ref(),
+                                pending_rollups: pending_rollups.as_ref(),
+                            },
+                            UsageEventFlushState {
+                                buffer: &mut buffer,
+                                analytics_retry_buffer: &mut analytics_retry_buffer,
+                                buffered_bytes: &mut buffered_bytes,
+                                flush_count: &mut flush_count,
+                            },
                             "usage event retry flush failed",
                         )
                         .await;
@@ -487,10 +716,17 @@ fn spawn_usage_event_flusher(
                             buffer.push(event);
                         }
                         let _ = flush_usage_event_buffer(
-                            inner.as_ref(),
-                            &mut buffer,
-                            &mut buffered_bytes,
-                            &mut flush_count,
+                            UsageEventFlushTargets {
+                                rollup_sink: rollup_sink.as_ref(),
+                                analytics_sink: analytics_sink.as_ref(),
+                                pending_rollups: pending_rollups.as_ref(),
+                            },
+                            UsageEventFlushState {
+                                buffer: &mut buffer,
+                                analytics_retry_buffer: &mut analytics_retry_buffer,
+                                buffered_bytes: &mut buffered_bytes,
+                                flush_count: &mut flush_count,
+                            },
                             "final usage event flush failed during shutdown",
                         )
                         .await;
@@ -520,10 +756,17 @@ fn spawn_usage_event_flusher(
                                 || buffered_bytes >= flush_config.max_buffer_bytes
                             {
                                 retry_failed_batch_on_timer = flush_usage_event_buffer(
-                                    inner.as_ref(),
-                                    &mut buffer,
-                                    &mut buffered_bytes,
-                                    &mut flush_count,
+                                    UsageEventFlushTargets {
+                                        rollup_sink: rollup_sink.as_ref(),
+                                        analytics_sink: analytics_sink.as_ref(),
+                                        pending_rollups: pending_rollups.as_ref(),
+                                    },
+                                    UsageEventFlushState {
+                                        buffer: &mut buffer,
+                                        analytics_retry_buffer: &mut analytics_retry_buffer,
+                                        buffered_bytes: &mut buffered_bytes,
+                                        flush_count: &mut flush_count,
+                                    },
                                     "usage event batch flush failed",
                                 )
                                 .await;
@@ -531,10 +774,17 @@ fn spawn_usage_event_flusher(
                         },
                         None => {
                             let _ = flush_usage_event_buffer(
-                                inner.as_ref(),
-                                &mut buffer,
-                                &mut buffered_bytes,
-                                &mut flush_count,
+                                UsageEventFlushTargets {
+                                    rollup_sink: rollup_sink.as_ref(),
+                                    analytics_sink: analytics_sink.as_ref(),
+                                    pending_rollups: pending_rollups.as_ref(),
+                                },
+                                UsageEventFlushState {
+                                    buffer: &mut buffer,
+                                    analytics_retry_buffer: &mut analytics_retry_buffer,
+                                    buffered_bytes: &mut buffered_bytes,
+                                    flush_count: &mut flush_count,
+                                },
                                 "final usage event flush failed",
                             )
                             .await;
@@ -544,12 +794,19 @@ fn spawn_usage_event_flusher(
                     }
                 }
                 _ = time::sleep(flush_config.flush_interval) => {
-                    if !buffer.is_empty() {
+                    if !buffer.is_empty() || !analytics_retry_buffer.is_empty() {
                         retry_failed_batch_on_timer = flush_usage_event_buffer(
-                            inner.as_ref(),
-                            &mut buffer,
-                            &mut buffered_bytes,
-                            &mut flush_count,
+                            UsageEventFlushTargets {
+                                rollup_sink: rollup_sink.as_ref(),
+                                analytics_sink: analytics_sink.as_ref(),
+                                pending_rollups: pending_rollups.as_ref(),
+                            },
+                            UsageEventFlushState {
+                                buffer: &mut buffer,
+                                analytics_retry_buffer: &mut analytics_retry_buffer,
+                                buffered_bytes: &mut buffered_bytes,
+                                flush_count: &mut flush_count,
+                            },
                             "usage event timed flush failed",
                         )
                         .await;
@@ -585,33 +842,73 @@ impl UsageEventFlusherHandle {
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+struct UsageEventFlushTargets<'a> {
+    rollup_sink: &'a dyn UsageEventSink,
+    analytics_sink: &'a dyn UsageEventSink,
+    pending_rollups: &'a PendingUsageRollups,
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+struct UsageEventFlushState<'a> {
+    buffer: &'a mut Vec<UsageEvent>,
+    analytics_retry_buffer: &'a mut Vec<UsageEvent>,
+    buffered_bytes: &'a mut usize,
+    flush_count: &'a mut u64,
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 async fn flush_usage_event_buffer(
-    inner: &dyn UsageEventSink,
-    buffer: &mut Vec<UsageEvent>,
-    buffered_bytes: &mut usize,
-    flush_count: &mut u64,
+    targets: UsageEventFlushTargets<'_>,
+    state: UsageEventFlushState<'_>,
     error_message: &'static str,
 ) -> bool {
-    if buffer.is_empty() {
-        return false;
+    let mut retry = false;
+    if !state.buffer.is_empty() {
+        let batch = std::mem::take(state.buffer);
+        *state.buffered_bytes = 0;
+        let count = batch.len();
+        match targets.rollup_sink.append_usage_events(&batch).await {
+            Ok(()) => {
+                if let Err(err) = targets.pending_rollups.subtract_events(&batch) {
+                    tracing::error!(
+                        count,
+                        "persisted usage rollups but failed to clear pending usage rollups: \
+                         {err:#}"
+                    );
+                }
+                state.analytics_retry_buffer.extend(batch);
+            },
+            Err(err) => {
+                tracing::error!(count, "{}: {err:#}", error_message);
+                *state.buffered_bytes = batch.iter().map(estimate_usage_event_bytes).sum();
+                *state.buffer = batch;
+                return true;
+            },
+        }
     }
-
-    let batch = std::mem::take(buffer);
-    *buffered_bytes = 0;
-    let count = batch.len();
-    match inner.append_usage_events(&batch).await {
-        Ok(()) => {
-            *flush_count += 1;
-            tracing::debug!("flushed {count} llm access usage events (flush #{flush_count})");
-            false
-        },
-        Err(err) => {
-            tracing::error!(count, "{}: {err:#}", error_message);
-            *buffered_bytes = batch.iter().map(estimate_usage_event_bytes).sum();
-            *buffer = batch;
-            true
-        },
+    if !state.analytics_retry_buffer.is_empty() {
+        let analytics_batch = std::mem::take(state.analytics_retry_buffer);
+        let count = analytics_batch.len();
+        match targets
+            .analytics_sink
+            .append_usage_events(&analytics_batch)
+            .await
+        {
+            Ok(()) => {
+                *state.flush_count += 1;
+                tracing::debug!(
+                    "flushed {count} llm access usage events (flush #{})",
+                    *state.flush_count
+                );
+            },
+            Err(err) => {
+                tracing::error!(count, "{}: {err:#}", error_message);
+                *state.analytics_retry_buffer = analytics_batch;
+                retry = true;
+            },
+        }
     }
+    retry
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -648,24 +945,122 @@ impl AdminConfigStore for RecordingAdminConfigStore {
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-struct RecordingControlStore {
+struct UsageAccountingControlStore {
     control_store: Arc<dyn ControlStore>,
-    usage_event_sink: Arc<dyn UsageEventSink>,
+    usage_accounting: Arc<UsageAccounting>,
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+impl UsageAccountingControlStore {
+    fn new(control_store: Arc<dyn ControlStore>, usage_accounting: Arc<UsageAccounting>) -> Self {
+        Self {
+            control_store,
+            usage_accounting,
+        }
+    }
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 #[async_trait]
-impl ControlStore for RecordingControlStore {
+impl ControlStore for UsageAccountingControlStore {
     async fn authenticate_bearer_secret(
         &self,
         secret: &str,
-    ) -> anyhow::Result<Option<llm_access_core::store::AuthenticatedKey>> {
-        self.control_store.authenticate_bearer_secret(secret).await
+    ) -> anyhow::Result<Option<AuthenticatedKey>> {
+        Ok(self
+            .control_store
+            .authenticate_bearer_secret(secret)
+            .await?
+            .map(|key| self.usage_accounting.overlay_authenticated_key(key)))
     }
 
     async fn apply_usage_rollup(&self, event: &UsageEvent) -> anyhow::Result<()> {
-        self.control_store.apply_usage_rollup(event).await?;
-        self.usage_event_sink.append_usage_event(event).await
+        self.usage_accounting.append_usage_event(event).await
+    }
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+struct UsageAccountingAdminKeyStore {
+    admin_key_store: Arc<dyn AdminKeyStore>,
+    usage_accounting: Arc<UsageAccounting>,
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+#[async_trait]
+impl AdminKeyStore for UsageAccountingAdminKeyStore {
+    async fn list_admin_keys(&self) -> anyhow::Result<Vec<AdminKey>> {
+        Ok(self
+            .admin_key_store
+            .list_admin_keys()
+            .await?
+            .into_iter()
+            .map(|key| self.usage_accounting.overlay_admin_key(key))
+            .collect())
+    }
+
+    async fn create_admin_key(&self, key: NewAdminKey) -> anyhow::Result<AdminKey> {
+        self.admin_key_store.create_admin_key(key).await
+    }
+
+    async fn patch_admin_key(
+        &self,
+        key_id: &str,
+        patch: AdminKeyPatch,
+    ) -> anyhow::Result<Option<AdminKey>> {
+        Ok(self
+            .admin_key_store
+            .patch_admin_key(key_id, patch)
+            .await?
+            .map(|key| self.usage_accounting.overlay_admin_key(key)))
+    }
+
+    async fn delete_admin_key(&self, key_id: &str) -> anyhow::Result<Option<AdminKey>> {
+        self.admin_key_store.delete_admin_key(key_id).await
+    }
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+struct UsageAccountingPublicAccessStore {
+    public_access_store: Arc<dyn PublicAccessStore>,
+    usage_accounting: Arc<UsageAccounting>,
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+#[async_trait]
+impl PublicAccessStore for UsageAccountingPublicAccessStore {
+    async fn auth_cache_ttl_seconds(&self) -> anyhow::Result<u64> {
+        self.public_access_store.auth_cache_ttl_seconds().await
+    }
+
+    async fn list_public_access_keys(&self) -> anyhow::Result<Vec<PublicAccessKey>> {
+        Ok(self
+            .public_access_store
+            .list_public_access_keys()
+            .await?
+            .into_iter()
+            .map(|key| self.usage_accounting.overlay_public_access_key(key))
+            .collect())
+    }
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+struct UsageAccountingPublicUsageStore {
+    public_usage_store: Arc<dyn PublicUsageStore>,
+    usage_accounting: Arc<UsageAccounting>,
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+#[async_trait]
+impl PublicUsageStore for UsageAccountingPublicUsageStore {
+    async fn get_public_usage_key_by_secret(
+        &self,
+        secret: &str,
+    ) -> anyhow::Result<Option<PublicUsageLookupKey>> {
+        Ok(self
+            .public_usage_store
+            .get_public_usage_key_by_secret(secret)
+            .await?
+            .map(|key| self.usage_accounting.overlay_public_usage_key(key)))
     }
 }
 
@@ -695,7 +1090,7 @@ mod tests {
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType},
-        store::{AdminRuntimeConfig, UsageEventSink},
+        store::{AdminRuntimeConfig, AuthenticatedKey, ControlStore, UsageEventSink},
         usage::{UsageEvent, UsageTiming},
     };
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -779,6 +1174,26 @@ mod tests {
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    struct StaticControlStore {
+        key: AuthenticatedKey,
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    #[async_trait::async_trait]
+    impl ControlStore for StaticControlStore {
+        async fn authenticate_bearer_secret(
+            &self,
+            secret: &str,
+        ) -> anyhow::Result<Option<AuthenticatedKey>> {
+            Ok((secret == "secret").then(|| self.key.clone()))
+        }
+
+        async fn apply_usage_rollup(&self, _event: &UsageEvent) -> anyhow::Result<()> {
+            anyhow::bail!("usage rollups must be persisted by the accounting flusher")
+        }
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     fn sample_usage_event(event_id: &str) -> UsageEvent {
         UsageEvent {
             event_id: event_id.to_string(),
@@ -835,72 +1250,151 @@ mod tests {
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    fn sample_authenticated_key() -> AuthenticatedKey {
+        AuthenticatedKey {
+            key_id: "key-runtime".to_string(),
+            key_name: "runtime".to_string(),
+            provider_type: "kiro".to_string(),
+            protocol_family: "anthropic".to_string(),
+            status: "active".to_string(),
+            quota_billable_limit: 100,
+            billable_tokens_used: 5,
+        }
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     #[tokio::test]
-    async fn batched_usage_sink_flushes_when_batch_size_reached() {
-        let inner = Arc::new(RecordingUsageEventSink::default());
+    async fn usage_accounting_buffers_rollups_and_overlays_auth_until_flush() {
+        let rollup_sink = Arc::new(RecordingUsageEventSink::default());
+        let analytics_sink = Arc::new(RecordingUsageEventSink::default());
         let runtime_config = Arc::new(RwLock::new(AdminRuntimeConfig {
             usage_event_flush_batch_size: 2,
             usage_event_flush_interval_seconds: 3600,
             usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
             ..AdminRuntimeConfig::default()
         }));
-        let (sink, _handle) = super::BatchedUsageEventSink::new(inner.clone(), runtime_config);
+        let (accounting, _handle) = super::UsageAccounting::new(
+            rollup_sink.clone(),
+            analytics_sink.clone(),
+            runtime_config,
+        );
+        let control_store = super::UsageAccountingControlStore::new(
+            Arc::new(StaticControlStore {
+                key: sample_authenticated_key(),
+            }),
+            accounting.clone(),
+        );
+
+        accounting
+            .append_usage_event(&sample_usage_event("evt-1"))
+            .await
+            .expect("enqueue first event");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert!(rollup_sink.batches.lock().await.is_empty());
+        assert!(analytics_sink.batches.lock().await.is_empty());
+        let key = control_store
+            .authenticate_bearer_secret("secret")
+            .await
+            .expect("authenticate")
+            .expect("key exists");
+        assert_eq!(key.billable_tokens_used, 17);
+
+        accounting
+            .append_usage_event(&sample_usage_event("evt-2"))
+            .await
+            .expect("enqueue second event");
+        wait_for_recorded_batches(&rollup_sink, 1).await;
+        wait_for_recorded_batches(&analytics_sink, 1).await;
+
+        assert_eq!(rollup_sink.batches.lock().await.as_slice(), &[vec![
+            "evt-1".to_string(),
+            "evt-2".to_string()
+        ]]);
+        assert_eq!(analytics_sink.batches.lock().await.as_slice(), &[vec![
+            "evt-1".to_string(),
+            "evt-2".to_string()
+        ]]);
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    #[tokio::test]
+    async fn batched_usage_sink_flushes_when_batch_size_reached() {
+        let rollup_sink = Arc::new(RecordingUsageEventSink::default());
+        let analytics_sink = Arc::new(RecordingUsageEventSink::default());
+        let runtime_config = Arc::new(RwLock::new(AdminRuntimeConfig {
+            usage_event_flush_batch_size: 2,
+            usage_event_flush_interval_seconds: 3600,
+            usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
+            ..AdminRuntimeConfig::default()
+        }));
+        let (sink, _handle) = super::UsageAccounting::new(
+            rollup_sink.clone(),
+            analytics_sink.clone(),
+            runtime_config,
+        );
 
         sink.append_usage_event(&sample_usage_event("evt-1"))
             .await
             .expect("enqueue first event");
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(inner.batches.lock().await.is_empty());
+        assert!(rollup_sink.batches.lock().await.is_empty());
+        assert!(analytics_sink.batches.lock().await.is_empty());
 
         sink.append_usage_event(&sample_usage_event("evt-2"))
             .await
             .expect("enqueue second event");
-        wait_for_recorded_batches(&inner, 1).await;
+        wait_for_recorded_batches(&rollup_sink, 1).await;
+        wait_for_recorded_batches(&analytics_sink, 1).await;
 
-        let batches = inner.batches.lock().await;
+        let batches = analytics_sink.batches.lock().await;
         assert_eq!(batches.as_slice(), &[vec!["evt-1".to_string(), "evt-2".to_string()]]);
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     #[tokio::test]
     async fn batched_usage_sink_flushes_remaining_events_when_sender_closes() {
-        let inner = Arc::new(RecordingUsageEventSink::default());
+        let rollup_sink = Arc::new(RecordingUsageEventSink::default());
+        let analytics_sink = Arc::new(RecordingUsageEventSink::default());
         let runtime_config = Arc::new(RwLock::new(AdminRuntimeConfig {
             usage_event_flush_batch_size: 256,
             usage_event_flush_interval_seconds: 3600,
             usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
             ..AdminRuntimeConfig::default()
         }));
-        let (sink, _handle) = super::BatchedUsageEventSink::new(inner.clone(), runtime_config);
+        let (sink, _handle) =
+            super::UsageAccounting::new(rollup_sink, analytics_sink.clone(), runtime_config);
 
         sink.append_usage_event(&sample_usage_event("evt-1"))
             .await
             .expect("enqueue event");
         drop(sink);
-        wait_for_recorded_batches(&inner, 1).await;
+        wait_for_recorded_batches(&analytics_sink, 1).await;
 
-        let batches = inner.batches.lock().await;
+        let batches = analytics_sink.batches.lock().await;
         assert_eq!(batches.as_slice(), &[vec!["evt-1".to_string()]]);
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     #[tokio::test]
     async fn batched_usage_sink_flushes_remaining_events_on_shutdown_signal() {
-        let inner = Arc::new(RecordingUsageEventSink::default());
+        let rollup_sink = Arc::new(RecordingUsageEventSink::default());
+        let analytics_sink = Arc::new(RecordingUsageEventSink::default());
         let runtime_config = Arc::new(RwLock::new(AdminRuntimeConfig {
             usage_event_flush_batch_size: 256,
             usage_event_flush_interval_seconds: 3600,
             usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
             ..AdminRuntimeConfig::default()
         }));
-        let (sink, handle) = super::BatchedUsageEventSink::new(inner.clone(), runtime_config);
+        let (sink, handle) =
+            super::UsageAccounting::new(rollup_sink, analytics_sink.clone(), runtime_config);
 
         sink.append_usage_event(&sample_usage_event("evt-1"))
             .await
             .expect("enqueue event");
         handle.shutdown().await;
 
-        let batches = inner.batches.lock().await;
+        let batches = analytics_sink.batches.lock().await;
         assert_eq!(batches.as_slice(), &[vec!["evt-1".to_string()]]);
     }
 }

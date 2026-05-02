@@ -600,7 +600,7 @@ impl ControlStore for SqliteControlRepository {
         let event = event.clone();
         let inner = Arc::clone(&self.inner);
         task::spawn_blocking(move || {
-            let store = inner
+            let mut store = inner
                 .lock()
                 .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
             store.increment_key_usage_rollup(&event)
@@ -739,6 +739,22 @@ impl ProviderRouteStore for SqliteControlRepository {
 impl UsageEventSink for SqliteControlRepository {
     async fn append_usage_event(&self, event: &UsageEvent) -> anyhow::Result<()> {
         self.apply_usage_rollup(event).await
+    }
+
+    async fn append_usage_events(&self, events: &[UsageEvent]) -> anyhow::Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        let events = events.to_vec();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let mut store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.increment_key_usage_rollups(&events)
+        })
+        .await
+        .context("sqlite control repository rollup batch task failed")?
     }
 }
 

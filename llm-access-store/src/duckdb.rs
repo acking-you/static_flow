@@ -443,6 +443,12 @@ struct SegmentStats {
 }
 
 #[cfg(feature = "duckdb-runtime")]
+const DUCKDB_COMPACT_MEMORY_LIMIT: &str = "1536MB";
+
+#[cfg(feature = "duckdb-runtime")]
+const DUCKDB_COMPACT_MAX_TEMP_DIRECTORY_SIZE: &str = "8GB";
+
+#[cfg(feature = "duckdb-runtime")]
 impl DuckDbUsageRepository {
     /// Open a DuckDB usage repository and initialize the analytics schema.
     pub fn open_path(path: impl AsRef<Path>) -> anyhow::Result<Self> {
@@ -785,10 +791,21 @@ fn publish_pending_segment(
     fs::create_dir_all(&config.archive_dir).with_context(|| {
         format!("failed to create archive directory `{}`", config.archive_dir.display())
     })?;
-    let compact_path = compact_pending_segment_to_local_file(config, pending_path, segment_id)?;
-    let stats = validate_compacted_segment_matches_source(pending_path, &compact_path)?;
     let uploading_path = uploading_archive_segment_path(config, segment_id);
     let archive_path = archive_segment_path(config, segment_id);
+    let compact_path = compacting_segment_path(config, segment_id);
+    if archive_path.exists() {
+        return finalize_archived_segment(
+            config,
+            pending_path,
+            &compact_path,
+            &uploading_path,
+            &archive_path,
+            segment_id,
+        );
+    }
+    let compact_path = compact_pending_segment_to_local_file(config, pending_path, segment_id)?;
+    let stats = validate_compacted_segment_matches_source(pending_path, &compact_path)?;
     remove_file_if_exists(&uploading_path)?;
     fs::copy(&compact_path, &uploading_path).with_context(|| {
         format!(
@@ -810,6 +827,26 @@ fn publish_pending_segment(
     publish_segment_catalog(config, segment_id, &archive_path, &stats, size_bytes)?;
     remove_file_if_exists(pending_path)?;
     remove_file_if_exists(&compact_path)?;
+    Ok(())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn finalize_archived_segment(
+    config: &TieredDuckDbUsageConfig,
+    pending_path: &Path,
+    compact_path: &Path,
+    uploading_path: &Path,
+    archive_path: &Path,
+    segment_id: &str,
+) -> anyhow::Result<()> {
+    let stats = collect_segment_stats(archive_path)?;
+    let size_bytes = fs::metadata(archive_path)
+        .with_context(|| format!("failed to stat archived segment `{}`", archive_path.display()))?
+        .len();
+    publish_segment_catalog(config, segment_id, archive_path, &stats, size_bytes)?;
+    remove_file_if_exists(uploading_path)?;
+    remove_file_if_exists(pending_path)?;
+    remove_file_if_exists(compact_path)?;
     Ok(())
 }
 
@@ -888,8 +925,7 @@ fn compact_pending_segment_to_local_file(
     remove_file_if_exists(&compact_path)?;
 
     let conn = DuckDbUsageRepository::open_conn(&compact_path)?;
-    conn.execute_batch("SET memory_limit='768MB';")
-        .context("failed to set duckdb compact memory limit")?;
+    configure_duckdb_compact_connection(&conn, &tiered_compacting_dir(config))?;
     crate::initialize_duckdb_target(&conn)?;
     let pending_path_str = pending_path
         .to_str()
@@ -919,6 +955,33 @@ fn compact_pending_segment_to_local_file(
         )
     })?;
     Ok(compact_path)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn configure_duckdb_compact_connection(
+    conn: &duckdb::Connection,
+    temp_dir: &Path,
+) -> anyhow::Result<()> {
+    fs::create_dir_all(temp_dir).with_context(|| {
+        format!("failed to create duckdb compact temp directory `{}`", temp_dir.display())
+    })?;
+    let temp_dir_str = temp_dir
+        .to_str()
+        .ok_or_else(|| anyhow!("duckdb compact temp directory path is not valid UTF-8"))?;
+    let sql = format!(
+        "
+        SET memory_limit={};
+        SET threads=1;
+        SET preserve_insertion_order=false;
+        SET temp_directory={};
+        SET max_temp_directory_size={};
+        ",
+        duckdb_string_literal(DUCKDB_COMPACT_MEMORY_LIMIT),
+        duckdb_string_literal(temp_dir_str),
+        duckdb_string_literal(DUCKDB_COMPACT_MAX_TEMP_DIRECTORY_SIZE),
+    );
+    conn.execute_batch(&sql)
+        .context("failed to configure duckdb compact connection")
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -2422,6 +2485,16 @@ mod tests {
                 .join("usage-compact-test-000001.uploading.duckdb")
                 .exists(),
             "uploading archive temp file should not remain after publication"
+        );
+        let stale_compact_path =
+            super::compacting_segment_path(&config, "usage-compact-test-000001");
+        std::fs::write(&stale_compact_path, b"stale compact retry")
+            .expect("write stale compact retry file");
+        super::publish_pending_segment(&config, &pending_path, "usage-compact-test-000001")
+            .expect("published segment finalization is idempotent");
+        assert!(
+            !stale_compact_path.exists(),
+            "idempotent finalization should remove stale compact retry files"
         );
 
         let archived = super::DuckDbUsageRepository::open_read_only_conn(&archive_path)

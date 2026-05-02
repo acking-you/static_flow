@@ -72,6 +72,7 @@ use llm_access_kiro::{
     wire::{ConversationState, Event, KiroRequest},
 };
 use serde_json::Value;
+use static_flow_shared::llm_gateway_store::compute_kiro_billable_tokens as shared_compute_kiro_billable_tokens;
 
 use crate::{activity::RequestActivityTracker, codex_refresh, kiro_refresh};
 
@@ -3303,21 +3304,13 @@ fn kiro_billable_tokens_with_multipliers(
     usage: KiroUsageSummary,
     multipliers: &BTreeMap<String, f64>,
 ) -> u64 {
-    let family = if model.contains("opus") {
-        "opus"
-    } else if model.contains("haiku") {
-        "haiku"
-    } else {
-        "sonnet"
-    };
-    let multiplier = multipliers.get(family).copied().unwrap_or(1.0).max(0.0);
-    let weighted = usage.input_uncached_tokens.max(0) as f64
-        + usage.input_cached_tokens.max(0) as f64
-        + (usage.output_tokens.max(0) as f64 * 5.0);
-    (weighted * multiplier)
-        .round()
-        .max(0.0)
-        .min(u64::MAX as f64) as u64
+    shared_compute_kiro_billable_tokens(
+        Some(model),
+        usage.input_uncached_tokens.max(0) as u64,
+        usage.input_cached_tokens.max(0) as u64,
+        usage.output_tokens.max(0) as u64,
+        multipliers,
+    )
 }
 
 /// Axum entrypoint for provider requests.
@@ -4279,6 +4272,7 @@ fn now_seconds() -> i64 {
 )]
 mod tests {
     use std::{
+        collections::BTreeMap,
         sync::{Arc, Mutex},
         time::{Duration, Instant},
     };
@@ -6133,6 +6127,23 @@ mod tests {
         assert!(event.timing.post_headers_body_ms.is_some());
         assert!(event.timing.stream_finish_ms.is_some());
         assert_eq!(event.last_message_content.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn kiro_billable_tokens_discounts_cached_input_like_legacy_gateway() {
+        let usage = super::KiroUsageSummary {
+            input_uncached_tokens: 100,
+            input_cached_tokens: 1_000,
+            output_tokens: 4,
+            credit_usage: None,
+            credit_usage_missing: false,
+        };
+        let multipliers = BTreeMap::from([("sonnet".to_string(), 2.0)]);
+
+        let billable =
+            super::kiro_billable_tokens_with_multipliers("claude-sonnet-4-6", usage, &multipliers);
+
+        assert_eq!(billable, (100 + 1_000 / 10 + 4 * 5) * 2);
     }
 
     #[tokio::test]

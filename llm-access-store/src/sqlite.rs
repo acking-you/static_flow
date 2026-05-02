@@ -2277,48 +2277,113 @@ impl SqliteControlStore {
 
     /// Add one accepted usage event to the hot-path key rollup counters.
     pub fn increment_key_usage_rollup(
-        &self,
+        &mut self,
         event: &llm_access_core::usage::UsageEvent,
     ) -> anyhow::Result<()> {
-        let credit_delta = event
-            .credit_usage
-            .as_deref()
-            .unwrap_or("0")
-            .parse::<f64>()
-            .context("parse usage event credit usage")?;
-        let changed = self
-            .conn
-            .execute(
-                "UPDATE llm_key_usage_rollups
-                 SET input_uncached_tokens = input_uncached_tokens + ?2,
-                     input_cached_tokens = input_cached_tokens + ?3,
-                     output_tokens = output_tokens + ?4,
-                     billable_tokens = billable_tokens + ?5,
-                     credit_total = CAST((CAST(credit_total AS REAL) + ?6) AS TEXT),
-                     credit_missing_events = credit_missing_events + ?7,
-                     last_used_at_ms = ?8,
-                     updated_at_ms = ?8
-                 WHERE key_id = ?1",
-                params![
-                    &event.key_id,
-                    event.input_uncached_tokens,
-                    event.input_cached_tokens,
-                    event.output_tokens,
-                    event.billable_tokens,
-                    credit_delta,
-                    event.credit_usage_missing as i64,
-                    event.created_at_ms,
-                ],
-            )
-            .context("increment key usage rollup")?;
-        if changed == 0 {
-            anyhow::bail!("usage rollup not found for key `{}`", event.key_id);
+        self.increment_key_usage_rollups(std::slice::from_ref(event))
+    }
+
+    /// Add accepted usage events to hot-path key rollup counters in one SQLite
+    /// transaction, aggregating multiple events for the same key before update.
+    pub fn increment_key_usage_rollups(
+        &mut self,
+        events: &[llm_access_core::usage::UsageEvent],
+    ) -> anyhow::Result<()> {
+        #[derive(Default)]
+        struct Delta {
+            input_uncached_tokens: i64,
+            input_cached_tokens: i64,
+            output_tokens: i64,
+            billable_tokens: i64,
+            credit_total: f64,
+            credit_missing_events: i64,
+            last_used_at_ms: Option<i64>,
         }
+
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        let mut deltas = BTreeMap::<String, Delta>::new();
+        for event in events {
+            let credit_delta = event
+                .credit_usage
+                .as_deref()
+                .unwrap_or("0")
+                .parse::<f64>()
+                .context("parse usage event credit usage")?;
+            let delta = deltas.entry(event.key_id.clone()).or_default();
+            delta.input_uncached_tokens = delta
+                .input_uncached_tokens
+                .saturating_add(event.input_uncached_tokens.max(0));
+            delta.input_cached_tokens = delta
+                .input_cached_tokens
+                .saturating_add(event.input_cached_tokens.max(0));
+            delta.output_tokens = delta
+                .output_tokens
+                .saturating_add(event.output_tokens.max(0));
+            delta.billable_tokens = delta
+                .billable_tokens
+                .saturating_add(event.billable_tokens.max(0));
+            delta.credit_total += credit_delta;
+            delta.credit_missing_events = delta
+                .credit_missing_events
+                .saturating_add(event.credit_usage_missing as i64);
+            delta.last_used_at_ms = Some(
+                delta
+                    .last_used_at_ms
+                    .map(|current| current.max(event.created_at_ms))
+                    .unwrap_or(event.created_at_ms),
+            );
+        }
+
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin key usage rollup batch increment")?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "UPDATE llm_key_usage_rollups
+                     SET input_uncached_tokens = input_uncached_tokens + ?2,
+                         input_cached_tokens = input_cached_tokens + ?3,
+                         output_tokens = output_tokens + ?4,
+                         billable_tokens = billable_tokens + ?5,
+                         credit_total = CAST((CAST(credit_total AS REAL) + ?6) AS TEXT),
+                         credit_missing_events = credit_missing_events + ?7,
+                         last_used_at_ms = CASE
+                             WHEN last_used_at_ms IS NULL THEN ?8
+                             ELSE max(last_used_at_ms, ?8)
+                         END,
+                         updated_at_ms = max(updated_at_ms, ?8)
+                     WHERE key_id = ?1",
+                )
+                .context("prepare key usage rollup batch increment")?;
+            for (key_id, delta) in deltas {
+                let last_used_at_ms = delta.last_used_at_ms.unwrap_or(0);
+                let changed = stmt
+                    .execute(params![
+                        &key_id,
+                        delta.input_uncached_tokens,
+                        delta.input_cached_tokens,
+                        delta.output_tokens,
+                        delta.billable_tokens,
+                        delta.credit_total,
+                        delta.credit_missing_events,
+                        last_used_at_ms,
+                    ])
+                    .with_context(|| format!("increment usage rollup for key `{key_id}`"))?;
+                if changed == 0 {
+                    anyhow::bail!("usage rollup not found for key `{key_id}`");
+                }
+            }
+        }
+        tx.commit()
+            .context("commit key usage rollup batch increment")?;
         Ok(())
     }
 
-    /// Replace hot-path key usage rollups with aggregates derived from the
-    /// canonical DuckDB usage fact table.
+    /// Replace hot-path key usage rollups from an explicit offline repair task.
     pub fn replace_key_usage_rollups(
         &mut self,
         rollups: &[KeyUsageRollupSummary],
@@ -4442,7 +4507,7 @@ mod tests {
     fn key_usage_rollup_increments_from_usage_event() {
         let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
         crate::initialize_sqlite_target(&conn).expect("init schema");
-        let repo = super::SqliteControlStore::new(conn);
+        let mut repo = super::SqliteControlStore::new(conn);
         let key = super::KeyRecord {
             key_id: "key-rollup".to_string(),
             name: "rollup".to_string(),

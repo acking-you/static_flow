@@ -11,8 +11,7 @@ use std::path::Path;
 
 use anyhow::Context;
 
-/// Aggregated usage counters for one API key, derived from the DuckDB usage
-/// fact table and written back into SQLite's operational rollup table.
+/// Aggregated usage counters for one API key from analytics usage events.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyUsageRollupSummary {
     /// API key id.
