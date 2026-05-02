@@ -33,6 +33,11 @@ const MULTIMODAL_UNSUPPORTED_SCHEMA_KEYWORDS: &[&str] = &[
     "prefixItems",
     "unevaluatedProperties",
 ];
+const CLAUDE_CODE_BILLING_HEADER_PREFIX: &str = "x-anthropic-billing-header:";
+const CLAUDE_CODE_CLI_SYSTEM_IDENTITY_LINE: &str =
+    "You are Claude Code, Anthropic's official CLI for Claude.";
+const CLAUDE_AGENT_SDK_SYSTEM_IDENTITY_LINE: &str =
+    "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
 
 fn permissive_object_schema() -> serde_json::Value {
     serde_json::json!({
@@ -2125,6 +2130,41 @@ fn normalize_claude_code_model_identity(content: String, requested_model: &str) 
         .join("\n")
 }
 
+fn strip_volatile_claude_code_billing_header(content: String) -> String {
+    let mut line_start = 0;
+    while line_start < content.len() {
+        let line_end = content[line_start..]
+            .find('\n')
+            .map(|offset| line_start + offset)
+            .unwrap_or(content.len());
+        let next_line_start = if line_end < content.len() { line_end + 1 } else { line_end };
+        let line = &content[line_start..line_end];
+        if line.starts_with(CLAUDE_CODE_BILLING_HEADER_PREFIX) {
+            let remainder = content[next_line_start..].trim_start();
+            if starts_with_claude_identity(remainder) {
+                let prefix = &content[..line_start];
+                return if prefix.is_empty() {
+                    remainder.to_string()
+                } else if prefix.ends_with('\n') {
+                    format!("{prefix}{remainder}")
+                } else {
+                    format!("{prefix}\n{remainder}")
+                };
+            }
+        }
+        if line_end == content.len() {
+            break;
+        }
+        line_start = next_line_start;
+    }
+    content
+}
+
+fn starts_with_claude_identity(content: &str) -> bool {
+    content.starts_with(CLAUDE_CODE_CLI_SYSTEM_IDENTITY_LINE)
+        || content.starts_with(CLAUDE_AGENT_SDK_SYSTEM_IDENTITY_LINE)
+}
+
 fn build_injected_system_content(
     req: &MessagesRequest,
     structured_output_tool_name: Option<&str>,
@@ -2141,6 +2181,7 @@ fn build_injected_system_content(
                 .join("\n")
         })
         .filter(|content| !content.is_empty())
+        .map(strip_volatile_claude_code_billing_header)
         .map(|content| normalize_claude_code_model_identity(content, &req.model))
         .map(|content| format!("{content}\n{SYSTEM_CHUNKED_POLICY}"));
 
@@ -3184,6 +3225,126 @@ mod tests {
             "You are powered by the model named Opus 4.6. The exact model ID is claude-opus-4-6."
         ));
         assert!(!system_prefix.contains("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn convert_request_strips_volatile_claude_code_billing_header_before_upstream() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Hello"),
+        }]);
+        req.model = "claude-opus-4-6".to_string();
+        req.thinking = Some(crate::anthropic::types::Thinking {
+            thinking_type: "adaptive".to_string(),
+            budget_tokens: 20_000,
+        });
+        req.output_config = Some(crate::anthropic::types::OutputConfig {
+            effort: Some("high".to_string()),
+            format: None,
+        });
+        req.system = Some(vec![SystemMessage {
+            text: concat!(
+                "你是 Claude Opus 4.7，知识库截至时间 2026-01。\n",
+                "x-anthropic-billing-header: cc_version=2.1.123.074; ",
+                "cc_entrypoint=cli; cch=ea527;\n",
+                "You are Claude Code, Anthropic's official CLI for Claude."
+            )
+            .to_string(),
+        }]);
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        let system_prefix = match &result.conversation_state.history[0] {
+            Message::User(message) => &message.user_input_message.content,
+            other => panic!("expected injected system user message, got {other:?}"),
+        };
+
+        assert!(system_prefix.contains("<thinking_effort>high</thinking_effort>"));
+        assert!(system_prefix.contains("你是 Claude Opus 4.7，知识库截至时间 2026-01。"));
+        assert!(system_prefix.contains("You are Claude Code, Anthropic's official CLI for Claude."));
+        assert!(!system_prefix.contains("x-anthropic-billing-header:"));
+        assert!(!system_prefix.contains("cch=ea527"));
+    }
+
+    #[test]
+    fn convert_request_strips_legacy_claude_code_billing_header_at_system_start() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Hello"),
+        }]);
+        req.system = Some(vec![SystemMessage {
+            text: concat!(
+                "x-anthropic-billing-header: cc_version=2.1.114.069; ",
+                "cc_entrypoint=cli; cch=638d8;\n",
+                "You are Claude Code, Anthropic's official CLI for Claude.\n",
+                "You are an interactive agent that helps users with software engineering tasks."
+            )
+            .to_string(),
+        }]);
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        let system_prefix = match &result.conversation_state.history[0] {
+            Message::User(message) => &message.user_input_message.content,
+            other => panic!("expected injected system user message, got {other:?}"),
+        };
+
+        assert!(system_prefix.starts_with("You are Claude Code, Anthropic's official CLI"));
+        assert!(!system_prefix.contains("x-anthropic-billing-header:"));
+        assert!(!system_prefix.contains("cch=638d8"));
+    }
+
+    #[test]
+    fn convert_request_strips_agent_sdk_billing_header_after_existing_thinking_tags() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Hello"),
+        }]);
+        req.system = Some(vec![SystemMessage {
+            text: concat!(
+                "<thinking_mode>adaptive</thinking_mode>",
+                "<thinking_effort>max</thinking_effort>\n",
+                "x-anthropic-billing-header: cc_version=2.1.114.eee; ",
+                "cc_entrypoint=sdk-cli; cch=fb0be;\n",
+                "You are a Claude agent, built on Anthropic's Claude Agent SDK.\n",
+                "You are an interactive agent that helps users with software engineering tasks."
+            )
+            .to_string(),
+        }]);
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        let system_prefix = match &result.conversation_state.history[0] {
+            Message::User(message) => &message.user_input_message.content,
+            other => panic!("expected injected system user message, got {other:?}"),
+        };
+
+        assert!(system_prefix.contains("<thinking_effort>max</thinking_effort>"));
+        assert!(system_prefix
+            .contains("You are a Claude agent, built on Anthropic's Claude Agent SDK."));
+        assert!(!system_prefix.contains("x-anthropic-billing-header:"));
+        assert!(!system_prefix.contains("cch=fb0be"));
+    }
+
+    #[test]
+    fn convert_request_preserves_billing_header_not_followed_by_claude_identity() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Hello"),
+        }]);
+        req.system = Some(vec![SystemMessage {
+            text: concat!(
+                "x-anthropic-billing-header: this is user supplied text\n",
+                "This is not a Claude Code identity block."
+            )
+            .to_string(),
+        }]);
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        let system_prefix = match &result.conversation_state.history[0] {
+            Message::User(message) => &message.user_input_message.content,
+            other => panic!("expected injected system user message, got {other:?}"),
+        };
+
+        assert!(system_prefix.contains("x-anthropic-billing-header: this is user supplied text"));
+        assert!(system_prefix.contains("This is not a Claude Code identity block."));
     }
 
     #[test]

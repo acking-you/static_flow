@@ -1750,6 +1750,8 @@ pub fn admin_llm_gateway_page() -> Html {
     let usage_flush_batch_size_input = use_state(|| "256".to_string());
     let usage_flush_interval_input = use_state(|| "15".to_string());
     let usage_flush_max_buffer_bytes_input = use_state(|| (8 * 1024 * 1024_u64).to_string());
+    let duckdb_usage_memory_limit_mib_input = use_state(|| "1024".to_string());
+    let duckdb_usage_checkpoint_threshold_mib_input = use_state(|| "16".to_string());
     let proxy_configs = use_state(Vec::<AdminUpstreamProxyConfigView>::new);
     let proxy_bindings = use_state(Vec::<AdminUpstreamProxyBindingView>::new);
     let create_proxy_name = use_state(|| "shared-upstream".to_string());
@@ -2035,6 +2037,9 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_flush_batch_size_input = usage_flush_batch_size_input.clone();
         let usage_flush_interval_input = usage_flush_interval_input.clone();
         let usage_flush_max_buffer_bytes_input = usage_flush_max_buffer_bytes_input.clone();
+        let duckdb_usage_memory_limit_mib_input = duckdb_usage_memory_limit_mib_input.clone();
+        let duckdb_usage_checkpoint_threshold_mib_input =
+            duckdb_usage_checkpoint_threshold_mib_input.clone();
         let codex_proxy_binding_input = codex_proxy_binding_input.clone();
         let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
         let usage_page = usage_page.clone();
@@ -2065,6 +2070,9 @@ pub fn admin_llm_gateway_page() -> Html {
             let usage_flush_batch_size_input = usage_flush_batch_size_input.clone();
             let usage_flush_interval_input = usage_flush_interval_input.clone();
             let usage_flush_max_buffer_bytes_input = usage_flush_max_buffer_bytes_input.clone();
+            let duckdb_usage_memory_limit_mib_input = duckdb_usage_memory_limit_mib_input.clone();
+            let duckdb_usage_checkpoint_threshold_mib_input =
+                duckdb_usage_checkpoint_threshold_mib_input.clone();
             let codex_proxy_binding_input = codex_proxy_binding_input.clone();
             let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
             let usage_page = usage_page.clone();
@@ -2156,6 +2164,10 @@ pub fn admin_llm_gateway_page() -> Html {
                             .set(cfg.usage_event_flush_interval_seconds.to_string());
                         usage_flush_max_buffer_bytes_input
                             .set(cfg.usage_event_flush_max_buffer_bytes.to_string());
+                        duckdb_usage_memory_limit_mib_input
+                            .set(cfg.duckdb_usage_memory_limit_mib.to_string());
+                        duckdb_usage_checkpoint_threshold_mib_input
+                            .set(cfg.duckdb_usage_checkpoint_threshold_mib.to_string());
                         config.set(Some(cfg));
                         keys.set(key_items);
                         account_groups.set(account_group_items);
@@ -2255,6 +2267,9 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_flush_batch_size_input = usage_flush_batch_size_input.clone();
         let usage_flush_interval_input = usage_flush_interval_input.clone();
         let usage_flush_max_buffer_bytes_input = usage_flush_max_buffer_bytes_input.clone();
+        let duckdb_usage_memory_limit_mib_input = duckdb_usage_memory_limit_mib_input.clone();
+        let duckdb_usage_checkpoint_threshold_mib_input =
+            duckdb_usage_checkpoint_threshold_mib_input.clone();
         let saving_runtime_config = saving_runtime_config.clone();
         let load_error = load_error.clone();
         let reload = reload.clone();
@@ -2283,6 +2298,12 @@ pub fn admin_llm_gateway_page() -> Html {
                 (*usage_flush_interval_input).trim().parse::<u64>();
             let usage_event_flush_max_buffer_bytes =
                 (*usage_flush_max_buffer_bytes_input).trim().parse::<u64>();
+            let duckdb_usage_memory_limit_mib =
+                (*duckdb_usage_memory_limit_mib_input).trim().parse::<u64>();
+            let duckdb_usage_checkpoint_threshold_mib =
+                (*duckdb_usage_checkpoint_threshold_mib_input)
+                    .trim()
+                    .parse::<u64>();
             let saving_runtime_config = saving_runtime_config.clone();
             let load_error = load_error.clone();
             let reload = reload.clone();
@@ -2353,6 +2374,17 @@ pub fn admin_llm_gateway_page() -> Html {
                     load_error.set(Some("usage flush 缓冲上限必须是非负整数".to_string()));
                     return;
                 };
+                let Ok(duckdb_usage_memory_limit_mib) = duckdb_usage_memory_limit_mib else {
+                    load_error.set(Some("DuckDB memory_limit 必须是正整数 MiB".to_string()));
+                    return;
+                };
+                let Ok(duckdb_usage_checkpoint_threshold_mib) =
+                    duckdb_usage_checkpoint_threshold_mib
+                else {
+                    load_error
+                        .set(Some("DuckDB checkpoint threshold 必须是正整数 MiB".to_string()));
+                    return;
+                };
                 let runtime_config = LlmGatewayRuntimeConfig {
                     auth_cache_ttl_seconds: ttl,
                     max_request_body_bytes,
@@ -2367,6 +2399,8 @@ pub fn admin_llm_gateway_page() -> Html {
                     usage_event_flush_batch_size,
                     usage_event_flush_interval_seconds,
                     usage_event_flush_max_buffer_bytes,
+                    duckdb_usage_memory_limit_mib,
+                    duckdb_usage_checkpoint_threshold_mib,
                     kiro_cache_kmodels_json: config
                         .as_ref()
                         .map(|current| current.kiro_cache_kmodels_json.clone())
@@ -4407,6 +4441,42 @@ pub fn admin_llm_gateway_page() -> Html {
                                     }}
                                 />
                             </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "duckdb_usage_memory_limit_mib" }</span>
+                                <input
+                                    type="number"
+                                    min="512"
+                                    max="2048"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*duckdb_usage_memory_limit_mib_input).clone()}
+                                    oninput={{
+                                        let duckdb_usage_memory_limit_mib_input = duckdb_usage_memory_limit_mib_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                duckdb_usage_memory_limit_mib_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "duckdb_usage_checkpoint_threshold_mib" }</span>
+                                <input
+                                    type="number"
+                                    min="16"
+                                    max="256"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*duckdb_usage_checkpoint_threshold_mib_input).clone()}
+                                    oninput={{
+                                        let duckdb_usage_checkpoint_threshold_mib_input = duckdb_usage_checkpoint_threshold_mib_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                duckdb_usage_checkpoint_threshold_mib_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
                             <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--bg)]", "px-3", "py-2", "text-xs", "text-[var(--muted)]", "md:col-span-2", "xl:col-span-3")}>
                                 <p class={classes!("m-0")}>
                                     { format!("默认 Codex models catalog 版本：{}。不带 client_version 的 `/v1/models` 请求会回落到这里。", DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION) }
@@ -4415,7 +4485,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                     { "默认轮询窗口：Codex / Kiro 都是 240-300 秒；每个账号请求之间插入 0-10 秒随机抖动。" }
                                 </p>
                                 <p class={classes!("m-0", "mt-1")}>
-                                    { "默认 usage flush：256 条、15 秒、8 MiB。提高阈值能显著降低 version churn，但会增加短时缓冲占用。" }
+                                    { "默认 usage flush：256 条、15 秒、8 MiB；DuckDB writer 默认 memory_limit=1024 MiB、checkpoint_threshold=16 MiB。" }
                                 </p>
                                 <p class={classes!("m-0", "mt-1")}>
                                     { "llm usage 表现在和其他表共用 /admin 里的 Storage Maintenance 配置：scan interval、fragment threshold、prune 窗口和 worker 数都只有一套。" }
@@ -4459,10 +4529,12 @@ pub fn admin_llm_gateway_page() -> Html {
                                 </p>
                                 <p class={classes!("m-0")}>
                                     { format!(
-                                        "当前 usage flush：{} 条 / {} 秒 / {} bytes",
+                                        "当前 usage flush：{} 条 / {} 秒 / {} bytes；DuckDB：{} MiB / {} MiB",
                                         cfg.usage_event_flush_batch_size,
                                         cfg.usage_event_flush_interval_seconds,
-                                        format_number_u64(cfg.usage_event_flush_max_buffer_bytes)
+                                        format_number_u64(cfg.usage_event_flush_max_buffer_bytes),
+                                        cfg.duckdb_usage_memory_limit_mib,
+                                        cfg.duckdb_usage_checkpoint_threshold_mib
                                     ) }
                                 </p>
                             </div>

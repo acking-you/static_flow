@@ -5,7 +5,7 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -18,8 +18,9 @@ use async_trait::async_trait;
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType, RouteStrategy},
     store::{
-        UsageAnalyticsStore, UsageChartPoint, UsageEventPage, UsageEventQuery, UsageEventSink,
-        UsageEventSource,
+        AdminRuntimeConfig, UsageAnalyticsStore, UsageChartPoint, UsageEventPage, UsageEventQuery,
+        UsageEventSink, UsageEventSource, DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB,
+        DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
     },
     usage::{UsageEvent, UsageTiming},
 };
@@ -358,6 +359,17 @@ fn execute_usage_event_insert(
 /// Initialize a DuckDB analytics database at `path`.
 #[cfg(feature = "duckdb-runtime")]
 pub fn initialize_duckdb_target_path(path: impl AsRef<Path>) -> anyhow::Result<()> {
+    initialize_duckdb_target_path_with_connection_config(
+        path,
+        DuckDbUsageConnectionConfig::default(),
+    )
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn initialize_duckdb_target_path_with_connection_config(
+    path: impl AsRef<Path>,
+    connection_config: DuckDbUsageConnectionConfig,
+) -> anyhow::Result<()> {
     let path = path.as_ref();
     if let Some(parent) = path
         .parent()
@@ -369,7 +381,7 @@ pub fn initialize_duckdb_target_path(path: impl AsRef<Path>) -> anyhow::Result<(
     }
     let conn = duckdb::Connection::open(path)
         .with_context(|| format!("failed to open duckdb database `{}`", path.display()))?;
-    configure_duckdb_usage_connection(&conn)?;
+    configure_duckdb_usage_connection(&conn, connection_config)?;
     crate::initialize_duckdb_target(&conn)
 }
 
@@ -383,8 +395,51 @@ pub struct DuckDbUsageRepository {
 #[cfg(feature = "duckdb-runtime")]
 #[derive(Debug)]
 enum DuckDbUsageRepositoryInner {
-    Single { path: PathBuf },
-    Tiered { config: TieredDuckDbUsageConfig, state: Mutex<TieredDuckDbUsageState> },
+    Single {
+        path: PathBuf,
+        connection_config: SharedDuckDbUsageConnectionConfig,
+    },
+    Tiered {
+        config: TieredDuckDbUsageConfig,
+        state: Mutex<TieredDuckDbUsageState>,
+        connection_config: SharedDuckDbUsageConnectionConfig,
+    },
+}
+
+#[cfg(feature = "duckdb-runtime")]
+type SharedDuckDbUsageConnectionConfig = Arc<RwLock<DuckDbUsageConnectionConfig>>;
+
+/// Runtime-tunable DuckDB connection settings for usage analytics writes.
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DuckDbUsageConnectionConfig {
+    /// DuckDB buffer-manager memory limit in MiB.
+    pub memory_limit_mib: u64,
+    /// WAL size threshold for automatic checkpoints in MiB.
+    pub checkpoint_threshold_mib: u64,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+impl Default for DuckDbUsageConnectionConfig {
+    fn default() -> Self {
+        Self {
+            memory_limit_mib: DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
+            checkpoint_threshold_mib: DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB,
+        }
+    }
+}
+
+#[cfg(feature = "duckdb-runtime")]
+impl DuckDbUsageConnectionConfig {
+    /// Build DuckDB usage connection settings from admin runtime config.
+    pub fn from_admin_runtime_config(config: &AdminRuntimeConfig) -> Self {
+        Self {
+            memory_limit_mib: config.duckdb_usage_memory_limit_mib.max(1),
+            checkpoint_threshold_mib: config
+                .duckdb_usage_checkpoint_threshold_mib
+                .max(DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB),
+        }
+    }
 }
 
 /// Tiered DuckDB usage storage configuration.
@@ -474,26 +529,49 @@ const DUCKDB_COMPACT_MEMORY_LIMIT: &str = "1536MB";
 const DUCKDB_COMPACT_MAX_TEMP_DIRECTORY_SIZE: &str = "8GB";
 
 #[cfg(feature = "duckdb-runtime")]
-const DUCKDB_USAGE_CONNECTION_MEMORY_LIMIT: &str = "512MB";
-
-#[cfg(feature = "duckdb-runtime")]
 const DUCKDB_USAGE_CONNECTION_MAX_TEMP_DIRECTORY_SIZE: &str = "2GB";
 
 #[cfg(feature = "duckdb-runtime")]
 impl DuckDbUsageRepository {
     /// Open a DuckDB usage repository and initialize the analytics schema.
     pub fn open_path(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        Self::open_path_with_connection_config(
+            path,
+            Arc::new(RwLock::new(DuckDbUsageConnectionConfig::default())),
+        )
+    }
+
+    /// Open a DuckDB usage repository with runtime-tunable connection settings.
+    pub fn open_path_with_connection_config(
+        path: impl AsRef<Path>,
+        connection_config: SharedDuckDbUsageConnectionConfig,
+    ) -> anyhow::Result<Self> {
         let path = path.as_ref().to_path_buf();
-        initialize_duckdb_target_path(&path)?;
+        initialize_duckdb_target_path_with_connection_config(
+            &path,
+            connection_config_snapshot(&connection_config),
+        )?;
         Ok(Self {
             inner: Arc::new(DuckDbUsageRepositoryInner::Single {
                 path,
+                connection_config,
             }),
         })
     }
 
     /// Open a tiered DuckDB usage repository.
     pub fn open_tiered(config: TieredDuckDbUsageConfig) -> anyhow::Result<Self> {
+        Self::open_tiered_with_connection_config(
+            config,
+            Arc::new(RwLock::new(DuckDbUsageConnectionConfig::default())),
+        )
+    }
+
+    /// Open a tiered DuckDB usage repository with runtime-tunable settings.
+    pub fn open_tiered_with_connection_config(
+        config: TieredDuckDbUsageConfig,
+        connection_config: SharedDuckDbUsageConnectionConfig,
+    ) -> anyhow::Result<Self> {
         fs::create_dir_all(&config.active_dir).with_context(|| {
             format!("failed to create active duckdb directory `{}`", config.active_dir.display())
         })?;
@@ -521,7 +599,10 @@ impl DuckDbUsageRepository {
 
         let (active_path, next_sequence) = choose_active_segment(&config)?;
         let active_has_rows = active_path.exists();
-        initialize_duckdb_target_path(&active_path)?;
+        initialize_duckdb_target_path_with_connection_config(
+            &active_path,
+            connection_config_snapshot(&connection_config),
+        )?;
         Ok(Self {
             inner: Arc::new(DuckDbUsageRepositoryInner::Tiered {
                 config,
@@ -530,14 +611,22 @@ impl DuckDbUsageRepository {
                     next_sequence,
                     active_has_rows,
                 }),
+                connection_config,
             }),
         })
     }
 
     fn open_conn(path: &Path) -> anyhow::Result<duckdb::Connection> {
+        Self::open_conn_with_connection_config(path, DuckDbUsageConnectionConfig::default())
+    }
+
+    fn open_conn_with_connection_config(
+        path: &Path,
+        connection_config: DuckDbUsageConnectionConfig,
+    ) -> anyhow::Result<duckdb::Connection> {
         let conn = duckdb::Connection::open(path)
             .with_context(|| format!("failed to open duckdb database `{}`", path.display()))?;
-        configure_duckdb_usage_connection(&conn)?;
+        configure_duckdb_usage_connection(&conn, connection_config)?;
         Ok(conn)
     }
 
@@ -548,7 +637,7 @@ impl DuckDbUsageRepository {
         let conn = duckdb::Connection::open_with_flags(path, config).with_context(|| {
             format!("failed to open read-only duckdb database `{}`", path.display())
         })?;
-        configure_duckdb_usage_connection(&conn)?;
+        configure_duckdb_usage_connection(&conn, DuckDbUsageConnectionConfig::default())?;
         Ok(conn)
     }
 
@@ -568,11 +657,12 @@ impl DuckDbUsageRepository {
         let inner = Arc::clone(&self.inner);
         task::spawn_blocking(move || match inner.as_ref() {
             DuckDbUsageRepositoryInner::Single {
-                path,
+                path, ..
             } => key_usage_rollups_from_path(path),
             DuckDbUsageRepositoryInner::Tiered {
                 config,
                 state,
+                ..
             } => key_usage_rollups_from_tiered(config, state),
         })
         .await
@@ -632,7 +722,46 @@ fn duckdb_usage_temp_dir() -> PathBuf {
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn configure_duckdb_usage_connection(conn: &duckdb::Connection) -> anyhow::Result<()> {
+fn connection_config_snapshot(
+    connection_config: &SharedDuckDbUsageConnectionConfig,
+) -> DuckDbUsageConnectionConfig {
+    connection_config
+        .read()
+        .map(|config| *config)
+        .unwrap_or_default()
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn duckdb_mib_setting(value_mib: u64) -> String {
+    format!("{}MB", value_mib.max(1))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn duckdb_usage_connection_sql(
+    connection_config: &DuckDbUsageConnectionConfig,
+    temp_dir_str: &str,
+) -> String {
+    format!(
+        "
+        SET memory_limit={};
+        SET checkpoint_threshold={};
+        SET threads=1;
+        SET preserve_insertion_order=false;
+        SET temp_directory={};
+        SET max_temp_directory_size={};
+        ",
+        duckdb_string_literal(&duckdb_mib_setting(connection_config.memory_limit_mib)),
+        duckdb_string_literal(&duckdb_mib_setting(connection_config.checkpoint_threshold_mib)),
+        duckdb_string_literal(temp_dir_str),
+        duckdb_string_literal(DUCKDB_USAGE_CONNECTION_MAX_TEMP_DIRECTORY_SIZE),
+    )
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn configure_duckdb_usage_connection(
+    conn: &duckdb::Connection,
+    connection_config: DuckDbUsageConnectionConfig,
+) -> anyhow::Result<()> {
     let temp_dir = duckdb_usage_temp_dir();
     fs::create_dir_all(&temp_dir).with_context(|| {
         format!("failed to create duckdb usage temp directory `{}`", temp_dir.display())
@@ -640,18 +769,7 @@ fn configure_duckdb_usage_connection(conn: &duckdb::Connection) -> anyhow::Resul
     let temp_dir_str = temp_dir
         .to_str()
         .ok_or_else(|| anyhow!("duckdb usage temp directory path is not valid UTF-8"))?;
-    let sql = format!(
-        "
-        SET memory_limit={};
-        SET threads=1;
-        SET preserve_insertion_order=false;
-        SET temp_directory={};
-        SET max_temp_directory_size={};
-        ",
-        duckdb_string_literal(DUCKDB_USAGE_CONNECTION_MEMORY_LIMIT),
-        duckdb_string_literal(temp_dir_str),
-        duckdb_string_literal(DUCKDB_USAGE_CONNECTION_MAX_TEMP_DIRECTORY_SIZE),
-    );
+    let sql = duckdb_usage_connection_sql(&connection_config, temp_dir_str);
     conn.execute_batch(&sql)
         .context("failed to configure duckdb usage connection")
 }
@@ -1325,8 +1443,10 @@ fn archived_key_usage_rollups(
 fn append_usage_events_to_tiered(
     config: &TieredDuckDbUsageConfig,
     state: &Mutex<TieredDuckDbUsageState>,
+    connection_config: &SharedDuckDbUsageConnectionConfig,
     rows: &[UsageEventRow],
 ) -> anyhow::Result<()> {
+    let connection_config_snapshot = connection_config_snapshot(connection_config);
     let mut state = state
         .lock()
         .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
@@ -1337,7 +1457,10 @@ fn append_usage_events_to_tiered(
     }
     {
         let mut writer =
-            DuckDbUsageWriter::new(DuckDbUsageRepository::open_conn(&state.active_path)?)?;
+            DuckDbUsageWriter::new(DuckDbUsageRepository::open_conn_with_connection_config(
+                &state.active_path,
+                connection_config_snapshot,
+            )?)?;
         writer.insert_usage_events(rows)?;
     }
     state.active_has_rows = true;
@@ -1414,14 +1537,19 @@ impl UsageEventSink for DuckDbUsageRepository {
         task::spawn_blocking(move || match inner.as_ref() {
             DuckDbUsageRepositoryInner::Single {
                 path,
+                connection_config,
             } => {
-                let mut writer = DuckDbUsageWriter::new(Self::open_conn(path)?)?;
+                let mut writer = DuckDbUsageWriter::new(Self::open_conn_with_connection_config(
+                    path,
+                    connection_config_snapshot(connection_config),
+                )?)?;
                 writer.insert_usage_events(&rows)
             },
             DuckDbUsageRepositoryInner::Tiered {
                 config,
                 state,
-            } => append_usage_events_to_tiered(config, state, &rows),
+                connection_config,
+            } => append_usage_events_to_tiered(config, state, connection_config, &rows),
         })
         .await
         .context("duckdb usage insert task failed")?
@@ -1435,11 +1563,12 @@ impl UsageAnalyticsStore for DuckDbUsageRepository {
         let inner = Arc::clone(&self.inner);
         task::spawn_blocking(move || match inner.as_ref() {
             DuckDbUsageRepositoryInner::Single {
-                path,
+                path, ..
             } => list_usage_events_from_path(path, &query),
             DuckDbUsageRepositoryInner::Tiered {
                 config,
                 state,
+                ..
             } => list_usage_events_from_tiered(config, state, &query),
         })
         .await
@@ -1451,11 +1580,12 @@ impl UsageAnalyticsStore for DuckDbUsageRepository {
         let event_id = event_id.to_string();
         task::spawn_blocking(move || match inner.as_ref() {
             DuckDbUsageRepositoryInner::Single {
-                path,
+                path, ..
             } => get_usage_event_from_path(path, &event_id),
             DuckDbUsageRepositoryInner::Tiered {
                 config,
                 state,
+                ..
             } => get_usage_event_from_tiered(config, state, &event_id),
         })
         .await
@@ -1473,7 +1603,7 @@ impl UsageAnalyticsStore for DuckDbUsageRepository {
         let key_id = key_id.to_string();
         task::spawn_blocking(move || match inner.as_ref() {
             DuckDbUsageRepositoryInner::Single {
-                path,
+                path, ..
             } => usage_chart_points_from_single_path(
                 path,
                 &key_id,
@@ -1484,6 +1614,7 @@ impl UsageAnalyticsStore for DuckDbUsageRepository {
             DuckDbUsageRepositoryInner::Tiered {
                 config,
                 state,
+                ..
             } => usage_chart_points_from_tiered(
                 config,
                 state,
@@ -2275,6 +2406,19 @@ mod tests {
         assert_eq!(chart[0].tokens, 40);
 
         std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[test]
+    fn duckdb_usage_connection_config_formats_runtime_limits() {
+        let config = super::DuckDbUsageConnectionConfig {
+            memory_limit_mib: 1024,
+            checkpoint_threshold_mib: 32,
+        };
+        let sql = super::duckdb_usage_connection_sql(&config, "/tmp/staticflow-duckdb");
+
+        assert!(sql.contains("SET memory_limit='1024MB'"));
+        assert!(sql.contains("SET checkpoint_threshold='32MB'"));
     }
 
     #[cfg(feature = "duckdb-runtime")]

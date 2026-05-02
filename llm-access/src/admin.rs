@@ -56,6 +56,10 @@ const MIN_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 1;
 const MAX_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 3_600;
 const MIN_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 1_024;
 const MAX_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 256 * 1024 * 1024;
+const MIN_RUNTIME_DUCKDB_USAGE_MEMORY_LIMIT_MIB: u64 = 512;
+const MAX_RUNTIME_DUCKDB_USAGE_MEMORY_LIMIT_MIB: u64 = 2_048;
+const MIN_RUNTIME_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB: u64 = 16;
+const MAX_RUNTIME_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB: u64 = 256;
 const MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY: u64 = 1_024;
 const MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS: u64 = 300_000;
 const DEFAULT_ADMIN_REVIEW_QUEUE_LIMIT: usize = 50;
@@ -2511,6 +2515,24 @@ fn apply_runtime_config_update(
         MIN_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
         MAX_RUNTIME_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
     )?;
+    let duckdb_usage_memory_limit_mib = request
+        .duckdb_usage_memory_limit_mib
+        .unwrap_or(current.duckdb_usage_memory_limit_mib);
+    validate_range(
+        "duckdb_usage_memory_limit_mib",
+        duckdb_usage_memory_limit_mib,
+        MIN_RUNTIME_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
+        MAX_RUNTIME_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
+    )?;
+    let duckdb_usage_checkpoint_threshold_mib = request
+        .duckdb_usage_checkpoint_threshold_mib
+        .unwrap_or(current.duckdb_usage_checkpoint_threshold_mib);
+    validate_range(
+        "duckdb_usage_checkpoint_threshold_mib",
+        duckdb_usage_checkpoint_threshold_mib,
+        MIN_RUNTIME_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB,
+        MAX_RUNTIME_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB,
+    )?;
 
     let kiro_cache_kmodels_json = request
         .kiro_cache_kmodels_json
@@ -2577,6 +2599,8 @@ fn apply_runtime_config_update(
         usage_event_flush_batch_size,
         usage_event_flush_interval_seconds,
         usage_event_flush_max_buffer_bytes,
+        duckdb_usage_memory_limit_mib,
+        duckdb_usage_checkpoint_threshold_mib,
         kiro_cache_kmodels_json,
         kiro_billable_model_multipliers_json,
         kiro_cache_policy_json,
@@ -3847,6 +3871,35 @@ mod tests {
         assert_eq!(policy["small_input_high_credit_boost"]["target_input_tokens"], 50_000);
         assert_eq!(policy["small_input_high_credit_boost"]["credit_start"], 1.0);
         assert!(!keys[0].uses_global_kiro_cache_policy);
+    }
+
+    #[test]
+    fn runtime_config_update_accepts_duckdb_usage_runtime_settings() {
+        let updated =
+            apply_runtime_config_update(AdminRuntimeConfig::default(), UpdateAdminRuntimeConfig {
+                duckdb_usage_memory_limit_mib: Some(1024),
+                duckdb_usage_checkpoint_threshold_mib: Some(32),
+                ..UpdateAdminRuntimeConfig::default()
+            })
+            .expect("duckdb runtime settings should be valid");
+
+        assert_eq!(updated.duckdb_usage_memory_limit_mib, 1024);
+        assert_eq!(updated.duckdb_usage_checkpoint_threshold_mib, 32);
+    }
+
+    #[test]
+    fn runtime_config_update_rejects_too_small_duckdb_checkpoint_threshold() {
+        let err =
+            apply_runtime_config_update(AdminRuntimeConfig::default(), UpdateAdminRuntimeConfig {
+                duckdb_usage_checkpoint_threshold_mib: Some(8),
+                ..UpdateAdminRuntimeConfig::default()
+            })
+            .expect_err("checkpoint threshold below 16 MiB should be rejected");
+
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err
+            .message
+            .contains("duckdb_usage_checkpoint_threshold_mib"));
     }
 
     #[test]

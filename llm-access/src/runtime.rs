@@ -28,7 +28,9 @@ use llm_access_core::store::{
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 use llm_access_core::usage::UsageEvent;
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-use llm_access_store::duckdb::{DuckDbUsageRepository, TieredDuckDbUsageConfig};
+use llm_access_store::duckdb::{
+    DuckDbUsageConnectionConfig, DuckDbUsageRepository, TieredDuckDbUsageConfig,
+};
 use llm_access_store::repository::SqliteControlRepository;
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 use tokio::{
@@ -164,9 +166,16 @@ impl LlmAccessRuntime {
         validate_state_root(config)?;
         let repository = Arc::new(SqliteControlRepository::open_path(&config.sqlite_control)?);
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-        let runtime_config = Arc::new(RwLock::new(repository.get_admin_runtime_config().await?));
+        let initial_runtime_config = repository.get_admin_runtime_config().await?;
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-        let duckdb_usage = Arc::new(open_duckdb_usage_repository(config)?);
+        let duckdb_connection_config = Arc::new(RwLock::new(
+            DuckDbUsageConnectionConfig::from_admin_runtime_config(&initial_runtime_config),
+        ));
+        #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+        let runtime_config = Arc::new(RwLock::new(initial_runtime_config));
+        #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+        let duckdb_usage =
+            Arc::new(open_duckdb_usage_repository(config, duckdb_connection_config.clone())?);
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let (usage_accounting, usage_event_flusher) =
             UsageAccounting::new(repository.clone(), duckdb_usage.clone(), runtime_config.clone());
@@ -182,6 +191,7 @@ impl LlmAccessRuntime {
         let admin_config_store: Arc<dyn AdminConfigStore> = Arc::new(RecordingAdminConfigStore {
             admin_config_store: repository.clone(),
             runtime_config: runtime_config.clone(),
+            duckdb_connection_config,
         });
         #[cfg(not(any(feature = "duckdb-runtime", feature = "duckdb-bundled")))]
         let admin_config_store: Arc<dyn AdminConfigStore> = repository.clone();
@@ -331,16 +341,25 @@ impl LlmAccessRuntime {
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-fn open_duckdb_usage_repository(config: &StorageConfig) -> anyhow::Result<DuckDbUsageRepository> {
+fn open_duckdb_usage_repository(
+    config: &StorageConfig,
+    duckdb_connection_config: Arc<RwLock<DuckDbUsageConnectionConfig>>,
+) -> anyhow::Result<DuckDbUsageRepository> {
     if let Some(tiered) = &config.duckdb_tiered {
-        return DuckDbUsageRepository::open_tiered(TieredDuckDbUsageConfig {
-            active_dir: tiered.active_dir.clone(),
-            archive_dir: tiered.archive_dir.clone(),
-            catalog_dir: tiered.catalog_dir.clone(),
-            rollover_bytes: tiered.rollover_bytes,
-        });
+        return DuckDbUsageRepository::open_tiered_with_connection_config(
+            TieredDuckDbUsageConfig {
+                active_dir: tiered.active_dir.clone(),
+                archive_dir: tiered.archive_dir.clone(),
+                catalog_dir: tiered.catalog_dir.clone(),
+                rollover_bytes: tiered.rollover_bytes,
+            },
+            duckdb_connection_config,
+        );
     }
-    DuckDbUsageRepository::open_path(&config.duckdb)
+    DuckDbUsageRepository::open_path_with_connection_config(
+        &config.duckdb,
+        duckdb_connection_config,
+    )
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -903,7 +922,6 @@ async fn flush_usage_event_buffer(
     mut state: UsageEventFlushState<'_>,
     error_message: &'static str,
 ) -> bool {
-    let mut retry = false;
     if !state.buffer.is_empty() {
         let batch = std::mem::take(state.buffer);
         *state.buffered_bytes = 0;
@@ -945,12 +963,14 @@ async fn flush_usage_event_buffer(
             },
             Err(err) => {
                 tracing::error!(count, "{}: {err:#}", error_message);
-                append_analytics_retry_events(&mut state, analytics_batch);
-                retry = !state.analytics_retry_buffer.is_empty();
+                tracing::warn!(
+                    count,
+                    "dropped llm access analytics events after rollups were persisted"
+                );
             },
         }
     }
-    retry
+    false
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -978,6 +998,7 @@ fn append_analytics_retry_events(state: &mut UsageEventFlushState<'_>, events: V
 struct RecordingAdminConfigStore {
     admin_config_store: Arc<dyn AdminConfigStore>,
     runtime_config: Arc<RwLock<AdminRuntimeConfig>>,
+    duckdb_connection_config: Arc<RwLock<DuckDbUsageConnectionConfig>>,
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -1003,6 +1024,11 @@ impl AdminConfigStore for RecordingAdminConfigStore {
             .runtime_config
             .write()
             .expect("llm access runtime config lock poisoned") = updated.clone();
+        *self
+            .duckdb_connection_config
+            .write()
+            .expect("llm access duckdb config lock poisoned") =
+            DuckDbUsageConnectionConfig::from_admin_runtime_config(&updated);
         Ok(updated)
     }
 }
@@ -1237,6 +1263,25 @@ mod tests {
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    #[derive(Default)]
+    struct FailingUsageEventSink {
+        attempts: Mutex<usize>,
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    #[async_trait::async_trait]
+    impl UsageEventSink for FailingUsageEventSink {
+        async fn append_usage_event(&self, event: &UsageEvent) -> anyhow::Result<()> {
+            self.append_usage_events(std::slice::from_ref(event)).await
+        }
+
+        async fn append_usage_events(&self, _events: &[UsageEvent]) -> anyhow::Result<()> {
+            *self.attempts.lock().await += 1;
+            anyhow::bail!("analytics sink unavailable")
+        }
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     struct StaticControlStore {
         key: AuthenticatedKey,
     }
@@ -1323,6 +1368,58 @@ mod tests {
             quota_billable_limit: 100,
             billable_tokens_used: 5,
         }
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    #[tokio::test]
+    async fn flush_drops_analytics_events_after_rollups_are_persisted() {
+        let rollup_sink = RecordingUsageEventSink::default();
+        let analytics_sink = FailingUsageEventSink::default();
+        let pending_rollups = super::PendingUsageRollups::default();
+        let mut buffer = vec![sample_usage_event("evt-1"), sample_usage_event("evt-2")];
+        for event in &buffer {
+            pending_rollups
+                .add_event(event)
+                .expect("add pending rollup");
+        }
+        let mut analytics_retry_buffer = Vec::new();
+        let mut buffered_bytes = buffer
+            .iter()
+            .map(super::estimate_usage_event_bytes)
+            .sum::<usize>();
+        let mut analytics_retry_bytes = 0usize;
+        let mut flush_count = 0u64;
+
+        let retry = super::flush_usage_event_buffer(
+            super::UsageEventFlushTargets {
+                rollup_sink: &rollup_sink,
+                analytics_sink: &analytics_sink,
+                pending_rollups: &pending_rollups,
+            },
+            super::UsageEventFlushState {
+                buffer: &mut buffer,
+                analytics_retry_buffer: &mut analytics_retry_buffer,
+                buffered_bytes: &mut buffered_bytes,
+                analytics_retry_bytes: &mut analytics_retry_bytes,
+                max_buffer_bytes: 8 * 1024 * 1024,
+                flush_count: &mut flush_count,
+            },
+            "usage event batch flush failed",
+        )
+        .await;
+
+        assert!(!retry);
+        assert!(buffer.is_empty());
+        assert!(analytics_retry_buffer.is_empty());
+        assert_eq!(buffered_bytes, 0);
+        assert_eq!(analytics_retry_bytes, 0);
+        assert_eq!(flush_count, 0);
+        assert_eq!(*analytics_sink.attempts.lock().await, 1);
+        assert_eq!(rollup_sink.batches.lock().await.as_slice(), &[vec![
+            "evt-1".to_string(),
+            "evt-2".to_string()
+        ]]);
+        assert!(pending_rollups.delta_for_key("key-runtime").is_none());
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]

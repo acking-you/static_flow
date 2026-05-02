@@ -18,7 +18,7 @@ grep -F -- '--duckdb-active-dir ${LLM_ACCESS_DUCKDB_ACTIVE_DIR}' "$OUT_DIR/llm-a
 grep -F 'Environment=LLM_ACCESS_DUCKDB_ACTIVE_DIR=/var/lib/staticflow/llm-access/analytics-active' "$OUT_DIR/llm-access.service"
 grep -F 'MemoryHigh=2200M' "$OUT_DIR/llm-access.service"
 grep -F 'MemoryMax=3072M' "$OUT_DIR/llm-access.service"
-grep -F 'MemorySwapMax=0' "$OUT_DIR/llm-access.service"
+grep -F 'MemorySwapMax=1024M' "$OUT_DIR/llm-access.service"
 ! grep -F 'ReadWritePaths=' "$OUT_DIR/llm-access.service"
 ! grep -F 'ProtectSystem=' "$OUT_DIR/llm-access.service"
 ! grep -F 'PrivateTmp=' "$OUT_DIR/llm-access.service"

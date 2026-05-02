@@ -29,6 +29,11 @@ const SQLITE_MIGRATIONS: &[SqlMigration] = &[
         name: "kiro_full_request_logging",
         sql: include_str!("../migrations/sqlite/0003_kiro_full_request_logging.sql"),
     },
+    SqlMigration {
+        version: 4,
+        name: "duckdb_usage_runtime_settings",
+        sql: include_str!("../migrations/sqlite/0004_duckdb_usage_runtime_settings.sql"),
+    },
 ];
 
 const DUCKDB_MIGRATIONS: &[SqlMigration] = &[
@@ -119,7 +124,7 @@ mod tests {
     fn sqlite_migrations_are_file_backed_and_versioned() {
         let migrations = super::sqlite_migrations();
 
-        assert_eq!(migrations.len(), 3);
+        assert_eq!(migrations.len(), 4);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(migrations[0].name, "init");
         assert!(migrations[0]
@@ -135,6 +140,12 @@ mod tests {
         assert!(migrations[2]
             .sql
             .contains("kiro_full_request_logging_enabled"));
+        assert_eq!(migrations[3].version, 4);
+        assert_eq!(migrations[3].name, "duckdb_usage_runtime_settings");
+        assert!(migrations[3].sql.contains("duckdb_usage_memory_limit_mib"));
+        assert!(migrations[3]
+            .sql
+            .contains("duckdb_usage_checkpoint_threshold_mib"));
     }
 
     #[test]
@@ -168,7 +179,7 @@ mod tests {
         let applied_count: i64 = conn
             .query_row("SELECT count(*) FROM llm_access_schema_migrations", [], |row| row.get(0))
             .expect("count migrations");
-        assert_eq!(applied_count, 3);
+        assert_eq!(applied_count, 4);
 
         let full_logging_column_count: i64 = conn
             .query_row(
@@ -180,5 +191,19 @@ mod tests {
             )
             .expect("inspect route config columns");
         assert_eq!(full_logging_column_count, 1);
+
+        let runtime_duckdb_column_count: i64 = conn
+            .query_row(
+                "SELECT count(*)
+                 FROM pragma_table_info('llm_runtime_config')
+                 WHERE name IN (
+                    'duckdb_usage_memory_limit_mib',
+                    'duckdb_usage_checkpoint_threshold_mib'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .expect("inspect runtime config duckdb columns");
+        assert_eq!(runtime_duckdb_column_count, 2);
     }
 }

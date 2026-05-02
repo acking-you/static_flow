@@ -1,23 +1,25 @@
 # LLM Access Cloud Migration Design
 
-> Status update on 2026-04-30: cloud migration depends on the full-parity
-> extraction design in
-> `docs/superpowers/specs/2026-04-30-llm-access-full-parity-design.md`.
-> Do not treat the existing `llm-access` shell as deployable production
-> replacement until that parity work is complete.
+> Status update on 2026-05-02: production cutover is complete. GCP Caddy routes
+> LLM paths directly to cloud `llm-access` on `127.0.0.1:19080`; non-LLM
+> StaticFlow paths continue through pb-mapper to the local Pingora gateway.
+> `llm-access` is now the production source of truth for gateway keys, account
+> state, runtime config, public request queues, and usage analytics. State lives
+> on a JuiceFS mount backed by Cloudflare R2 object storage and Valkey metadata,
+> with the active mutable DuckDB segment on local GCP VM block storage.
 
 ## Background
 
-The immediate production problem is not only application latency. The home
+The original production problem was not only application latency. The home
 network is likely being classified as PCDN-like traffic by the ISP, causing
-home upstream throttling. StaticFlow currently exposes public traffic through a
-cloud ingress relay, but the real backend payload is still served by the local
-machine through pb-mapper. LLM access traffic is the worst fit for this shape:
+home upstream throttling. StaticFlow exposed public traffic through a cloud
+ingress relay while the real backend payload was still served by the local
+machine through pb-mapper. LLM access traffic was the worst fit for that shape:
 it is high-frequency, stream-oriented, and response-heavy, so every SSE stream
-keeps consuming the throttled home upstream path until completion.
+kept consuming the throttled home upstream path until completion.
 
-The migration should remove LLM access traffic from the home uplink quickly
-without moving the rest of StaticFlow.
+The migration removed LLM access traffic from the home uplink without moving
+the rest of StaticFlow.
 
 ## Goals
 
@@ -39,7 +41,7 @@ without moving the rest of StaticFlow.
 - Do not build multi-writer or active-active `llm-access` in the first phase.
 - Do not run SQLite or DuckDB from multiple active writer instances.
 
-## Recommended Architecture
+## Current Architecture
 
 Public traffic continues to enter through the cloud Caddy instance.
 
@@ -62,16 +64,18 @@ The cloud VM runs:
 The local machine keeps:
 
 - StaticFlow backend and Pingora gateway.
-- LanceDB-backed content, comments, music, and legacy LLM source data during
-  migration.
+- LanceDB-backed content, comments, music, and legacy LLM source/migration
+  tables.
 - pb-mapper server-side registration for non-LLM StaticFlow traffic.
+- pb-mapper client subscription to cloud `llm-access` for local external-mode
+  backend/dev requests.
 
 ## Route Split
 
-The initial routing boundary should be path based. Caddy sends only LLM-related
-paths to cloud `llm-access`; everything else keeps the current local path.
+The routing boundary is path based. Caddy sends LLM-related paths to cloud
+`llm-access`; everything else keeps the local StaticFlow path.
 
-Candidate LLM paths:
+Current LLM paths:
 
 ```text
 /v1/*
@@ -86,24 +90,28 @@ The deployment template uses a Caddy path matcher plus `handle @llm_access`.
 It intentionally does not use `handle_path`, because `handle_path` strips the
 matched prefix and would break provider routes such as `/v1/chat/completions`.
 
-Before implementation, verify the exact route list against backend routes. The
-principle is simple: routes that issue upstream LLM requests, manage LLM keys,
-manage Kiro/Codex accounts, write usage events, or handle LLM contribution
-queues belong to `llm-access`.
+The principle is simple: routes that issue upstream LLM requests, manage LLM
+keys, manage Kiro/Codex accounts, write usage events, or handle LLM
+contribution queues belong to `llm-access`.
 
 ## Storage Layout
 
-The target cloud state root is mounted through JuiceFS:
+The production cloud state root is mounted through JuiceFS:
 
 ```text
 /mnt/llm-access
   /control/llm-access.sqlite3
-  /analytics/usage.duckdb
+  /analytics/segments
+  /analytics/catalog
   /auths/kiro
   /auths/codex
+  /support/llm_access_support
   /cdc
   /logs
   /backups
+
+/var/lib/staticflow/llm-access/analytics-active
+  /usage-active-*.duckdb
 ```
 
 SQLite is the runtime control plane:
@@ -120,54 +128,60 @@ SQLite is the runtime control plane:
 
 DuckDB is the append-heavy analytics plane:
 
-- Wide `usage_events` fact table.
+- Active mutable `usage_events` facts in a local VM block-storage segment.
+- Immutable archived usage segments under `/mnt/llm-access/analytics/segments`.
+- A low-frequency segment catalog under `/mnt/llm-access/analytics/catalog`.
 - Usage details side table.
 - Hourly and daily rollups.
 - CDC audit history.
 
-The first production deployment is single-writer. The service must not run two
-active writers against the same SQLite/DuckDB files.
+The production deployment is single-writer. The service must not run two active
+writers against the same SQLite/DuckDB/auth tree. Do not point a live writer at
+`/mnt/llm-access/analytics/usage.duckdb` as a mutable all-history DuckDB file;
+tiered mode keeps the current mutable file on local VM disk and archives
+completed segments to JuiceFS/R2.
 
 ## JuiceFS Requirements
 
-JuiceFS is used to decouple service state from the VM root disk. For this goal,
-both data objects and metadata must survive VM replacement.
+JuiceFS is used to decouple service state from the VM root disk. Both data
+objects and metadata must survive VM replacement.
 
-Recommended first version:
+Current production backend:
 
-- Object storage in the same cloud and region as the VM.
-- External metadata backend when possible, such as managed Redis, Postgres, or
-  MySQL.
-- If SQLite metadata is used temporarily, the metadata database itself must be
-  backed up and not treated as disposable VM-local state.
-- Systemd must gate `llm-access.service` on the JuiceFS mount being ready.
+- Object storage: Cloudflare R2 bucket for `llm-access`.
+- Metadata backend: external Valkey, DB `11`, dedicated `juicefs` ACL user.
+- GCP local cache: `/var/cache/juicefs/llm-access`, not inside
+  `/mnt/llm-access`.
+- Systemd gates `llm-access.service` on the JuiceFS mount and expected state
+  files through `/usr/local/bin/staticflow-wait-llm-access-state`.
 
 The service should fail closed if `/mnt/llm-access` is not mounted or required
 state files are missing. It should not silently initialize against an empty
 local directory.
 
-## Migration Flow
+## Completed Migration Flow
 
 1. Enable source-side LLM CDC outbox in local StaticFlow.
 2. Export a full LLM snapshot from existing LanceDB-backed StaticFlow data.
 3. Import the snapshot into cloud SQLite and DuckDB.
 4. Replay source CDC rows from the snapshot high-water mark.
-5. Start cloud `llm-access` with test-only keys.
-6. Add Caddy canary routing for a narrow LLM path or test key.
-7. Compare cloud `llm-access` usage output with local StaticFlow usage output.
+5. Start cloud `llm-access` and validate it with narrow traffic.
+6. Add Caddy LLM path split to `127.0.0.1:19080`.
+7. Compare cloud `llm-access` usage output with previous StaticFlow usage
+   output.
 8. Switch all LLM paths to cloud `llm-access`.
-9. Make local StaticFlow LLM write paths read-only, redirected, or disabled so
-   cloud `llm-access` becomes the source of truth.
+9. Run local StaticFlow in external-LLM mode so legacy/local route families
+   proxy to cloud `llm-access` instead of writing local LLM state.
 
 ## Rollback
 
-Before final source-of-truth cutover, rollback is simple: point Caddy LLM paths
-back to the existing local pb-mapper route.
+Before source-of-truth cutover, rollback was simple: point Caddy LLM paths back
+to the existing local pb-mapper route.
 
-After final source-of-truth cutover, rollback must be treated as a data
-migration. The cloud `llm-access` state must either be replayed back into local
-StaticFlow or local StaticFlow must continue to proxy LLM operations to cloud
-`llm-access`.
+After source-of-truth cutover, rollback is a data migration. Cloud
+`llm-access` has accepted live writes, so local StaticFlow must either continue
+proxying LLM operations to cloud `llm-access`, or cloud state must be exported
+and replayed back into a replacement writer.
 
 ## Operational Checks
 
@@ -181,7 +195,7 @@ For canary and cutover, track:
 - Home upstream traffic dropping after LLM path cutover.
 - pb-mapper health for non-LLM paths.
 
-## Implementation Order
+## Implementation Order Record
 
 1. Finish `llm-access` provider runtime for the existing Kiro/Codex/OpenAI and
    Claude-compatible request paths.
@@ -191,10 +205,13 @@ For canary and cutover, track:
 5. Add deployment files for JuiceFS mount and `llm-access.service`.
 6. Add Caddy path split for LLM paths.
 7. Run test-key canary, then switch production LLM paths.
+8. Add tiered DuckDB analytics so active writes stay on local VM block storage
+   and completed segments archive to JuiceFS/R2.
+9. Add bounded admin usage queries and memory guards for the 2c8g GCP VM.
 
 ## Current Implementation Snapshot
 
-Implemented in this repo:
+Implemented and live:
 
 - Source-side SQLite CDC outbox for StaticFlow LLM mutations.
 - `llm-access-migrations`, `llm-access-store`, `llm-access-migrator`, and
@@ -204,26 +221,34 @@ Implemented in this repo:
   config/bindings, public request queues, and sponsor requests.
 - Snapshot manifest/export scaffold with CDC high-water marks and optional
   `staticflow-source` JSONL export using the existing StaticFlow store APIs.
-- `llm-access` HTTP shell with route ownership tests and explicit 401 for
-  unauthenticated provider entries.
+- `llm-access` standalone provider runtime for Codex/OpenAI-compatible and
+  Kiro/Anthropic-compatible routes.
+- Cloud path split for public LLM routes.
+- External-mode local backend proxy for LLM route families.
+- Tiered DuckDB usage analytics with local active segment, archived immutable
+  segments, and bounded admin list queries.
 - Deployment bundle templates:
   `deployment-examples/systemd/llm-access.service.template`,
   `deployment-examples/systemd/llm-access-juicefs.mount.template`, and
   `deployment-examples/caddy/llm-access-path-split.Caddyfile`.
 
-Still pending before real production cutover:
+Current production constraints:
 
-- Move the actual Kiro/Codex provider runtime into `llm-access`.
-- Import snapshot JSONL rows into SQLite/DuckDB, not only initialize targets.
-- Write live usage events to DuckDB from the standalone service.
-- Run a test-key canary before routing all LLM paths to the cloud service.
+- Keep only one active writer for the cloud SQLite/DuckDB/auth tree.
+- Keep broad diagnostics out of in-process admin usage APIs; use external
+  read-only DuckDB connections for large scans.
+- Keep `/mnt/llm-access` as JuiceFS/R2 state and the active mutable DuckDB
+  directory on local VM block storage.
+- Treat the local LanceDB `llm_gateway_*` tables as legacy/source data, not the
+  live production source of truth.
 
-## Open Decisions
+## Resolved Decisions
 
-- Exact GCP storage backend for JuiceFS metadata and objects.
-- Exact public route list after backend route verification.
-- Whether admin LLM pages are served by local StaticFlow frontend while their
-  APIs point to cloud `llm-access`, or whether those admin APIs are fully owned
-  by cloud `llm-access` from the first cutover.
-- Whether local StaticFlow should proxy legacy LLM paths to cloud `llm-access`
-  after cutover for backward compatibility.
+- JuiceFS object backend is Cloudflare R2; metadata backend is external Valkey
+  DB `11`.
+- Public LLM path list is `/v1/*`, `/cc/v1/*`, `/api/llm-gateway/*`,
+  `/api/kiro-gateway/*`, `/api/codex-gateway/*`, and `/api/llm-access/*`.
+- The frontend and non-LLM StaticFlow payloads remain local-first behind
+  pb-mapper; LLM APIs are routed by GCP Caddy to cloud `llm-access`.
+- Local StaticFlow uses external-LLM mode / pb-mapper subscription for
+  compatibility instead of writing cloud JuiceFS state directly.

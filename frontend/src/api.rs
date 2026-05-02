@@ -19,6 +19,14 @@ fn default_codex_client_version() -> String {
     DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION.to_string()
 }
 
+fn default_duckdb_usage_memory_limit_mib() -> u64 {
+    1024
+}
+
+fn default_duckdb_usage_checkpoint_threshold_mib() -> u64 {
+    16
+}
+
 // API base URL. Read at compile time from STATICFLOW_API_BASE and fall back
 // to the local development backend when the variable is absent.
 #[cfg(not(feature = "mock"))]
@@ -6371,6 +6379,10 @@ pub struct LlmGatewayRuntimeConfig {
     pub usage_event_flush_batch_size: u64,
     pub usage_event_flush_interval_seconds: u64,
     pub usage_event_flush_max_buffer_bytes: u64,
+    #[serde(default = "default_duckdb_usage_memory_limit_mib")]
+    pub duckdb_usage_memory_limit_mib: u64,
+    #[serde(default = "default_duckdb_usage_checkpoint_threshold_mib")]
+    pub duckdb_usage_checkpoint_threshold_mib: u64,
     pub kiro_cache_kmodels_json: String,
     #[serde(default = "default_kiro_billable_model_multipliers_json")]
     pub kiro_billable_model_multipliers_json: String,
@@ -7149,6 +7161,9 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             usage_event_flush_batch_size: 256,
             usage_event_flush_interval_seconds: 15,
             usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
+            duckdb_usage_memory_limit_mib: default_duckdb_usage_memory_limit_mib(),
+            duckdb_usage_checkpoint_threshold_mib:
+                default_duckdb_usage_checkpoint_threshold_mib(),
             kiro_cache_kmodels_json: r#"{"claude-haiku-4-5-20251001":2.3681034438052206e-06,"claude-opus-4-6":8.061927916785985e-06,"claude-sonnet-4-6":5.055065250835128e-06}"#.to_string(),
             kiro_billable_model_multipliers_json: default_kiro_billable_model_multipliers_json(),
             kiro_cache_policy_json: r#"{"small_input_high_credit_boost":{"target_input_tokens":100000,"credit_start":1.0,"credit_end":1.8},"prefix_tree_credit_ratio_bands":[{"credit_start":0.3,"credit_end":1.0,"cache_ratio_start":0.7,"cache_ratio_end":0.2},{"credit_start":1.0,"credit_end":2.5,"cache_ratio_start":0.2,"cache_ratio_end":0.0}],"high_credit_diagnostic_threshold":2.0}"#.to_string(),
@@ -9974,5 +9989,7 @@ mod tests {
 
         assert_eq!(config.usage_event_flush_interval_seconds, 15);
         assert_eq!(config.codex_client_version, DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION);
+        assert_eq!(config.duckdb_usage_memory_limit_mib, 1024);
+        assert_eq!(config.duckdb_usage_checkpoint_threshold_mib, 16);
     }
 }

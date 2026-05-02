@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-https://ackingliu.top}"
-LLM_HEALTH_URL="${LLM_HEALTH_URL:-$BASE_URL/healthz}"
+LLM_HEALTH_URL="${LLM_HEALTH_URL:-$BASE_URL/api/llm-gateway/status}"
 STATICFLOW_HEALTH_URL="${STATICFLOW_HEALTH_URL:-$BASE_URL/api/healthz}"
 
 curl_common=(

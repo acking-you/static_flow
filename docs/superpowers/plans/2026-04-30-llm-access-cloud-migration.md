@@ -1,9 +1,11 @@
 # LLM Access Cloud Migration Implementation Plan
 
-> Status update on 2026-04-30: this cloud migration plan is blocked on
-> full-parity extraction. Implement
-> `docs/superpowers/specs/2026-04-30-llm-access-full-parity-design.md` first,
-> then return to cloud deployment, JuiceFS, Caddy, and canary routing.
+> Status update on 2026-05-02: this plan is now a historical execution record,
+> not the current runbook. Production LLM traffic has been cut over to GCP
+> `llm-access` on `127.0.0.1:19080`; non-LLM StaticFlow traffic still returns
+> to the local Pingora gateway through pb-mapper. For current operations, use
+> `docs/cloud-ingress-relay-pbmapper-runbook.zh.md` and
+> `docs/superpowers/specs/2026-04-30-llm-access-cloud-migration-design.md`.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -1608,7 +1610,7 @@ Create `scripts/verify_llm_access_cloud_canary.sh`:
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-https://ackingliu.top}"
-LLM_HEALTH_URL="${LLM_HEALTH_URL:-$BASE_URL/healthz}"
+LLM_HEALTH_URL="${LLM_HEALTH_URL:-$BASE_URL/api/llm-gateway/status}"
 STATICFLOW_HEALTH_URL="${STATICFLOW_HEALTH_URL:-$BASE_URL/api/healthz}"
 
 curl_common=(

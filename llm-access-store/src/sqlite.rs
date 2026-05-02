@@ -179,6 +179,10 @@ pub struct RuntimeConfigRecord {
     pub usage_event_flush_interval_seconds: i64,
     /// Usage event flush max buffer bytes.
     pub usage_event_flush_max_buffer_bytes: i64,
+    /// DuckDB usage writer memory limit in MiB.
+    pub duckdb_usage_memory_limit_mib: i64,
+    /// DuckDB usage writer WAL checkpoint threshold in MiB.
+    pub duckdb_usage_checkpoint_threshold_mib: i64,
     /// Whether usage maintenance is enabled.
     pub usage_event_maintenance_enabled: bool,
     /// Usage maintenance interval.
@@ -2471,6 +2475,8 @@ impl SqliteControlStore {
                     usage_event_flush_batch_size,
                     usage_event_flush_interval_seconds,
                     usage_event_flush_max_buffer_bytes,
+                    duckdb_usage_memory_limit_mib,
+                    duckdb_usage_checkpoint_threshold_mib,
                     usage_event_maintenance_enabled,
                     usage_event_maintenance_interval_seconds,
                     usage_event_detail_retention_days,
@@ -2486,7 +2492,7 @@ impl SqliteControlStore {
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
                     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24,
-                    ?25, ?26, ?27, ?28
+                    ?25, ?26, ?27, ?28, ?29, ?30
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     auth_cache_ttl_seconds = excluded.auth_cache_ttl_seconds,
@@ -2513,6 +2519,10 @@ impl SqliteControlStore {
                         excluded.usage_event_flush_interval_seconds,
                     usage_event_flush_max_buffer_bytes =
                         excluded.usage_event_flush_max_buffer_bytes,
+                    duckdb_usage_memory_limit_mib =
+                        excluded.duckdb_usage_memory_limit_mib,
+                    duckdb_usage_checkpoint_threshold_mib =
+                        excluded.duckdb_usage_checkpoint_threshold_mib,
                     usage_event_maintenance_enabled =
                         excluded.usage_event_maintenance_enabled,
                     usage_event_maintenance_interval_seconds =
@@ -2549,6 +2559,8 @@ impl SqliteControlStore {
                     record.usage_event_flush_batch_size,
                     record.usage_event_flush_interval_seconds,
                     record.usage_event_flush_max_buffer_bytes,
+                    record.duckdb_usage_memory_limit_mib,
+                    record.duckdb_usage_checkpoint_threshold_mib,
                     record.usage_event_maintenance_enabled as i64,
                     record.usage_event_maintenance_interval_seconds,
                     record.usage_event_detail_retention_days,
@@ -2584,6 +2596,8 @@ impl SqliteControlStore {
                     usage_event_flush_batch_size,
                     usage_event_flush_interval_seconds,
                     usage_event_flush_max_buffer_bytes,
+                    duckdb_usage_memory_limit_mib,
+                    duckdb_usage_checkpoint_threshold_mib,
                     usage_event_maintenance_enabled,
                     usage_event_maintenance_interval_seconds,
                     usage_event_detail_retention_days,
@@ -4166,18 +4180,20 @@ fn decode_runtime_config(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeCon
         usage_event_flush_batch_size: row.get(13)?,
         usage_event_flush_interval_seconds: row.get(14)?,
         usage_event_flush_max_buffer_bytes: row.get(15)?,
-        usage_event_maintenance_enabled: row.get::<_, i64>(16)? != 0,
-        usage_event_maintenance_interval_seconds: row.get(17)?,
-        usage_event_detail_retention_days: row.get(18)?,
-        kiro_cache_kmodels_json: row.get(19)?,
-        kiro_billable_model_multipliers_json: row.get(20)?,
-        kiro_cache_policy_json: row.get(21)?,
-        kiro_prefix_cache_mode: row.get(22)?,
-        kiro_prefix_cache_max_tokens: row.get(23)?,
-        kiro_prefix_cache_entry_ttl_seconds: row.get(24)?,
-        kiro_conversation_anchor_max_entries: row.get(25)?,
-        kiro_conversation_anchor_ttl_seconds: row.get(26)?,
-        updated_at_ms: row.get(27)?,
+        duckdb_usage_memory_limit_mib: row.get(16)?,
+        duckdb_usage_checkpoint_threshold_mib: row.get(17)?,
+        usage_event_maintenance_enabled: row.get::<_, i64>(18)? != 0,
+        usage_event_maintenance_interval_seconds: row.get(19)?,
+        usage_event_detail_retention_days: row.get(20)?,
+        kiro_cache_kmodels_json: row.get(21)?,
+        kiro_billable_model_multipliers_json: row.get(22)?,
+        kiro_cache_policy_json: row.get(23)?,
+        kiro_prefix_cache_mode: row.get(24)?,
+        kiro_prefix_cache_max_tokens: row.get(25)?,
+        kiro_prefix_cache_entry_ttl_seconds: row.get(26)?,
+        kiro_conversation_anchor_max_entries: row.get(27)?,
+        kiro_conversation_anchor_ttl_seconds: row.get(28)?,
+        updated_at_ms: row.get(29)?,
     })
 }
 
@@ -4209,6 +4225,9 @@ impl Default for RuntimeConfigRecord {
                 core_store::DEFAULT_USAGE_EVENT_FLUSH_INTERVAL_SECONDS as i64,
             usage_event_flush_max_buffer_bytes:
                 core_store::DEFAULT_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES as i64,
+            duckdb_usage_memory_limit_mib: core_store::DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB as i64,
+            duckdb_usage_checkpoint_threshold_mib:
+                core_store::DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB as i64,
             usage_event_maintenance_enabled: core_store::DEFAULT_USAGE_EVENT_MAINTENANCE_ENABLED,
             usage_event_maintenance_interval_seconds:
                 core_store::DEFAULT_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS as i64,
@@ -4256,6 +4275,9 @@ impl RuntimeConfigRecord {
             usage_event_flush_batch_size: self.usage_event_flush_batch_size as u64,
             usage_event_flush_interval_seconds: self.usage_event_flush_interval_seconds as u64,
             usage_event_flush_max_buffer_bytes: self.usage_event_flush_max_buffer_bytes as u64,
+            duckdb_usage_memory_limit_mib: self.duckdb_usage_memory_limit_mib as u64,
+            duckdb_usage_checkpoint_threshold_mib: self.duckdb_usage_checkpoint_threshold_mib
+                as u64,
             kiro_cache_kmodels_json: self.kiro_cache_kmodels_json.clone(),
             kiro_billable_model_multipliers_json: self.kiro_billable_model_multipliers_json.clone(),
             kiro_cache_policy_json: self.kiro_cache_policy_json.clone(),
@@ -4289,6 +4311,9 @@ impl RuntimeConfigRecord {
         self.usage_event_flush_batch_size = config.usage_event_flush_batch_size as i64;
         self.usage_event_flush_interval_seconds = config.usage_event_flush_interval_seconds as i64;
         self.usage_event_flush_max_buffer_bytes = config.usage_event_flush_max_buffer_bytes as i64;
+        self.duckdb_usage_memory_limit_mib = config.duckdb_usage_memory_limit_mib as i64;
+        self.duckdb_usage_checkpoint_threshold_mib =
+            config.duckdb_usage_checkpoint_threshold_mib as i64;
         self.kiro_cache_kmodels_json = config.kiro_cache_kmodels_json.clone();
         self.kiro_billable_model_multipliers_json =
             config.kiro_billable_model_multipliers_json.clone();
@@ -4325,6 +4350,8 @@ impl RuntimeConfigRecord {
             usage_event_flush_batch_size: 32,
             usage_event_flush_interval_seconds: 5,
             usage_event_flush_max_buffer_bytes: 1_048_576,
+            duckdb_usage_memory_limit_mib: 1024,
+            duckdb_usage_checkpoint_threshold_mib: 16,
             usage_event_maintenance_enabled: true,
             usage_event_maintenance_interval_seconds: 3600,
             usage_event_detail_retention_days: 30,
@@ -5372,6 +5399,8 @@ mod tests {
         let repo = super::SqliteControlStore::new(conn);
         let mut config = super::RuntimeConfigRecord::test_default();
         config.codex_client_version = "0.124.0".to_string();
+        config.duckdb_usage_memory_limit_mib = 2048;
+        config.duckdb_usage_checkpoint_threshold_mib = 32;
         config.updated_at_ms = 100;
 
         repo.upsert_runtime_config(&config).expect("upsert config");
@@ -5384,6 +5413,8 @@ mod tests {
             .expect("load config")
             .expect("config exists");
         assert_eq!(value.codex_client_version, "0.125.0");
+        assert_eq!(value.duckdb_usage_memory_limit_mib, 2048);
+        assert_eq!(value.duckdb_usage_checkpoint_threshold_mib, 32);
         assert_eq!(value.updated_at_ms, 200);
     }
 

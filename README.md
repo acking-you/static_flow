@@ -4,9 +4,21 @@
 
 [CLI Guide (ZH)](./docs/cli-user-guide.zh.md)
 
-A local-first dynamic blog system. Run backend locally behind the Pingora gateway, expose public HTTPS through cloud Caddy + pb-mapper, and write Markdown notes plus images into LanceDB through CLI.
+A local-first dynamic blog system with a split production edge. Article,
+comment, music, media, and frontend payloads still run on the local machine
+behind Pingora and pb-mapper; public HTTPS terminates on GCP Caddy. LLM access
+traffic now stays in GCP and is served by the standalone `llm-access` service,
+with service state on JuiceFS backed by Cloudflare R2 object storage and Valkey
+metadata.
 
-StaticFlow also includes a public LLM access layer on top of the content system: an OpenAI-compatible Codex gateway, an Anthropic-compatible Kiro gateway, provider-scoped upstream proxy routing, quota-managed gateway keys, and usage accounting. For the current implementation details, see [docs/llm-access-and-kiro-gateway-implementation.md](./docs/llm-access-and-kiro-gateway-implementation.md).
+StaticFlow also includes a public LLM access layer: an OpenAI-compatible Codex
+gateway, an Anthropic-compatible Kiro gateway, provider-scoped upstream proxy
+routing, quota-managed gateway keys, and usage accounting. In production this
+layer is owned by the cloud `llm-access` service rather than the local
+StaticFlow backend. For the implementation details and deployment notes, see
+[docs/llm-access-and-kiro-gateway-implementation.md](./docs/llm-access-and-kiro-gateway-implementation.md)
+and
+[docs/superpowers/specs/2026-04-30-llm-access-cloud-migration-design.md](./docs/superpowers/specs/2026-04-30-llm-access-cloud-migration-design.md).
 
 ## Philosophy
 
@@ -40,11 +52,16 @@ local-only music DB:
 Canonical local data root:
 - `/mnt/wsl/data4tb/static-flow-data`
 
-- Content DB (content + request + interactive mirror + llm gateway tables)
+- Content DB (content + request + interactive mirror + legacy LLM gateway
+  migration/source tables)
   - HF dataset repo: <https://huggingface.co/datasets/LB7666/my_lancedb_data>
   - Remote: `git@hf.co:datasets/LB7666/my_lancedb_data`
   - Local path: `/mnt/wsl/data4tb/static-flow-data/lancedb`
   - Tables: `articles`, `images`, `taxonomies`, `article_views`, `api_behavior_events`, `article_requests`, `article_request_ai_runs`, `article_request_ai_run_chunks`, `interactive_pages`, `interactive_page_locales`, `interactive_assets`, `llm_gateway_keys`, `llm_gateway_usage_events`, `llm_gateway_runtime_config`, `llm_gateway_proxy_configs`, `llm_gateway_proxy_bindings`, `llm_gateway_token_requests`, `llm_gateway_account_contribution_requests`, `llm_gateway_sponsor_requests`
+  - Current production LLM access state is no longer written here directly.
+    These `llm_gateway_*` tables are legacy/source-of-migration tables for the
+    local StaticFlow side. The live `llm-access` control plane is SQLite on the
+    GCP JuiceFS mount, and usage analytics are written to tiered DuckDB files.
 - Comments DB (comment moderation + AI run traces)
   - HF dataset repo: <https://huggingface.co/datasets/LB7666/static-flow-comments>
   - Remote: `git@hf.co:datasets/LB7666/static-flow-comments`
@@ -117,25 +134,67 @@ on Hugging Face's Xet-integrated transfer path.
 
 ## Deployment Modes
 
-### Mode A: Self-Hosted (Recommended)
+### Mode A: Production Hybrid GCP Edge + Local StaticFlow
 
-Backend serves both API and frontend static files. In current production,
-public HTTPS enters through cloud Caddy and pb-mapper, then lands on the local
-Pingora gateway.
+The current production deployment is hybrid:
+
+- GCP Caddy terminates public HTTPS for `ackingliu.top`.
+- LLM routes are handled on the GCP VM by standalone `llm-access` at
+  `127.0.0.1:19080`.
+- Non-LLM StaticFlow routes still go through cloud pb-mapper to the local
+  Pingora gateway and active backend slot.
+- The local backend can also proxy LLM routes to cloud `llm-access` through the
+  local `pbmapper-llm-access` subscription at `127.0.0.1:19182`.
 
 ```text
 Browser -> https://ackingliu.top
-        -> cloud Caddy (:443)
-        -> cloud pb-mapper-client (127.0.0.1:39080)
-        -> cloud pb-mapper-server (:7666)
-        -> local tmux `pbmapper-sf-backend`
-        -> local Pingora gateway (127.0.0.1:39180)
-        -> active backend slot (currently green, 127.0.0.1:39081)
-           ├── /api/*        → API handlers
-           ├── /posts/:id    → SEO-injected page
-           ├── /sitemap.xml  → Dynamic sitemap
-           └── /*            → Frontend static (SPA fallback)
+        -> GCP Caddy (:443)
+           ├── LLM paths
+           │   -> cloud llm-access (127.0.0.1:19080)
+           │      ├── SQLite control DB on /mnt/llm-access/control
+           │      ├── active DuckDB files on local VM block storage
+           │      └── archived DuckDB segments/catalog on JuiceFS/R2
+           └── non-LLM paths
+               -> cloud pb-mapper-client (127.0.0.1:39080)
+               -> cloud pb-mapper-server (:7666)
+               -> local tmux `pbmapper-sf-backend`
+               -> local Pingora gateway (127.0.0.1:39180)
+               -> active backend slot (currently green, 127.0.0.1:39081)
+                  ├── /api/*        → content/comment/music/media API handlers
+                  ├── /posts/:id    → SEO-injected page
+                  ├── /sitemap.xml  → Dynamic sitemap
+                  └── /*            → Frontend static (SPA fallback)
 ```
+
+Current GCP production services:
+
+| systemd unit | Role | Local address / storage |
+| --- | --- | --- |
+| `caddy` | TLS termination and path split. | Public `:443`; LLM routes to `127.0.0.1:19080`, all other routes to `127.0.0.1:39080` |
+| `llm-access.service` | Standalone Codex/Kiro/OpenAI-compatible access layer. | Serves `127.0.0.1:19080` |
+| `juicefs-llm-access.service` | Mounts persistent LLM state. | `/mnt/llm-access`, backed by Valkey metadata and Cloudflare R2 objects |
+| `pb-mapper-server.service` | Cloud relay server for non-LLM StaticFlow and service back-links. | Listens on `:7666` |
+| `pb-mapper-client-cli@sf-backend.service` | Exposes the local StaticFlow gateway to Caddy. | Binds `127.0.0.1:39080` |
+| `pb-mapper-server-cli@llm-access.service` | Registers cloud `llm-access` back to local development/runtime consumers. | Registers key `llm-access` for `127.0.0.1:19080` |
+
+`llm-access` storage layout in production:
+
+```text
+/mnt/llm-access
+  /control/llm-access.sqlite3        # SQLite control plane
+  /auths/{codex,kiro}                # upstream account snapshots
+  /support/llm_access_support        # public support/community config
+  /analytics/segments                # immutable archived DuckDB segments
+  /analytics/catalog                 # low-frequency segment catalog
+
+/var/lib/staticflow/llm-access/analytics-active
+  usage-active-*.duckdb              # current mutable DuckDB segment on VM disk
+```
+
+`/mnt/llm-access` is a JuiceFS mount backed by Cloudflare R2 object storage and
+Valkey metadata. The active mutable DuckDB file intentionally lives on local VM
+block storage, while only archived immutable segments and catalog data go to
+JuiceFS/R2. Do not run another writer against the same SQLite/DuckDB state.
 
 Current local production binaries supervised by tmux:
 
@@ -145,6 +204,7 @@ Current local production binaries supervised by tmux:
 | `sf-backend-green` | `scripts/start_backend_selfhosted.sh --port 39081` with `BACKEND_BIN=target/release-backend/static-flow-backend` | Active backend slot selected by Pingora. | Listens on `127.0.0.1:39081`; uses `DB_ROOT=/mnt/wsl/data4tb/static-flow-data` |
 | `gpt2api-rs` | `deps/gpt2api_rs/target/release/gpt2api-rs serve` | GPT2API image gateway used by StaticFlow routes/admin. | Listens on `127.0.0.1:18787` |
 | `pbmapper-sf-backend` | `~/.local/pbmapper/current/pb-mapper-server-cli ... tcp-server --key sf-backend --addr 127.0.0.1:39180` | Registers the local Pingora gateway with the cloud relay. | Connects to `ackingliu.top:7666` |
+| `pbmapper-llm-access` | `~/.local/pbmapper/current/pb-mapper-client-cli ... tcp-server --key llm-access --addr 127.0.0.1:19182` | Subscribes cloud `llm-access` back to this workstation. | Listens on `127.0.0.1:19182` |
 | `pbmapper-home-ubuntu` | `~/.local/pbmapper/current/pb-mapper-server-cli ... tcp-server --key home-ubuntu --addr 127.0.0.1:22` | Registers local SSH access with the cloud relay. | Connects to `ackingliu.top:7666` |
 
 Notes:
@@ -153,9 +213,10 @@ Notes:
 - The local Pingora listener has `downstream_h2c: true`: Caddy/pb-mapper may
   use cleartext HTTP/2 prior-knowledge to `127.0.0.1:39180`, while ordinary
   HTTP/1.1 clients still work through protocol fallback.
-- Cloud-side Caddy and pb-mapper remain systemd services on `ubuntu@ackingliu.top`
-  (`caddy`, `pb-mapper-server.service`, and
-  `pb-mapper-client-cli@sf-backend.service`).
+- Cloud-side Caddy, pb-mapper, JuiceFS, and `llm-access` are systemd services
+  on the GCP host. The current SSH login from this workstation is
+  `ts_user@35.241.86.154` with `~/.ssh/google_compute_engine`; do not assume
+  `ubuntu@ackingliu.top` is the working login.
 - Deployment secrets such as `MSG_HEADER_KEY` and the GPT2API admin token are
   intentionally not documented here. Inspect live tmux/process environment only
   when operating the deployment.
@@ -169,14 +230,16 @@ readlink -f /proc/<pid>/exe
 curl --http2-prior-knowledge -o /dev/null -sS -w 'h2c=%{http_version} code=%{http_code}\n' http://127.0.0.1:39180/api/healthz
 ```
 
-Cloud Caddy should prefer h2c toward the local relay endpoint and keep HTTP/1.1
-as fallback:
+Cloud Caddy must keep the LLM route split before the default pb-mapper route:
 
 ```caddy
-reverse_proxy 127.0.0.1:39080 {
-    transport http {
-        versions h2c 1.1
-    }
+@llm_access path /v1/* /cc/v1/* /api/llm-gateway/* /api/kiro-gateway/* /api/codex-gateway/* /api/llm-access/*
+handle @llm_access {
+    reverse_proxy 127.0.0.1:19080
+}
+
+handle {
+    reverse_proxy 127.0.0.1:39080
 }
 ```
 
@@ -221,12 +284,17 @@ Backend: `http://127.0.0.1:39080` | Frontend: `http://127.0.0.1:38080`
 
 ### Mode C: GitHub Pages (Frontend-only)
 
-Frontend deployed to GitHub Pages; API accessed via pb-mapper tunnel to local backend.
+Frontend deployed to GitHub Pages; API calls use the configured public
+`STATICFLOW_API_BASE`. On the current `ackingliu.top` edge, LLM API paths stay
+on GCP `llm-access` and non-LLM API paths go through pb-mapper to the local
+backend.
 CI builds automatically; `STATICFLOW_API_BASE` configured via GitHub repo variables.
 
 ```text
 Browser -> https://acking-you.github.io (GitHub Pages static files)
-        -> fetch(STATICFLOW_API_BASE/api/...) -> pb-mapper -> Local backend
+        -> fetch(STATICFLOW_API_BASE/api/...)
+           ├── LLM paths -> GCP llm-access
+           └── non-LLM paths -> pb-mapper -> local backend
 ```
 
 Reference configs:
@@ -236,16 +304,29 @@ Reference configs:
 
 ## LLM Access / Kiro Access
 
-Self-hosted mode exposes two public read-only access pages:
+Production exposes two public read-only access pages:
 
 - `/llm-access`: Codex access, backed by the OpenAI-compatible gateway at `/api/llm-gateway/v1`
 - `/kiro-access`: Kiro access, backed by the Anthropic-compatible gateway at `/api/kiro-gateway`
 
+The pages are still part of the StaticFlow frontend, but the production API
+surface behind them is owned by cloud `llm-access`. GCP Caddy routes all LLM
+paths directly to `127.0.0.1:19080`:
+
+- `/v1/*`
+- `/cc/v1/*`
+- `/api/llm-gateway/*`
+- `/api/kiro-gateway/*`
+- `/api/codex-gateway/*`
+- `/api/llm-access/*`
+
 Shared characteristics:
 
-- both gateways sit behind the StaticFlow backend instead of exposing upstream accounts directly
+- both gateways sit behind the StaticFlow/`llm-access` public edge instead of exposing upstream accounts directly
 - provider-level proxy routing is resolved through one shared registry
-- keys, runtime config, proxy configs, proxy bindings, and usage events are persisted in the same LLM gateway store
+- live keys, runtime config, proxy configs, proxy bindings, account snapshots,
+  public request queues, and usage analytics are persisted by cloud `llm-access`
+  under `/mnt/llm-access` plus the local active DuckDB directory
 - the detailed runtime architecture is documented in [docs/llm-access-and-kiro-gateway-implementation.md](./docs/llm-access-and-kiro-gateway-implementation.md)
 
 The Codex page additionally publishes:
@@ -262,6 +343,9 @@ Key behavior:
 - admin paths are blocked at the edge and not forwarded publicly
 - upstream inference uses backend-managed real accounts rather than exposing upstream credentials
 - Codex `/fast` requests are billed at `2x` billable tokens in StaticFlow quota accounting
+- production usage list APIs are deliberately bounded: broad DuckDB diagnostics
+  should use an external read-only DuckDB connection, not large in-process admin
+  scans inside `llm-access`
 
 Recommended Codex config:
 
@@ -283,8 +367,10 @@ path while avoiding the initial websocket fallback delay.
 
 On this host, the current long-running production setup is tmux-supervised on
 the local machine, with Pingora selecting the active blue/green backend slot.
-The cloud ingress side still uses systemd-managed Caddy and pb-mapper services.
-The systemd quick-start remains useful as a reference deployment shape:
+The cloud ingress side uses systemd-managed Caddy, pb-mapper, JuiceFS, and
+`llm-access` services. The systemd quick-start remains useful as a reference
+for local StaticFlow/Pingora service management; it is not the full current
+GCP `llm-access` production topology.
 
 - [docs/self-hosted-systemd-quick-start.zh.md](docs/self-hosted-systemd-quick-start.zh.md)
 
@@ -420,7 +506,8 @@ cd cli
 # - article_views / api_behavior_events: backend runtime analytics
 # - article_requests / article_request_ai_*: article request worker runtime tables
 # - interactive_pages / interactive_page_locales / interactive_assets: standalone interactive mirror pages and localized assets
-# - llm_gateway_keys / llm_gateway_usage_events / llm_gateway_runtime_config: public gateway auth, usage ledger, and runtime cache config
+# - llm_gateway_*: legacy/source LLM gateway tables. Current production LLM
+#   access state is owned by cloud llm-access SQLite + tiered DuckDB.
 
 # Backend-like API debug commands
 ../target/release/sf-cli api --db-path ../data/lancedb list-articles --category "Tech"
@@ -494,6 +581,12 @@ Backend (set automatically by `scripts/start_backend_selfhosted.sh`):
 - `ENABLE_GEOIP_FALLBACK_API` / `GEOIP_FALLBACK_API_URL` (fallback API when local db lacks region detail)
 - `GEOIP_REQUIRE_REGION_DETAIL` (default `true`, reject country-only labels)
 - `GEOIP_PROXY_URL` (optional proxy, e.g. `http://127.0.0.1:7890`)
+- `STATICFLOW_LLM_ACCESS_MODE=external` (production/local hybrid mode; proxies
+  LLM route families to standalone `llm-access` instead of running provider
+  traffic in the local backend)
+- `STATICFLOW_LLM_ACCESS_URL` (optional external `llm-access` base URL; default
+  proxy target is `http://127.0.0.1:19182`, the local pb-mapper subscription to
+  cloud `llm-access`)
 
 Frontend build-time:
 - `STATICFLOW_API_BASE`

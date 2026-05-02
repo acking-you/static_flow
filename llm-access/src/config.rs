@@ -51,17 +51,6 @@ pub struct ServeConfig {
     pub storage: StorageConfig,
 }
 
-/// One-shot StaticFlow seed configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SeedStaticFlowConfig {
-    /// Target storage bootstrap paths.
-    pub storage: StorageConfig,
-    /// Source StaticFlow LanceDB content database path.
-    pub source_lancedb: PathBuf,
-    /// Source StaticFlow auth directory.
-    pub auths_dir: PathBuf,
-}
-
 /// Parsed command-line command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
@@ -69,8 +58,6 @@ pub enum CliCommand {
     Init(StorageConfig),
     /// Initialize storage, then run the HTTP server.
     Serve(ServeConfig),
-    /// Seed standalone control data from the current StaticFlow state.
-    SeedStaticFlow(SeedStaticFlowConfig),
 }
 
 impl CliCommand {
@@ -92,7 +79,6 @@ impl CliCommand {
                     storage,
                 }))
             },
-            "seed-staticflow" => Ok(Self::SeedStaticFlow(parse_seed_staticflow_args(args)?)),
             _ => Err(usage_error()),
         }
     }
@@ -243,79 +229,6 @@ fn parse_tiered_duckdb_config(
     }))
 }
 
-fn parse_seed_staticflow_args<I>(args: I) -> anyhow::Result<SeedStaticFlowConfig>
-where
-    I: IntoIterator<Item = OsString>,
-{
-    let mut state_root = None;
-    let mut sqlite_control = None;
-    let mut duckdb = None;
-    let mut source_lancedb = None;
-    let mut auths_dir = None;
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        match arg.to_string_lossy().as_ref() {
-            "--state-root" => {
-                state_root = Some(PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| anyhow!("--state-root requires a path"))?,
-                ));
-            },
-            "--sqlite-control" => {
-                sqlite_control = Some(PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| anyhow!("--sqlite-control requires a path"))?,
-                ));
-            },
-            "--duckdb" => {
-                duckdb = Some(PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| anyhow!("--duckdb requires a path"))?,
-                ));
-            },
-            "--source-lancedb" => {
-                source_lancedb = Some(PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| anyhow!("--source-lancedb requires a path"))?,
-                ));
-            },
-            "--auths-dir" => {
-                auths_dir = Some(PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| anyhow!("--auths-dir requires a path"))?,
-                ));
-            },
-            _ => return Err(usage_error()),
-        }
-    }
-    let state_root = state_root.ok_or_else(usage_error)?;
-    let sqlite_control = sqlite_control.ok_or_else(usage_error)?;
-    let duckdb = duckdb.ok_or_else(usage_error)?;
-    ensure_under_root(&state_root, &sqlite_control)?;
-    ensure_under_root(&state_root, &duckdb)?;
-    Ok(SeedStaticFlowConfig {
-        storage: StorageConfig {
-            kiro_auths_dir: state_root.join("auths/kiro"),
-            codex_auths_dir: state_root.join("auths/codex"),
-            logs_dir: state_root.join("logs"),
-            state_root,
-            sqlite_control,
-            duckdb,
-            duckdb_tiered: None,
-        },
-        source_lancedb: source_lancedb.ok_or_else(usage_error)?,
-        auths_dir: auths_dir.unwrap_or_else(default_staticflow_auths_dir),
-    })
-}
-
-fn default_staticflow_auths_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/home/ts_user"))
-        .join(".static-flow")
-        .join("auths")
-}
-
 fn ensure_under_root(root: &Path, path: &Path) -> anyhow::Result<()> {
     if path.starts_with(root) {
         Ok(())
@@ -329,9 +242,7 @@ fn usage_error() -> anyhow::Error {
         "usage: llm-access init --state-root <path> --sqlite-control <path> --duckdb \
          <path>\nusage: llm-access serve [--bind <addr>] --state-root <path> --sqlite-control \
          <path> [--duckdb <path>] [--duckdb-active-dir <path> --duckdb-archive-dir <path> \
-         --duckdb-catalog-dir <path> --duckdb-rollover-bytes <bytes>]\nusage: llm-access \
-         seed-staticflow --state-root <path> --sqlite-control <path> --duckdb <path> \
-         --source-lancedb <path> [--auths-dir <path>]"
+         --duckdb-catalog-dir <path> --duckdb-rollover-bytes <bytes>]"
     )
 }
 
@@ -420,32 +331,5 @@ mod tests {
         .expect_err("sqlite outside state root must fail");
 
         assert!(err.to_string().contains("must live under --state-root"));
-    }
-
-    #[test]
-    fn parses_seed_staticflow_config() {
-        let command = super::CliCommand::parse([
-            "llm-access",
-            "seed-staticflow",
-            "--state-root",
-            "/mnt/llm-access",
-            "--sqlite-control",
-            "/mnt/llm-access/control/llm-access.sqlite3",
-            "--duckdb",
-            "/mnt/llm-access/analytics/usage.duckdb",
-            "--source-lancedb",
-            "/mnt/static-flow/lancedb",
-            "--auths-dir",
-            "/home/test/.static-flow/auths",
-        ])
-        .expect("parse seed command");
-
-        let super::CliCommand::SeedStaticFlow(config) = command else {
-            panic!("expected seed command");
-        };
-
-        assert_eq!(config.storage.state_root, PathBuf::from("/mnt/llm-access"));
-        assert_eq!(config.source_lancedb, PathBuf::from("/mnt/static-flow/lancedb"));
-        assert_eq!(config.auths_dir, PathBuf::from("/home/test/.static-flow/auths"));
     }
 }

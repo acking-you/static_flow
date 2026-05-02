@@ -15,6 +15,10 @@ Files:
 - `staticflow-common.env.example`
 - `staticflow-gateway.env.example`
 - `staticflow-backend-slot.env.example`
+- `llm-access.service.template`
+- `llm-access-juicefs.mount.template`
+- `juicefs-llm-access.resource-guard.conf`
+- `staticflow-wait-llm-access-state`
 
 Suggested workflow:
 
@@ -45,3 +49,29 @@ Runtime operations stay script-driven:
 Validation:
 
 - `./scripts/test_selfhosted_systemd_stack.sh`
+
+## Cloud llm-access Templates
+
+Current production routes LLM paths on the GCP edge directly to standalone
+`llm-access` on `127.0.0.1:19080`; non-LLM StaticFlow paths still use
+pb-mapper back to the local Pingora gateway. The `llm-access*` templates in
+this directory describe that cloud-side service shape.
+
+Storage model:
+
+- state root: `/mnt/llm-access`
+- SQLite control DB: `/mnt/llm-access/control/llm-access.sqlite3`
+- active mutable DuckDB dir: `/var/lib/staticflow/llm-access/analytics-active`
+- archived DuckDB segments: `/mnt/llm-access/analytics/segments`
+- DuckDB segment catalog: `/mnt/llm-access/analytics/catalog`
+- JuiceFS cache dir: `/var/cache/juicefs/llm-access`
+
+The production JuiceFS volume is backed by Cloudflare R2 object storage and
+external Valkey metadata. Credentials belong in ignored private env files, not
+in these templates. `llm-access.service` must be a single writer for the
+SQLite/DuckDB/auth tree.
+
+Bundle rendering and template validation:
+
+- `./scripts/render_llm_access_cloud_bundle.sh /tmp/llm-access-cloud-bundle`
+- `./scripts/test_llm_access_cloud_bundle.sh`

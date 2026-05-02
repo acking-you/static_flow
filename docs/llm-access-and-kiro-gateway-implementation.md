@@ -1,11 +1,20 @@
-# StaticFlow LLM Access 当前实现：Codex 网关、Kiro 网关与上游代理解析
+# StaticFlow LLM Access 实现机制：Codex 网关、Kiro 网关与上游代理解析
 
-> **Code Version**: 基于当前仓库工作树，时间点为 `2026-04-01`。  
-> **讨论范围**: 只覆盖 StaticFlow 当前仓库里的 LLM Access 运行时实现，包括 Codex 网关、Kiro 网关、共享代理解析、账号与 key 路由、后台刷新与运维入口；不展开前端视觉设计，也不展开公开申请/赞助流程的业务文案细节。
+> **Code Version**: 本文最初基于 `2026-04-01` 的本地 backend 内嵌实现写成。
+> **Production Status**: 截至 `2026-05-02`，生产 LLM 流量已经切到 GCP
+> standalone `llm-access`。GCP Caddy 将 `/v1/*`、`/cc/v1/*`、
+> `/api/llm-gateway/*`、`/api/kiro-gateway/*`、`/api/codex-gateway/*` 和
+> `/api/llm-access/*` 直接路由到 `127.0.0.1:19080`。本文的协议、账号、
+> 代理、调度和 usage 机制仍然适用；引用 `backend/src/...` 的位置请理解为
+> 历史来源或本地兼容/proxy 层，当前生产 source of truth 在 `llm-access*`
+> crates 和 cloud `llm-access.service`。
+> **讨论范围**: 覆盖 LLM Access 运行时机制，包括 Codex 网关、Kiro 网关、
+> 共享代理解析、账号与 key 路由、后台刷新与运维入口；不展开前端视觉设计，
+> 也不展开公开申请/赞助流程的业务文案细节。
 
 ## 1. 背景与目标
 
-StaticFlow 原本更像一套本地优先的内容系统：文章、图片、评论、音乐、外部内容重发、LanceDB 存储、CLI 写入和自托管部署是 README 里最显眼的部分。
+StaticFlow 原本更像一套本地优先的内容系统：文章、图片、评论、音乐、外部内容重发、LanceDB 存储、CLI 写入和自托管部署是 README 里最显眼的部分。当前生产部署仍然保留这种 local-first 内容路径，但 LLM access 已经从本地 backend 热路径中拆出来，成为 GCP 上的单独服务。
 
 但当前仓库实际上已经内建了另一条能力线：
 
@@ -53,6 +62,29 @@ StaticFlow 原本更像一套本地优先的内容系统：文章、图片、评
 - **Codex 与 Kiro 共享控制面，不共享上游协议**。这保证了对外体验统一，但不会把内部实现硬拧成一个抽象层。
 
 ## 3. 端到端架构
+
+### 3.0 当前生产路由边界
+
+现网的第一层边界在 GCP Caddy，而不是本地 backend：
+
+```text
+public client
+  -> GCP Caddy :443
+     ├── LLM paths -> cloud llm-access 127.0.0.1:19080
+     └── non-LLM paths -> cloud pb-mapper 127.0.0.1:39080
+         -> local Pingora 127.0.0.1:39180
+         -> local StaticFlow backend slot
+```
+
+`llm-access` 使用 SQLite 做控制面，使用 tiered DuckDB 做 usage analytics：
+active mutable segment 在 GCP VM 本地块存储
+`/var/lib/staticflow/llm-access/analytics-active`，归档 segment/catalog 在
+JuiceFS mount `/mnt/llm-access/analytics`。JuiceFS 的对象存储后端是
+Cloudflare R2，元数据后端是 Valkey。
+
+本地 StaticFlow backend 可以用 `STATICFLOW_LLM_ACCESS_MODE=external` 把
+LLM route family 代理到外部 `llm-access`，默认本地目标是
+`http://127.0.0.1:19182`，也就是本地 pb-mapper 对 cloud `llm-access` 的订阅。
 
 ### 3.1 全局流向
 
@@ -376,7 +408,7 @@ Kiro 的 access token 管理是文件持久化的。默认目录是 `~/.static-f
 
 ### 5.1 持久化模型
 
-这套能力的控制面数据都放在 content DB 内的 LLM gateway 相关表：
+历史本地实现的控制面数据放在 content DB 内的 LLM gateway 相关表：
 
 | 表 | 作用 |
 |---|---|
@@ -387,6 +419,19 @@ Kiro 的 access token 管理是文件持久化的。默认目录是 `~/.static-f
 | `llm_gateway_proxy_bindings` | provider 到代理配置项的绑定关系 |
 
 这些表的 schema 统一定义在 `shared/src/llm_gateway_store/schema.rs`。
+
+当前生产 `llm-access` 不再把这些 LanceDB 表作为 live source of truth：
+
+| 存储 | 作用 |
+|---|---|
+| `/mnt/llm-access/control/llm-access.sqlite3` | keys、runtime config、account groups、proxy config/bindings、public request queues |
+| `/mnt/llm-access/auths/{codex,kiro}` | upstream account snapshots/auth JSON |
+| `/var/lib/staticflow/llm-access/analytics-active` | current mutable DuckDB usage segment |
+| `/mnt/llm-access/analytics/segments` | immutable archived DuckDB usage segments |
+| `/mnt/llm-access/analytics/catalog` | low-frequency DuckDB segment catalog |
+
+因此，生产排障时不要把 local LanceDB `llm_gateway_usage_events` 当成当前
+LLM usage 的完整事实源。它最多是历史/迁移来源或本地兼容路径的线索。
 
 ### 5.2 内存态与持久化的边界
 

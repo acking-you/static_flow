@@ -18,7 +18,6 @@ mod request_context;
 pub mod routes;
 /// Runtime startup validation.
 pub mod runtime;
-mod seed_staticflow;
 mod submission;
 mod support;
 /// Usage-event helpers.
@@ -79,12 +78,6 @@ pub fn run_from_env() -> anyhow::Result<()> {
             let runtime =
                 tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
             runtime.block_on(serve(config))
-        },
-        CliCommand::SeedStaticFlow(config) => {
-            bootstrap_storage(&config.storage)?;
-            let runtime =
-                tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
-            runtime.block_on(seed_staticflow::seed_staticflow(config))
         },
     }
 }

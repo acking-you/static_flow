@@ -1574,6 +1574,8 @@ mod tests {
                 usage_event_flush_batch_size,
                 usage_event_flush_interval_seconds,
                 usage_event_flush_max_buffer_bytes,
+                duckdb_usage_memory_limit_mib,
+                duckdb_usage_checkpoint_threshold_mib,
                 usage_event_maintenance_enabled,
                 usage_event_maintenance_interval_seconds,
                 usage_event_detail_retention_days,
@@ -1589,7 +1591,7 @@ mod tests {
             ) VALUES (
                 'default', 42, 1048576, 3, '0.124.0',
                 1, 0, 240, 300, 10, 240, 300, 10,
-                100, 5, 1048576, 1, 3600, 30,
+                100, 5, 1048576, 1024, 16, 1, 3600, 30,
                 '{}', '{}', '{}', 'prefix_tree', 4000000, 21600, 20000, 86400, 10
             )",
             [],

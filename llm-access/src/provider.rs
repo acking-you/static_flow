@@ -34,8 +34,9 @@ use llm_access_core::{
     provider::{ProtocolFamily, ProviderType},
     routes::provider_route_requirement,
     store::{
-        AdminConfigStore, AuthenticatedKey, ControlStore, EmptyAdminConfigStore,
-        ProviderCodexRoute, ProviderKiroRoute, ProviderProxyConfig, ProviderRouteStore,
+        compute_kiro_billable_tokens, AdminConfigStore, AuthenticatedKey, ControlStore,
+        EmptyAdminConfigStore, ProviderCodexRoute, ProviderKiroRoute, ProviderProxyConfig,
+        ProviderRouteStore,
     },
     usage::{UsageEvent, UsageTiming},
 };
@@ -73,7 +74,6 @@ use llm_access_kiro::{
     wire::{ConversationState, Event, KiroRequest},
 };
 use serde_json::Value;
-use static_flow_shared::llm_gateway_store::compute_kiro_billable_tokens as shared_compute_kiro_billable_tokens;
 
 use crate::{activity::RequestActivityTracker, codex_refresh, kiro_refresh};
 
@@ -3369,7 +3369,7 @@ fn kiro_billable_tokens_with_multipliers(
     usage: KiroUsageSummary,
     multipliers: &BTreeMap<String, f64>,
 ) -> u64 {
-    shared_compute_kiro_billable_tokens(
+    compute_kiro_billable_tokens(
         Some(model),
         usage.input_uncached_tokens.max(0) as u64,
         usage.input_cached_tokens.max(0) as u64,

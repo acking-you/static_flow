@@ -36,6 +36,10 @@ pub const DEFAULT_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 256;
 pub const DEFAULT_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 15;
 /// Default usage-event buffered payload cap.
 pub const DEFAULT_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
+/// Default DuckDB usage writer memory limit in MiB.
+pub const DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB: u64 = 1024;
+/// Default DuckDB usage writer WAL checkpoint threshold in MiB.
+pub const DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB: u64 = 16;
 /// Default usage maintenance toggle.
 pub const DEFAULT_USAGE_EVENT_MAINTENANCE_ENABLED: bool = true;
 /// Default usage maintenance interval.
@@ -104,6 +108,10 @@ pub struct AdminRuntimeConfig {
     pub usage_event_flush_interval_seconds: u64,
     /// Usage event buffered payload cap.
     pub usage_event_flush_max_buffer_bytes: u64,
+    /// DuckDB usage writer memory limit in MiB.
+    pub duckdb_usage_memory_limit_mib: u64,
+    /// DuckDB usage writer WAL checkpoint threshold in MiB.
+    pub duckdb_usage_checkpoint_threshold_mib: u64,
     /// Kiro cache k-model coefficients JSON.
     pub kiro_cache_kmodels_json: String,
     /// Kiro billable model multiplier JSON.
@@ -143,6 +151,8 @@ impl Default for AdminRuntimeConfig {
             usage_event_flush_batch_size: DEFAULT_USAGE_EVENT_FLUSH_BATCH_SIZE,
             usage_event_flush_interval_seconds: DEFAULT_USAGE_EVENT_FLUSH_INTERVAL_SECONDS,
             usage_event_flush_max_buffer_bytes: DEFAULT_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
+            duckdb_usage_memory_limit_mib: DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
+            duckdb_usage_checkpoint_threshold_mib: DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB,
             kiro_cache_kmodels_json: default_kiro_cache_kmodels_json(),
             kiro_billable_model_multipliers_json: default_kiro_billable_model_multipliers_json(),
             kiro_cache_policy_json: default_kiro_cache_policy_json(),
@@ -197,6 +207,12 @@ pub struct UpdateAdminRuntimeConfig {
     /// Usage event buffered payload cap.
     #[serde(default)]
     pub usage_event_flush_max_buffer_bytes: Option<u64>,
+    /// DuckDB usage writer memory limit in MiB.
+    #[serde(default)]
+    pub duckdb_usage_memory_limit_mib: Option<u64>,
+    /// DuckDB usage writer WAL checkpoint threshold in MiB.
+    #[serde(default)]
+    pub duckdb_usage_checkpoint_threshold_mib: Option<u64>,
     /// Kiro cache k-model coefficients JSON.
     #[serde(default)]
     pub kiro_cache_kmodels_json: Option<String>,
@@ -241,6 +257,55 @@ pub fn default_kiro_billable_model_multipliers_json() -> String {
         ("sonnet".to_string(), 1.0),
     ]);
     serde_json::to_string(&map).expect("default billable multipliers should serialize")
+}
+
+/// Shared billable-token weighting used for gateway accounting.
+///
+/// Cached input is billed at one tenth of uncached input, while output tokens
+/// are billed at five times input cost.
+pub fn compute_billable_tokens(
+    input_uncached_tokens: u64,
+    input_cached_tokens: u64,
+    output_tokens: u64,
+) -> u64 {
+    input_uncached_tokens
+        .saturating_add(input_cached_tokens / 10)
+        .saturating_add(output_tokens.saturating_mul(5))
+}
+
+fn kiro_billable_model_family(model_name: &str) -> Option<&'static str> {
+    let normalized = model_name.trim().to_ascii_lowercase();
+    if normalized.contains("opus") {
+        Some("opus")
+    } else if normalized.contains("sonnet") {
+        Some("sonnet")
+    } else if normalized.contains("haiku") {
+        Some("haiku")
+    } else {
+        None
+    }
+}
+
+/// Apply the configured Kiro model-family multiplier to billable tokens.
+pub fn compute_kiro_billable_tokens(
+    model_name: Option<&str>,
+    input_uncached_tokens: u64,
+    input_cached_tokens: u64,
+    output_tokens: u64,
+    multipliers: &BTreeMap<String, f64>,
+) -> u64 {
+    let base = compute_billable_tokens(input_uncached_tokens, input_cached_tokens, output_tokens);
+    if base == 0 {
+        return 0;
+    }
+
+    let multiplier = model_name
+        .and_then(kiro_billable_model_family)
+        .and_then(|family| multipliers.get(family).copied())
+        .unwrap_or(1.0);
+    ((base as f64) * multiplier)
+        .round()
+        .clamp(0.0, u64::MAX as f64) as u64
 }
 
 /// Return the default Kiro cache policy JSON.
@@ -2614,5 +2679,40 @@ pub trait UsageEventSink: Send + Sync {
             self.append_usage_event(event).await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn compute_kiro_billable_tokens_applies_family_multiplier() {
+        let multipliers = BTreeMap::from([
+            ("opus".to_string(), 2.0),
+            ("sonnet".to_string(), 1.0),
+            ("haiku".to_string(), 1.0),
+        ]);
+
+        let base = super::compute_billable_tokens(100, 20, 5);
+        let adjusted =
+            super::compute_kiro_billable_tokens(Some("claude-opus-4-6"), 100, 20, 5, &multipliers);
+
+        assert_eq!(adjusted, base * 2);
+    }
+
+    #[test]
+    fn compute_kiro_billable_tokens_defaults_for_unknown_models() {
+        let multipliers = BTreeMap::from([
+            ("opus".to_string(), 2.0),
+            ("sonnet".to_string(), 3.0),
+            ("haiku".to_string(), 0.5),
+        ]);
+
+        let base = super::compute_billable_tokens(80, 10, 4);
+        let adjusted =
+            super::compute_kiro_billable_tokens(Some("claude-unknown-1"), 80, 10, 4, &multipliers);
+
+        assert_eq!(adjusted, base);
     }
 }
