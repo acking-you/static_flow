@@ -18,9 +18,9 @@ use llm_access_core::{
         self as core_store, AdminAccountGroupPatch, AdminCodexAccountPatch, AdminKeyPatch,
         AdminProxyConfigPatch, AdminReviewQueueAction, AdminRuntimeConfig, NewAdminAccountGroup,
         NewAdminCodexAccount, NewAdminKey, NewAdminKiroAccount, NewAdminProxyConfig,
-        UpdateAdminRuntimeConfig, UsageEventQuery, KEY_STATUS_ACTIVE, KEY_STATUS_DISABLED,
-        KIRO_PREFIX_CACHE_MODE_FORMULA, PROTOCOL_ANTHROPIC, PROTOCOL_OPENAI, PROVIDER_CODEX,
-        PROVIDER_KIRO,
+        UpdateAdminRuntimeConfig, UsageEventQuery, UsageEventSource, KEY_STATUS_ACTIVE,
+        KEY_STATUS_DISABLED, KIRO_PREFIX_CACHE_MODE_FORMULA, PROTOCOL_ANTHROPIC, PROTOCOL_OPENAI,
+        PROVIDER_CODEX, PROVIDER_KIRO,
     },
     usage::UsageEvent,
 };
@@ -249,6 +249,8 @@ pub(crate) struct ListUsageEventsRequest {
     start_ms: Option<i64>,
     #[serde(default)]
     end_ms: Option<i64>,
+    #[serde(default)]
+    source: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
     #[serde(default)]
@@ -1009,7 +1011,10 @@ pub(crate) async fn list_llm_gateway_usage_events(
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    let query = normalize_usage_query(request);
+    let query = match normalize_usage_query(request) {
+        Ok(query) => query,
+        Err(response) => return response.into_response(),
+    };
     let activity = state.request_activity.snapshot(query.key_id.as_deref());
     match state.usage_analytics_store.list_usage_events(query).await {
         Ok(page) => Json(AdminUsageEventsResponse {
@@ -1444,7 +1449,10 @@ pub(crate) async fn list_admin_kiro_usage_events(
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    let query = normalize_provider_usage_query(request, PROVIDER_KIRO);
+    let query = match normalize_provider_usage_query(request, PROVIDER_KIRO) {
+        Ok(query) => query,
+        Err(response) => return response.into_response(),
+    };
     let activity = state.request_activity.snapshot(query.key_id.as_deref());
     match state.usage_analytics_store.list_usage_events(query).await {
         Ok(page) => Json(AdminUsageEventsResponse {
@@ -2573,13 +2581,26 @@ fn normalize_review_queue_query(
     }
 }
 
-fn normalize_usage_query(request: ListUsageEventsRequest) -> UsageEventQuery {
+fn normalize_usage_query(
+    request: ListUsageEventsRequest,
+) -> Result<UsageEventQuery, AdminHttpError> {
     let (start_ms, end_ms) = normalize_usage_time_range(request.start_ms, request.end_ms);
-    UsageEventQuery {
+    let source = match request
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => UsageEventSource::from_query_value(value)
+            .ok_or_else(|| bad_request("source must be one of hot, archive, or all"))?,
+        None => UsageEventSource::Hot,
+    };
+    Ok(UsageEventQuery {
         key_id: request
             .key_id
             .and_then(|key_id| normalize_optional_string(&key_id)),
         provider_type: None,
+        source,
         start_ms,
         end_ms,
         limit: request
@@ -2587,17 +2608,17 @@ fn normalize_usage_query(request: ListUsageEventsRequest) -> UsageEventQuery {
             .unwrap_or(DEFAULT_ADMIN_USAGE_LIMIT)
             .clamp(1, MAX_ADMIN_USAGE_LIMIT),
         offset: request.offset.unwrap_or(0).min(MAX_ADMIN_USAGE_OFFSET),
-    }
+    })
 }
 
 fn normalize_provider_usage_query(
     request: ListUsageEventsRequest,
     provider_type: &str,
-) -> UsageEventQuery {
-    UsageEventQuery {
+) -> Result<UsageEventQuery, AdminHttpError> {
+    Ok(UsageEventQuery {
         provider_type: Some(provider_type.to_string()),
-        ..normalize_usage_query(request)
-    }
+        ..normalize_usage_query(request)?
+    })
 }
 
 fn normalize_usage_time_range(
@@ -3698,6 +3719,37 @@ mod tests {
         assert_eq!(policy["small_input_high_credit_boost"]["target_input_tokens"], 50_000);
         assert_eq!(policy["small_input_high_credit_boost"]["credit_start"], 1.0);
         assert!(!keys[0].uses_global_kiro_cache_policy);
+    }
+
+    #[test]
+    fn normalize_usage_query_accepts_explicit_archive_source() {
+        let query = normalize_usage_query(ListUsageEventsRequest {
+            key_id: None,
+            start_ms: None,
+            end_ms: None,
+            source: Some("archive".to_string()),
+            limit: Some(20),
+            offset: Some(0),
+        })
+        .expect("archive source should be valid");
+
+        assert_eq!(query.source, UsageEventSource::Archive);
+    }
+
+    #[test]
+    fn normalize_usage_query_rejects_unknown_source() {
+        let err = normalize_usage_query(ListUsageEventsRequest {
+            key_id: None,
+            start_ms: None,
+            end_ms: None,
+            source: Some("broad-scan".to_string()),
+            limit: Some(20),
+            offset: Some(0),
+        })
+        .expect_err("unknown usage source should fail");
+
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("source must be one of"));
     }
 
     #[test]

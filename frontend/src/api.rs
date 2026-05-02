@@ -6068,6 +6068,7 @@ pub struct AdminLlmGatewayUsageEventsQuery {
     pub key_id: Option<String>,
     pub start_ms: Option<i64>,
     pub end_ms: Option<i64>,
+    pub source: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -8350,6 +8351,14 @@ pub async fn fetch_admin_llm_gateway_usage_events(
         if let Some(end_ms) = query.end_ms {
             params.push(format!("end_ms={end_ms}"));
         }
+        if let Some(source) = query
+            .source
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("source={}", urlencoding::encode(source)));
+        }
         if let Some(limit) = query.limit {
             params.push(format!("limit={limit}"));
         }
@@ -9378,6 +9387,14 @@ pub async fn fetch_admin_kiro_usage_events(
         }
         if let Some(end_ms) = query.end_ms {
             params.push(format!("end_ms={end_ms}"));
+        }
+        if let Some(source) = query
+            .source
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("source={}", urlencoding::encode(source)));
         }
         if let Some(limit) = query.limit {
             params.push(format!("limit={limit}"));

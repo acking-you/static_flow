@@ -462,6 +462,7 @@ pub(crate) async fn post_llm_gateway_public_usage_query(
         .list_usage_events(UsageEventQuery {
             key_id: Some(key_id),
             provider_type: None,
+            source: llm_access_core::store::UsageEventSource::All,
             start_ms,
             end_ms,
             limit,

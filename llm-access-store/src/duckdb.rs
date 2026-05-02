@@ -1,10 +1,17 @@
 //! DuckDB analytics writer helpers for LLM usage events.
 
 #[cfg(feature = "duckdb-runtime")]
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 #[cfg(feature = "duckdb-runtime")]
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 #[cfg(feature = "duckdb-runtime")]
 use async_trait::async_trait;
 #[cfg(feature = "duckdb-runtime")]
@@ -12,9 +19,12 @@ use llm_access_core::{
     provider::{ProtocolFamily, ProviderType, RouteStrategy},
     store::{
         UsageAnalyticsStore, UsageChartPoint, UsageEventPage, UsageEventQuery, UsageEventSink,
+        UsageEventSource,
     },
     usage::{UsageEvent, UsageTiming},
 };
+#[cfg(feature = "duckdb-runtime")]
+use rusqlite::OptionalExtension;
 #[cfg(feature = "duckdb-runtime")]
 use tokio::task;
 
@@ -363,7 +373,69 @@ pub fn initialize_duckdb_target_path(path: impl AsRef<Path>) -> anyhow::Result<(
 #[cfg(feature = "duckdb-runtime")]
 #[derive(Debug, Clone)]
 pub struct DuckDbUsageRepository {
-    path: PathBuf,
+    inner: Arc<DuckDbUsageRepositoryInner>,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug)]
+enum DuckDbUsageRepositoryInner {
+    Single { path: PathBuf },
+    Tiered { config: TieredDuckDbUsageConfig, state: Mutex<TieredDuckDbUsageState> },
+}
+
+/// Tiered DuckDB usage storage configuration.
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TieredDuckDbUsageConfig {
+    /// Local directory for the current writable DuckDB file.
+    pub active_dir: PathBuf,
+    /// JuiceFS-backed directory for immutable archived DuckDB segments.
+    pub archive_dir: PathBuf,
+    /// JuiceFS-backed directory for the segment catalog SQLite database.
+    pub catalog_dir: PathBuf,
+    /// Rollover threshold in bytes for the active DuckDB file.
+    pub rollover_bytes: u64,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug)]
+struct TieredDuckDbUsageState {
+    active_path: PathBuf,
+    next_sequence: u64,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug, Clone)]
+struct ArchivedUsageSegment {
+    segment_id: String,
+    archive_path: PathBuf,
+    start_ms: Option<i64>,
+    end_ms: Option<i64>,
+    row_count: usize,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug, Clone)]
+struct SegmentKeyRollup {
+    key_id: String,
+    provider_type: String,
+    row_count: usize,
+    input_uncached_tokens: i64,
+    input_cached_tokens: i64,
+    output_tokens: i64,
+    billable_tokens: i64,
+    credit_total: String,
+    credit_missing_events: i64,
+    last_used_at_ms: Option<i64>,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug)]
+struct SegmentStats {
+    start_ms: Option<i64>,
+    end_ms: Option<i64>,
+    row_count: usize,
+    rollups: Vec<SegmentKeyRollup>,
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -373,7 +445,42 @@ impl DuckDbUsageRepository {
         let path = path.as_ref().to_path_buf();
         initialize_duckdb_target_path(&path)?;
         Ok(Self {
-            path,
+            inner: Arc::new(DuckDbUsageRepositoryInner::Single {
+                path,
+            }),
+        })
+    }
+
+    /// Open a tiered DuckDB usage repository.
+    pub fn open_tiered(config: TieredDuckDbUsageConfig) -> anyhow::Result<Self> {
+        fs::create_dir_all(&config.active_dir).with_context(|| {
+            format!("failed to create active duckdb directory `{}`", config.active_dir.display())
+        })?;
+        fs::create_dir_all(tiered_pending_dir(&config)).with_context(|| {
+            format!(
+                "failed to create pending duckdb directory `{}`",
+                tiered_pending_dir(&config).display()
+            )
+        })?;
+        fs::create_dir_all(&config.archive_dir).with_context(|| {
+            format!("failed to create archive duckdb directory `{}`", config.archive_dir.display())
+        })?;
+        fs::create_dir_all(&config.catalog_dir).with_context(|| {
+            format!("failed to create duckdb catalog directory `{}`", config.catalog_dir.display())
+        })?;
+        initialize_tiered_catalog(&config)?;
+        spawn_existing_pending_sealers(config.clone())?;
+
+        let (active_path, next_sequence) = choose_active_segment(&config)?;
+        initialize_duckdb_target_path(&active_path)?;
+        Ok(Self {
+            inner: Arc::new(DuckDbUsageRepositoryInner::Tiered {
+                config,
+                state: Mutex::new(TieredDuckDbUsageState {
+                    active_path,
+                    next_sequence,
+                }),
+            }),
         })
     }
 
@@ -382,48 +489,583 @@ impl DuckDbUsageRepository {
             .with_context(|| format!("failed to open duckdb database `{}`", path.display()))
     }
 
+    fn open_read_only_conn(path: &Path) -> anyhow::Result<duckdb::Connection> {
+        let config = duckdb::Config::default()
+            .access_mode(duckdb::AccessMode::ReadOnly)
+            .context("failed to configure duckdb read-only access")?;
+        duckdb::Connection::open_with_flags(path, config).with_context(|| {
+            format!("failed to open read-only duckdb database `{}`", path.display())
+        })
+    }
+
     /// Aggregate all persisted usage events into per-key operational rollups.
     pub async fn key_usage_rollups(&self) -> anyhow::Result<Vec<KeyUsageRollupSummary>> {
-        let path = self.path.clone();
-        task::spawn_blocking(move || {
-            let conn = Self::open_conn(&path)?;
-            let mut stmt = conn
-                .prepare(
-                    "SELECT
-                        key_id,
-                        CAST(COALESCE(sum(input_uncached_tokens), 0) AS BIGINT),
-                        CAST(COALESCE(sum(input_cached_tokens), 0) AS BIGINT),
-                        CAST(COALESCE(sum(output_tokens), 0) AS BIGINT),
-                        CAST(COALESCE(sum(billable_tokens), 0) AS BIGINT),
-                        CAST(COALESCE(sum(COALESCE(try_cast(credit_usage AS DOUBLE), 0)), 0) AS \
-                     VARCHAR),
-                        CAST(COALESCE(sum(CASE WHEN credit_usage_missing THEN 1 ELSE 0 END), 0) AS \
-                     BIGINT),
-                        max(created_at_ms)
-                     FROM usage_events
-                     GROUP BY key_id",
-                )
-                .context("prepare duckdb key usage rollup query")?;
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok(KeyUsageRollupSummary {
-                        key_id: row.get(0)?,
-                        input_uncached_tokens: row.get(1)?,
-                        input_cached_tokens: row.get(2)?,
-                        output_tokens: row.get(3)?,
-                        billable_tokens: row.get(4)?,
-                        credit_total: row.get(5)?,
-                        credit_missing_events: row.get(6)?,
-                        last_used_at_ms: row.get(7)?,
-                    })
-                })
-                .context("query duckdb key usage rollups")?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .context("collect duckdb key usage rollups")
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || match inner.as_ref() {
+            DuckDbUsageRepositoryInner::Single {
+                path,
+            } => key_usage_rollups_from_path(path),
+            DuckDbUsageRepositoryInner::Tiered {
+                config,
+                state,
+            } => key_usage_rollups_from_tiered(config, state),
         })
         .await
         .context("duckdb key usage rollup task failed")?
     }
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn tiered_catalog_path(config: &TieredDuckDbUsageConfig) -> PathBuf {
+    config.catalog_dir.join("usage-segments.sqlite3")
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn tiered_pending_dir(config: &TieredDuckDbUsageConfig) -> PathBuf {
+    config.active_dir.join("pending")
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn initialize_tiered_catalog(config: &TieredDuckDbUsageConfig) -> anyhow::Result<()> {
+    let path = tiered_catalog_path(config);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!("failed to create tiered catalog directory `{}`", parent.display())
+        })?;
+    }
+    let conn = rusqlite::Connection::open(&path)
+        .with_context(|| format!("failed to open tiered usage catalog `{}`", path.display()))?;
+    conn.execute_batch(
+        "
+        PRAGMA journal_mode=DELETE;
+        CREATE TABLE IF NOT EXISTS usage_segments (
+            segment_id TEXT PRIMARY KEY,
+            archive_path TEXT NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('archived')),
+            start_ms INTEGER,
+            end_ms INTEGER,
+            row_count INTEGER NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            sealed_at_ms INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS usage_segment_events (
+            event_id TEXT PRIMARY KEY,
+            segment_id TEXT NOT NULL REFERENCES usage_segments(segment_id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS usage_segment_key_rollups (
+            segment_id TEXT NOT NULL REFERENCES usage_segments(segment_id) ON DELETE CASCADE,
+            key_id TEXT NOT NULL,
+            provider_type TEXT NOT NULL,
+            row_count INTEGER NOT NULL,
+            input_uncached_tokens INTEGER NOT NULL,
+            input_cached_tokens INTEGER NOT NULL,
+            output_tokens INTEGER NOT NULL,
+            billable_tokens INTEGER NOT NULL,
+            credit_total TEXT NOT NULL,
+            credit_missing_events INTEGER NOT NULL,
+            last_used_at_ms INTEGER,
+            PRIMARY KEY (segment_id, key_id, provider_type)
+        );
+        CREATE INDEX IF NOT EXISTS idx_usage_segments_time
+            ON usage_segments(end_ms, start_ms);
+        CREATE INDEX IF NOT EXISTS idx_usage_segment_key_rollups_key
+            ON usage_segment_key_rollups(key_id, provider_type);
+        ",
+    )
+    .context("failed to initialize tiered usage catalog")?;
+    Ok(())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn choose_active_segment(config: &TieredDuckDbUsageConfig) -> anyhow::Result<(PathBuf, u64)> {
+    let mut active_files = Vec::new();
+    for entry in fs::read_dir(&config.active_dir).with_context(|| {
+        format!("failed to read active duckdb directory `{}`", config.active_dir.display())
+    })? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("usage-active-") && name.ends_with(".duckdb"))
+        {
+            active_files.push(path);
+        }
+    }
+    active_files.sort();
+    if let Some(path) = active_files.pop() {
+        let next = parse_segment_sequence(&path).unwrap_or(0).saturating_add(1);
+        return Ok((path, next));
+    }
+
+    let next_sequence = next_catalog_sequence(config)?.saturating_add(1);
+    Ok((active_segment_path(config, next_sequence), next_sequence.saturating_add(1)))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn next_catalog_sequence(config: &TieredDuckDbUsageConfig) -> anyhow::Result<u64> {
+    let catalog = rusqlite::Connection::open(tiered_catalog_path(config))
+        .context("failed to open tiered catalog for sequence lookup")?;
+    let max_segment_id: Option<String> = catalog
+        .query_row(
+            "SELECT segment_id FROM usage_segments ORDER BY sealed_at_ms DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .context("failed to read latest usage segment id")?;
+    Ok(max_segment_id
+        .as_deref()
+        .and_then(parse_sequence_from_segment_id)
+        .unwrap_or(0))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn active_segment_path(config: &TieredDuckDbUsageConfig, sequence: u64) -> PathBuf {
+    config
+        .active_dir
+        .join(format!("usage-active-{sequence:012}.duckdb"))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn parse_segment_sequence(path: &Path) -> Option<u64> {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .and_then(|stem| stem.rsplit('-').next())
+        .and_then(|raw| raw.parse::<u64>().ok())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn parse_sequence_from_segment_id(segment_id: &str) -> Option<u64> {
+    segment_id
+        .rsplit('-')
+        .next()
+        .and_then(|raw| raw.parse::<u64>().ok())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn spawn_existing_pending_sealers(config: TieredDuckDbUsageConfig) -> anyhow::Result<()> {
+    let pending_dir = tiered_pending_dir(&config);
+    for entry in fs::read_dir(&pending_dir).with_context(|| {
+        format!("failed to read pending duckdb directory `{}`", pending_dir.display())
+    })? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("duckdb") {
+            let segment_id = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("usage-recovered")
+                .to_string();
+            spawn_segment_sealer(config.clone(), path, segment_id);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn spawn_segment_sealer(
+    config: TieredDuckDbUsageConfig,
+    pending_path: PathBuf,
+    segment_id: String,
+) {
+    let _ = thread::Builder::new()
+        .name("llm-access-duckdb-sealer".to_string())
+        .spawn(move || {
+            let mut last_err = None;
+            for attempt in 0..5 {
+                match publish_pending_segment(&config, &pending_path, &segment_id) {
+                    Ok(()) => return,
+                    Err(err) => {
+                        last_err = Some(err);
+                        thread::sleep(Duration::from_millis(250 * (attempt + 1)));
+                    },
+                }
+            }
+            if let Some(err) = last_err {
+                eprintln!(
+                    "failed to archive llm-access duckdb segment `{segment_id}` from `{}`: {err:#}",
+                    pending_path.display()
+                );
+            }
+        });
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn publish_pending_segment(
+    config: &TieredDuckDbUsageConfig,
+    pending_path: &Path,
+    segment_id: &str,
+) -> anyhow::Result<()> {
+    fs::create_dir_all(&config.archive_dir).with_context(|| {
+        format!("failed to create archive directory `{}`", config.archive_dir.display())
+    })?;
+    let stats = collect_segment_stats(pending_path)?;
+    let archive_path = config.archive_dir.join(format!("{segment_id}.duckdb"));
+    fs::copy(pending_path, &archive_path).with_context(|| {
+        format!(
+            "failed to copy pending duckdb segment `{}` to `{}`",
+            pending_path.display(),
+            archive_path.display()
+        )
+    })?;
+    let size_bytes = fs::metadata(&archive_path)
+        .with_context(|| format!("failed to stat archived segment `{}`", archive_path.display()))?
+        .len();
+    publish_segment_catalog(config, segment_id, &archive_path, &stats, size_bytes)?;
+    fs::remove_file(pending_path).with_context(|| {
+        format!("failed to remove archived pending segment `{}`", pending_path.display())
+    })?;
+    Ok(())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn collect_segment_stats(path: &Path) -> anyhow::Result<SegmentStats> {
+    let conn = DuckDbUsageRepository::open_read_only_conn(path)?;
+    let (row_count, start_ms, end_ms): (i64, Option<i64>, Option<i64>) = conn
+        .query_row(
+            "SELECT CAST(count(*) AS BIGINT), min(created_at_ms), max(created_at_ms)
+             FROM usage_events",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .context("query duckdb segment stats")?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT
+                key_id,
+                provider_type,
+                CAST(count(*) AS BIGINT),
+                CAST(COALESCE(sum(input_uncached_tokens), 0) AS BIGINT),
+                CAST(COALESCE(sum(input_cached_tokens), 0) AS BIGINT),
+                CAST(COALESCE(sum(output_tokens), 0) AS BIGINT),
+                CAST(COALESCE(sum(billable_tokens), 0) AS BIGINT),
+                CAST(COALESCE(sum(COALESCE(try_cast(credit_usage AS DOUBLE), 0)), 0) AS VARCHAR),
+                CAST(COALESCE(sum(CASE WHEN credit_usage_missing THEN 1 ELSE 0 END), 0) AS BIGINT),
+                max(created_at_ms)
+             FROM usage_events
+             GROUP BY key_id, provider_type",
+        )
+        .context("prepare duckdb segment rollup query")?;
+    let rollups = stmt
+        .query_map([], |row| {
+            Ok(SegmentKeyRollup {
+                key_id: row.get(0)?,
+                provider_type: row.get(1)?,
+                row_count: i64_to_usize(row.get(2)?),
+                input_uncached_tokens: row.get(3)?,
+                input_cached_tokens: row.get(4)?,
+                output_tokens: row.get(5)?,
+                billable_tokens: row.get(6)?,
+                credit_total: row.get(7)?,
+                credit_missing_events: row.get(8)?,
+                last_used_at_ms: row.get(9)?,
+            })
+        })
+        .context("query duckdb segment rollups")?
+        .collect::<Result<Vec<_>, _>>()
+        .context("collect duckdb segment rollups")?;
+    Ok(SegmentStats {
+        start_ms,
+        end_ms,
+        row_count: i64_to_usize(row_count),
+        rollups,
+    })
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn publish_segment_catalog(
+    config: &TieredDuckDbUsageConfig,
+    segment_id: &str,
+    archive_path: &Path,
+    stats: &SegmentStats,
+    size_bytes: u64,
+) -> anyhow::Result<()> {
+    let mut catalog = rusqlite::Connection::open(tiered_catalog_path(config))
+        .context("failed to open tiered usage catalog for publication")?;
+    let tx = catalog
+        .transaction()
+        .context("begin tiered catalog transaction")?;
+    tx.execute(
+        "INSERT OR REPLACE INTO usage_segments (
+            segment_id, archive_path, state, start_ms, end_ms, row_count, size_bytes, sealed_at_ms
+         ) VALUES (?1, ?2, 'archived', ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            segment_id,
+            archive_path.to_string_lossy().as_ref(),
+            stats.start_ms,
+            stats.end_ms,
+            usize_to_i64(stats.row_count),
+            u64_to_i64(size_bytes),
+            now_ms(),
+        ],
+    )
+    .context("insert tiered usage segment catalog row")?;
+    tx.execute("DELETE FROM usage_segment_events WHERE segment_id = ?1", rusqlite::params![
+        segment_id
+    ])
+    .context("clear existing segment event locators")?;
+    tx.execute("DELETE FROM usage_segment_key_rollups WHERE segment_id = ?1", rusqlite::params![
+        segment_id
+    ])
+    .context("clear existing segment rollups")?;
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT OR REPLACE INTO usage_segment_key_rollups (
+                    segment_id, key_id, provider_type, row_count, input_uncached_tokens,
+                    input_cached_tokens, output_tokens, billable_tokens, credit_total,
+                    credit_missing_events, last_used_at_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            )
+            .context("prepare tiered rollup insert")?;
+        for rollup in &stats.rollups {
+            stmt.execute(rusqlite::params![
+                segment_id,
+                rollup.key_id,
+                rollup.provider_type,
+                usize_to_i64(rollup.row_count),
+                rollup.input_uncached_tokens,
+                rollup.input_cached_tokens,
+                rollup.output_tokens,
+                rollup.billable_tokens,
+                rollup.credit_total,
+                rollup.credit_missing_events,
+                rollup.last_used_at_ms,
+            ])
+            .context("insert tiered segment rollup")?;
+        }
+    }
+    {
+        let segment_conn = DuckDbUsageRepository::open_read_only_conn(archive_path)?;
+        let mut event_query = segment_conn
+            .prepare("SELECT event_id FROM usage_events")
+            .context("prepare archived segment event locator query")?;
+        let mut event_rows = event_query
+            .query([])
+            .context("query archived segment event locators")?;
+        let mut insert_event = tx
+            .prepare(
+                "INSERT OR REPLACE INTO usage_segment_events (event_id, segment_id)
+                 VALUES (?1, ?2)",
+            )
+            .context("prepare event locator insert")?;
+        while let Some(row) = event_rows.next().context("read event locator row")? {
+            let event_id: String = row.get(0)?;
+            insert_event
+                .execute(rusqlite::params![event_id, segment_id])
+                .context("insert event locator")?;
+        }
+    }
+    tx.commit()
+        .context("commit tiered usage catalog transaction")?;
+    Ok(())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn key_usage_rollups_from_path(path: &Path) -> anyhow::Result<Vec<KeyUsageRollupSummary>> {
+    let conn = DuckDbUsageRepository::open_conn(path)?;
+    key_usage_rollups_from_conn(&conn)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn key_usage_rollups_from_conn(
+    conn: &duckdb::Connection,
+) -> anyhow::Result<Vec<KeyUsageRollupSummary>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT
+                key_id,
+                CAST(COALESCE(sum(input_uncached_tokens), 0) AS BIGINT),
+                CAST(COALESCE(sum(input_cached_tokens), 0) AS BIGINT),
+                CAST(COALESCE(sum(output_tokens), 0) AS BIGINT),
+                CAST(COALESCE(sum(billable_tokens), 0) AS BIGINT),
+                CAST(COALESCE(sum(COALESCE(try_cast(credit_usage AS DOUBLE), 0)), 0) AS VARCHAR),
+                CAST(COALESCE(sum(CASE WHEN credit_usage_missing THEN 1 ELSE 0 END), 0) AS BIGINT),
+                max(created_at_ms)
+             FROM usage_events
+             GROUP BY key_id",
+        )
+        .context("prepare duckdb key usage rollup query")?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(KeyUsageRollupSummary {
+                key_id: row.get(0)?,
+                input_uncached_tokens: row.get(1)?,
+                input_cached_tokens: row.get(2)?,
+                output_tokens: row.get(3)?,
+                billable_tokens: row.get(4)?,
+                credit_total: row.get(5)?,
+                credit_missing_events: row.get(6)?,
+                last_used_at_ms: row.get(7)?,
+            })
+        })
+        .context("query duckdb key usage rollups")?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .context("collect duckdb key usage rollups")
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn key_usage_rollups_from_tiered(
+    config: &TieredDuckDbUsageConfig,
+    state: &Mutex<TieredDuckDbUsageState>,
+) -> anyhow::Result<Vec<KeyUsageRollupSummary>> {
+    let mut combined = BTreeMap::<String, KeyUsageRollupSummary>::new();
+    {
+        let state = state
+            .lock()
+            .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
+        let conn = DuckDbUsageRepository::open_conn(&state.active_path)?;
+        for rollup in key_usage_rollups_from_conn(&conn)? {
+            merge_key_rollup(&mut combined, rollup);
+        }
+    }
+    for rollup in archived_key_usage_rollups(config)? {
+        merge_key_rollup(&mut combined, rollup);
+    }
+    Ok(combined.into_values().collect())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn merge_key_rollup(
+    combined: &mut BTreeMap<String, KeyUsageRollupSummary>,
+    rollup: KeyUsageRollupSummary,
+) {
+    let entry = combined
+        .entry(rollup.key_id.clone())
+        .or_insert_with(|| KeyUsageRollupSummary {
+            key_id: rollup.key_id.clone(),
+            input_uncached_tokens: 0,
+            input_cached_tokens: 0,
+            output_tokens: 0,
+            billable_tokens: 0,
+            credit_total: "0".to_string(),
+            credit_missing_events: 0,
+            last_used_at_ms: None,
+        });
+    entry.input_uncached_tokens = entry
+        .input_uncached_tokens
+        .saturating_add(rollup.input_uncached_tokens);
+    entry.input_cached_tokens = entry
+        .input_cached_tokens
+        .saturating_add(rollup.input_cached_tokens);
+    entry.output_tokens = entry.output_tokens.saturating_add(rollup.output_tokens);
+    entry.billable_tokens = entry.billable_tokens.saturating_add(rollup.billable_tokens);
+    let current_credit = entry.credit_total.parse::<f64>().unwrap_or(0.0);
+    let added_credit = rollup.credit_total.parse::<f64>().unwrap_or(0.0);
+    entry.credit_total = (current_credit + added_credit).to_string();
+    entry.credit_missing_events = entry
+        .credit_missing_events
+        .saturating_add(rollup.credit_missing_events);
+    entry.last_used_at_ms = match (entry.last_used_at_ms, rollup.last_used_at_ms) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (None, Some(right)) => Some(right),
+        (left, None) => left,
+    };
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn archived_key_usage_rollups(
+    config: &TieredDuckDbUsageConfig,
+) -> anyhow::Result<Vec<KeyUsageRollupSummary>> {
+    let catalog = rusqlite::Connection::open(tiered_catalog_path(config))
+        .context("failed to open tiered catalog for archived rollups")?;
+    let mut stmt = catalog
+        .prepare(
+            "SELECT
+                key_id,
+                COALESCE(sum(input_uncached_tokens), 0),
+                COALESCE(sum(input_cached_tokens), 0),
+                COALESCE(sum(output_tokens), 0),
+                COALESCE(sum(billable_tokens), 0),
+                COALESCE(sum(CAST(credit_total AS REAL)), 0),
+                COALESCE(sum(credit_missing_events), 0),
+                max(last_used_at_ms)
+             FROM usage_segment_key_rollups
+             GROUP BY key_id",
+        )
+        .context("prepare archived key usage rollup query")?;
+    let rows = stmt
+        .query_map([], |row| {
+            let credit_total: f64 = row.get(5)?;
+            Ok(KeyUsageRollupSummary {
+                key_id: row.get(0)?,
+                input_uncached_tokens: row.get(1)?,
+                input_cached_tokens: row.get(2)?,
+                output_tokens: row.get(3)?,
+                billable_tokens: row.get(4)?,
+                credit_total: credit_total.to_string(),
+                credit_missing_events: row.get(6)?,
+                last_used_at_ms: row.get(7)?,
+            })
+        })
+        .context("query archived key usage rollups")?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .context("collect archived key usage rollups")
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn append_usage_events_to_tiered(
+    config: &TieredDuckDbUsageConfig,
+    state: &Mutex<TieredDuckDbUsageState>,
+    rows: &[UsageEventRow],
+) -> anyhow::Result<()> {
+    let mut state = state
+        .lock()
+        .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
+    {
+        let mut writer =
+            DuckDbUsageWriter::new(DuckDbUsageRepository::open_conn(&state.active_path)?)?;
+        writer.insert_usage_events(rows)?;
+    }
+    let active_size = fs::metadata(&state.active_path)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    if active_size >= config.rollover_bytes.max(1) {
+        rollover_active_segment(config, &mut state)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn rollover_active_segment(
+    config: &TieredDuckDbUsageConfig,
+    state: &mut TieredDuckDbUsageState,
+) -> anyhow::Result<()> {
+    checkpoint_duckdb_path(&state.active_path)?;
+    let sequence = parse_segment_sequence(&state.active_path).unwrap_or(state.next_sequence);
+    let segment_id = format!("usage-{}-{sequence:012}", now_ms());
+    let pending_path = tiered_pending_dir(config).join(format!("{segment_id}.duckdb"));
+    fs::rename(&state.active_path, &pending_path).with_context(|| {
+        format!(
+            "failed to move active duckdb segment `{}` to pending `{}`",
+            state.active_path.display(),
+            pending_path.display()
+        )
+    })?;
+    let new_active_path = active_segment_path(config, state.next_sequence);
+    state.next_sequence = state.next_sequence.saturating_add(1);
+    initialize_duckdb_target_path(&new_active_path)?;
+    state.active_path = new_active_path;
+    spawn_segment_sealer(config.clone(), pending_path, segment_id);
+    Ok(())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn checkpoint_duckdb_path(path: &Path) -> anyhow::Result<()> {
+    let conn = DuckDbUsageRepository::open_conn(path)?;
+    conn.execute_batch("CHECKPOINT;")
+        .with_context(|| format!("failed to checkpoint duckdb database `{}`", path.display()))?;
+    Ok(())
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -437,14 +1079,22 @@ impl UsageEventSink for DuckDbUsageRepository {
         if events.is_empty() {
             return Ok(());
         }
-        let path = self.path.clone();
+        let inner = Arc::clone(&self.inner);
         let rows = events
             .iter()
             .map(UsageEventRow::from_usage_event)
             .collect::<Vec<_>>();
-        task::spawn_blocking(move || {
-            let mut writer = DuckDbUsageWriter::new(Self::open_conn(&path)?)?;
-            writer.insert_usage_events(&rows)
+        task::spawn_blocking(move || match inner.as_ref() {
+            DuckDbUsageRepositoryInner::Single {
+                path,
+            } => {
+                let mut writer = DuckDbUsageWriter::new(Self::open_conn(path)?)?;
+                writer.insert_usage_events(&rows)
+            },
+            DuckDbUsageRepositoryInner::Tiered {
+                config,
+                state,
+            } => append_usage_events_to_tiered(config, state, &rows),
         })
         .await
         .context("duckdb usage insert task failed")?
@@ -455,86 +1105,31 @@ impl UsageEventSink for DuckDbUsageRepository {
 #[async_trait]
 impl UsageAnalyticsStore for DuckDbUsageRepository {
     async fn list_usage_events(&self, query: UsageEventQuery) -> anyhow::Result<UsageEventPage> {
-        let path = self.path.clone();
-        task::spawn_blocking(move || {
-            let conn = Self::open_conn(&path)?;
-            let key_filter = query.key_id.as_deref();
-            let provider_filter = query.provider_type.as_deref();
-            let start_ms = query.start_ms;
-            let end_ms = query.end_ms;
-            let safe_limit = query.limit.min(USAGE_EVENT_ONLINE_MAX_LIMIT);
-            let safe_offset = query.offset.min(USAGE_EVENT_ONLINE_MAX_OFFSET);
-            let total: i64 = conn
-                .query_row(
-                    COUNT_USAGE_EVENTS_SQL,
-                    duckdb::params![key_filter, provider_filter, start_ms, end_ms],
-                    |row| row.get(0),
-                )
-                .context("count duckdb usage events")?;
-            let total = total.max(0) as usize;
-            if safe_limit == 0 {
-                return Ok(UsageEventPage {
-                    total,
-                    offset: safe_offset,
-                    limit: safe_limit,
-                    has_more: false,
-                    events: Vec::new(),
-                });
-            }
-            if safe_offset >= total {
-                return Ok(UsageEventPage {
-                    total,
-                    offset: safe_offset,
-                    limit: safe_limit,
-                    has_more: false,
-                    events: Vec::new(),
-                });
-            }
-            let fetch_count = total.saturating_sub(safe_offset).min(safe_limit);
-            let reverse_offset = total.saturating_sub(safe_offset.saturating_add(fetch_count));
-            let mut stmt = conn
-                .prepare(LIST_USAGE_EVENT_SUMMARIES_SQL)
-                .context("prepare duckdb usage event summary query")?;
-            let rows = stmt
-                .query_map(
-                    duckdb::params![
-                        key_filter,
-                        provider_filter,
-                        start_ms,
-                        end_ms,
-                        fetch_count as i64,
-                        reverse_offset as i64
-                    ],
-                    decode_usage_event_summary_row,
-                )
-                .context("query duckdb usage events")?;
-            let mut events = rows.collect::<Result<Vec<_>, _>>()?;
-            events.reverse();
-            Ok(UsageEventPage {
-                total,
-                offset: safe_offset,
-                limit: safe_limit,
-                has_more: safe_offset.saturating_add(events.len()) < total,
-                events,
-            })
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || match inner.as_ref() {
+            DuckDbUsageRepositoryInner::Single {
+                path,
+            } => list_usage_events_from_path(path, &query),
+            DuckDbUsageRepositoryInner::Tiered {
+                config,
+                state,
+            } => list_usage_events_from_tiered(config, state, &query),
         })
         .await
         .context("duckdb usage event list task failed")?
     }
 
     async fn get_usage_event(&self, event_id: &str) -> anyhow::Result<Option<UsageEvent>> {
-        let path = self.path.clone();
+        let inner = Arc::clone(&self.inner);
         let event_id = event_id.to_string();
-        task::spawn_blocking(move || {
-            let conn = Self::open_conn(&path)?;
-            let mut stmt = conn
-                .prepare(GET_USAGE_EVENT_DETAIL_SQL)
-                .context("prepare duckdb usage event detail query")?;
-            match stmt.query_row(duckdb::params![event_id], decode_usage_event_detail_row) {
-                Ok(event) => Ok(Some(event)),
-                Err(duckdb::Error::QueryReturnedNoRows) => Ok(None),
-                Err(err) => Err(err).context("query duckdb usage event detail"),
-            }
+        task::spawn_blocking(move || match inner.as_ref() {
+            DuckDbUsageRepositoryInner::Single {
+                path,
+            } => get_usage_event_from_path(path, &event_id),
+            DuckDbUsageRepositoryInner::Tiered {
+                config,
+                state,
+            } => get_usage_event_from_tiered(config, state, &event_id),
         })
         .await
         .context("duckdb usage event detail task failed")?
@@ -547,47 +1142,494 @@ impl UsageAnalyticsStore for DuckDbUsageRepository {
         bucket_ms: i64,
         bucket_count: usize,
     ) -> anyhow::Result<Vec<UsageChartPoint>> {
-        let path = self.path.clone();
+        let inner = Arc::clone(&self.inner);
         let key_id = key_id.to_string();
-        task::spawn_blocking(move || {
-            let mut points = (0..bucket_count)
-                .map(|index| UsageChartPoint {
-                    bucket_start_ms: start_ms
-                        .saturating_add((index as i64).saturating_mul(bucket_ms)),
-                    tokens: 0,
-                })
-                .collect::<Vec<_>>();
-            if bucket_count == 0 {
-                return Ok(points);
-            }
-            let end_ms = start_ms.saturating_add((bucket_count as i64).saturating_mul(bucket_ms));
-            let conn = Self::open_conn(&path)?;
-            let mut stmt = conn
-                .prepare(
-                    "SELECT CAST(floor((created_at_ms - ?2) / ?3) AS BIGINT) AS bucket_index,
-                            CAST(sum(input_uncached_tokens + output_tokens) AS BIGINT) AS tokens
-                     FROM usage_events
-                     WHERE key_id = ?1 AND created_at_ms >= ?2 AND created_at_ms < ?4
-                     GROUP BY bucket_index",
-                )
-                .context("prepare duckdb usage chart query")?;
-            let mut rows = stmt
-                .query(duckdb::params![key_id, start_ms, bucket_ms, end_ms])
-                .context("query duckdb usage chart")?;
-            while let Some(row) = rows.next().context("read duckdb usage chart row")? {
-                let bucket_index: i64 = row.get(0)?;
-                let tokens: i64 = row.get(1)?;
-                if let Ok(index) = usize::try_from(bucket_index) {
-                    if let Some(point) = points.get_mut(index) {
-                        point.tokens = tokens.max(0) as u64;
-                    }
-                }
-            }
-            Ok(points)
+        task::spawn_blocking(move || match inner.as_ref() {
+            DuckDbUsageRepositoryInner::Single {
+                path,
+            } => usage_chart_points_from_single_path(
+                path,
+                &key_id,
+                start_ms,
+                bucket_ms,
+                bucket_count,
+            ),
+            DuckDbUsageRepositoryInner::Tiered {
+                config,
+                state,
+            } => usage_chart_points_from_tiered(
+                config,
+                state,
+                &key_id,
+                start_ms,
+                bucket_ms,
+                bucket_count,
+            ),
         })
         .await
         .context("duckdb usage chart task failed")?
     }
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn list_usage_events_from_path(
+    path: &Path,
+    query: &UsageEventQuery,
+) -> anyhow::Result<UsageEventPage> {
+    let conn = DuckDbUsageRepository::open_conn(path)?;
+    list_usage_events_from_conn(&conn, query)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn list_usage_events_from_conn(
+    conn: &duckdb::Connection,
+    query: &UsageEventQuery,
+) -> anyhow::Result<UsageEventPage> {
+    let total = count_usage_events_from_conn(conn, query)?;
+    let safe_limit = query.limit.min(USAGE_EVENT_ONLINE_MAX_LIMIT);
+    let safe_offset = query.offset.min(USAGE_EVENT_ONLINE_MAX_OFFSET);
+    if safe_limit == 0 || safe_offset >= total {
+        return Ok(UsageEventPage {
+            total,
+            offset: safe_offset,
+            limit: safe_limit,
+            has_more: false,
+            events: Vec::new(),
+        });
+    }
+    let fetch_count = total.saturating_sub(safe_offset).min(safe_limit);
+    let reverse_offset = total.saturating_sub(safe_offset.saturating_add(fetch_count));
+    let mut events =
+        fetch_usage_event_summaries_from_conn(conn, query, fetch_count, reverse_offset)?;
+    events.reverse();
+    Ok(UsageEventPage {
+        total,
+        offset: safe_offset,
+        limit: safe_limit,
+        has_more: safe_offset.saturating_add(events.len()) < total,
+        events,
+    })
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn count_usage_events_from_conn(
+    conn: &duckdb::Connection,
+    query: &UsageEventQuery,
+) -> anyhow::Result<usize> {
+    let total: i64 = conn
+        .query_row(
+            COUNT_USAGE_EVENTS_SQL,
+            duckdb::params![
+                query.key_id.as_deref(),
+                query.provider_type.as_deref(),
+                query.start_ms,
+                query.end_ms
+            ],
+            |row| row.get(0),
+        )
+        .context("count duckdb usage events")?;
+    Ok(i64_to_usize(total))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn fetch_usage_event_summaries_from_conn(
+    conn: &duckdb::Connection,
+    query: &UsageEventQuery,
+    limit: usize,
+    offset: usize,
+) -> anyhow::Result<Vec<UsageEvent>> {
+    let mut stmt = conn
+        .prepare(LIST_USAGE_EVENT_SUMMARIES_SQL)
+        .context("prepare duckdb usage event summary query")?;
+    let rows = stmt
+        .query_map(
+            duckdb::params![
+                query.key_id.as_deref(),
+                query.provider_type.as_deref(),
+                query.start_ms,
+                query.end_ms,
+                usize_to_i64(limit),
+                usize_to_i64(offset)
+            ],
+            decode_usage_event_summary_row,
+        )
+        .context("query duckdb usage events")?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .context("collect duckdb usage events")
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn list_usage_events_from_tiered(
+    config: &TieredDuckDbUsageConfig,
+    state: &Mutex<TieredDuckDbUsageState>,
+    query: &UsageEventQuery,
+) -> anyhow::Result<UsageEventPage> {
+    let safe_limit = query.limit.min(USAGE_EVENT_ONLINE_MAX_LIMIT);
+    let safe_offset = query.offset.min(USAGE_EVENT_ONLINE_MAX_OFFSET);
+    let fetch_budget = safe_offset.saturating_add(safe_limit);
+    let mut total = 0usize;
+    let mut events = Vec::new();
+
+    if query.source.includes_hot() {
+        let state = state
+            .lock()
+            .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
+        let conn = DuckDbUsageRepository::open_conn(&state.active_path)?;
+        total = total.saturating_add(count_usage_events_from_conn(&conn, query)?);
+        if fetch_budget > 0 {
+            let active_total = count_usage_events_from_conn(&conn, query)?;
+            let fetch_count = active_total.min(fetch_budget);
+            let reverse_offset = active_total.saturating_sub(fetch_count);
+            let mut active_events =
+                fetch_usage_event_summaries_from_conn(&conn, query, fetch_count, reverse_offset)?;
+            active_events.reverse();
+            events.extend(active_events);
+        }
+    }
+
+    if query.source.includes_archive() {
+        let segments = archived_segments_for_query(config, query)?;
+        total = total.saturating_add(archived_usage_count(config, query, &segments)?);
+        if fetch_budget > 0 {
+            for segment in segments {
+                let conn = DuckDbUsageRepository::open_read_only_conn(&segment.archive_path)?;
+                let segment_total = count_usage_events_from_conn(&conn, query)?;
+                if segment_total == 0 {
+                    continue;
+                }
+                let fetch_count = segment_total.min(fetch_budget);
+                let reverse_offset = segment_total.saturating_sub(fetch_count);
+                let mut segment_events = fetch_usage_event_summaries_from_conn(
+                    &conn,
+                    query,
+                    fetch_count,
+                    reverse_offset,
+                )?;
+                segment_events.reverse();
+                events.extend(segment_events);
+            }
+        }
+    }
+
+    events.sort_by(|left, right| {
+        right
+            .created_at_ms
+            .cmp(&left.created_at_ms)
+            .then_with(|| right.event_id.cmp(&left.event_id))
+    });
+    let events = events
+        .into_iter()
+        .skip(safe_offset)
+        .take(safe_limit)
+        .collect::<Vec<_>>();
+    Ok(UsageEventPage {
+        total,
+        offset: safe_offset,
+        limit: safe_limit,
+        has_more: safe_offset.saturating_add(events.len()) < total,
+        events,
+    })
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn archived_segments_for_query(
+    config: &TieredDuckDbUsageConfig,
+    query: &UsageEventQuery,
+) -> anyhow::Result<Vec<ArchivedUsageSegment>> {
+    let catalog = rusqlite::Connection::open(tiered_catalog_path(config))
+        .context("failed to open tiered usage catalog for segment lookup")?;
+    let mut stmt = catalog
+        .prepare(
+            "SELECT segment_id, archive_path, start_ms, end_ms, row_count
+             FROM usage_segments
+             WHERE state = 'archived'
+               AND (?1 IS NULL OR end_ms IS NULL OR end_ms >= ?1)
+               AND (?2 IS NULL OR start_ms IS NULL OR start_ms < ?2)
+             ORDER BY COALESCE(end_ms, 0) DESC, segment_id DESC",
+        )
+        .context("prepare archived segment lookup")?;
+    let rows = stmt
+        .query_map(rusqlite::params![query.start_ms, query.end_ms], |row| {
+            Ok(ArchivedUsageSegment {
+                segment_id: row.get(0)?,
+                archive_path: PathBuf::from(row.get::<_, String>(1)?),
+                start_ms: row.get(2)?,
+                end_ms: row.get(3)?,
+                row_count: i64_to_usize(row.get(4)?),
+            })
+        })
+        .context("query archived segments")?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .context("collect archived segments")
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn archived_usage_count(
+    config: &TieredDuckDbUsageConfig,
+    query: &UsageEventQuery,
+    segments: &[ArchivedUsageSegment],
+) -> anyhow::Result<usize> {
+    if query.start_ms.is_none() && query.end_ms.is_none() {
+        return archived_usage_count_from_catalog(config, query, segments);
+    }
+    let mut total = 0usize;
+    for segment in segments {
+        if segment_fully_inside(segment, query) {
+            total =
+                total.saturating_add(archived_segment_count_from_catalog(config, query, segment)?);
+        } else {
+            let conn = DuckDbUsageRepository::open_read_only_conn(&segment.archive_path)?;
+            total = total.saturating_add(count_usage_events_from_conn(&conn, query)?);
+        }
+    }
+    Ok(total)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn archived_usage_count_from_catalog(
+    config: &TieredDuckDbUsageConfig,
+    query: &UsageEventQuery,
+    segments: &[ArchivedUsageSegment],
+) -> anyhow::Result<usize> {
+    let mut total = 0usize;
+    for segment in segments {
+        total = total.saturating_add(archived_segment_count_from_catalog(config, query, segment)?);
+    }
+    Ok(total)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn archived_segment_count_from_catalog(
+    config: &TieredDuckDbUsageConfig,
+    query: &UsageEventQuery,
+    segment: &ArchivedUsageSegment,
+) -> anyhow::Result<usize> {
+    if query.key_id.is_none() && query.provider_type.is_none() {
+        return Ok(segment.row_count);
+    }
+    let catalog = rusqlite::Connection::open(tiered_catalog_path(config))
+        .context("failed to open tiered catalog for segment count")?;
+    let total: i64 = catalog
+        .query_row(
+            "SELECT COALESCE(sum(row_count), 0)
+             FROM usage_segment_key_rollups
+             WHERE segment_id = ?1
+               AND (?2 IS NULL OR key_id = ?2)
+               AND (?3 IS NULL OR provider_type = ?3)",
+            rusqlite::params![
+                segment.segment_id,
+                query.key_id.as_deref(),
+                query.provider_type.as_deref()
+            ],
+            |row| row.get(0),
+        )
+        .context("query archived segment catalog count")?;
+    Ok(i64_to_usize(total))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn segment_fully_inside(segment: &ArchivedUsageSegment, query: &UsageEventQuery) -> bool {
+    let lower_ok = match (query.start_ms, segment.start_ms) {
+        (Some(start), Some(segment_start)) => segment_start >= start,
+        (Some(_), None) => false,
+        (None, _) => true,
+    };
+    let upper_ok = match (query.end_ms, segment.end_ms) {
+        (Some(end), Some(segment_end)) => segment_end < end,
+        (Some(_), None) => false,
+        (None, _) => true,
+    };
+    lower_ok && upper_ok
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn get_usage_event_from_path(path: &Path, event_id: &str) -> anyhow::Result<Option<UsageEvent>> {
+    let conn = DuckDbUsageRepository::open_conn(path)?;
+    get_usage_event_from_conn(&conn, event_id)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn get_usage_event_from_conn(
+    conn: &duckdb::Connection,
+    event_id: &str,
+) -> anyhow::Result<Option<UsageEvent>> {
+    let mut stmt = conn
+        .prepare(GET_USAGE_EVENT_DETAIL_SQL)
+        .context("prepare duckdb usage event detail query")?;
+    match stmt.query_row(duckdb::params![event_id], decode_usage_event_detail_row) {
+        Ok(event) => Ok(Some(event)),
+        Err(duckdb::Error::QueryReturnedNoRows) => Ok(None),
+        Err(err) => Err(err).context("query duckdb usage event detail"),
+    }
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn get_usage_event_from_tiered(
+    config: &TieredDuckDbUsageConfig,
+    state: &Mutex<TieredDuckDbUsageState>,
+    event_id: &str,
+) -> anyhow::Result<Option<UsageEvent>> {
+    {
+        let state = state
+            .lock()
+            .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
+        let conn = DuckDbUsageRepository::open_conn(&state.active_path)?;
+        if let Some(event) = get_usage_event_from_conn(&conn, event_id)? {
+            return Ok(Some(event));
+        }
+    }
+    let Some(segment) = locate_archived_segment(config, event_id)? else {
+        return Ok(None);
+    };
+    let conn = DuckDbUsageRepository::open_read_only_conn(&segment.archive_path)?;
+    get_usage_event_from_conn(&conn, event_id)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn locate_archived_segment(
+    config: &TieredDuckDbUsageConfig,
+    event_id: &str,
+) -> anyhow::Result<Option<ArchivedUsageSegment>> {
+    let catalog = rusqlite::Connection::open(tiered_catalog_path(config))
+        .context("failed to open tiered catalog for event locator")?;
+    let row = catalog
+        .query_row(
+            "SELECT s.segment_id, s.archive_path, s.start_ms, s.end_ms, s.row_count
+             FROM usage_segment_events e
+             JOIN usage_segments s ON s.segment_id = e.segment_id
+             WHERE e.event_id = ?1 AND s.state = 'archived'",
+            rusqlite::params![event_id],
+            |row| {
+                Ok(ArchivedUsageSegment {
+                    segment_id: row.get(0)?,
+                    archive_path: PathBuf::from(row.get::<_, String>(1)?),
+                    start_ms: row.get(2)?,
+                    end_ms: row.get(3)?,
+                    row_count: i64_to_usize(row.get(4)?),
+                })
+            },
+        )
+        .optional()
+        .context("query archived event locator")?;
+    Ok(row)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn usage_chart_points_from_tiered(
+    config: &TieredDuckDbUsageConfig,
+    state: &Mutex<TieredDuckDbUsageState>,
+    key_id: &str,
+    start_ms: i64,
+    bucket_ms: i64,
+    bucket_count: usize,
+) -> anyhow::Result<Vec<UsageChartPoint>> {
+    let mut points = empty_usage_chart_points(start_ms, bucket_ms, bucket_count);
+    if bucket_count == 0 {
+        return Ok(points);
+    }
+    {
+        let state = state
+            .lock()
+            .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
+        let conn = DuckDbUsageRepository::open_conn(&state.active_path)?;
+        add_usage_chart_points_from_conn(&mut points, &conn, key_id, start_ms, bucket_ms)?;
+    }
+    let query = UsageEventQuery {
+        key_id: Some(key_id.to_string()),
+        provider_type: None,
+        source: UsageEventSource::Archive,
+        start_ms: Some(start_ms),
+        end_ms: Some(start_ms.saturating_add((bucket_count as i64).saturating_mul(bucket_ms))),
+        limit: USAGE_EVENT_ONLINE_MAX_LIMIT,
+        offset: 0,
+    };
+    for segment in archived_segments_for_query(config, &query)? {
+        let conn = DuckDbUsageRepository::open_read_only_conn(&segment.archive_path)?;
+        add_usage_chart_points_from_conn(&mut points, &conn, key_id, start_ms, bucket_ms)?;
+    }
+    Ok(points)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn usage_chart_points_from_single_path(
+    path: &Path,
+    key_id: &str,
+    start_ms: i64,
+    bucket_ms: i64,
+    bucket_count: usize,
+) -> anyhow::Result<Vec<UsageChartPoint>> {
+    let mut points = empty_usage_chart_points(start_ms, bucket_ms, bucket_count);
+    if bucket_count == 0 {
+        return Ok(points);
+    }
+    let conn = DuckDbUsageRepository::open_conn(path)?;
+    add_usage_chart_points_from_conn(&mut points, &conn, key_id, start_ms, bucket_ms)?;
+    Ok(points)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn empty_usage_chart_points(
+    start_ms: i64,
+    bucket_ms: i64,
+    bucket_count: usize,
+) -> Vec<UsageChartPoint> {
+    (0..bucket_count)
+        .map(|index| UsageChartPoint {
+            bucket_start_ms: start_ms.saturating_add((index as i64).saturating_mul(bucket_ms)),
+            tokens: 0,
+        })
+        .collect()
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn add_usage_chart_points_from_conn(
+    points: &mut [UsageChartPoint],
+    conn: &duckdb::Connection,
+    key_id: &str,
+    start_ms: i64,
+    bucket_ms: i64,
+) -> anyhow::Result<()> {
+    let end_ms = points
+        .last()
+        .map(|point| point.bucket_start_ms.saturating_add(bucket_ms))
+        .unwrap_or(start_ms);
+    let mut stmt = conn
+        .prepare(
+            "SELECT CAST(floor((created_at_ms - ?2) / ?3) AS BIGINT) AS bucket_index,
+                    CAST(sum(input_uncached_tokens + output_tokens) AS BIGINT) AS tokens
+             FROM usage_events
+             WHERE key_id = ?1 AND created_at_ms >= ?2 AND created_at_ms < ?4
+             GROUP BY bucket_index",
+        )
+        .context("prepare duckdb usage chart query")?;
+    let mut rows = stmt
+        .query(duckdb::params![key_id, start_ms, bucket_ms, end_ms])
+        .context("query duckdb usage chart")?;
+    while let Some(row) = rows.next().context("read duckdb usage chart row")? {
+        let bucket_index: i64 = row.get(0)?;
+        let tokens: i64 = row.get(1)?;
+        if let Ok(index) = usize::try_from(bucket_index) {
+            if let Some(point) = points.get_mut(index) {
+                point.tokens = point.tokens.saturating_add(tokens.max(0) as u64);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn i64_to_usize(value: i64) -> usize {
+    usize::try_from(value.max(0)).unwrap_or(usize::MAX)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn usize_to_i64(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn u64_to_i64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -703,7 +1745,7 @@ mod tests {
     #[cfg(feature = "duckdb-runtime")]
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType, RouteStrategy},
-        store::{UsageAnalyticsStore, UsageEventQuery, UsageEventSink},
+        store::{UsageAnalyticsStore, UsageEventQuery, UsageEventSink, UsageEventSource},
         usage::{UsageEvent, UsageTiming},
     };
 
@@ -844,6 +1886,7 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(event.key_id.clone()),
                 provider_type: None,
+                source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
                 limit: 10,
@@ -902,6 +1945,7 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(first.key_id.clone()),
                 provider_type: None,
+                source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
                 limit: 10,
@@ -985,6 +2029,7 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(first.key_id.clone()),
                 provider_type: None,
+                source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
                 limit: 1,
@@ -1002,6 +2047,7 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(first.key_id.clone()),
                 provider_type: None,
+                source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
                 limit: 1,
@@ -1019,6 +2065,7 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(first.key_id.clone()),
                 provider_type: None,
+                source: UsageEventSource::All,
                 start_ms: Some(second.created_at_ms),
                 end_ms: Some(second.created_at_ms.saturating_add(1)),
                 limit: 10,
@@ -1056,6 +2103,7 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: None,
                 provider_type: None,
+                source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
                 limit: 100,
@@ -1074,6 +2122,7 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: None,
                 provider_type: None,
+                source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
                 limit: 100,
@@ -1088,6 +2137,86 @@ mod tests {
         assert_eq!(first_page.events[0].event_id, "online-clamp-24");
 
         std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn duckdb_tiered_repository_rolls_over_without_blocking_active_appends() {
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-duckdb-test-{}-tiered-rollover", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create tiered duckdb test directory");
+        let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            catalog_dir: root.join("catalog"),
+            rollover_bytes: 1,
+        })
+        .expect("open tiered duckdb usage db");
+        let mut first = test_usage_event();
+        first.event_id = "tiered-archived-first".to_string();
+        first.created_at_ms = 1_700_000_000_000;
+        first.last_message_content = Some("archived detail".repeat(128));
+        let mut second = test_usage_event();
+        second.event_id = "tiered-active-second".to_string();
+        second.created_at_ms = 1_700_000_060_000;
+
+        repo.append_usage_event(&first)
+            .await
+            .expect("append first tiered usage event");
+        repo.append_usage_event(&second)
+            .await
+            .expect("append second tiered usage event after rollover");
+
+        wait_for_archived_duckdb_file_count(&root.join("archive"), 2).await;
+
+        let page = repo
+            .list_usage_events(UsageEventQuery {
+                key_id: Some(first.key_id.clone()),
+                provider_type: None,
+                source: UsageEventSource::All,
+                start_ms: None,
+                end_ms: None,
+                limit: 10,
+                offset: 0,
+            })
+            .await
+            .expect("list tiered usage events");
+        assert_eq!(page.total, 2);
+        assert_eq!(page.events.len(), 2);
+        assert_eq!(page.events[0].event_id, second.event_id);
+        assert_eq!(page.events[1].event_id, first.event_id);
+
+        let archived_detail = repo
+            .get_usage_event(&first.event_id)
+            .await
+            .expect("get archived tiered usage event")
+            .expect("archived tiered event exists");
+        assert_usage_event_round_trips(&archived_detail, &first);
+
+        std::fs::remove_dir_all(&root).expect("cleanup tiered duckdb test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    async fn wait_for_archived_duckdb_file_count(archive_dir: &std::path::Path, expected: usize) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let archived = std::fs::read_dir(archive_dir)
+                .ok()
+                .into_iter()
+                .flat_map(|entries| entries.filter_map(Result::ok))
+                .filter(|entry| {
+                    entry.path().extension().and_then(|ext| ext.to_str()) == Some("duckdb")
+                })
+                .count();
+            if archived >= expected {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("timed out waiting for archived duckdb segment");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
     }
 
     #[cfg(feature = "duckdb-runtime")]

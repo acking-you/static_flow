@@ -1294,6 +1294,41 @@ pub struct AdminReviewQueueAction {
     pub updated_at_ms: i64,
 }
 
+/// Physical usage-event source queried by admin and public compatibility views.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageEventSource {
+    /// Query the currently writable active usage store.
+    Hot,
+    /// Query immutable archived usage segments.
+    Archive,
+    /// Query both active and archived usage data.
+    #[default]
+    All,
+}
+
+impl UsageEventSource {
+    /// Parse a user-facing query value.
+    pub fn from_query_value(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "hot" => Some(Self::Hot),
+            "archive" | "archived" => Some(Self::Archive),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+
+    /// Whether active usage rows should be consulted.
+    pub fn includes_hot(self) -> bool {
+        matches!(self, Self::Hot | Self::All)
+    }
+
+    /// Whether archived usage rows should be consulted.
+    pub fn includes_archive(self) -> bool {
+        matches!(self, Self::Archive | Self::All)
+    }
+}
+
 /// Paginated usage-event query used by admin and public compatibility views.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageEventQuery {
@@ -1301,6 +1336,8 @@ pub struct UsageEventQuery {
     pub key_id: Option<String>,
     /// Optional provider filter.
     pub provider_type: Option<String>,
+    /// Physical usage event source.
+    pub source: UsageEventSource,
     /// Optional inclusive lower creation timestamp bound in Unix milliseconds.
     pub start_ms: Option<i64>,
     /// Optional exclusive upper creation timestamp bound in Unix milliseconds.

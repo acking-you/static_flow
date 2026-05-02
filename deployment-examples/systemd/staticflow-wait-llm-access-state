@@ -6,6 +6,7 @@ timeout="${LLM_ACCESS_READY_TIMEOUT_SECONDS:-120}"
 mount_point="${LLM_ACCESS_STATE_ROOT:-${JUICEFS_MOUNT_POINT:-/mnt/llm-access}}"
 sqlite_path="${LLM_ACCESS_SQLITE_CONTROL:-${mount_point}/control/llm-access.sqlite3}"
 duckdb_path="${LLM_ACCESS_DUCKDB:-${mount_point}/analytics/usage.duckdb}"
+duckdb_active_dir="${LLM_ACCESS_DUCKDB_ACTIVE_DIR:-}"
 support_config="${LLM_ACCESS_SUPPORT_CONFIG:-${mount_point}/support/llm_access_support/config.json}"
 
 for ((second = 0; second < timeout; second++)); do
@@ -13,7 +14,13 @@ for ((second = 0; second < timeout; second++)); do
     if [[ "$mode" == "mount-only" || "$mode" == "--mount-only" ]]; then
       exit 0
     fi
-    if [[ -s "$sqlite_path" && -s "$duckdb_path" && -s "$support_config" ]]; then
+    duckdb_ready=0
+    if [[ -n "$duckdb_active_dir" ]]; then
+      duckdb_ready=1
+    elif [[ -s "$duckdb_path" ]]; then
+      duckdb_ready=1
+    fi
+    if [[ -s "$sqlite_path" && "$duckdb_ready" == "1" && -s "$support_config" ]]; then
       exit 0
     fi
   fi
@@ -24,6 +31,7 @@ echo "llm-access state is not ready after ${timeout}s" >&2
 echo "mount_point=${mount_point}" >&2
 echo "sqlite_path=${sqlite_path}" >&2
 echo "duckdb_path=${duckdb_path}" >&2
+echo "duckdb_active_dir=${duckdb_active_dir}" >&2
 echo "support_config=${support_config}" >&2
 findmnt -T "$mount_point" >&2 || true
 exit 1

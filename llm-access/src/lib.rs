@@ -92,7 +92,18 @@ pub fn bootstrap_storage(config: &StorageConfig) -> anyhow::Result<()> {
     runtime::validate_state_root(config)?;
     llm_access_store::initialize_sqlite_target_path(&config.sqlite_control)?;
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-    llm_access_store::initialize_duckdb_target_path(&config.duckdb)?;
+    if let Some(tiered) = &config.duckdb_tiered {
+        llm_access_store::duckdb::DuckDbUsageRepository::open_tiered(
+            llm_access_store::duckdb::TieredDuckDbUsageConfig {
+                active_dir: tiered.active_dir.clone(),
+                archive_dir: tiered.archive_dir.clone(),
+                catalog_dir: tiered.catalog_dir.clone(),
+                rollover_bytes: tiered.rollover_bytes,
+            },
+        )?;
+    } else {
+        llm_access_store::initialize_duckdb_target_path(&config.duckdb)?;
+    }
     llm_access_store::write_duckdb_schema_file(config.duckdb.with_extension("schema.sql"))?;
     Ok(())
 }
@@ -420,6 +431,7 @@ mod tests {
             state_root: root.clone(),
             sqlite_control: root.join("control/llm-access.sqlite3"),
             duckdb: root.join("analytics/usage.duckdb"),
+            duckdb_tiered: None,
             kiro_auths_dir: root.join("auths/kiro"),
             codex_auths_dir: root.join("auths/codex"),
             logs_dir: root.join("logs"),

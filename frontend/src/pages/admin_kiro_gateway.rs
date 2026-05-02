@@ -2767,6 +2767,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                     key_id: None,
                     start_ms: None,
                     end_ms: None,
+                    source: Some("all".to_string()),
                     limit: Some(5),
                     offset: Some(0),
                 })

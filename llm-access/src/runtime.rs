@@ -24,7 +24,7 @@ use llm_access_core::store::{AdminRuntimeConfig, UsageEventSink};
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 use llm_access_core::usage::UsageEvent;
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-use llm_access_store::duckdb::DuckDbUsageRepository;
+use llm_access_store::duckdb::{DuckDbUsageRepository, TieredDuckDbUsageConfig};
 use llm_access_store::repository::SqliteControlRepository;
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 use tokio::{
@@ -136,7 +136,7 @@ impl LlmAccessRuntime {
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let runtime_config = Arc::new(RwLock::new(repository.get_admin_runtime_config().await?));
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-        let duckdb_usage = Arc::new(DuckDbUsageRepository::open_path(&config.duckdb)?);
+        let duckdb_usage = Arc::new(open_duckdb_usage_repository(config)?);
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         rebuild_key_usage_rollups_from_duckdb(&repository, &duckdb_usage).await?;
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -282,6 +282,19 @@ impl LlmAccessRuntime {
     /// No-op when DuckDB usage persistence is not compiled in.
     #[cfg(not(any(feature = "duckdb-runtime", feature = "duckdb-bundled")))]
     pub async fn shutdown_usage_events(&self) {}
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+fn open_duckdb_usage_repository(config: &StorageConfig) -> anyhow::Result<DuckDbUsageRepository> {
+    if let Some(tiered) = &config.duckdb_tiered {
+        return DuckDbUsageRepository::open_tiered(TieredDuckDbUsageConfig {
+            active_dir: tiered.active_dir.clone(),
+            archive_dir: tiered.archive_dir.clone(),
+            catalog_dir: tiered.catalog_dir.clone(),
+            rollover_bytes: tiered.rollover_bytes,
+        });
+    }
+    DuckDbUsageRepository::open_path(&config.duckdb)
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -699,6 +712,7 @@ mod tests {
             state_root: root.clone(),
             sqlite_control: root.join("control/llm-access.sqlite3"),
             duckdb: root.join("analytics/usage.duckdb"),
+            duckdb_tiered: None,
             kiro_auths_dir: root.join("auths/kiro"),
             codex_auths_dir: root.join("auths/codex"),
             logs_dir: root.join("logs"),

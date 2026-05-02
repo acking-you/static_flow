@@ -55,6 +55,9 @@ const USAGE_TIME_RANGE_ALL: &str = "all";
 const USAGE_TIME_RANGE_1H: &str = "1h";
 const USAGE_TIME_RANGE_24H: &str = "24h";
 const USAGE_TIME_RANGE_7D: &str = "7d";
+const USAGE_SOURCE_HOT: &str = "hot";
+const USAGE_SOURCE_ARCHIVE: &str = "archive";
+const USAGE_SOURCE_ALL: &str = "all";
 const TOKEN_REQUEST_PAGE_SIZE: usize = 20;
 const ACCOUNT_CONTRIBUTION_REQUEST_PAGE_SIZE: usize = 20;
 const SPONSOR_REQUEST_PAGE_SIZE: usize = 20;
@@ -323,6 +326,14 @@ fn usage_time_range_label(value: &str) -> &'static str {
         USAGE_TIME_RANGE_24H => "最近 24 小时",
         USAGE_TIME_RANGE_7D => "最近 7 天",
         _ => "全部时间",
+    }
+}
+
+fn usage_source_label(value: &str) -> &'static str {
+    match value {
+        USAGE_SOURCE_ARCHIVE => "历史归档",
+        USAGE_SOURCE_ALL => "全部",
+        _ => "在线",
     }
 }
 
@@ -1697,6 +1708,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let usage_key_filter = use_state(String::new);
     let usage_key_search = use_state(String::new);
     let usage_time_range = use_state(|| USAGE_TIME_RANGE_ALL.to_string());
+    let usage_source = use_state(|| USAGE_SOURCE_HOT.to_string());
     let token_requests = use_state(Vec::<AdminLlmGatewayTokenRequestView>::new);
     let token_request_total = use_state(|| 0_usize);
     let token_request_page = use_state(|| 1_usize);
@@ -1824,9 +1836,11 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_error = usage_error.clone();
         let usage_key_filter = usage_key_filter.clone();
         let usage_time_range = usage_time_range.clone();
+        let usage_source = usage_source.clone();
         Callback::from(
-            move |(requested_page, override_key_id, override_time_range): (
+            move |(requested_page, override_key_id, override_time_range, override_source): (
                 Option<usize>,
+                Option<String>,
                 Option<String>,
                 Option<String>,
             )| {
@@ -1839,11 +1853,13 @@ pub fn admin_llm_gateway_page() -> Html {
                 let usage_error = usage_error.clone();
                 let usage_key_filter = usage_key_filter.clone();
                 let usage_time_range = usage_time_range.clone();
+                let usage_source = usage_source.clone();
                 let page = requested_page.unwrap_or(*usage_page).max(1);
                 let selected_key_id =
                     override_key_id.unwrap_or_else(|| (*usage_key_filter).clone());
                 let selected_time_range =
                     override_time_range.unwrap_or_else(|| (*usage_time_range).clone());
+                let selected_source = override_source.unwrap_or_else(|| (*usage_source).clone());
                 let (start_ms, end_ms) = usage_time_range_bounds(&selected_time_range);
                 usage_loading.set(true);
                 usage_error.set(None);
@@ -1852,6 +1868,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         key_id: (!selected_key_id.is_empty()).then_some(selected_key_id),
                         start_ms,
                         end_ms,
+                        source: Some(selected_source),
                         limit: Some(USAGE_PAGE_SIZE),
                         offset: Some((page - 1) * USAGE_PAGE_SIZE),
                     };
@@ -2197,6 +2214,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         reload_usage.emit((
                             Some(current_page),
                             Some(usage_filter_for_reload),
+                            None,
                             None,
                         ));
                     },
@@ -2750,7 +2768,7 @@ pub fn admin_llm_gateway_page() -> Html {
             }
             usage_key_filter.set(selected_key_id.clone());
             usage_page.set(1);
-            reload_usage.emit((Some(1), Some(selected_key_id), None));
+            reload_usage.emit((Some(1), Some(selected_key_id), None, None));
         })
     };
 
@@ -2775,7 +2793,19 @@ pub fn admin_llm_gateway_page() -> Html {
             if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
                 let selected = target.value();
                 usage_time_range.set(selected.clone());
-                reload_usage.emit((Some(1), None, Some(selected)));
+                reload_usage.emit((Some(1), None, Some(selected), None));
+            }
+        })
+    };
+
+    let on_usage_source_change = {
+        let usage_source = usage_source.clone();
+        let reload_usage = reload_usage.clone();
+        Callback::from(move |event: Event| {
+            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                let selected = target.value();
+                usage_source.set(selected.clone());
+                reload_usage.emit((Some(1), None, None, Some(selected)));
             }
         })
     };
@@ -2785,7 +2815,7 @@ pub fn admin_llm_gateway_page() -> Html {
         let reload_usage = reload_usage.clone();
         Callback::from(move |page: usize| {
             usage_page.set(page);
-            reload_usage.emit((Some(page), None, None));
+            reload_usage.emit((Some(page), None, None, None));
         })
     };
 
@@ -5375,7 +5405,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                 aria-label="刷新事件"
                                 onclick={{
                                     let reload_usage = reload_usage.clone();
-                                    Callback::from(move |_| reload_usage.emit((None, None, None)))
+                                    Callback::from(move |_| reload_usage.emit((None, None, None, None)))
                                 }}
                                 disabled={*usage_loading}
                             >
@@ -5384,7 +5414,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
                     </div>
 
-                    <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-[minmax(16rem,1fr)_minmax(14rem,18rem)_minmax(10rem,12rem)_auto_auto]", "items-end")}>
+                    <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-[minmax(16rem,1fr)_minmax(14rem,18rem)_minmax(10rem,12rem)_minmax(9rem,10rem)_auto_auto]", "items-end")}>
                         <label class={classes!("text-sm")}>
                             <span class={classes!("text-[var(--muted)]")}>{ "搜索 Key" }</span>
                             <div class={classes!("mt-1")}>
@@ -5443,8 +5473,20 @@ pub fn admin_llm_gateway_page() -> Html {
                                 <option value={USAGE_TIME_RANGE_7D} selected={*usage_time_range == USAGE_TIME_RANGE_7D}>{ "最近 7 天" }</option>
                             </select>
                         </label>
+                        <label class={classes!("text-sm")}>
+                            <span class={classes!("text-[var(--muted)]")}>{ "数据源" }</span>
+                            <select
+                                key={format!("usage-source-{}", (*usage_source).clone())}
+                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                onchange={on_usage_source_change}
+                            >
+                                <option value={USAGE_SOURCE_HOT} selected={*usage_source == USAGE_SOURCE_HOT}>{ "在线" }</option>
+                                <option value={USAGE_SOURCE_ARCHIVE} selected={*usage_source == USAGE_SOURCE_ARCHIVE}>{ "历史归档" }</option>
+                                <option value={USAGE_SOURCE_ALL} selected={*usage_source == USAGE_SOURCE_ALL}>{ "全部" }</option>
+                            </select>
+                        </label>
                         <span class={classes!("text-sm", "font-semibold", "text-[var(--muted)]")}>
-                            { format!("{} · {} 条", usage_time_range_label(&usage_time_range), *usage_total) }
+                            { format!("{} · {} · {} 条", usage_source_label(&usage_source), usage_time_range_label(&usage_time_range), *usage_total) }
                         </span>
                         <span class={classes!("text-sm", "font-semibold", "text-[var(--muted)]")}>
                             { format!("第 {} 页", *usage_page) }

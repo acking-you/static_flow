@@ -12,15 +12,20 @@ EnvironmentFile=/etc/llm-access/llm-access.env
 Environment=STATICFLOW_LOG_DIR=/var/log/staticflow-runtime
 Environment=STATICFLOW_LOG_SERVICE=llm-access
 Environment=STATICFLOW_LOG_STDOUT=0
+Environment=LLM_ACCESS_DUCKDB_ACTIVE_DIR=/var/lib/staticflow/llm-access/analytics-active
+Environment=LLM_ACCESS_DUCKDB_ARCHIVE_DIR=/mnt/llm-access/analytics/segments
+Environment=LLM_ACCESS_DUCKDB_CATALOG_DIR=/mnt/llm-access/analytics/catalog
+Environment=LLM_ACCESS_DUCKDB_ROLLOVER_BYTES=536870912
 WorkingDirectory=/mnt/llm-access
 ExecStartPre=/usr/local/bin/staticflow-wait-llm-access-state
-ExecStart=/usr/local/bin/llm-access serve --bind ${LLM_ACCESS_BIND_ADDR} --state-root ${LLM_ACCESS_STATE_ROOT} --sqlite-control ${LLM_ACCESS_SQLITE_CONTROL} --duckdb ${LLM_ACCESS_DUCKDB}
+ExecStart=/usr/local/bin/llm-access serve --bind ${LLM_ACCESS_BIND_ADDR} --state-root ${LLM_ACCESS_STATE_ROOT} --sqlite-control ${LLM_ACCESS_SQLITE_CONTROL} --duckdb ${LLM_ACCESS_DUCKDB} --duckdb-active-dir ${LLM_ACCESS_DUCKDB_ACTIVE_DIR} --duckdb-archive-dir ${LLM_ACCESS_DUCKDB_ARCHIVE_DIR} --duckdb-catalog-dir ${LLM_ACCESS_DUCKDB_CATALOG_DIR} --duckdb-rollover-bytes ${LLM_ACCESS_DUCKDB_ROLLOVER_BYTES}
 Restart=always
 RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=/mnt/llm-access
+StateDirectory=staticflow/llm-access
+ReadWritePaths=/mnt/llm-access /var/lib/staticflow/llm-access
 
 [Install]
 WantedBy=multi-user.target
