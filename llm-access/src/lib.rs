@@ -30,7 +30,7 @@ use anyhow::Context;
 use axum::{
     body::Body,
     extract::State,
-    http::Request,
+    http::{HeaderValue, Request},
     middleware,
     response::Response,
     routing::{any, get, post},
@@ -45,6 +45,7 @@ use llm_access_core::store::{
 };
 use serde::Serialize;
 use tokio::sync::Semaphore;
+use tower_http::cors::{Any, CorsLayer};
 
 #[cfg(test)]
 pub(crate) static KIRO_UPSTREAM_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -312,7 +313,41 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         .route("/api/codex-gateway/*path", any(provider_entry_handler))
         .route("/api/llm-access/*path", any(provider_entry_handler))
         .layer(middleware::from_fn(request_context::request_context_middleware))
+        .layer(cors_layer())
         .with_state(state)
+}
+
+fn cors_layer() -> CorsLayer {
+    let allowed_origins = std::env::var("LLM_ACCESS_ALLOWED_ORIGINS")
+        .ok()
+        .or_else(|| std::env::var("ALLOWED_ORIGINS").ok())
+        .and_then(|value| parse_allowed_origins(&value));
+
+    let layer = CorsLayer::new().allow_methods(Any).allow_headers(Any);
+    match allowed_origins {
+        Some(origins) => layer.allow_origin(origins),
+        None => layer.allow_origin(Any),
+    }
+}
+
+fn parse_allowed_origins(value: &str) -> Option<Vec<HeaderValue>> {
+    let origins = value
+        .split(',')
+        .filter_map(|origin| {
+            let origin = origin.trim();
+            if origin.is_empty() {
+                None
+            } else {
+                origin.parse::<HeaderValue>().ok()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if origins.is_empty() {
+        None
+    } else {
+        Some(origins)
+    }
 }
 
 async fn provider_entry_handler(
@@ -427,6 +462,34 @@ mod tests {
     fn test_router() -> axum::Router {
         let runtime = crate::runtime::LlmAccessRuntime::new(Arc::new(EmptyStore));
         super::router(runtime)
+    }
+
+    #[tokio::test]
+    async fn router_answers_llm_gateway_cors_preflight() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/llm-gateway/access")
+                    .header(header::ORIGIN, "https://acking-you.github.io")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                    .header(
+                        header::ACCESS_CONTROL_REQUEST_HEADERS,
+                        "x-sf-client,x-sf-page,cache-control,pragma",
+                    )
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
+        assert!(response
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_ALLOW_HEADERS));
     }
 
     struct BlockingUsageStore {

@@ -38,6 +38,7 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 static-flow-runtime = { path = "../runtime" }
 tokio = { workspace = true }
+tower-http = { workspace = true }
 tracing = { workspace = true }
 url = "2.5"
 uuid = { version = "1.18", features = ["v4"] }
