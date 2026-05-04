@@ -6,6 +6,7 @@ mod codex_refresh;
 mod codex_status;
 /// Command-line and environment configuration.
 pub mod config;
+mod geoip;
 /// Local Kiro endpoints.
 pub mod kiro;
 mod kiro_refresh;
@@ -51,6 +52,7 @@ pub(crate) static KIRO_UPSTREAM_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mute
 #[derive(Clone)]
 struct HttpState {
     provider_state: provider::ProviderState,
+    geoip: geoip::GeoIpResolver,
     request_activity: Arc<activity::RequestActivityTracker>,
     admin_config_store: Arc<dyn AdminConfigStore>,
     admin_key_store: Arc<dyn AdminKeyStore>,
@@ -106,14 +108,17 @@ pub fn bootstrap_storage(config: &StorageConfig) -> anyhow::Result<()> {
 /// Build the HTTP router.
 pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
     let request_activity = Arc::new(activity::RequestActivityTracker::new());
+    let geoip = runtime.geoip();
     let provider_state = provider::ProviderState::new_with_config_store_and_activity(
         runtime.control_store(),
         runtime.provider_route_store(),
         runtime.admin_config_store(),
         Arc::clone(&request_activity),
+        geoip.clone(),
     );
     let state = HttpState {
         provider_state,
+        geoip,
         request_activity,
         admin_config_store: runtime.admin_config_store(),
         admin_key_store: runtime.admin_key_store(),

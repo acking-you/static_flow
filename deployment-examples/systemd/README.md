@@ -62,6 +62,7 @@ Storage model:
 - state root: `/mnt/llm-access`
 - SQLite control DB: `/mnt/llm-access/control/llm-access.sqlite3`
 - active mutable DuckDB dir: `/var/lib/staticflow/llm-access/analytics-active`
+- GeoIP MMDB cache: `/var/lib/staticflow/llm-access/geoip/GeoLite2-City.mmdb`
 - archived DuckDB segments: `/mnt/llm-access/analytics/segments`
 - DuckDB segment catalog: `/mnt/llm-access/analytics/catalog`
 - JuiceFS cache dir: `/var/cache/juicefs/llm-access`
@@ -70,6 +71,8 @@ The production JuiceFS volume is backed by Cloudflare R2 object storage and
 external Valkey metadata. Credentials belong in ignored private env files, not
 in these templates. `llm-access.service` must be a single writer for the
 SQLite/DuckDB/auth tree.
+The GeoIP MMDB is a rebuildable local cache and should stay on the VM block
+disk, not under `/mnt/llm-access`.
 
 Bundle rendering and template validation:
 

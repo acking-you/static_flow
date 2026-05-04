@@ -189,12 +189,16 @@ Current GCP production services:
 
 /var/lib/staticflow/llm-access/analytics-active
   usage-active-*.duckdb              # current mutable DuckDB segment on VM disk
+
+/var/lib/staticflow/llm-access/geoip
+  GeoLite2-City.mmdb                 # rebuildable GeoIP cache on VM disk
 ```
 
 `/mnt/llm-access` is a JuiceFS mount backed by Cloudflare R2 object storage and
 Valkey metadata. The active mutable DuckDB file intentionally lives on local VM
-block storage, while only archived immutable segments and catalog data go to
-JuiceFS/R2. Do not run another writer against the same SQLite/DuckDB state.
+block storage, and the GeoIP MMDB cache also stays on the VM disk. Only
+archived immutable segments and catalog data go to JuiceFS/R2. Do not run
+another writer against the same SQLite/DuckDB state.
 
 Current local production binaries supervised by tmux:
 

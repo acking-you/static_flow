@@ -8,6 +8,7 @@ RequiresMountsFor=/mnt/llm-access
 Type=simple
 User=llm-access
 Group=llm-access
+Environment=GEOIP_DB_PATH=/var/lib/staticflow/llm-access/geoip/GeoLite2-City.mmdb
 EnvironmentFile=/etc/llm-access/llm-access.env
 Environment=STATICFLOW_LOG_DIR=/var/log/staticflow-runtime
 Environment=STATICFLOW_LOG_SERVICE=llm-access

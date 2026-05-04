@@ -39,7 +39,7 @@ use tokio::{
     time,
 };
 
-use crate::config::StorageConfig;
+use crate::{config::StorageConfig, geoip::GeoIpResolver};
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 const USAGE_EVENT_CHANNEL_CAPACITY: usize = 1_024;
@@ -48,6 +48,7 @@ const USAGE_EVENT_CHANNEL_CAPACITY: usize = 1_024;
 #[derive(Clone)]
 pub struct LlmAccessRuntime {
     control_store: Arc<dyn ControlStore>,
+    geoip: GeoIpResolver,
     provider_route_store: Arc<dyn ProviderRouteStore>,
     admin_config_store: Arc<dyn AdminConfigStore>,
     admin_key_store: Arc<dyn AdminKeyStore>,
@@ -70,6 +71,7 @@ pub struct LlmAccessRuntime {
 /// standalone service grows.
 struct LlmAccessStores {
     control_store: Arc<dyn ControlStore>,
+    geoip: GeoIpResolver,
     provider_route_store: Arc<dyn ProviderRouteStore>,
     admin_config_store: Arc<dyn AdminConfigStore>,
     admin_key_store: Arc<dyn AdminKeyStore>,
@@ -93,6 +95,7 @@ impl LlmAccessRuntime {
     pub fn new(control_store: Arc<dyn ControlStore>) -> Self {
         Self::with_stores(LlmAccessStores {
             control_store,
+            geoip: GeoIpResolver::disabled(),
             provider_route_store: Arc::new(EmptyProviderRouteStore),
             admin_config_store: Arc::new(EmptyAdminConfigStore),
             admin_key_store: Arc::new(EmptyAdminKeyStore),
@@ -119,6 +122,7 @@ impl LlmAccessRuntime {
     ) -> Self {
         Self::with_stores(LlmAccessStores {
             control_store,
+            geoip: GeoIpResolver::disabled(),
             provider_route_store: Arc::new(EmptyProviderRouteStore),
             admin_config_store: Arc::new(EmptyAdminConfigStore),
             admin_key_store: Arc::new(EmptyAdminKeyStore),
@@ -142,6 +146,7 @@ impl LlmAccessRuntime {
     fn with_stores(stores: LlmAccessStores) -> Self {
         Self {
             control_store: stores.control_store,
+            geoip: stores.geoip,
             provider_route_store: stores.provider_route_store,
             admin_config_store: stores.admin_config_store,
             admin_key_store: stores.admin_key_store,
@@ -164,6 +169,8 @@ impl LlmAccessRuntime {
     /// Open runtime dependencies from configured persistent storage.
     pub async fn from_storage_config(config: &StorageConfig) -> anyhow::Result<Self> {
         validate_state_root(config)?;
+        let geoip = GeoIpResolver::from_env()?;
+        geoip.warmup().await;
         let repository = Arc::new(SqliteControlRepository::open_path(&config.sqlite_control)?);
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let initial_runtime_config = repository.get_admin_runtime_config().await?;
@@ -233,6 +240,7 @@ impl LlmAccessRuntime {
         let public_status_store: Arc<dyn PublicStatusStore> = repository;
         Ok(Self::with_stores(LlmAccessStores {
             control_store,
+            geoip,
             provider_route_store,
             admin_config_store,
             admin_key_store,
@@ -255,6 +263,10 @@ impl LlmAccessRuntime {
     /// Shared control store used by request handlers.
     pub fn control_store(&self) -> Arc<dyn ControlStore> {
         Arc::clone(&self.control_store)
+    }
+
+    pub(crate) fn geoip(&self) -> GeoIpResolver {
+        self.geoip.clone()
     }
 
     /// Provider route store used by data-plane dispatch.

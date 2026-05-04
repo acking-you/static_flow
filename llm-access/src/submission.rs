@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::Url;
 
-use crate::HttpState;
+use crate::{geoip::GeoIpResolver, HttpState};
 
 const MAX_PUBLIC_TOKEN_WISH_REASON_CHARS: usize = 4000;
 const MAX_PUBLIC_TOKEN_WISH_QUOTA: u64 = 100_000_000_000;
@@ -104,10 +104,13 @@ pub(crate) async fn submit_public_token_request(
     headers: HeaderMap,
     Json(request): Json<SubmitLlmGatewayTokenRequest>,
 ) -> Response {
-    let request = match normalize_token_request(request, &headers, &state.public_submit_guard) {
-        Ok(request) => request,
-        Err(err) => return err.into_response(),
-    };
+    let request =
+        match normalize_token_request(request, &headers, &state.public_submit_guard, &state.geoip)
+            .await
+        {
+            Ok(request) => request,
+            Err(err) => return err.into_response(),
+        };
     let request_id = request.request_id.clone();
     match state
         .public_submission_store
@@ -128,12 +131,17 @@ pub(crate) async fn submit_public_account_contribution_request(
     headers: HeaderMap,
     Json(request): Json<SubmitLlmGatewayAccountContributionRequest>,
 ) -> Response {
-    let request =
-        match normalize_account_contribution_request(request, &headers, &state.public_submit_guard)
-        {
-            Ok(request) => request,
-            Err(err) => return err.into_response(),
-        };
+    let request = match normalize_account_contribution_request(
+        request,
+        &headers,
+        &state.public_submit_guard,
+        &state.geoip,
+    )
+    .await
+    {
+        Ok(request) => request,
+        Err(err) => return err.into_response(),
+    };
     let request_id = request.request_id.clone();
     match state
         .public_submission_store
@@ -154,7 +162,14 @@ pub(crate) async fn submit_public_sponsor_request(
     headers: HeaderMap,
     Json(request): Json<SubmitLlmGatewaySponsorRequest>,
 ) -> Response {
-    let request = match normalize_sponsor_request(request, &headers, &state.public_submit_guard) {
+    let request = match normalize_sponsor_request(
+        request,
+        &headers,
+        &state.public_submit_guard,
+        &state.geoip,
+    )
+    .await
+    {
         Ok(request) => request,
         Err(err) => return err.into_response(),
     };
@@ -174,10 +189,11 @@ pub(crate) async fn submit_public_sponsor_request(
     }
 }
 
-fn normalize_token_request(
+async fn normalize_token_request(
     request: SubmitLlmGatewayTokenRequest,
     headers: &HeaderMap,
     guard: &Arc<PublicSubmitGuard>,
+    geoip: &GeoIpResolver,
 ) -> Result<NewPublicTokenRequest, SubmitError> {
     if request.requested_quota_billable_limit == 0 {
         return Err(bad_request("requested_quota_billable_limit must be > 0"));
@@ -197,7 +213,7 @@ fn normalize_token_request(
         .ok_or_else(|| bad_request("requester_email is required"))?;
     let frontend_page_url = normalize_frontend_page_url_input(request.frontend_page_url)
         .map_err(|err| bad_request(&format!("invalid frontend_page_url: {err}")))?;
-    let submit_context = submit_context(headers, guard)?;
+    let submit_context = submit_context(headers, guard, geoip).await?;
 
     Ok(NewPublicTokenRequest {
         request_id: generate_task_id("llmwish"),
@@ -212,10 +228,11 @@ fn normalize_token_request(
     })
 }
 
-fn normalize_account_contribution_request(
+async fn normalize_account_contribution_request(
     request: SubmitLlmGatewayAccountContributionRequest,
     headers: &HeaderMap,
     guard: &Arc<PublicSubmitGuard>,
+    geoip: &GeoIpResolver,
 ) -> Result<NewPublicAccountContributionRequest, SubmitError> {
     let account_name =
         validate_account_name(&request.account_name).map_err(|err| bad_request(&err))?;
@@ -240,7 +257,7 @@ fn normalize_account_contribution_request(
         .map_err(|err| bad_request(&format!("invalid github_id: {err}")))?;
     let frontend_page_url = normalize_frontend_page_url_input(request.frontend_page_url)
         .map_err(|err| bad_request(&format!("invalid frontend_page_url: {err}")))?;
-    let submit_context = submit_context(headers, guard)?;
+    let submit_context = submit_context(headers, guard, geoip).await?;
 
     Ok(NewPublicAccountContributionRequest {
         request_id: generate_task_id("llmacct"),
@@ -260,10 +277,11 @@ fn normalize_account_contribution_request(
     })
 }
 
-fn normalize_sponsor_request(
+async fn normalize_sponsor_request(
     request: SubmitLlmGatewaySponsorRequest,
     headers: &HeaderMap,
     guard: &Arc<PublicSubmitGuard>,
+    geoip: &GeoIpResolver,
 ) -> Result<NewPublicSponsorRequest, SubmitError> {
     let requester_email = normalize_requester_email_input(Some(request.requester_email))
         .map_err(|err| bad_request(&format!("invalid requester_email: {err}")))?
@@ -281,7 +299,7 @@ fn normalize_sponsor_request(
         .map_err(|err| bad_request(&format!("invalid github_id: {err}")))?;
     let frontend_page_url = normalize_frontend_page_url_input(request.frontend_page_url)
         .map_err(|err| bad_request(&format!("invalid frontend_page_url: {err}")))?;
-    let submit_context = submit_context(headers, guard)?;
+    let submit_context = submit_context(headers, guard, geoip).await?;
 
     Ok(NewPublicSponsorRequest {
         request_id: generate_task_id("llmsponsor"),
@@ -304,9 +322,10 @@ struct SubmitContext {
     now_ms: i64,
 }
 
-fn submit_context(
+async fn submit_context(
     headers: &HeaderMap,
     guard: &Arc<PublicSubmitGuard>,
+    geoip: &GeoIpResolver,
 ) -> Result<SubmitContext, SubmitError> {
     let now_ms = now_ms();
     let client_ip = extract_client_ip(headers);
@@ -319,10 +338,11 @@ fn submit_context(
         PUBLIC_SUBMIT_RATE_LIMIT_SECONDS,
         "llm-access public submission",
     )?;
+    let ip_region = geoip.resolve_region(&client_ip).await;
     Ok(SubmitContext {
         fingerprint,
         client_ip,
-        ip_region: "unknown".to_string(),
+        ip_region,
         now_ms,
     })
 }
@@ -599,5 +619,27 @@ fn internal_error(message: &str) -> SubmitError {
     SubmitError {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         message: message.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn submit_context_resolves_client_ip_region() {
+        let resolver = crate::geoip::GeoIpResolver::fixed_for_tests("Singapore/Singapore");
+        let headers = HeaderMap::from_iter([(
+            "x-forwarded-for".parse().expect("header name"),
+            "208.77.246.15".parse().expect("header value"),
+        )]);
+        let guard = Arc::new(PublicSubmitGuard::default());
+
+        let context = submit_context(&headers, &guard, &resolver)
+            .await
+            .expect("submit context");
+
+        assert_eq!(context.client_ip, "208.77.246.15");
+        assert_eq!(context.ip_region, "Singapore/Singapore");
     }
 }

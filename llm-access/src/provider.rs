@@ -80,7 +80,7 @@ use llm_access_kiro::{
 };
 use serde_json::Value;
 
-use crate::{activity::RequestActivityTracker, codex_refresh, kiro_refresh};
+use crate::{activity::RequestActivityTracker, codex_refresh, geoip::GeoIpResolver, kiro_refresh};
 
 const MAX_PROVIDER_PROXY_BODY_BYTES: usize = 32 * 1024 * 1024;
 const DEFAULT_WIRE_ORIGINATOR: &str = "codex_cli_rs";
@@ -124,7 +124,14 @@ struct ProviderUsageMetadata {
 }
 
 impl ProviderUsageMetadata {
-    fn from_request_parts(method: &Method, uri: &axum::http::Uri, headers: &HeaderMap) -> Self {
+    async fn from_request_parts(
+        method: &Method,
+        uri: &axum::http::Uri,
+        headers: &HeaderMap,
+        geoip: &GeoIpResolver,
+    ) -> Self {
+        let client_ip = extract_client_ip_from_headers(headers);
+        let ip_region = geoip.resolve_region(&client_ip).await;
         Self {
             started_at: Instant::now(),
             request_method: method.as_str().to_string(),
@@ -140,8 +147,8 @@ impl ProviderUsageMetadata {
             stream_finish_ms: None,
             quota_failover_count: 0,
             routing_diagnostics_json: None,
-            client_ip: extract_client_ip_from_headers(headers),
-            ip_region: "unknown".to_string(),
+            client_ip,
+            ip_region,
             request_headers_json: serialize_headers_json(headers),
             last_message_content: None,
             client_request_body_json: None,
@@ -230,6 +237,7 @@ fn capture_upstream_request_body_json(meta: &mut ProviderUsageMetadata, body: &[
 pub struct ProviderState {
     control_store: Arc<dyn ControlStore>,
     route_store: Arc<dyn ProviderRouteStore>,
+    geoip: GeoIpResolver,
     admin_config_store: Arc<dyn AdminConfigStore>,
     dispatcher: Arc<dyn ProviderDispatcher>,
     kiro_cache_simulator: Arc<KiroCacheSimulator>,
@@ -244,6 +252,7 @@ pub struct ProviderState {
 pub struct ProviderDispatchDeps {
     route_store: Arc<dyn ProviderRouteStore>,
     control_store: Arc<dyn ControlStore>,
+    geoip: GeoIpResolver,
     admin_config_store: Arc<dyn AdminConfigStore>,
     kiro_cache_simulator: Arc<KiroCacheSimulator>,
     request_limiter: Arc<RequestLimiter>,
@@ -271,6 +280,7 @@ impl ProviderState {
             route_store,
             admin_config_store,
             Arc::new(RequestActivityTracker::new()),
+            GeoIpResolver::disabled(),
         )
     }
 
@@ -279,6 +289,7 @@ impl ProviderState {
         route_store: Arc<dyn ProviderRouteStore>,
         admin_config_store: Arc<dyn AdminConfigStore>,
         request_activity: Arc<RequestActivityTracker>,
+        geoip: GeoIpResolver,
     ) -> Self {
         Self::with_dispatcher_and_config_store(
             control_store,
@@ -286,6 +297,7 @@ impl ProviderState {
             admin_config_store,
             Arc::new(DefaultProviderDispatcher),
             request_activity,
+            geoip,
         )
     }
 
@@ -301,6 +313,7 @@ impl ProviderState {
             Arc::new(EmptyAdminConfigStore),
             dispatcher,
             Arc::new(RequestActivityTracker::new()),
+            GeoIpResolver::disabled(),
         )
     }
 
@@ -310,10 +323,12 @@ impl ProviderState {
         admin_config_store: Arc<dyn AdminConfigStore>,
         dispatcher: Arc<dyn ProviderDispatcher>,
         request_activity: Arc<RequestActivityTracker>,
+        geoip: GeoIpResolver,
     ) -> Self {
         Self {
             control_store,
             route_store,
+            geoip,
             admin_config_store,
             dispatcher,
             kiro_cache_simulator: Arc::new(KiroCacheSimulator::default()),
@@ -339,6 +354,7 @@ impl ProviderState {
         ProviderDispatchDeps {
             route_store: Arc::clone(&self.route_store),
             control_store: Arc::clone(&self.control_store),
+            geoip: self.geoip.clone(),
             admin_config_store: Arc::clone(&self.admin_config_store),
             kiro_cache_simulator: Arc::clone(&self.kiro_cache_simulator),
             request_limiter: Arc::clone(&self.request_limiter),
@@ -703,27 +719,10 @@ impl ProviderDispatcher for DefaultProviderDispatcher {
         deps: ProviderDispatchDeps,
     ) -> Response {
         if ProviderType::from_storage_str(&key.provider_type) == Some(ProviderType::Codex) {
-            return dispatch_codex_proxy(
-                key,
-                request,
-                deps.route_store,
-                deps.control_store,
-                deps.admin_config_store,
-                deps.request_limiter,
-            )
-            .await;
+            return dispatch_codex_proxy(key, request, deps).await;
         }
         if ProviderType::from_storage_str(&key.provider_type) == Some(ProviderType::Kiro) {
-            return dispatch_kiro_proxy(
-                key,
-                request,
-                deps.route_store,
-                deps.control_store,
-                deps.kiro_cache_simulator,
-                deps.request_limiter,
-                deps.kiro_request_scheduler,
-            )
-            .await;
+            return dispatch_kiro_proxy(key, request, deps).await;
         }
         (StatusCode::NOT_IMPLEMENTED, "provider dispatch is not wired").into_response()
     }
@@ -732,16 +731,23 @@ impl ProviderDispatcher for DefaultProviderDispatcher {
 async fn dispatch_codex_proxy(
     key: AuthenticatedKey,
     request: Request<Body>,
-    route_store: Arc<dyn ProviderRouteStore>,
-    control_store: Arc<dyn ControlStore>,
-    admin_config_store: Arc<dyn AdminConfigStore>,
-    request_limiter: Arc<RequestLimiter>,
+    deps: ProviderDispatchDeps,
 ) -> Response {
+    let ProviderDispatchDeps {
+        route_store,
+        control_store,
+        geoip,
+        admin_config_store,
+        request_limiter,
+        ..
+    } = deps;
     let mut usage_meta = ProviderUsageMetadata::from_request_parts(
         request.method(),
         request.uri(),
         request.headers(),
-    );
+        &geoip,
+    )
+    .await;
     let routes = match route_store.resolve_codex_route_candidates(&key).await {
         Ok(routes) if !routes.is_empty() => routes,
         Ok(_) => {
@@ -2023,17 +2029,24 @@ fn inject_kiro_vision_bridge_context(payload: &mut MessagesRequest, description:
 async fn dispatch_kiro_proxy(
     key: AuthenticatedKey,
     request: Request<Body>,
-    route_store: Arc<dyn ProviderRouteStore>,
-    control_store: Arc<dyn ControlStore>,
-    kiro_cache_simulator: Arc<KiroCacheSimulator>,
-    request_limiter: Arc<RequestLimiter>,
-    kiro_request_scheduler: Arc<KiroRequestScheduler>,
+    deps: ProviderDispatchDeps,
 ) -> Response {
+    let ProviderDispatchDeps {
+        route_store,
+        control_store,
+        geoip,
+        kiro_cache_simulator,
+        request_limiter,
+        kiro_request_scheduler,
+        ..
+    } = deps;
     let mut usage_meta = ProviderUsageMetadata::from_request_parts(
         request.method(),
         request.uri(),
         request.headers(),
-    );
+        &geoip,
+    )
+    .await;
     let routes = match route_store.resolve_kiro_route_candidates(&key).await {
         Ok(routes) if !routes.is_empty() => routes,
         Ok(_) => {
@@ -5929,6 +5942,27 @@ mod tests {
             Some(Duration::from_secs(60))
         );
         assert!(super::is_monthly_request_limit(r#"{"error":{"reason":"MONTHLY_REQUEST_COUNT"}}"#));
+    }
+
+    #[tokio::test]
+    async fn usage_metadata_resolves_client_ip_region() {
+        let resolver = crate::geoip::GeoIpResolver::fixed_for_tests("Singapore/Singapore");
+        let headers = HeaderMap::from_iter([(
+            "x-forwarded-for".parse().expect("header name"),
+            "208.77.246.15".parse().expect("header value"),
+        )]);
+        let uri = "/api/kiro-gateway/v1/messages".parse().expect("uri");
+
+        let metadata = super::ProviderUsageMetadata::from_request_parts(
+            &super::Method::POST,
+            &uri,
+            &headers,
+            &resolver,
+        )
+        .await;
+
+        assert_eq!(metadata.client_ip, "208.77.246.15");
+        assert_eq!(metadata.ip_region, "Singapore/Singapore");
     }
 
     fn test_state() -> super::ProviderState {
