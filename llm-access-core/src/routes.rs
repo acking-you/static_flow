@@ -90,6 +90,14 @@ pub const PUBLIC_PROVIDER_ROUTES: &[RouteSpec] = &[
     },
     RouteSpec {
         method: "POST",
+        path: "/v1/messages",
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/messages/count_tokens",
+    },
+    RouteSpec {
+        method: "POST",
         path: "/api/kiro-gateway/v1/messages",
     },
     RouteSpec {
@@ -270,7 +278,9 @@ pub fn is_llm_access_path(path: &str) -> bool {
 
 /// Return the provider/protocol contract for provider data-plane routes.
 pub fn provider_route_requirement(path: &str) -> Option<ProviderRouteRequirement> {
-    if path.starts_with("/cc/v1/")
+    if path == "/v1/messages"
+        || path == "/v1/messages/count_tokens"
+        || path.starts_with("/cc/v1/")
         || path.starts_with("/api/kiro-gateway/v1/")
         || path.starts_with("/api/kiro-gateway/cc/v1/")
     {
@@ -300,6 +310,7 @@ mod tests {
             .map(|route| route.path)
             .collect::<Vec<_>>();
         assert!(paths.contains(&"/api/llm-gateway/v1/*path"));
+        assert!(paths.contains(&"/v1/messages"));
         assert!(paths.contains(&"/api/kiro-gateway/v1/messages"));
         assert!(paths.contains(&"/api/kiro-gateway/cc/v1/messages"));
         assert!(paths.contains(&"/api/llm-gateway/public-usage/query"));
@@ -338,6 +349,8 @@ mod tests {
         };
 
         assert_eq!(provider_route_requirement("/v1/responses"), Some(codex));
+        assert_eq!(provider_route_requirement("/v1/messages"), Some(kiro));
+        assert_eq!(provider_route_requirement("/v1/messages/count_tokens"), Some(kiro));
         assert_eq!(provider_route_requirement("/api/llm-gateway/v1/responses"), Some(codex));
         assert_eq!(provider_route_requirement("/api/codex-gateway/v1/responses"), Some(codex));
         assert_eq!(provider_route_requirement("/cc/v1/messages"), Some(kiro));

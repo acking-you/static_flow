@@ -2,6 +2,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -14,6 +15,7 @@ use axum::{
     http::{header, HeaderMap, Method, Request, StatusCode},
     response::{IntoResponse, Response},
 };
+use base64::Engine as _;
 use eventsource_stream::Eventsource;
 use futures_util::{StreamExt, TryStreamExt};
 use llm_access_codex::{
@@ -44,7 +46,7 @@ use llm_access_kiro::{
     anthropic::{
         converter::{
             convert_normalized_request_with_resolved_session, current_user_message_range,
-            extract_tool_result_content, normalize_request, preview_session_value,
+            extract_tool_result_content, map_model, normalize_request, preview_session_value,
             resolve_conversation_id_from_metadata, ConversionError, ResolvedConversationId,
             SessionFallbackReason, SessionIdSource, SessionTracking,
         },
@@ -71,7 +73,10 @@ use llm_access_kiro::{
     parser::decoder::EventStreamDecoder,
     scheduler::{KiroRequestLease, KiroRequestScheduler},
     token,
-    wire::{ConversationState, Event, KiroRequest},
+    wire::{
+        ConversationState, CurrentMessage, Event, KiroImage, KiroRequest, UserInputMessage,
+        UserInputMessageContext,
+    },
 };
 use serde_json::Value;
 
@@ -82,8 +87,16 @@ const DEFAULT_WIRE_ORIGINATOR: &str = "codex_cli_rs";
 const MAX_CODEX_CLIENT_VERSION_LEN: usize = 64;
 const KIRO_PROVIDER_AWS_SDK_VERSION: &str = "1.0.34";
 const KIRO_GENERATE_REQUEST_MAX_BODY_BYTES: usize = 1_600_000;
+const KIRO_REMOTE_IMAGE_MAX_BYTES: usize = 1_000_000;
+const KIRO_REMOTE_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
+const KIRO_REMOTE_MEDIA_TIMEOUT: Duration = Duration::from_secs(15);
 const KIRO_LAST_MESSAGE_PART_PREVIEW_CHARS: usize = 320;
 const KIRO_LAST_MESSAGE_TOTAL_PREVIEW_CHARS: usize = 1_024;
+const KIRO_VISION_BRIDGE_MODEL: &str = "claude-sonnet-4.6";
+const KIRO_VISION_BRIDGE_PROMPT: &str = "Describe the attached image(s) for another Claude model \
+                                         that will answer the user's request. Include visible \
+                                         text, objects, colors, layout, charts, tables, and \
+                                         uncertainty. Return concise numbered visual facts only.";
 
 #[derive(Debug, Clone)]
 struct ProviderUsageMetadata {
@@ -1203,6 +1216,810 @@ fn stream_codex_upstream_response(
         })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KiroRemoteMediaKind {
+    Image,
+    Document,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct KiroRemoteMediaRequest<'a> {
+    url: &'a str,
+    kind: KiroRemoteMediaKind,
+}
+
+#[derive(Debug)]
+struct ResolvedKiroRemoteMedia {
+    media_type: Option<String>,
+    bytes: Bytes,
+}
+
+#[derive(Debug)]
+struct KiroRemoteMediaResolutionError {
+    message: String,
+}
+
+impl KiroRemoteMediaResolutionError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    fn with_context(self, context: impl AsRef<str>) -> Self {
+        Self {
+            message: format!("{}: {}", context.as_ref(), self.message),
+        }
+    }
+}
+
+impl std::fmt::Display for KiroRemoteMediaResolutionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+#[async_trait]
+trait KiroRemoteMediaFetcher: Sync {
+    async fn fetch(
+        &self,
+        request: KiroRemoteMediaRequest<'_>,
+    ) -> Result<ResolvedKiroRemoteMedia, KiroRemoteMediaResolutionError>;
+}
+
+struct ReqwestKiroRemoteMediaFetcher {
+    client: reqwest::Client,
+}
+
+#[async_trait]
+impl KiroRemoteMediaFetcher for ReqwestKiroRemoteMediaFetcher {
+    async fn fetch(
+        &self,
+        request: KiroRemoteMediaRequest<'_>,
+    ) -> Result<ResolvedKiroRemoteMedia, KiroRemoteMediaResolutionError> {
+        let url = validate_kiro_remote_media_url(request.url)?;
+        validate_kiro_remote_media_resolved_addresses(&url).await?;
+        let max_bytes = match request.kind {
+            KiroRemoteMediaKind::Image => KIRO_REMOTE_IMAGE_MAX_BYTES,
+            KiroRemoteMediaKind::Document => KIRO_REMOTE_DOCUMENT_MAX_BYTES,
+        };
+        let response = self
+            .client
+            .get(url.clone())
+            .header(reqwest::header::ACCEPT, kiro_remote_media_accept_header(request.kind))
+            .send()
+            .await
+            .map_err(|err| {
+                KiroRemoteMediaResolutionError::new(format!("failed to fetch URL source: {err}"))
+            })?;
+        if !response.status().is_success() {
+            return Err(KiroRemoteMediaResolutionError::new(format!(
+                "URL source returned HTTP {}",
+                response.status()
+            )));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > max_bytes as u64)
+        {
+            return Err(KiroRemoteMediaResolutionError::new(format!(
+                "URL source exceeds {} byte limit",
+                max_bytes
+            )));
+        }
+        let media_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(normalize_media_type);
+        let bytes = response.bytes().await.map_err(|err| {
+            KiroRemoteMediaResolutionError::new(format!("failed to read URL source body: {err}"))
+        })?;
+        if bytes.len() > max_bytes {
+            return Err(KiroRemoteMediaResolutionError::new(format!(
+                "URL source exceeds {} byte limit",
+                max_bytes
+            )));
+        }
+        if bytes.is_empty() {
+            return Err(KiroRemoteMediaResolutionError::new("URL source body is empty"));
+        }
+        Ok(ResolvedKiroRemoteMedia {
+            media_type,
+            bytes,
+        })
+    }
+}
+
+fn kiro_remote_media_accept_header(kind: KiroRemoteMediaKind) -> &'static str {
+    match kind {
+        KiroRemoteMediaKind::Image => "image/jpeg,image/png,image/gif,image/webp",
+        KiroRemoteMediaKind::Document => "application/pdf,text/plain,text/*",
+    }
+}
+
+async fn resolve_kiro_remote_media_sources(
+    payload: &mut MessagesRequest,
+) -> Result<(), KiroRemoteMediaResolutionError> {
+    if !payload_has_kiro_remote_media_sources(payload) {
+        return Ok(());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(KIRO_REMOTE_MEDIA_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|err| {
+            KiroRemoteMediaResolutionError::new(format!(
+                "failed to initialize URL source client: {err}"
+            ))
+        })?;
+    let fetcher = ReqwestKiroRemoteMediaFetcher {
+        client,
+    };
+    resolve_kiro_remote_media_sources_with_fetcher(payload, &fetcher).await
+}
+
+fn payload_has_kiro_remote_media_sources(payload: &MessagesRequest) -> bool {
+    payload.messages.iter().any(|message| {
+        message.role == "user"
+            && message
+                .content
+                .as_array()
+                .is_some_and(|items| items.iter().any(is_kiro_remote_media_source_block))
+    })
+}
+
+fn is_kiro_remote_media_source_block(item: &serde_json::Value) -> bool {
+    let Some(object) = item.as_object() else {
+        return false;
+    };
+    let Some("image" | "document") = object.get("type").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    object
+        .get("source")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|source| source.get("type"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        == Some("url")
+}
+
+async fn resolve_kiro_remote_media_sources_with_fetcher(
+    payload: &mut MessagesRequest,
+    fetcher: &(dyn KiroRemoteMediaFetcher + Sync),
+) -> Result<(), KiroRemoteMediaResolutionError> {
+    for (message_index, message) in payload.messages.iter_mut().enumerate() {
+        if message.role != "user" {
+            continue;
+        }
+        let Some(items) = message.content.as_array_mut() else {
+            continue;
+        };
+        for (block_index, item) in items.iter_mut().enumerate() {
+            let Some(source) = pending_kiro_remote_media_source(item, message_index, block_index)?
+            else {
+                continue;
+            };
+            let remote = fetcher
+                .fetch(KiroRemoteMediaRequest {
+                    url: &source.url,
+                    kind: source.kind,
+                })
+                .await
+                .map_err(|err| {
+                    err.with_context(format!(
+                        "message {message_index} {} block {block_index}",
+                        source.block_type
+                    ))
+                })?;
+            let replacement = match source.kind {
+                KiroRemoteMediaKind::Image => build_kiro_remote_image_source(
+                    source.source_media_type.as_deref(),
+                    remote.media_type.as_deref(),
+                    &source.url,
+                    &remote.bytes,
+                )?,
+                KiroRemoteMediaKind::Document => build_kiro_remote_document_source(
+                    source.source_media_type.as_deref(),
+                    remote.media_type.as_deref(),
+                    &source.url,
+                    &remote.bytes,
+                )?,
+            };
+            if let Some(object) = item.as_object_mut() {
+                object.insert("source".to_string(), replacement);
+            }
+        }
+    }
+    Ok(())
+}
+
+struct PendingKiroRemoteMediaSource {
+    kind: KiroRemoteMediaKind,
+    block_type: &'static str,
+    url: String,
+    source_media_type: Option<String>,
+}
+
+fn pending_kiro_remote_media_source(
+    item: &serde_json::Value,
+    message_index: usize,
+    block_index: usize,
+) -> Result<Option<PendingKiroRemoteMediaSource>, KiroRemoteMediaResolutionError> {
+    let Some(object) = item.as_object() else {
+        return Ok(None);
+    };
+    let Some(block_type) = object.get("type").and_then(serde_json::Value::as_str) else {
+        return Ok(None);
+    };
+    let (kind, block_type) = match block_type {
+        "image" => (KiroRemoteMediaKind::Image, "image"),
+        "document" => (KiroRemoteMediaKind::Document, "document"),
+        _ => return Ok(None),
+    };
+    let Some(source) = object.get("source").and_then(serde_json::Value::as_object) else {
+        return Ok(None);
+    };
+    let Some(source_type) = source
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+    else {
+        return Ok(None);
+    };
+    if source_type != "url" {
+        return Ok(None);
+    }
+    let Some(url) = source
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(KiroRemoteMediaResolutionError::new(format!(
+            "message {message_index} {block_type} block {block_index} URL source is missing url"
+        )));
+    };
+    Ok(Some(PendingKiroRemoteMediaSource {
+        kind,
+        block_type,
+        url: url.to_string(),
+        source_media_type: source
+            .get("media_type")
+            .and_then(serde_json::Value::as_str)
+            .and_then(normalize_media_type),
+    }))
+}
+
+fn build_kiro_remote_image_source(
+    source_media_type: Option<&str>,
+    response_media_type: Option<&str>,
+    url: &str,
+    bytes: &[u8],
+) -> Result<serde_json::Value, KiroRemoteMediaResolutionError> {
+    if bytes.is_empty() {
+        return Err(KiroRemoteMediaResolutionError::new("URL source body is empty"));
+    }
+    let media_type = response_media_type
+        .and_then(canonical_image_media_type)
+        .or_else(|| source_media_type.and_then(canonical_image_media_type))
+        .or_else(|| image_media_type_from_url(url))
+        .ok_or_else(|| {
+            KiroRemoteMediaResolutionError::new(
+                "URL image source must resolve to image/jpeg, image/png, image/gif, or image/webp",
+            )
+        })?;
+    Ok(serde_json::json!({
+        "type": "base64",
+        "media_type": media_type,
+        "data": base64::engine::general_purpose::STANDARD.encode(bytes)
+    }))
+}
+
+fn build_kiro_remote_document_source(
+    source_media_type: Option<&str>,
+    response_media_type: Option<&str>,
+    url: &str,
+    bytes: &[u8],
+) -> Result<serde_json::Value, KiroRemoteMediaResolutionError> {
+    if bytes.is_empty() {
+        return Err(KiroRemoteMediaResolutionError::new("URL source body is empty"));
+    }
+    let media_type = response_media_type
+        .and_then(canonical_document_media_type)
+        .or_else(|| source_media_type.and_then(canonical_document_media_type))
+        .or_else(|| document_media_type_from_url(url))
+        .ok_or_else(|| {
+            KiroRemoteMediaResolutionError::new(
+                "URL document source must resolve to application/pdf or text/plain",
+            )
+        })?;
+    match media_type {
+        "application/pdf" => Ok(serde_json::json!({
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": base64::engine::general_purpose::STANDARD.encode(bytes)
+        })),
+        "text/plain" => {
+            let text = std::str::from_utf8(bytes).map_err(|err| {
+                KiroRemoteMediaResolutionError::new(format!(
+                    "URL text document source is not valid UTF-8: {err}"
+                ))
+            })?;
+            Ok(serde_json::json!({
+                "type": "text",
+                "media_type": "text/plain",
+                "data": text
+            }))
+        },
+        _ => unreachable!("document media type is normalized to the supported set"),
+    }
+}
+
+fn normalize_media_type(value: &str) -> Option<String> {
+    value
+        .split(';')
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+}
+
+fn canonical_image_media_type(media_type: &str) -> Option<&'static str> {
+    match media_type {
+        "image/jpeg" | "image/jpg" => Some("image/jpeg"),
+        "image/png" => Some("image/png"),
+        "image/gif" => Some("image/gif"),
+        "image/webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+fn canonical_document_media_type(media_type: &str) -> Option<&'static str> {
+    match media_type {
+        "application/pdf" => Some("application/pdf"),
+        "text/plain" => Some("text/plain"),
+        value if value.starts_with("text/") => Some("text/plain"),
+        _ => None,
+    }
+}
+
+fn image_media_type_from_url(url: &str) -> Option<&'static str> {
+    match lower_url_path_extension(url).as_deref() {
+        Some("jpg" | "jpeg") => Some("image/jpeg"),
+        Some("png") => Some("image/png"),
+        Some("gif") => Some("image/gif"),
+        Some("webp") => Some("image/webp"),
+        _ => None,
+    }
+}
+
+fn document_media_type_from_url(url: &str) -> Option<&'static str> {
+    match lower_url_path_extension(url).as_deref() {
+        Some("pdf") => Some("application/pdf"),
+        Some("txt") => Some("text/plain"),
+        _ => None,
+    }
+}
+
+fn lower_url_path_extension(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    parsed
+        .path_segments()
+        .and_then(Iterator::last)
+        .and_then(|name| {
+            name.rsplit_once('.')
+                .map(|(_, ext)| ext.to_ascii_lowercase())
+        })
+}
+
+fn validate_kiro_remote_media_url(
+    raw_url: &str,
+) -> Result<url::Url, KiroRemoteMediaResolutionError> {
+    let url = url::Url::parse(raw_url)
+        .map_err(|err| KiroRemoteMediaResolutionError::new(format!("invalid URL source: {err}")))?;
+    match url.scheme() {
+        "http" | "https" => {},
+        _ => {
+            return Err(KiroRemoteMediaResolutionError::new(
+                "URL source scheme must be http or https",
+            ))
+        },
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| KiroRemoteMediaResolutionError::new("URL source is missing host"))?;
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+        return Err(KiroRemoteMediaResolutionError::new("URL source host must not be localhost"));
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        reject_private_kiro_remote_media_ip(ip)?;
+    }
+    Ok(url)
+}
+
+async fn validate_kiro_remote_media_resolved_addresses(
+    url: &url::Url,
+) -> Result<(), KiroRemoteMediaResolutionError> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| KiroRemoteMediaResolutionError::new("URL source is missing host"))?;
+    if host.parse::<IpAddr>().is_ok() {
+        return Ok(());
+    }
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| KiroRemoteMediaResolutionError::new("URL source is missing port"))?;
+    let addresses = tokio::net::lookup_host((host, port)).await.map_err(|err| {
+        KiroRemoteMediaResolutionError::new(format!("failed to resolve URL source host: {err}"))
+    })?;
+    let mut resolved_any = false;
+    for address in addresses {
+        resolved_any = true;
+        reject_private_kiro_remote_media_ip(address.ip())?;
+    }
+    if !resolved_any {
+        return Err(KiroRemoteMediaResolutionError::new(
+            "URL source host resolved to no addresses",
+        ));
+    }
+    Ok(())
+}
+
+fn reject_private_kiro_remote_media_ip(ip: IpAddr) -> Result<(), KiroRemoteMediaResolutionError> {
+    if is_private_kiro_remote_media_ip(ip) {
+        Err(KiroRemoteMediaResolutionError::new(
+            "URL source host resolves to a private or local address",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn is_private_kiro_remote_media_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => is_private_kiro_remote_media_ipv4(ip),
+        IpAddr::V6(ip) => is_private_kiro_remote_media_ipv6(ip),
+    }
+}
+
+fn is_private_kiro_remote_media_ipv4(ip: Ipv4Addr) -> bool {
+    ip.is_private()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        || ip == Ipv4Addr::UNSPECIFIED
+}
+
+fn is_private_kiro_remote_media_ipv6(ip: Ipv6Addr) -> bool {
+    ip.is_loopback()
+        || ip.is_unique_local()
+        || ip.is_unicast_link_local()
+        || ip.is_unspecified()
+        || matches!(ip.segments(), [0x2001, 0x0db8, _, _, _, _, _, _])
+}
+
+#[derive(Debug, Clone)]
+struct KiroVisionBridgeImage {
+    format: String,
+    data: String,
+}
+
+fn kiro_opus_vision_bridge_required(payload: &MessagesRequest) -> bool {
+    matches!(map_model(&payload.model).as_deref(), Some("claude-opus-4.6"))
+        && !collect_kiro_vision_bridge_images(payload).is_empty()
+}
+
+fn collect_kiro_vision_bridge_images(payload: &MessagesRequest) -> Vec<KiroVisionBridgeImage> {
+    let mut images = Vec::new();
+    for message in &payload.messages {
+        if message.role != "user" {
+            continue;
+        }
+        let Some(items) = message.content.as_array() else {
+            continue;
+        };
+        for item in items {
+            let Some(object) = item.as_object() else {
+                continue;
+            };
+            if object.get("type").and_then(serde_json::Value::as_str) != Some("image") {
+                continue;
+            }
+            let Some(source) = object.get("source").and_then(serde_json::Value::as_object) else {
+                continue;
+            };
+            if source.get("type").and_then(serde_json::Value::as_str) != Some("base64") {
+                continue;
+            }
+            let Some(media_type) = source
+                .get("media_type")
+                .and_then(serde_json::Value::as_str)
+                .and_then(kiro_image_format_from_media_type)
+            else {
+                continue;
+            };
+            let Some(data) = source
+                .get("data")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            images.push(KiroVisionBridgeImage {
+                format: media_type.to_string(),
+                data: data.to_string(),
+            });
+        }
+    }
+    images
+}
+
+fn kiro_image_format_from_media_type(media_type: &str) -> Option<&'static str> {
+    match canonical_image_media_type(media_type) {
+        Some("image/jpeg") => Some("jpeg"),
+        Some("image/png") => Some("png"),
+        Some("image/gif") => Some("gif"),
+        Some("image/webp") => Some("webp"),
+        _ => None,
+    }
+}
+
+fn kiro_vision_bridge_user_context(payload: &MessagesRequest) -> String {
+    let mut parts = Vec::new();
+    for message in &payload.messages {
+        if message.role != "user" {
+            continue;
+        }
+        match &message.content {
+            serde_json::Value::String(text) => {
+                if !text.trim().is_empty() {
+                    parts.push(text.trim().to_string());
+                }
+            },
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    if item.get("type").and_then(serde_json::Value::as_str) == Some("text") {
+                        if let Some(text) = item
+                            .get("text")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                        {
+                            parts.push(text.to_string());
+                        }
+                    }
+                }
+            },
+            _ => {},
+        }
+    }
+    parts.join("\n")
+}
+
+fn build_kiro_vision_bridge_request(
+    route: &ProviderKiroRoute,
+    images: &[KiroVisionBridgeImage],
+    user_context: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let mut content = KIRO_VISION_BRIDGE_PROMPT.to_string();
+    if !user_context.trim().is_empty() {
+        content.push_str("\n\nUser request context:\n");
+        content.push_str(user_context.trim());
+    }
+    let user_input = UserInputMessage {
+        user_input_message_context: UserInputMessageContext::default(),
+        content,
+        model_id: KIRO_VISION_BRIDGE_MODEL.to_string(),
+        images: images
+            .iter()
+            .map(|image| KiroImage::from_base64(image.format.clone(), image.data.clone()))
+            .collect(),
+        origin: Some("AI_EDITOR".to_string()),
+    };
+    let conversation_state = ConversationState::new(uuid::Uuid::new_v4().to_string())
+        .with_agent_continuation_id(uuid::Uuid::new_v4().to_string())
+        .with_agent_task_type("vibe")
+        .with_chat_trigger_type("MANUAL")
+        .with_current_message(CurrentMessage::new(user_input));
+    Ok(serde_json::to_vec(&KiroRequest {
+        conversation_state,
+        profile_arn: route.profile_arn.clone(),
+    })?)
+}
+
+fn kiro_assistant_text_from_response_bytes(bytes: &[u8]) -> Result<String, String> {
+    let events = decode_kiro_events_from_bytes(bytes)?;
+    let mut text = String::new();
+    for event in events {
+        match event {
+            Event::AssistantResponse(delta) => text.push_str(&delta.content),
+            Event::Error {
+                error_code,
+                error_message,
+            } => {
+                return Err(format!("{error_code}: {error_message}"));
+            },
+            Event::Exception {
+                exception_type,
+                message,
+            } => {
+                return Err(format!("{exception_type}: {message}"));
+            },
+            Event::ToolUse(tool) => {
+                return Err(format!("vision bridge unexpectedly requested tool `{}`", tool.name));
+            },
+            Event::Metering(_) | Event::ContextUsage(_) | Event::Unknown {} => {},
+        }
+    }
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        Err("vision bridge returned empty description".to_string())
+    } else {
+        Ok(text)
+    }
+}
+
+async fn describe_kiro_images_with_sonnet_bridge(
+    routes: &[ProviderKiroRoute],
+    route_store: &(dyn ProviderRouteStore + 'static),
+    kiro_request_scheduler: &Arc<KiroRequestScheduler>,
+    images: &[KiroVisionBridgeImage],
+    user_context: &str,
+) -> Result<String, Response> {
+    let mut failed_accounts = HashSet::new();
+    loop {
+        let (route, _account_permit) = match select_kiro_route_with_account_permit(
+            kiro_request_scheduler,
+            routes,
+            &failed_accounts,
+        )
+        .await
+        {
+            Ok(value) => value,
+            Err(response) => return Err(response),
+        };
+        let request_body = match build_kiro_vision_bridge_request(&route, images, user_context) {
+            Ok(body) => body,
+            Err(err) => {
+                return Err(kiro_json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "api_error",
+                    &format!("failed to encode kiro vision bridge request: {err}"),
+                ));
+            },
+        };
+        if request_body.len() > KIRO_GENERATE_REQUEST_MAX_BODY_BYTES {
+            return Err(kiro_json_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+                "image payload is too large for Kiro vision bridge",
+            ));
+        }
+        let upstream_url = format!(
+            "{}/generateAssistantResponse",
+            std::env::var("KIRO_UPSTREAM_BASE_URL")
+                .map(|value| value.trim_end_matches('/').to_string())
+                .unwrap_or_else(|_| format!("https://q.{}.amazonaws.com", route.api_region))
+        );
+        let response =
+            match call_kiro_generate_for_route(&route, route_store, upstream_url, &request_body)
+                .await
+            {
+                Ok(response) => response,
+                Err(failure) => {
+                    let body = failure.body_text();
+                    match failure.kind {
+                        KiroRouteFailureKind::QuotaExhausted => {
+                            for account_name in account_names_for_kiro_routing_identity(
+                                routes,
+                                &route.routing_identity,
+                            ) {
+                                failed_accounts.insert(account_name.clone());
+                                let _ = route_store
+                                    .mark_kiro_account_quota_exhausted(
+                                        &account_name,
+                                        &body,
+                                        now_millis(),
+                                    )
+                                    .await;
+                            }
+                        },
+                        KiroRouteFailureKind::RateLimited {
+                            cooldown,
+                            mark_proxy,
+                        } => {
+                            kiro_request_scheduler.mark_account_cooldown(
+                                &route.routing_identity,
+                                cooldown,
+                                &body,
+                            );
+                            if mark_proxy {
+                                if let Some(proxy_key) = proxy_cooldown_key_for_route(&route) {
+                                    kiro_request_scheduler
+                                        .mark_proxy_cooldown(&proxy_key, cooldown, &body);
+                                }
+                            }
+                            failed_accounts.insert(route.account_name.clone());
+                        },
+                        KiroRouteFailureKind::RetryNext => {
+                            failed_accounts.insert(route.account_name.clone());
+                        },
+                        KiroRouteFailureKind::Fatal => return Err(failure.into_response()),
+                    }
+                    if has_remaining_kiro_candidate(routes, &failed_accounts, &route.account_name) {
+                        continue;
+                    }
+                    return Err(kiro_json_error(
+                        StatusCode::BAD_GATEWAY,
+                        "api_error",
+                        "Kiro vision bridge has no available account",
+                    ));
+                },
+            };
+        let status = response.status();
+        let bytes = match response.bytes().await {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                return Err(kiro_json_error(
+                    StatusCode::BAD_GATEWAY,
+                    "api_error",
+                    &format!("failed to read Kiro vision bridge response: {err}"),
+                ));
+            },
+        };
+        if !status.is_success() {
+            return Err(kiro_json_error(
+                StatusCode::BAD_GATEWAY,
+                "api_error",
+                &format!(
+                    "Kiro vision bridge returned {status}: {}",
+                    String::from_utf8_lossy(&bytes)
+                ),
+            ));
+        }
+        return kiro_assistant_text_from_response_bytes(&bytes).map_err(|err| {
+            kiro_json_error(
+                StatusCode::BAD_GATEWAY,
+                "api_error",
+                &format!("failed to parse Kiro vision bridge response: {err}"),
+            )
+        });
+    }
+}
+
+fn inject_kiro_vision_bridge_context(payload: &mut MessagesRequest, description: &str) {
+    let context = format!(
+        "<image_context source=\"kiro-sonnet-4.6-vision\">\n{}\n</image_context>",
+        description.trim()
+    );
+    let mut last_user_array_with_image = None;
+    for (message_index, message) in payload.messages.iter_mut().enumerate() {
+        if message.role != "user" {
+            continue;
+        }
+        let Some(items) = message.content.as_array_mut() else {
+            continue;
+        };
+        let original_len = items.len();
+        items.retain(|item| item.get("type").and_then(serde_json::Value::as_str) != Some("image"));
+        if items.len() != original_len {
+            last_user_array_with_image = Some(message_index);
+        }
+    }
+    if let Some(message_index) = last_user_array_with_image {
+        if let Some(items) = payload.messages[message_index].content.as_array_mut() {
+            items.push(serde_json::json!({
+                "type": "text",
+                "text": context
+            }));
+        }
+    }
+}
+
 async fn dispatch_kiro_proxy(
     key: AuthenticatedKey,
     request: Request<Body>,
@@ -1277,14 +2094,31 @@ async fn dispatch_kiro_proxy(
     if !route_mcp_web_search {
         websearch::remove_web_search_tools(&mut payload);
     }
-    let request_input_tokens = token::count_all_tokens(
-        payload.model.clone(),
-        payload.system.clone(),
-        payload.messages.clone(),
-        payload.tools.clone(),
-    ) as i32;
-    override_kiro_thinking_from_model_name(&mut payload);
+    if let Err(err) = resolve_kiro_remote_media_sources(&mut payload).await {
+        let response =
+            kiro_json_error(StatusCode::BAD_REQUEST, "invalid_request_error", &err.to_string());
+        capture_client_request_body_json(&mut usage_meta, &body);
+        record_kiro_preflight_failure(KiroPreflightFailureRecord {
+            control_store: control_store.as_ref(),
+            key: &key,
+            route: &routes[0],
+            endpoint: public_path,
+            model: &effective_model,
+            status: StatusCode::BAD_REQUEST,
+            meta: &mut usage_meta,
+            cache_simulator: kiro_cache_simulator.as_ref(),
+        })
+        .await;
+        return response;
+    }
     if route_mcp_web_search {
+        let request_input_tokens = token::count_all_tokens(
+            payload.model.clone(),
+            payload.system.clone(),
+            payload.messages.clone(),
+            payload.tools.clone(),
+        ) as i32;
+        override_kiro_thinking_from_model_name(&mut payload);
         if routes[0].full_request_logging_enabled {
             capture_client_request_body_json(&mut usage_meta, &body);
         }
@@ -1301,6 +2135,41 @@ async fn dispatch_kiro_proxy(
         })
         .await;
     }
+    let mut key_permit = None;
+    if kiro_opus_vision_bridge_required(&payload) {
+        let permit = match try_acquire_key_permit(
+            &request_limiter,
+            &key,
+            routes[0].request_max_concurrency,
+            routes[0].request_min_start_interval_ms,
+        ) {
+            Ok(permit) => permit,
+            Err(rejection) => return kiro_key_limit_response(&rejection),
+        };
+        let images = collect_kiro_vision_bridge_images(&payload);
+        let user_context = kiro_vision_bridge_user_context(&payload);
+        let description = match describe_kiro_images_with_sonnet_bridge(
+            &routes,
+            route_store.as_ref(),
+            &kiro_request_scheduler,
+            &images,
+            &user_context,
+        )
+        .await
+        {
+            Ok(description) => description,
+            Err(response) => return response,
+        };
+        inject_kiro_vision_bridge_context(&mut payload, &description);
+        key_permit = Some(permit);
+    }
+    let request_input_tokens = token::count_all_tokens(
+        payload.model.clone(),
+        payload.system.clone(),
+        payload.messages.clone(),
+        payload.tools.clone(),
+    ) as i32;
+    override_kiro_thinking_from_model_name(&mut payload);
     let normalized = match normalize_request(&payload) {
         Ok(normalized) => normalized,
         Err(err) => {
@@ -1369,14 +2238,17 @@ async fn dispatch_kiro_proxy(
         return response;
     }
     let base_conversation_state = conversion.conversation_state.clone();
-    let key_permit = match try_acquire_key_permit(
-        &request_limiter,
-        &key,
-        routes[0].request_max_concurrency,
-        routes[0].request_min_start_interval_ms,
-    ) {
-        Ok(permit) => permit,
-        Err(rejection) => return kiro_key_limit_response(&rejection),
+    let key_permit = match key_permit.take() {
+        Some(permit) => permit,
+        None => match try_acquire_key_permit(
+            &request_limiter,
+            &key,
+            routes[0].request_max_concurrency,
+            routes[0].request_min_start_interval_ms,
+        ) {
+            Ok(permit) => permit,
+            Err(rejection) => return kiro_key_limit_response(&rejection),
+        },
     };
     let mut key_permit = Some(key_permit);
     let mut failed_accounts = HashSet::new();
@@ -2668,7 +3540,7 @@ struct KiroUsageInputs {
 fn normalized_kiro_messages_path(path: &str) -> Option<(&'static str, bool)> {
     match path {
         "/cc/v1/messages" | "/api/kiro-gateway/cc/v1/messages" => Some(("/cc/v1/messages", true)),
-        "/api/kiro-gateway/v1/messages" => Some(("/v1/messages", false)),
+        "/v1/messages" | "/api/kiro-gateway/v1/messages" => Some(("/v1/messages", false)),
         _ => None,
     }
 }
@@ -4381,6 +5253,99 @@ mod tests {
         );
     }
 
+    #[derive(Debug)]
+    struct StaticRemoteMediaFetcher {
+        media_type: &'static str,
+        bytes: &'static [u8],
+    }
+
+    #[async_trait]
+    impl super::KiroRemoteMediaFetcher for StaticRemoteMediaFetcher {
+        async fn fetch(
+            &self,
+            request: super::KiroRemoteMediaRequest<'_>,
+        ) -> Result<super::ResolvedKiroRemoteMedia, super::KiroRemoteMediaResolutionError> {
+            assert_eq!(request.url, "https://example.test/asset");
+            Ok(super::ResolvedKiroRemoteMedia {
+                media_type: Some(self.media_type.to_string()),
+                bytes: super::Bytes::from_static(self.bytes),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn kiro_remote_media_resolver_rewrites_url_image_sources() {
+        let mut payload = serde_json::from_value::<llm_access_kiro::anthropic::types::MessagesRequest>(
+            json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 128,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "url", "url": "https://example.test/asset"}},
+                        {"type": "text", "text": "Describe it"}
+                    ]
+                }]
+            }),
+        )
+        .expect("request payload");
+
+        super::resolve_kiro_remote_media_sources_with_fetcher(
+            &mut payload,
+            &StaticRemoteMediaFetcher {
+                media_type: "image/png",
+                bytes: b"hello",
+            },
+        )
+        .await
+        .expect("remote media should resolve");
+
+        let source = &payload.messages[0].content[0]["source"];
+        assert_eq!(source["type"], "base64");
+        assert_eq!(source["media_type"], "image/png");
+        assert_eq!(source["data"], "aGVsbG8=");
+    }
+
+    #[tokio::test]
+    async fn kiro_remote_media_resolver_rewrites_url_pdf_documents() {
+        let mut payload =
+            serde_json::from_value::<llm_access_kiro::anthropic::types::MessagesRequest>(json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 128,
+                "messages": [{
+                    "role": "user",
+                    "content": [{
+                        "type": "document",
+                        "source": {"type": "url", "url": "https://example.test/asset"}
+                    }]
+                }]
+            }))
+            .expect("request payload");
+
+        super::resolve_kiro_remote_media_sources_with_fetcher(
+            &mut payload,
+            &StaticRemoteMediaFetcher {
+                media_type: "application/pdf",
+                bytes: b"%PDF-1.4",
+            },
+        )
+        .await
+        .expect("remote PDF should resolve");
+
+        let source = &payload.messages[0].content[0]["source"];
+        assert_eq!(source["type"], "base64");
+        assert_eq!(source["media_type"], "application/pdf");
+        assert_eq!(source["data"], "JVBERi0xLjQ=");
+    }
+
+    #[test]
+    fn normalized_kiro_messages_path_accepts_root_anthropic_messages() {
+        assert_eq!(
+            super::normalized_kiro_messages_path("/v1/messages"),
+            Some(("/v1/messages", false))
+        );
+    }
+
     #[derive(Default)]
     struct TestStore;
 
@@ -4858,6 +5823,97 @@ mod tests {
             "alpha".to_string(),
             "beta".to_string()
         ]);
+    }
+
+    #[test]
+    fn kiro_opus_vision_bridge_is_required_only_for_opus_46_images() {
+        let opus_payload = serde_json::from_value(json!({
+            "model": "claude-opus-4-6",
+            "max_tokens": 64,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What color is this?"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "aGVsbG8="
+                        }
+                    }
+                ]
+            }]
+        }))
+        .expect("request should deserialize");
+        assert!(super::kiro_opus_vision_bridge_required(&opus_payload));
+
+        let mut sonnet_payload = opus_payload.clone();
+        sonnet_payload.model = "claude-sonnet-4-6".to_string();
+        assert!(!super::kiro_opus_vision_bridge_required(&sonnet_payload));
+
+        let mut text_payload = opus_payload;
+        text_payload.messages[0].content = json!("hello");
+        assert!(!super::kiro_opus_vision_bridge_required(&text_payload));
+    }
+
+    #[test]
+    fn kiro_vision_bridge_request_uses_sonnet_origin_and_images() {
+        let route = static_kiro_route();
+        let body = super::build_kiro_vision_bridge_request(
+            &route,
+            &[super::KiroVisionBridgeImage {
+                format: "png".to_string(),
+                data: "aGVsbG8=".to_string(),
+            }],
+            "What color is this?",
+        )
+        .expect("bridge request should encode");
+        let value: serde_json::Value =
+            serde_json::from_slice(&body).expect("bridge request should be JSON");
+        let current = &value["conversationState"]["currentMessage"]["userInputMessage"];
+        assert_eq!(current["modelId"], "claude-sonnet-4.6");
+        assert_eq!(current["origin"], "AI_EDITOR");
+        assert_eq!(current["images"][0]["format"], "png");
+        assert_eq!(value["profileArn"], "arn:aws:kiro:test");
+    }
+
+    #[test]
+    fn kiro_vision_bridge_context_replaces_image_blocks_with_text() {
+        let mut payload: llm_access_kiro::anthropic::types::MessagesRequest =
+            serde_json::from_value(json!({
+                "model": "claude-opus-4-6",
+                "max_tokens": 64,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What color is this?"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "aGVsbG8="
+                            }
+                        }
+                    ]
+                }]
+            }))
+            .expect("request should deserialize");
+
+        super::inject_kiro_vision_bridge_context(&mut payload, "Image 1: a solid red square.");
+
+        let items = payload.messages[0]
+            .content
+            .as_array()
+            .expect("content should remain array");
+        assert!(!items
+            .iter()
+            .any(|item| item.get("type").and_then(serde_json::Value::as_str) == Some("image")));
+        assert!(items.iter().any(|item| item
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|text| text.contains("solid red square"))));
     }
 
     #[test]

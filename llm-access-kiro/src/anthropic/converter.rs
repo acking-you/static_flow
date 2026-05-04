@@ -107,6 +107,8 @@ const SYSTEM_CHUNKED_POLICY: &str =
      approaches. Complete all chunked operations without commentary.";
 const PDF_DOCUMENT_OPEN_TAG: &str = "<document media_type=\"application/pdf\">";
 const PDF_DOCUMENT_CLOSE_TAG: &str = "</document>";
+const TEXT_DOCUMENT_OPEN_TAG: &str = "<document media_type=\"text/plain\">";
+const TEXT_DOCUMENT_CLOSE_TAG: &str = "</document>";
 const STRUCTURED_OUTPUT_TOOL_NAME_BASE: &str = "sf_emit_structured_output";
 const STRUCTURED_OUTPUT_TOOL_DESCRIPTION: &str =
     "Return the final answer as structured JSON that exactly matches the provided schema. Call \
@@ -547,12 +549,6 @@ fn normalize_user_document_block(
             "message {message_index} document block {block_index} is missing source.type"
         )));
     };
-    if source_type != "base64" {
-        return Err(invalid_request(format!(
-            "message {message_index} document block {block_index} must use source.type=`base64`"
-        )));
-    }
-
     let Some(media_type) = source
         .get("media_type")
         .and_then(serde_json::Value::as_str)
@@ -563,47 +559,83 @@ fn normalize_user_document_block(
             "message {message_index} document block {block_index} is missing source.media_type"
         )));
     };
-    if media_type != "application/pdf" {
-        return Err(invalid_request(format!(
-            "message {message_index} document block {block_index} only supports \
-             source.media_type=`application/pdf`"
-        )));
-    }
 
-    let Some(encoded_pdf) = source
+    let Some(source_data) = source
         .get("data")
         .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.trim().is_empty())
     else {
         return Err(invalid_request(format!(
             "message {message_index} document block {block_index} is missing source.data"
         )));
     };
 
-    let extracted_text = extract_pdf_document_text(encoded_pdf).map_err(|reason| {
-        invalid_request(format!(
-            "message {message_index} document block {block_index} could not be converted from \
-             PDF: {reason}"
-        ))
-    })?;
+    match source_type {
+        "base64" => {
+            if media_type != "application/pdf" {
+                return Err(invalid_request(format!(
+                    "message {message_index} document block {block_index} only supports \
+                     source.media_type=`application/pdf` for base64 documents"
+                )));
+            }
 
-    push_normalization_event(
-        events,
-        message_index,
-        "user",
-        Some(block_index),
-        Some("document"),
-        "rewrite_content_block",
-        "pdf_document_converted_to_text",
-    );
+            let encoded_pdf = source_data.trim();
+            let extracted_text = extract_pdf_document_text(encoded_pdf).map_err(|reason| {
+                invalid_request(format!(
+                    "message {message_index} document block {block_index} could not be converted \
+                     from PDF: {reason}"
+                ))
+            })?;
 
-    Ok(serde_json::json!({
-        "type": "text",
-        "text": format!(
-            "{PDF_DOCUMENT_OPEN_TAG}\n{extracted_text}\n{PDF_DOCUMENT_CLOSE_TAG}"
-        )
-    }))
+            push_normalization_event(
+                events,
+                message_index,
+                "user",
+                Some(block_index),
+                Some("document"),
+                "rewrite_content_block",
+                "pdf_document_converted_to_text",
+            );
+
+            Ok(serde_json::json!({
+                "type": "text",
+                "text": format!(
+                    "{PDF_DOCUMENT_OPEN_TAG}\n{extracted_text}\n{PDF_DOCUMENT_CLOSE_TAG}"
+                )
+            }))
+        },
+        "text" => {
+            if media_type != "text/plain" {
+                return Err(invalid_request(format!(
+                    "message {message_index} document block {block_index} only supports \
+                     source.media_type=`text/plain` for text documents"
+                )));
+            }
+            let normalized_text = source_data.replace("\r\n", "\n").replace('\r', "\n");
+
+            push_normalization_event(
+                events,
+                message_index,
+                "user",
+                Some(block_index),
+                Some("document"),
+                "rewrite_content_block",
+                "text_document_converted_to_text",
+            );
+
+            Ok(serde_json::json!({
+                "type": "text",
+                "text": format!(
+                    "{TEXT_DOCUMENT_OPEN_TAG}\n{}\n{TEXT_DOCUMENT_CLOSE_TAG}",
+                    normalized_text.trim()
+                )
+            }))
+        },
+        _ => Err(invalid_request(format!(
+            "message {message_index} document block {block_index} must use source.type=`base64` \
+             or source.type=`text`"
+        ))),
+    }
 }
 
 fn extract_pdf_document_text(encoded_pdf: &str) -> Result<String, String> {
@@ -3561,6 +3593,36 @@ mod tests {
         let current = &result.conversation_state.current_message.user_input_message;
         assert!(current.content.contains("hvoywpkd"));
         assert!(current.content.contains("What text does this PDF contain?"));
+        assert!(current.images.is_empty());
+    }
+
+    #[test]
+    fn convert_request_extracts_text_documents_into_user_text() {
+        let req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!([
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "text",
+                        "media_type": "text/plain",
+                        "data": "plain document body"
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "Summarize the text document."
+                }
+            ]),
+        }]);
+
+        let result = convert_request(&req).expect("text document block should be converted");
+        let current = &result.conversation_state.current_message.user_input_message;
+        assert!(current
+            .content
+            .contains("<document media_type=\"text/plain\">"));
+        assert!(current.content.contains("plain document body"));
+        assert!(current.content.contains("Summarize the text document."));
         assert!(current.images.is_empty());
     }
 

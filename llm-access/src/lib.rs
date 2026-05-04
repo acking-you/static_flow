@@ -296,6 +296,8 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         .route("/v1/chat/completions", post(provider_entry_handler))
         .route("/v1/responses", post(provider_entry_handler))
         .route("/v1/models", get(provider_entry_handler))
+        .route("/v1/messages", post(provider_entry_handler))
+        .route("/v1/messages/count_tokens", post(kiro::count_tokens))
         .route("/cc/v1/messages", post(provider_entry_handler))
         .route("/api/kiro-gateway/v1/models", get(kiro::get_models))
         .route("/api/kiro-gateway/v1/messages/count_tokens", post(kiro::count_tokens))

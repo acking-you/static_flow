@@ -86,12 +86,25 @@
          IndexedDB persists the raw bytes so we skip the network round-trip and let
          V8's internal compile cache (keyed on identical bytes) accelerate startup.
 
-         Key design: probe IndexedDB FIRST (before awaiting fetch), so even when
-         HTTP disk cache is evicted we don't block on the network. -->
+         Key design: use IndexedDB only when the cached bytes exactly match the
+         current WASM URL. Older builds may have compatible imports but different
+         embedded API endpoints, so an arbitrary cached module is not safe. -->
   <script>
     (function () {
-      var DB = 'sf-wasm-cache', STORE = 'compiled', SCHEMA = 2;
+      var DB = 'sf-wasm-cache', STORE = 'compiled', SCHEMA = 3;
       var log = function (msg) { console.log('[WASM-Cache] ' + msg); };
+      function normalizeUrl(url) {
+        if (!url) return '';
+        try {
+          return new URL(url, window.location.href).href;
+        } catch (_) {
+          return url;
+        }
+      }
+      function expectedWasmUrl() {
+        var link = document.querySelector('link[rel="preload"][as="fetch"][type="application/wasm"]');
+        return normalizeUrl(link && link.getAttribute('href'));
+      }
       function openDB() {
         return new Promise(function (ok, fail) {
           var r = indexedDB.open(DB, SCHEMA);
@@ -106,33 +119,32 @@
         });
       }
 
-      // Read the latest cached entry (any key) from IndexedDB
-      function getLatestCache() {
+      // Read cached bytes only for the WASM URL referenced by this HTML.
+      function getCache(cacheKey) {
+        if (!cacheKey) return Promise.resolve(null);
         return openDB().then(function (db) {
           return new Promise(function (ok) {
             var tx = db.transaction(STORE, 'readonly');
             var st = tx.objectStore(STORE);
-            var cursorReq = st.openCursor();
-            cursorReq.onsuccess = function () {
-              var cursor = cursorReq.result;
-              if (cursor) {
-                ok({ key: cursor.key, bytes: cursor.value });
-              } else {
-                ok(null);
-              }
+            var req = st.get(cacheKey);
+            req.onsuccess = function () {
+              var bytes = req.result;
+              ok(bytes ? { key: cacheKey, bytes: bytes } : null);
             };
-            cursorReq.onerror = function () { ok(null); };
+            req.onerror = function () { ok(null); };
           });
         });
       }
 
       function storeBytes(url, bytes) {
+        var cacheKey = normalizeUrl(url);
+        if (!cacheKey) return;
         openDB().then(function (db) {
           var tx = db.transaction(STORE, 'readwrite');
           var st = tx.objectStore(STORE);
           st.clear();
-          st.put(bytes, url);
-          tx.oncomplete = function () { log('Stored ' + bytes.byteLength + ' bytes (key=' + url + ')'); };
+          st.put(bytes, cacheKey);
+          tx.oncomplete = function () { log('Stored ' + bytes.byteLength + ' bytes (key=' + cacheKey + ')'); };
           tx.onerror = function () { log('Store FAILED: ' + tx.error); };
         }).catch(function () {});
       }
@@ -168,8 +180,9 @@
       log('Monkey-patching WebAssembly.instantiateStreaming');
 
       WebAssembly.instantiateStreaming = function (source, imports) {
-        // Probe IndexedDB immediately — don't wait for fetch
-        var cacheP = getLatestCache().catch(function () { return null; });
+        // Probe IndexedDB immediately using the current build's WASM URL.
+        var cacheKey = expectedWasmUrl();
+        var cacheP = getCache(cacheKey).catch(function () { return null; });
 
         return cacheP.then(function (cached) {
           if (cached && cached.bytes instanceof ArrayBuffer && cached.bytes.byteLength > 0) {
@@ -178,11 +191,11 @@
             return WebAssembly.instantiate(cached.bytes, imports)
               .then(function (result) {
                 log('Instantiated from cache in ' + (performance.now() - t0).toFixed(0) + 'ms');
-                // Verify URL still matches; if not, fetch will update cache later
+                // Refresh bytes in the background when the response URL differs.
                 Promise.resolve(source).then(function (resp) {
-                  var url = resp && resp.url || '';
+                  var url = normalizeUrl(resp && resp.url || '');
                   if (url && url !== cached.key) {
-                    log('URL changed (' + cached.key + ' → ' + url + '), refreshing cache');
+                    log('URL changed (' + cached.key + ' -> ' + url + '), refreshing cache');
                     resp.arrayBuffer().then(function (b) { storeBytes(url, b); }).catch(function () {});
                   }
                 }).catch(function () {});
