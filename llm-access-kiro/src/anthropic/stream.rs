@@ -495,10 +495,13 @@ pub struct StreamContext {
     pub thinking_buffer: String,
     pub in_thinking_block: bool,
     pub thinking_extracted: bool,
+    reasoning_content_events_observed: bool,
     pub thinking_block_index: Option<i32>,
     pub text_block_index: Option<i32>,
     strip_thinking_leading_newline: bool,
     open_thinking_content: String,
+    completed_thinking_content: Option<String>,
+    completed_thinking_signature: Option<String>,
 }
 
 impl StreamContext {
@@ -532,10 +535,13 @@ impl StreamContext {
             thinking_buffer: String::new(),
             in_thinking_block: false,
             thinking_extracted: false,
+            reasoning_content_events_observed: false,
             thinking_block_index: None,
             text_block_index: None,
             strip_thinking_leading_newline: false,
             open_thinking_content: String::new(),
+            completed_thinking_content: None,
+            completed_thinking_signature: None,
         }
     }
 
@@ -576,6 +582,35 @@ impl StreamContext {
             assistant = assistant.with_tool_uses(tool_uses);
         }
         assistant
+    }
+
+    pub fn final_content_blocks(&self) -> Vec<serde_json::Value> {
+        if self.thinking_enabled {
+            if let Some(thinking) = self.completed_thinking_content.as_ref() {
+                let signature = self
+                    .completed_thinking_signature
+                    .clone()
+                    .unwrap_or_else(|| synthetic_thinking_signature(&self.model, thinking));
+                let mut blocks = vec![json!({
+                    "type": "thinking",
+                    "thinking": thinking,
+                    "signature": signature,
+                })];
+                if !self.assistant_content.is_empty() {
+                    blocks.push(json!({
+                        "type": "text",
+                        "text": self.assistant_content,
+                    }));
+                }
+                return blocks;
+            }
+        }
+
+        build_inline_thinking_content_blocks(
+            &self.assistant_content,
+            &self.model,
+            self.thinking_enabled,
+        )
     }
 
     pub fn create_message_start_event(&self) -> serde_json::Value {
@@ -623,6 +658,10 @@ impl StreamContext {
             Event::AssistantResponse(response) => {
                 self.process_assistant_response(&response.content)
             },
+            Event::ReasoningContent(reasoning) => self.process_reasoning_content(
+                reasoning.text.as_deref(),
+                reasoning.signature.as_deref(),
+            ),
             Event::ToolUse(tool_use) => self.process_tool_use(tool_use),
             Event::ContextUsage(usage) => {
                 let input_tokens = (usage.context_usage_percentage
@@ -671,9 +710,62 @@ impl StreamContext {
         self.assistant_content.push_str(content);
         self.output_tokens += estimate_tokens(content);
         if self.thinking_enabled {
+            if self.reasoning_content_events_observed {
+                let mut events = Vec::new();
+                if self.in_thinking_block {
+                    self.in_thinking_block = false;
+                    self.thinking_extracted = true;
+                    events.extend(self.finalize_open_thinking_block());
+                }
+                events.extend(self.create_text_delta_events(content));
+                return events;
+            }
             return self.process_content_with_thinking(content);
         }
         self.create_text_delta_events(content)
+    }
+
+    fn process_reasoning_content(
+        &mut self,
+        text: Option<&str>,
+        signature: Option<&str>,
+    ) -> Vec<SseEvent> {
+        if !self.thinking_enabled {
+            return Vec::new();
+        }
+
+        self.reasoning_content_events_observed = true;
+        let mut events = Vec::new();
+
+        if !self.in_thinking_block && !self.thinking_extracted {
+            let index = self.state_manager.next_block_index();
+            self.thinking_block_index = Some(index);
+            self.in_thinking_block = true;
+            events.extend(self.state_manager.handle_content_block_start(
+                index,
+                "thinking",
+                json!({
+                    "type":"content_block_start",
+                    "index":index,
+                    "content_block":{"type":"thinking","thinking":"","signature":""}
+                }),
+            ));
+        }
+
+        if let Some(text) = text.filter(|value| !value.is_empty()) {
+            self.output_tokens += estimate_tokens(text);
+            if let Some(index) = self.thinking_block_index {
+                events.push(self.create_thinking_delta_event(index, text));
+            }
+        }
+
+        if let Some(signature) = signature.filter(|value| !value.is_empty()) {
+            self.in_thinking_block = false;
+            self.thinking_extracted = true;
+            events.extend(self.finalize_open_thinking_block_with_signature(Some(signature)));
+        }
+
+        events
     }
 
     // Parses `<thinking>...</thinking>` tags from the content buffer,
@@ -808,12 +900,24 @@ impl StreamContext {
     }
 
     fn finalize_open_thinking_block(&mut self) -> Vec<SseEvent> {
+        self.finalize_open_thinking_block_with_signature(None)
+    }
+
+    fn finalize_open_thinking_block_with_signature(
+        &mut self,
+        signature_override: Option<&str>,
+    ) -> Vec<SseEvent> {
         let mut events = Vec::new();
         let Some(index) = self.thinking_block_index else {
             return events;
         };
 
-        let signature = synthetic_thinking_signature(&self.model, &self.open_thinking_content);
+        let thinking = self.open_thinking_content.clone();
+        let signature = signature_override
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| synthetic_thinking_signature(&self.model, &thinking));
+        self.completed_thinking_content = Some(thinking);
+        self.completed_thinking_signature = Some(signature.clone());
         if let Some(event) = self.state_manager.handle_content_block_delta(
             index,
             json!({
@@ -856,6 +960,13 @@ impl StreamContext {
             return events;
         }
         self.state_manager.set_has_tool_use(true);
+
+        if self.thinking_enabled && self.reasoning_content_events_observed && self.in_thinking_block
+        {
+            self.in_thinking_block = false;
+            self.thinking_extracted = true;
+            events.extend(self.finalize_open_thinking_block());
+        }
 
         if self.thinking_enabled && self.in_thinking_block {
             if let Some(end_pos) = find_real_thinking_end_tag_at_buffer_end(&self.thinking_buffer) {
@@ -970,6 +1081,12 @@ impl StreamContext {
                 self.output_tokens = estimate_tokens(&buffered);
                 events.extend(self.create_text_delta_events(&buffered));
             }
+        }
+        if self.thinking_enabled && self.reasoning_content_events_observed && self.in_thinking_block
+        {
+            self.in_thinking_block = false;
+            self.thinking_extracted = true;
+            events.extend(self.finalize_open_thinking_block());
         }
         if self.thinking_enabled && !self.thinking_buffer.is_empty() {
             if self.in_thinking_block {
@@ -1294,7 +1411,13 @@ pub(super) fn split_inline_thinking_content(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::{ContextUsageEvent, Event, MeteringEvent, ToolUseEvent};
+    use crate::{
+        parser::{
+            frame::Frame,
+            header::{HeaderValue, Headers},
+        },
+        wire::{ContextUsageEvent, Event, MeteringEvent, ToolUseEvent},
+    };
 
     #[test]
     fn resolve_input_tokens_discounts_kiro_hidden_prompt_for_small_requests() {
@@ -1341,6 +1464,17 @@ mod tests {
             .map(|event| event.data["delta"][field].as_str().unwrap_or(""))
             .filter(|text| !text.is_empty())
             .collect()
+    }
+
+    fn parse_kiro_event(event_type: &str, payload: serde_json::Value) -> Event {
+        let mut headers = Headers::new();
+        headers.insert(":message-type".to_string(), HeaderValue::String("event".to_string()));
+        headers.insert(":event-type".to_string(), HeaderValue::String(event_type.to_string()));
+        Event::from_frame(Frame {
+            headers,
+            payload: serde_json::to_vec(&payload).expect("payload json"),
+        })
+        .expect("event should parse")
     }
 
     fn read_proto_varint(buf: &[u8], offset: &mut usize) -> u64 {
@@ -1695,6 +1829,54 @@ mod tests {
             .as_str()
             .expect("signature should be a string");
         assert_claude_shaped_signature(signature, "claude-opus-4-6");
+    }
+
+    #[test]
+    fn reasoning_content_event_emits_upstream_signature_for_opus_47() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-7", 1, true, HashMap::new(), None);
+        let _ = ctx.generate_initial_events();
+
+        let mut events = ctx.process_kiro_event(&parse_kiro_event(
+            "reasoningContentEvent",
+            json!({"text":"先想一步"}),
+        ));
+        events.extend(ctx.process_kiro_event(&parse_kiro_event(
+            "reasoningContentEvent",
+            json!({"signature":"upstream-signature-47"}),
+        )));
+        events.extend(ctx.process_kiro_event(&parse_kiro_event(
+            "assistantResponseEvent",
+            json!({"content":"最终答案"}),
+        )));
+        events.extend(ctx.generate_final_events());
+
+        assert!(events.iter().any(|event| {
+            event.event == "content_block_start"
+                && event.data["content_block"]["type"] == "thinking"
+        }));
+        assert!(events.iter().any(|event| {
+            event.event == "content_block_delta"
+                && event.data["delta"]["type"] == "thinking_delta"
+                && event.data["delta"]["thinking"] == "先想一步"
+        }));
+        assert!(events.iter().any(|event| {
+            event.event == "content_block_delta"
+                && event.data["delta"]["type"] == "signature_delta"
+                && event.data["delta"]["signature"] == "upstream-signature-47"
+        }));
+        assert!(events.iter().any(|event| {
+            event.event == "content_block_delta"
+                && event.data["delta"]["type"] == "text_delta"
+                && event.data["delta"]["text"] == "最终答案"
+        }));
+
+        let blocks = ctx.final_content_blocks();
+        assert_eq!(blocks[0]["type"], "thinking");
+        assert_eq!(blocks[0]["thinking"], "先想一步");
+        assert_eq!(blocks[0]["signature"], "upstream-signature-47");
+        assert_eq!(blocks[1]["type"], "text");
+        assert_eq!(blocks[1]["text"], "最终答案");
     }
 
     #[test]

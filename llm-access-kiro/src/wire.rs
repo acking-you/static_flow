@@ -561,6 +561,7 @@ impl UsageLimitsResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventType {
     AssistantResponse,
+    ReasoningContent,
     ToolUse,
     Metering,
     ContextUsage,
@@ -571,6 +572,7 @@ impl EventType {
     pub fn from_wire_name(value: &str) -> Self {
         match value {
             "assistantResponseEvent" => Self::AssistantResponse,
+            "reasoningContentEvent" => Self::ReasoningContent,
             "toolUseEvent" => Self::ToolUse,
             "meteringEvent" => Self::Metering,
             "contextUsageEvent" => Self::ContextUsage,
@@ -596,6 +598,24 @@ pub struct AssistantResponseEvent {
 }
 
 impl EventPayload for AssistantResponseEvent {
+    fn from_frame(frame: &Frame) -> ParseResult<Self> {
+        frame.payload_as_json()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReasoningContentEvent {
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub signature: Option<String>,
+    #[serde(flatten)]
+    #[serde(skip_serializing)]
+    pub _extra: serde_json::Value,
+}
+
+impl EventPayload for ReasoningContentEvent {
     fn from_frame(frame: &Frame) -> ParseResult<Self> {
         frame.payload_as_json()
     }
@@ -662,6 +682,7 @@ impl EventPayload for MeteringEvent {
 #[derive(Debug, Clone)]
 pub enum Event {
     AssistantResponse(AssistantResponseEvent),
+    ReasoningContent(ReasoningContentEvent),
     ToolUse(ToolUseEvent),
     Metering(MeteringEvent),
     ContextUsage(ContextUsageEvent),
@@ -685,6 +706,9 @@ impl Event {
         match EventType::from_wire_name(frame.event_type().unwrap_or("unknown")) {
             EventType::AssistantResponse => {
                 Ok(Self::AssistantResponse(AssistantResponseEvent::from_frame(&frame)?))
+            },
+            EventType::ReasoningContent => {
+                Ok(Self::ReasoningContent(ReasoningContentEvent::from_frame(&frame)?))
             },
             EventType::ToolUse => Ok(Self::ToolUse(ToolUseEvent::from_frame(&frame)?)),
             EventType::Metering => Ok(Self::Metering(MeteringEvent::from_frame(&frame)?)),
@@ -720,7 +744,21 @@ impl Event {
 
 #[cfg(test)]
 mod tests {
-    use super::IdcRefreshResponse;
+    use super::{Event, IdcRefreshResponse};
+    use crate::parser::{
+        frame::Frame,
+        header::{HeaderValue, Headers},
+    };
+
+    fn event_frame(event_type: &str, payload: &str) -> Frame {
+        let mut headers = Headers::new();
+        headers.insert(":message-type".to_string(), HeaderValue::String("event".to_string()));
+        headers.insert(":event-type".to_string(), HeaderValue::String(event_type.to_string()));
+        Frame {
+            headers,
+            payload: payload.as_bytes().to_vec(),
+        }
+    }
 
     #[test]
     fn idc_refresh_response_deserializes_profile_arn() {
@@ -737,6 +775,21 @@ mod tests {
         assert_eq!(
             payload.profile_arn.as_deref(),
             Some("arn:aws:iam::123456789012:role/KiroProfile")
+        );
+    }
+
+    #[test]
+    fn reasoning_content_event_is_not_treated_as_unknown() {
+        let frame = event_frame(
+            "reasoningContentEvent",
+            r#"{"text":"step","signature":"upstream-signature-47"}"#,
+        );
+
+        let event = Event::from_frame(frame).expect("reasoning content event should parse");
+
+        assert!(
+            !matches!(event, Event::Unknown {}),
+            "reasoningContentEvent should not be dropped as unknown"
         );
     }
 }

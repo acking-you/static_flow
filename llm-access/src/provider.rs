@@ -51,8 +51,7 @@ use llm_access_kiro::{
             SessionFallbackReason, SessionIdSource, SessionTracking,
         },
         stream::{
-            anthropic_usage_json, build_inline_thinking_content_blocks, resolve_input_tokens,
-            BufferedStreamContext, StreamContext,
+            anthropic_usage_json, resolve_input_tokens, BufferedStreamContext, StreamContext,
         },
         supported_models_response,
         types::{MessagesRequest, OutputConfig, Thinking},
@@ -1859,7 +1858,10 @@ fn kiro_assistant_text_from_response_bytes(bytes: &[u8]) -> Result<String, Strin
             Event::ToolUse(tool) => {
                 return Err(format!("vision bridge unexpectedly requested tool `{}`", tool.name));
             },
-            Event::Metering(_) | Event::ContextUsage(_) | Event::Unknown {} => {},
+            Event::ReasoningContent(_)
+            | Event::Metering(_)
+            | Event::ContextUsage(_)
+            | Event::Unknown {} => {},
         }
     }
     let text = text.trim().to_string();
@@ -3448,11 +3450,7 @@ async fn non_stream_kiro_response(
         &ctx.cache_ctx,
     );
     let assistant_message = stream_ctx.final_assistant_message();
-    let mut content = build_inline_thinking_content_blocks(
-        &assistant_message.content,
-        &ctx.model,
-        ctx.thinking_enabled,
-    );
+    let mut content = stream_ctx.final_content_blocks();
     if let Some(tool_uses) = assistant_message.tool_uses.clone() {
         content.extend(tool_uses.into_iter().map(|tool_use| {
             serde_json::json!({
@@ -6361,6 +6359,45 @@ mod tests {
             .expect("upstream response")
     }
 
+    async fn fake_kiro_generate_reasoning(
+        State(captured): State<Arc<CapturedKiroUpstream>>,
+        headers: HeaderMap,
+        request: Request<Body>,
+    ) -> Response {
+        let path = request.uri().path().to_string();
+        let body = to_bytes(request.into_body(), usize::MAX)
+            .await
+            .expect("upstream request body");
+        let body = serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json");
+        captured
+            .requests
+            .lock()
+            .expect("captured requests")
+            .push(CapturedKiroRequest {
+                path,
+                authorization: headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                body,
+            });
+        let body = kiro_eventstream_body(vec![
+            kiro_event_frame("reasoningContentEvent", &json!({"text":"先想一步"})),
+            kiro_event_frame(
+                "reasoningContentEvent",
+                &json!({"signature":"upstream-signature-47"}),
+            ),
+            kiro_event_frame("assistantResponseEvent", &json!({"content":"最终答案"})),
+            kiro_event_frame("contextUsageEvent", &json!({"contextUsagePercentage":0.01})),
+            kiro_event_frame("meteringEvent", &json!({"unit":"credit","usage":0.25})),
+        ]);
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/vnd.amazon.eventstream")
+            .body(Body::from(body))
+            .expect("upstream response")
+    }
+
     async fn fake_kiro_usage_limits(
         State(captured): State<Arc<CapturedKiroUpstream>>,
         headers: HeaderMap,
@@ -6423,6 +6460,23 @@ mod tests {
     async fn spawn_fake_kiro_upstream(captured: Arc<CapturedKiroUpstream>) -> String {
         let app = Router::new()
             .route("/generateAssistantResponse", post(fake_kiro_generate))
+            .route("/getUsageLimits", get(fake_kiro_usage_limits))
+            .with_state(captured);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        upstream_base
+    }
+
+    async fn spawn_fake_kiro_reasoning_upstream(captured: Arc<CapturedKiroUpstream>) -> String {
+        let app = Router::new()
+            .route("/generateAssistantResponse", post(fake_kiro_generate_reasoning))
             .route("/getUsageLimits", get(fake_kiro_usage_limits))
             .with_state(captured);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -7025,6 +7079,95 @@ mod tests {
         assert_eq!(requests[0].path, "/generateAssistantResponse");
         assert_eq!(requests[0].authorization.as_deref(), Some("Bearer kiro-upstream-token"));
         assert_eq!(requests[0].body["profileArn"], "arn:aws:kiro:test");
+    }
+
+    #[tokio::test]
+    async fn kiro_dispatch_streaming_messages_preserve_upstream_reasoning_signature() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("kiro upstream env lock");
+        let captured = Arc::new(CapturedKiroUpstream::default());
+        let upstream_base = spawn_fake_kiro_reasoning_upstream(captured.clone()).await;
+        std::env::set_var("KIRO_UPSTREAM_BASE_URL", upstream_base);
+
+        let state = super::ProviderState::new(Arc::new(TestStore), static_kiro_route_store());
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/kiro-gateway/v1/messages")
+                .header("x-api-key", "valid-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "claude-opus-4-7",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": true,
+                        "thinking": {"type": "adaptive"}
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 response");
+        assert!(body.contains(r#""type":"thinking_delta""#));
+        assert!(body.contains(r#""thinking":"先想一步""#));
+        assert!(body.contains(r#""type":"signature_delta""#));
+        assert!(body.contains(r#""signature":"upstream-signature-47""#));
+        assert!(body.contains(r#""type":"text_delta""#));
+        assert!(body.contains(r#""text":"最终答案""#));
+    }
+
+    #[tokio::test]
+    async fn kiro_dispatch_non_stream_messages_preserve_upstream_reasoning_signature() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("kiro upstream env lock");
+        let captured = Arc::new(CapturedKiroUpstream::default());
+        let upstream_base = spawn_fake_kiro_reasoning_upstream(captured).await;
+        std::env::set_var("KIRO_UPSTREAM_BASE_URL", upstream_base);
+
+        let state = super::ProviderState::new(Arc::new(TestStore), static_kiro_route_store());
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/kiro-gateway/v1/messages")
+                .header("x-api-key", "valid-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "claude-opus-4-7",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": false,
+                        "thinking": {"type": "adaptive"}
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let body = serde_json::from_slice::<serde_json::Value>(&body).expect("json response");
+        assert_eq!(body["content"][0]["type"], "thinking");
+        assert_eq!(body["content"][0]["thinking"], "先想一步");
+        assert_eq!(body["content"][0]["signature"], "upstream-signature-47");
+        assert_eq!(body["content"][1]["type"], "text");
+        assert_eq!(body["content"][1]["text"], "最终答案");
     }
 
     #[tokio::test]
