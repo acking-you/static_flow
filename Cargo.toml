@@ -49,7 +49,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "regist
 chrono = { version = "0.4.42", features = ["serde"] }
 
 # HTTP 客户端
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "socks"] }
 
 # Frontend 特定
 yew = { version = "0.21", features = ["csr"] }
