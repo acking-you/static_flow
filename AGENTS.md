@@ -74,7 +74,8 @@ Traffic path:
 - `https://ackingliu.top` → GCP Caddy `:443` → route split
 - LLM paths (`/v1/*`, `/cc/v1/*`, `/api/llm-gateway/*`, `/api/kiro-gateway/*`,
   `/api/codex-gateway/*`, `/api/llm-access/*`) → cloud `llm-access` `127.0.0.1:19080`
-- Non-LLM paths → cloud pb-mapper `127.0.0.1:39080` → pb-mapper-server `:7666`
+- Non-LLM paths → cloud pb-mapper client `127.0.0.1:39080` → configured cloud
+  pb-mapper relay from private env
   → local Pingora `127.0.0.1:39180` → active backend slot
 - Local `pbmapper-llm-access` on `127.0.0.1:19182` subscribes cloud `llm-access`
   back for local dev/testing
@@ -97,9 +98,9 @@ Local tmux-supervised runtime (verified 2026-04-29):
 | `sf-gateway` | Pingora ingress (do not stop) | `127.0.0.1:39180` |
 | `sf-backend-green` | Active backend slot | `127.0.0.1:39081` |
 | `gpt2api-rs` | GPT2API image gateway | `127.0.0.1:18787` |
-| `pbmapper-sf-backend` | Registers gateway with cloud relay | → `ackingliu.top:7666` |
+| `pbmapper-sf-backend` | Registers gateway with cloud relay | configured in private env |
 | `pbmapper-llm-access` | Subscribes cloud llm-access locally | `127.0.0.1:19182` |
-| `pbmapper-home-ubuntu` | Registers local SSH with cloud relay | → `ackingliu.top:7666` |
+| `pbmapper-home-ubuntu` | Registers local SSH with cloud relay | configured in private env |
 
 ## Mandatory Quality Gates (Hard Rule)
 - Run `cargo clippy` for affected crates and fix all warnings to zero before

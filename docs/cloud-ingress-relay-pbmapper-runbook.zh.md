@@ -18,7 +18,7 @@ public client
      │      -> archived DuckDB segments/catalog on JuiceFS/R2
      └── non-LLM paths
          -> cloud pb-mapper-client-cli 127.0.0.1:39080
-         -> cloud pb-mapper-server :7666
+         -> configured cloud pb-mapper relay
          -> local pb-mapper-server-cli key=sf-backend
          -> local Pingora gateway 127.0.0.1:39180
          -> active StaticFlow backend slot
@@ -30,7 +30,7 @@ public client
 | --- | --- | --- |
 | GCP `:443` | Caddy TLS 入口 | 是 |
 | GCP `:80` | Caddy HTTP-01/重定向 | 是 |
-| GCP `:7666` | pb-mapper server，供本地注册服务 | 是，需受 key 保护 |
+| GCP configured relay port | pb-mapper server，供本地注册服务 | 是，需受 key 保护 |
 | GCP `127.0.0.1:19080` | cloud `llm-access` | 否 |
 | GCP `127.0.0.1:39080` | cloud pb-mapper client 暴露的 non-LLM StaticFlow 本地入口 | 否 |
 | local `127.0.0.1:39180` | 本地 Pingora 稳定入口 | 否 |
@@ -38,21 +38,29 @@ public client
 
 ## 2. GCP 主机预检
 
-当前 GCP 公网 IP 是 `35.241.86.154`，本机 SSH 登录方式是：
+GCP 公网地址、SSH 用户、SSH key 路径不写入 tracked 文档。它们统一放在
+本机 ignored 配置 `.local/llm-access-cloud-release.env`，新 checkout 用
+`conf/llm-access-cloud-release.env.example` 复制后填写。
 
 ```bash
-ssh -i ~/.ssh/google_compute_engine -o IdentitiesOnly=yes ts_user@35.241.86.154
+set -a
+source .local/llm-access-cloud-release.env
+set +a
+ssh -i "$GCP_SSH_KEY" -o IdentitiesOnly=yes "$GCP_DEST"
 ```
 
-不要假设 `ubuntu@35.241.86.154` 或 `ubuntu@ackingliu.top` 可用。
+不要假设默认 cloud 用户可用；以 `GCP_DEST` 为准。
 
 常用只读检查：
 
 ```bash
-ssh -i ~/.ssh/google_compute_engine -o IdentitiesOnly=yes ts_user@35.241.86.154 \
-  'hostname; date -u +%FT%TZ; sudo ss -lntup | grep -E ":(80|443|7666|19080|39080)\b" || true'
+set -a
+source .local/llm-access-cloud-release.env
+set +a
+ssh -i "$GCP_SSH_KEY" -o IdentitiesOnly=yes "$GCP_DEST" \
+  'hostname; date -u +%FT%TZ; sudo ss -lntup'
 
-ssh -i ~/.ssh/google_compute_engine -o IdentitiesOnly=yes ts_user@35.241.86.154 \
+ssh -i "$GCP_SSH_KEY" -o IdentitiesOnly=yes "$GCP_DEST" \
   'systemctl is-active caddy pb-mapper-server.service pb-mapper-client-cli@sf-backend.service llm-access.service juicefs-llm-access.service pb-mapper-server-cli@llm-access.service'
 ```
 
@@ -178,20 +186,21 @@ pb-mapper-client-cli@sf-backend.service
 pb-mapper-server-cli@llm-access.service
 ```
 
-`MSG_HEADER_KEY` 必须在 GCP server、GCP client、local server/client 之间
-一致。只比较 hash，不打印明文：
+pb-mapper message header key 必须在 GCP server、GCP client、local
+server/client 之间一致。实际值只放在对应 ignored/private env 文件里。
+排障时只比较 hash，不打印明文：
 
 ```bash
 sudo sh -c 'tr -d "\r\n" </var/lib/pb-mapper-server/msg_header_key | sha256sum'
-sudo sh -c 'sed -n "s/^MSG_HEADER_KEY=//p" /etc/pb-mapper/server.env | tr -d "\r\n" | sha256sum'
-sudo sh -c 'sed -n "s/^MSG_HEADER_KEY=//p" /etc/pb-mapper/client-cli/sf-backend.env | tr -d "\r\n" | sha256sum'
+sudo sh -c '. /etc/pb-mapper/server.env; printf "%s" "$MSG_HEADER_KEY" | tr -d "\r\n" | sha256sum'
+sudo sh -c '. /etc/pb-mapper/client-cli/sf-backend.env; printf "%s" "$MSG_HEADER_KEY" | tr -d "\r\n" | sha256sum'
 ```
 
 常见错误：
 
 | 现象 | 优先判断 |
 | --- | --- |
-| `datalen not valid` | `MSG_HEADER_KEY` 不一致，尤其是误用了按机器派生 key |
+| `datalen not valid` | pb-mapper message header key 不一致，尤其是误用了按机器派生 key |
 | GCP `127.0.0.1:39080` 没监听 | 本地 `sf-backend` 没注册，或 key 不一致 |
 | `client key sf-backend has no healthy remote server connections` | GCP client 已启动，但本地服务端还没注册 |
 | `client_key_available` | GCP 已看到本地 `sf-backend`，`39080` 应该开始监听 |
@@ -239,7 +248,10 @@ env -u https_proxy -u HTTPS_PROXY -u http_proxy -u HTTP_PROXY -u all_proxy -u AL
 Caddy/pb-mapper/local Pingora 链路。
 
 ```bash
-ssh -i ~/.ssh/google_compute_engine -o IdentitiesOnly=yes ts_user@35.241.86.154
+set -a
+source .local/llm-access-cloud-release.env
+set +a
+ssh -i "$GCP_SSH_KEY" -o IdentitiesOnly=yes "$GCP_DEST"
 sudo systemctl restart caddy
 sudo systemctl restart pb-mapper-server.service
 sudo systemctl restart pb-mapper-client-cli@sf-backend.service
@@ -282,5 +294,6 @@ for ns in ns1.dnsowl.com ns2.dnsowl.com ns3.dnsowl.com; do
 done
 ```
 
-当前 GCP IP 是 `35.241.86.154`。如果权威 DNS 全部稳定返回新 IP 后，
-公共 DNS 仍返回旧 IP，通常只是递归缓存等待。
+当前 GCP IP 以 `.local/llm-access-cloud-release.env` 里的 `GCP_HOST` 或
+`GCP_DEST` 为准。如果权威 DNS 全部稳定返回新 IP 后，公共 DNS 仍返回旧
+IP，通常只是递归缓存等待。

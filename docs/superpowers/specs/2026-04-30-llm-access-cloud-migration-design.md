@@ -148,8 +148,10 @@ objects and metadata must survive VM replacement.
 
 Current production backend:
 
-- Object storage: Cloudflare R2 bucket for `llm-access`.
-- Metadata backend: external Valkey, DB `11`, dedicated `juicefs` ACL user.
+- Object storage: configured Cloudflare R2 bucket from the ignored private
+  JuiceFS env.
+- Metadata backend: configured external Valkey instance and DB from the ignored
+  private JuiceFS env.
 - GCP local cache: `/var/cache/juicefs/llm-access`, not inside
   `/mnt/llm-access`.
 - Systemd gates `llm-access.service` on the JuiceFS mount and expected state
@@ -245,7 +247,7 @@ Current production constraints:
 ## Resolved Decisions
 
 - JuiceFS object backend is Cloudflare R2; metadata backend is external Valkey
-  DB `11`.
+  configured through the ignored private JuiceFS env.
 - Public LLM path list is `/v1/*`, `/cc/v1/*`, `/api/llm-gateway/*`,
   `/api/kiro-gateway/*`, `/api/codex-gateway/*`, and `/api/llm-access/*`.
 - The frontend and non-LLM StaticFlow payloads remain local-first behind

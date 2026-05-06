@@ -366,13 +366,13 @@ ALLOWED_ORIGINS=https://acking-you.github.io,https://ackingliu.top
 pb-mapper-server-cli tcp-server \
   --key staticflow-web \
   --addr 127.0.0.1:3000 \
-  --pb-mapper-server <cloud-ip>:7666
+  --pb-mapper-server "$PB_MAPPER_RELAY_ADDR"
 
 # 云端：映射到本地端口
 pb-mapper-client-cli tcp-server \
   --key staticflow-web \
   --addr 127.0.0.1:<local-port> \
-  --pb-mapper-server 127.0.0.1:7666
+  --pb-mapper-server "$PB_MAPPER_LOCAL_RELAY_ADDR"
 ```
 
 ### Step 8: Caddy 配置

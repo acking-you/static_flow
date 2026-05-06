@@ -27,9 +27,9 @@ grep -F '.local/llm-access-cloud-release.env' "$LOCAL_SCRIPT" >/dev/null
 grep -F 'source "$CONFIG_FILE"' "$LOCAL_SCRIPT" >/dev/null
 ! grep -F 'pgrep' "$LOCAL_SCRIPT" >/dev/null
 ! grep -F 'another Rust/frontend build appears to be running' "$LOCAL_SCRIPT" >/dev/null
-! grep -F '35.241.86.154' "$LOCAL_SCRIPT" >/dev/null
-! grep -F 'google_compute_engine' "$LOCAL_SCRIPT" >/dev/null
-! grep -F 'staticflow-llm-access-release' "$LOCAL_SCRIPT" >/dev/null
+! grep -F 'GCP_HOST="${GCP_HOST:-' "$LOCAL_SCRIPT" >/dev/null
+! grep -F 'GCP_SSH_KEY="${GCP_SSH_KEY:-' "$LOCAL_SCRIPT" >/dev/null
+! grep -F 'REMOTE_RELEASE_DIR="${REMOTE_RELEASE_DIR:-' "$LOCAL_SCRIPT" >/dev/null
 
 grep -F 'sudo mv -f' "$REMOTE_SCRIPT" >/dev/null
 grep -F 'systemctl restart' "$REMOTE_SCRIPT" >/dev/null
@@ -38,5 +38,6 @@ grep -F 'http://127.0.0.1:19080/healthz' "$REMOTE_SCRIPT" >/dev/null
 grep -F 'GCP_HOST=' "$CONFIG_EXAMPLE" >/dev/null
 grep -F 'GCP_SSH_KEY=' "$CONFIG_EXAMPLE" >/dev/null
 grep -F 'REMOTE_RELEASE_DIR=' "$CONFIG_EXAMPLE" >/dev/null
-! grep -F '35.241.86.154' "$CONFIG_EXAMPLE" >/dev/null
-! grep -F 'google_compute_engine' "$CONFIG_EXAMPLE" >/dev/null
+grep -F 'PB_MAPPER_RELAY_ADDR=' "$CONFIG_EXAMPLE" >/dev/null
+grep -F 'PB_MAPPER_LOCAL_RELAY_ADDR=' "$CONFIG_EXAMPLE" >/dev/null
+grep -F 'VALKEY_SSH_TARGET=' "$CONFIG_EXAMPLE" >/dev/null

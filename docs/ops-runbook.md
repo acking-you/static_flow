@@ -14,8 +14,8 @@ Current source-of-truth production facts verified on 2026-05-02:
   `pb-mapper-client-cli@sf-backend.service`.
 - Server-side pb-mapper client env file:
   `/etc/pb-mapper/client-cli/sf-backend.env`.
-- Current pb-mapper client settings:
-  - `PB_SERVER=127.0.0.1:7666`
+- Current pb-mapper client settings are read from the private server-side env:
+  - `PB_SERVER=<configured relay address>`
   - `SERVICE_KEY=sf-backend`
   - `LOCAL_ADDR=127.0.0.1:39080`
 - Server-side pb-mapper server systemd unit: `pb-mapper-server.service`.
@@ -30,33 +30,38 @@ Current source-of-truth production facts verified on 2026-05-02:
 ## Standard Tier Ingress Trial (Rejected)
 
 Standard Tier ingress trial on 2026-05-03:
-- A temporary `e2-micro` VM `sf-standard-front` with Standard Tier external IP
-  `35.215.139.25` was tested as a TCP pass-through front door for ports `80`,
-  `443`, and `7666`.
+- A temporary Standard Tier front door was tested as a TCP pass-through for
+  `80`, `443`, and the configured pb-mapper relay port.
 - The trial was rejected because the Standard Tier route from the local network
   showed much higher latency and packet loss than the existing Premium Tier
   path.
-- The VM and static IP were deleted on 2026-05-03. Do not use
-  `35.215.139.25` for production or rollback.
+- The temporary VM and static IP were deleted on 2026-05-03. Do not use the
+  trial endpoint for production or rollback; historical endpoint values belong
+  only in private notes, not this repository.
 
 ## GCP / Valkey / JuiceFS Configuration
 
-Current GCP / Valkey / JuiceFS facts verified on 2026-05-02:
-- GCP public host for the current cloud ingress is `35.241.86.154`; DNS
-  `ackingliu.top` currently resolves there.
-- GCP SSH login from this workstation uses:
+Current GCP / Valkey / JuiceFS facts verified on 2026-05-02. Concrete host,
+user, key, bucket, account, and metadata endpoint values are stored in ignored
+private env files, not in tracked docs.
+
+- Local private cloud-release config is:
+  `.local/llm-access-cloud-release.env`. Copy
+  `conf/llm-access-cloud-release.env.example` when bootstrapping a new checkout.
+- GCP SSH login from this workstation uses variables from that file:
   ```bash
-  ssh -i ~/.ssh/google_compute_engine -o IdentitiesOnly=yes ts_user@35.241.86.154
+  set -a
+  source .local/llm-access-cloud-release.env
+  set +a
+  ssh -i "$GCP_SSH_KEY" -o IdentitiesOnly=yes "$GCP_DEST"
   ```
-  `ubuntu@35.241.86.154` may reject the current local SSH key; do not assume
-  the `ubuntu` user is the working GCP login.
+  If `GCP_DEST` is unset, build it from `GCP_USER@$GCP_HOST`.
 - The GCP machine has FUSE available (`/dev/fuse`) and `fusermount3`; the
-  copied JuiceFS binary path used during validation was
-  `/home/ts_user/.local/bin/juicefs`.
-- The R2 bucket for llm-access JuiceFS storage is `llm-access` in account
-  `ea0c9b24f122be071c81933f9fb1f21b`, using the S3 endpoint
-  `https://llm-access.ea0c9b24f122be071c81933f9fb1f21b.r2.cloudflarestorage.com`.
-  Do not commit R2 access keys.
+  JuiceFS binary path is deployment-specific and should be read from the
+  private host configuration.
+- R2 bucket/account/endpoint values for llm-access JuiceFS storage live in the
+  private JuiceFS env below. Do not commit R2 access keys or endpoint/account
+  identifiers.
 - Local private JuiceFS config is:
   `.local/common/juicefs/llm-access.env`. This file is intentionally ignored by
   git through the `.local/` rule, must stay mode `0600`, and contains all
@@ -71,9 +76,13 @@ Current GCP / Valkey / JuiceFS facts verified on 2026-05-02:
 
 ## Valkey Metadata
 
-- Valkey metadata host is `43.161.218.153`, SSH login is:
+- Valkey metadata host/login are deployment secrets; load them from the private
+  JuiceFS/cloud env before connecting:
   ```bash
-  ssh ubuntu@43.161.218.153
+  set -a
+  source .local/common/juicefs/llm-access.env
+  set +a
+  ssh "$VALKEY_SSH_TARGET"
   ```
   Valkey runs as `valkey-16379.service`, listens on port `16379`, and uses:
   - config: `/etc/valkey/valkey-16379.conf`
@@ -85,11 +94,12 @@ Current GCP / Valkey / JuiceFS facts verified on 2026-05-02:
 - A dedicated Valkey ACL user `juicefs` exists for JuiceFS metadata. Do not
   print or commit the ACL password; use the ignored env file above.
 - Reserved Valkey DBs for JuiceFS metadata:
-  - DB `11`: production `staticflow-llm-access`
-  - DB `12`: temporary validation volume
+  - production DB: configured in the ignored JuiceFS env
+  - temporary validation DB: configured in the ignored JuiceFS env when needed
 - GCP validation already proved:
   - R2 object put/get/head/delete through JuiceFS `objbench` works from GCP.
-  - JuiceFS format/mount/write/read/sha256/umount works on DB `12`.
+  - JuiceFS format/mount/write/read/sha256/umount works on the temporary
+    validation DB.
   - Valkey metadata ping from GCP was about 1-2 ms.
 - Cloudflare R2 is usable for normal JuiceFS mount read/write, but its S3
   `ListObjects` behavior is not fully ordered. Avoid relying on JuiceFS
@@ -226,7 +236,10 @@ keepalive/HTTP2/tunnel connections and is often the fastest way to restore
 normal downstream latency:
 
 ```bash
-ssh -i ~/.ssh/google_compute_engine -o IdentitiesOnly=yes ts_user@35.241.86.154
+set -a
+source .local/llm-access-cloud-release.env
+set +a
+ssh -i "$GCP_SSH_KEY" -o IdentitiesOnly=yes "$GCP_DEST"
 sudo systemctl restart caddy
 sudo systemctl restart pb-mapper-server.service
 sudo systemctl restart pb-mapper-client-cli@sf-backend.service
@@ -235,7 +248,10 @@ sudo systemctl restart pb-mapper-client-cli@sf-backend.service
 After restart, verify both the relay path and public path:
 
 ```bash
-ssh -i ~/.ssh/google_compute_engine -o IdentitiesOnly=yes ts_user@35.241.86.154 \
+set -a
+source .local/llm-access-cloud-release.env
+set +a
+ssh -i "$GCP_SSH_KEY" -o IdentitiesOnly=yes "$GCP_DEST" \
   "curl -o /dev/null -sS -w 'code=%{http_code} size=%{size_download} start=%{time_starttransfer} total=%{time_total}\n' \
     -H 'Host: ackingliu.top' http://127.0.0.1:39080/"
 

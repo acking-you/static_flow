@@ -64,13 +64,13 @@ location /api/ {
 pb-mapper-server-cli tcp-server \
   --key staticflow-api-https \
   --addr 127.0.0.1:3443 \
-  --pb-mapper-server <cloud-ip>:7666
+  --pb-mapper-server "$PB_MAPPER_RELAY_ADDR"
 
 # 云端
 pb-mapper-client-cli tcp-server \
   --key staticflow-api-https \
   --addr 0.0.0.0:8888 \
-  --pb-mapper-server 127.0.0.1:7666
+  --pb-mapper-server "$PB_MAPPER_LOCAL_RELAY_ADDR"
 ```
 
 ## 可选云端 Nginx
