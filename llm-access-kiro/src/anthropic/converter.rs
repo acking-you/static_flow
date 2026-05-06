@@ -125,7 +125,9 @@ pub fn map_model(model: &str) -> Option<String> {
             Some("claude-sonnet-4.5".to_string())
         }
     } else if model.contains("opus") {
-        if model.contains("4-5") || model.contains("4.5") {
+        if model.contains("4-7") || model.contains("4.7") {
+            Some("claude-opus-4.7".to_string())
+        } else if model.contains("4-5") || model.contains("4.5") {
             Some("claude-opus-4.5".to_string())
         } else {
             Some("claude-opus-4.6".to_string())
@@ -141,7 +143,13 @@ pub fn map_model(model: &str) -> Option<String> {
 /// 4.6-generation models get 1M; everything else defaults to 200K.
 pub fn get_context_window_size(model: &str) -> i32 {
     match map_model(model) {
-        Some(mapped) if mapped == "claude-sonnet-4.6" || mapped == "claude-opus-4.6" => 1_000_000,
+        Some(mapped)
+            if mapped == "claude-sonnet-4.6"
+                || mapped == "claude-opus-4.6"
+                || mapped == "claude-opus-4.7" =>
+        {
+            1_000_000
+        },
         _ => 200_000,
     }
 }
@@ -2533,6 +2541,8 @@ mod tests {
     fn get_context_window_size_matches_latest_kiro_model_rules() {
         assert_eq!(get_context_window_size("claude-sonnet-4-6"), 1_000_000);
         assert_eq!(get_context_window_size("claude-opus-4-20250514"), 1_000_000);
+        assert_eq!(map_model("claude-opus-4-7"), Some("claude-opus-4.7".to_string()));
+        assert_eq!(get_context_window_size("claude-opus-4-7"), 1_000_000);
         assert_eq!(get_context_window_size("claude-sonnet-4-5-20250929"), 200_000);
     }
 

@@ -1715,7 +1715,7 @@ struct KiroVisionBridgeImage {
 }
 
 fn kiro_opus_vision_bridge_required(payload: &MessagesRequest) -> bool {
-    matches!(map_model(&payload.model).as_deref(), Some("claude-opus-4.6"))
+    matches!(map_model(&payload.model).as_deref(), Some("claude-opus-4.6" | "claude-opus-4.7"))
         && !collect_kiro_vision_bridge_images(payload).is_empty()
 }
 
@@ -4051,6 +4051,7 @@ fn estimate_prefix_cached_tokens(
 fn normalize_kiro_kmodel_name(model: &str) -> &str {
     match model {
         "claude-opus-4.6" => "claude-opus-4-6",
+        "claude-opus-4.7" => "claude-opus-4-7",
         _ => model,
     }
 }
@@ -5879,7 +5880,7 @@ mod tests {
     }
 
     #[test]
-    fn kiro_opus_vision_bridge_is_required_only_for_opus_46_images() {
+    fn kiro_opus_vision_bridge_is_required_for_opus_46_and_47_images() {
         let opus_payload = serde_json::from_value(json!({
             "model": "claude-opus-4-6",
             "max_tokens": 64,
@@ -5901,6 +5902,10 @@ mod tests {
         .expect("request should deserialize");
         assert!(super::kiro_opus_vision_bridge_required(&opus_payload));
 
+        let mut opus_47_payload = opus_payload.clone();
+        opus_47_payload.model = "claude-opus-4-7".to_string();
+        assert!(super::kiro_opus_vision_bridge_required(&opus_47_payload));
+
         let mut sonnet_payload = opus_payload.clone();
         sonnet_payload.model = "claude-sonnet-4-6".to_string();
         assert!(!super::kiro_opus_vision_bridge_required(&sonnet_payload));
@@ -5908,6 +5913,38 @@ mod tests {
         let mut text_payload = opus_payload;
         text_payload.messages[0].content = json!("hello");
         assert!(!super::kiro_opus_vision_bridge_required(&text_payload));
+    }
+
+    #[test]
+    fn override_kiro_thinking_aligns_opus_47_with_opus_46() {
+        let mut payload: llm_access_kiro::anthropic::types::MessagesRequest =
+            serde_json::from_value(json!({
+                "model": "claude-opus-4-7-thinking",
+                "max_tokens": 64,
+                "messages": [{
+                    "role": "user",
+                    "content": "hello"
+                }]
+            }))
+            .expect("request should deserialize");
+
+        super::override_kiro_thinking_from_model_name(&mut payload);
+
+        let thinking = payload.thinking.expect("thinking should be populated");
+        assert_eq!(thinking.thinking_type, "adaptive");
+        assert_eq!(thinking.budget_tokens, 20_000);
+        assert_eq!(
+            payload
+                .output_config
+                .and_then(|config| config.effort)
+                .as_deref(),
+            Some("xhigh")
+        );
+    }
+
+    #[test]
+    fn normalize_kiro_kmodel_name_maps_opus_47_back_to_public_name() {
+        assert_eq!(super::normalize_kiro_kmodel_name("claude-opus-4.7"), "claude-opus-4-7");
     }
 
     #[test]
