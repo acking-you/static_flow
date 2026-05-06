@@ -125,10 +125,8 @@ async fn refresh_codex_status(
         .await
         .context("list Codex accounts for status refresh")?;
     let source_url = compute_usage_url(&provider::codex_upstream_base_url());
-    let mut refreshed = accounts
-        .iter()
-        .map(initial_account_status)
-        .collect::<Vec<_>>();
+    let existing = status_store.codex_rate_limit_status().await.ok();
+    let mut refreshed = seed_full_refresh_statuses(&accounts, existing);
     status_store
         .save_codex_rate_limit_status(build_status_snapshot(
             refreshed.clone(),
@@ -220,6 +218,61 @@ pub(crate) async fn refresh_single_codex_account_status(
                 .unwrap_or_else(|| "Codex usage refresh failed".to_string())
         ),
     }
+}
+
+fn seed_full_refresh_statuses(
+    accounts: &[AdminCodexAccount],
+    existing: Option<CodexRateLimitStatus>,
+) -> Vec<AccountStatusRefresh> {
+    let Some(existing) = existing else {
+        return accounts.iter().map(initial_account_status).collect();
+    };
+    let mut existing_accounts = existing
+        .accounts
+        .into_iter()
+        .map(|account| (account.name.clone(), account))
+        .collect::<BTreeMap<_, _>>();
+    let mut existing_buckets = existing
+        .buckets
+        .into_iter()
+        .filter_map(|bucket| bucket.account_name.clone().map(|name| (name, bucket)))
+        .fold(
+            BTreeMap::<String, Vec<CodexRateLimitBucket>>::new(),
+            |mut grouped, (name, bucket)| {
+                grouped.entry(name).or_default().push(bucket);
+                grouped
+            },
+        );
+
+    accounts
+        .iter()
+        .map(|account| {
+            if account.status != KEY_STATUS_ACTIVE {
+                return initial_account_status(account);
+            }
+            let Some(public_account) = existing_accounts.remove(&account.name) else {
+                return initial_account_status(account);
+            };
+            if public_account.status != account.status {
+                return initial_account_status(account);
+            }
+            let buckets = existing_buckets.remove(&account.name).unwrap_or_default();
+            if !buckets.is_empty() {
+                AccountStatusRefresh::Ready {
+                    account: public_account,
+                    buckets,
+                }
+            } else if public_account.usage_error_message.is_some() {
+                AccountStatusRefresh::Error {
+                    account: public_account,
+                }
+            } else {
+                AccountStatusRefresh::Skipped {
+                    account: public_account,
+                }
+            }
+        })
+        .collect()
 }
 
 fn initial_account_status(account: &AdminCodexAccount) -> AccountStatusRefresh {
@@ -817,5 +870,57 @@ mod tests {
             .buckets
             .iter()
             .any(|bucket| bucket.account_name.as_deref() == Some("beta")));
+    }
+
+    #[test]
+    fn full_refresh_seed_preserves_cached_account_statuses() {
+        let accounts = vec![sample_admin_account("alpha"), sample_admin_account("beta")];
+        let alpha_bucket = sample_bucket("alpha", 70.0, 80.0);
+        let beta_bucket = sample_bucket("beta", 62.0, 39.0);
+        let existing = CodexRateLimitStatus {
+            status: "ready".to_string(),
+            refresh_interval_seconds: 300,
+            last_checked_at: Some(900),
+            last_success_at: Some(900),
+            source_url: "https://chatgpt.com/backend-api/wham/usage".to_string(),
+            error_message: None,
+            accounts: vec![
+                CodexPublicAccountStatus {
+                    name: "alpha".to_string(),
+                    status: KEY_STATUS_ACTIVE.to_string(),
+                    plan_type: Some("Pro".to_string()),
+                    primary_remaining_percent: Some(70.0),
+                    secondary_remaining_percent: Some(80.0),
+                    last_usage_checked_at: Some(900),
+                    last_usage_success_at: Some(900),
+                    usage_error_message: None,
+                },
+                CodexPublicAccountStatus {
+                    name: "beta".to_string(),
+                    status: KEY_STATUS_ACTIVE.to_string(),
+                    plan_type: Some("Pro".to_string()),
+                    primary_remaining_percent: Some(62.0),
+                    secondary_remaining_percent: Some(39.0),
+                    last_usage_checked_at: Some(900),
+                    last_usage_success_at: Some(900),
+                    usage_error_message: None,
+                },
+            ],
+            buckets: vec![alpha_bucket, beta_bucket],
+        };
+
+        let seeded = seed_full_refresh_statuses(&accounts, Some(existing));
+        let snapshot =
+            build_status_snapshot(seeded, "https://chatgpt.com/backend-api/wham/usage", 300);
+
+        assert_eq!(snapshot.status, "ready");
+        assert_eq!(snapshot.accounts.len(), 2);
+        assert!(snapshot
+            .accounts
+            .iter()
+            .all(|account| account.usage_error_message.is_none()));
+        assert_eq!(snapshot.accounts[0].primary_remaining_percent, Some(70.0));
+        assert_eq!(snapshot.accounts[1].secondary_remaining_percent, Some(39.0));
+        assert_eq!(snapshot.buckets.len(), 2);
     }
 }

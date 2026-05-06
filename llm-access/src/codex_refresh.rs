@@ -55,24 +55,34 @@ pub(crate) async fn ensure_context_for_route(
     store: &dyn ProviderRouteStore,
     force_refresh: bool,
 ) -> anyhow::Result<CodexCallContext> {
-    let parts = parse_auth_parts(&route.auth_json)?;
-    if !force_refresh && !access_token_is_expired(&parts.access_token) {
-        return Ok(parts.into_context());
+    let initial = parse_auth_parts(&route.auth_json)?;
+    if !force_refresh && !access_token_is_expired(&initial.access_token) {
+        return Ok(initial.into_context());
     }
 
     let refresh_lock = refresh_lock_for_account(&route.account_name)?;
     let _guard = refresh_lock.lock().await;
-    let latest = parse_auth_parts(&route.auth_json)?;
-    if !force_refresh && !access_token_is_expired(&latest.access_token) {
+    let latest_route = store
+        .resolve_codex_account_route(&route.account_name)
+        .await?
+        .ok_or_else(|| {
+            anyhow!("active Codex account `{}` is not configured", route.account_name)
+        })?;
+    let latest = parse_auth_parts(&latest_route.auth_json)?;
+    let latest_access_token_is_expired = access_token_is_expired(&latest.access_token);
+    if !force_refresh && !latest_access_token_is_expired {
+        return Ok(latest.into_context());
+    }
+    if force_refresh && auth_parts_changed(&initial, &latest) && !latest_access_token_is_expired {
         return Ok(latest.into_context());
     }
 
-    let refreshed = refresh_auth(route, &latest).await?;
-    let auth_json = refreshed_auth_json(&route.auth_json, &latest, &refreshed)?;
+    let refreshed = refresh_auth(&latest_route, &latest).await?;
+    let auth_json = refreshed_auth_json(&latest_route.auth_json, &latest, &refreshed)?;
     let next_parts = parse_auth_parts(&auth_json)?;
     store
         .save_codex_auth_update(ProviderCodexAuthUpdate {
-            account_name: route.account_name.clone(),
+            account_name: latest_route.account_name.clone(),
             auth_json,
             account_id: next_parts.account_id.clone(),
             status: KEY_STATUS_ACTIVE.to_string(),
@@ -81,6 +91,13 @@ pub(crate) async fn ensure_context_for_route(
         })
         .await?;
     Ok(next_parts.into_context())
+}
+
+fn auth_parts_changed(previous: &CodexAuthParts, latest: &CodexAuthParts) -> bool {
+    previous.access_token != latest.access_token
+        || previous.refresh_token != latest.refresh_token
+        || previous.id_token != latest.id_token
+        || previous.account_id != latest.account_id
 }
 
 impl CodexAuthParts {
@@ -282,4 +299,155 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use chrono::Duration;
+    use llm_access_core::{
+        provider::RouteStrategy,
+        store::{AuthenticatedKey, ProviderKiroAuthUpdate, ProviderKiroRoute},
+    };
+    use serde_json::json;
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct TestRouteStore {
+        latest_codex_route: Arc<Mutex<Option<ProviderCodexRoute>>>,
+        codex_updates: Arc<Mutex<Vec<ProviderCodexAuthUpdate>>>,
+    }
+
+    #[async_trait]
+    impl ProviderRouteStore for TestRouteStore {
+        async fn resolve_codex_route(
+            &self,
+            _key: &AuthenticatedKey,
+        ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+            Ok(self.latest_codex_route.lock().expect("route").clone())
+        }
+
+        async fn resolve_codex_account_route(
+            &self,
+            account_name: &str,
+        ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+            let route = self.latest_codex_route.lock().expect("route").clone();
+            Ok(route.filter(|route| route.account_name == account_name))
+        }
+
+        async fn resolve_kiro_route(
+            &self,
+            _key: &AuthenticatedKey,
+        ) -> anyhow::Result<Option<ProviderKiroRoute>> {
+            Ok(None)
+        }
+
+        async fn save_kiro_auth_update(
+            &self,
+            _update: ProviderKiroAuthUpdate,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn save_codex_auth_update(
+            &self,
+            update: ProviderCodexAuthUpdate,
+        ) -> anyhow::Result<()> {
+            self.codex_updates.lock().expect("updates").push(update);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_uses_latest_stored_auth_after_guarded_reload() {
+        let stale_route = codex_route_with_auth(auth_json(expired_token(), None));
+        let latest_access_token = future_token();
+        let latest_route = codex_route_with_auth(auth_json(
+            latest_access_token.clone(),
+            Some("latest-refresh-token"),
+        ));
+        let store = TestRouteStore {
+            latest_codex_route: Arc::new(Mutex::new(Some(latest_route))),
+            codex_updates: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let context = ensure_context_for_route(&stale_route, &store, false)
+            .await
+            .expect("refresh context should use latest stored auth");
+
+        assert_eq!(context.access_token, latest_access_token);
+        assert!(
+            store.codex_updates.lock().expect("updates").is_empty(),
+            "latest usable auth should not be rewritten"
+        );
+    }
+
+    #[tokio::test]
+    async fn forced_refresh_uses_latest_auth_when_stored_token_changed() {
+        let stale_route = codex_route_with_auth(auth_json(future_token(), Some("stale-refresh")));
+        let latest_access_token = future_token();
+        let latest_route = codex_route_with_auth(auth_json(
+            latest_access_token.clone(),
+            Some("latest-refresh-token"),
+        ));
+        let store = TestRouteStore {
+            latest_codex_route: Arc::new(Mutex::new(Some(latest_route))),
+            codex_updates: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let context = ensure_context_for_route(&stale_route, &store, true)
+            .await
+            .expect("forced refresh should use changed stored auth");
+
+        assert_eq!(context.access_token, latest_access_token);
+        assert!(
+            store.codex_updates.lock().expect("updates").is_empty(),
+            "changed latest auth should avoid a second refresh request"
+        );
+    }
+
+    fn codex_route_with_auth(auth_json: String) -> ProviderCodexRoute {
+        ProviderCodexRoute {
+            account_name: "codex-account".to_string(),
+            account_group_id_at_event: None,
+            route_strategy_at_event: RouteStrategy::Auto,
+            auth_json,
+            map_gpt53_codex_to_spark: false,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            account_request_max_concurrency: None,
+            account_request_min_start_interval_ms: None,
+            proxy: None,
+        }
+    }
+
+    fn auth_json(access_token: String, refresh_token: Option<&str>) -> String {
+        let mut value = json!({
+            "tokens": {
+                "access_token": access_token,
+                "account_id": "account-id"
+            }
+        });
+        if let Some(refresh_token) = refresh_token {
+            value["tokens"]["refresh_token"] = json!(refresh_token);
+        }
+        value.to_string()
+    }
+
+    fn expired_token() -> String {
+        jwt_with_exp((Utc::now() - Duration::minutes(5)).timestamp())
+    }
+
+    fn future_token() -> String {
+        jwt_with_exp((Utc::now() + Duration::hours(1)).timestamp())
+    }
+
+    fn jwt_with_exp(exp: i64) -> String {
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(format!(r#"{{"exp":{exp}}}"#));
+        format!("{header}.{payload}.signature")
+    }
 }

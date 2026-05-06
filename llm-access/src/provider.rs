@@ -5491,6 +5491,17 @@ mod tests {
             Ok(Some(self.codex_route.clone()))
         }
 
+        async fn resolve_codex_account_route(
+            &self,
+            account_name: &str,
+        ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+            if self.codex_route.account_name == account_name {
+                Ok(Some(self.codex_route.clone()))
+            } else {
+                Ok(None)
+            }
+        }
+
         async fn resolve_kiro_route(
             &self,
             _key: &AuthenticatedKey,
@@ -5524,6 +5535,13 @@ mod tests {
         async fn resolve_codex_route(
             &self,
             _key: &AuthenticatedKey,
+        ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+            Ok(None)
+        }
+
+        async fn resolve_codex_account_route(
+            &self,
+            _account_name: &str,
         ) -> anyhow::Result<Option<ProviderCodexRoute>> {
             Ok(None)
         }

@@ -644,6 +644,22 @@ impl ProviderRouteStore for SqliteControlRepository {
         .context("sqlite control repository provider codex route candidates task failed")?
     }
 
+    async fn resolve_codex_account_route(
+        &self,
+        account_name: &str,
+    ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+        let account_name = account_name.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.resolve_admin_codex_account_route(&account_name)
+        })
+        .await
+        .context("sqlite control repository provider codex account route task failed")?
+    }
+
     async fn resolve_kiro_route(
         &self,
         key: &AuthenticatedKey,

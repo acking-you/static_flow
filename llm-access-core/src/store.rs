@@ -1504,6 +1504,12 @@ pub trait ProviderRouteStore: Send + Sync {
         Ok(self.resolve_codex_route(key).await?.into_iter().collect())
     }
 
+    /// Reload one active Codex account route by account name.
+    async fn resolve_codex_account_route(
+        &self,
+        account_name: &str,
+    ) -> anyhow::Result<Option<ProviderCodexRoute>>;
+
     /// Resolve the Kiro account to use for an authenticated key.
     async fn resolve_kiro_route(
         &self,
@@ -1906,6 +1912,13 @@ impl ProviderRouteStore for EmptyProviderRouteStore {
     async fn resolve_codex_route(
         &self,
         _key: &AuthenticatedKey,
+    ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+        Ok(None)
+    }
+
+    async fn resolve_codex_account_route(
+        &self,
+        _account_name: &str,
     ) -> anyhow::Result<Option<ProviderCodexRoute>> {
         Ok(None)
     }
