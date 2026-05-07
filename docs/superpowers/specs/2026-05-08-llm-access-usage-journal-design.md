@@ -35,6 +35,9 @@ visible in logs and metrics.
 - Keep existing local StaticFlow and operator usage-detail workflows compatible
   by exposing settled usage queries on a new independent local port while
   preserving the old admin usage HTTP paths as proxy-compatible entrypoints.
+- Let the frontend show the current worker consumption progress, including the
+  currently claimed journal file, processed blocks/events/bytes, heartbeat, and
+  last error.
 - Provide a CLI for human or agent inspection of journal files.
 - Surface journal backlog and loss counters in admin/runtime status without
   embedding a full journal browser in the existing usage page.
@@ -94,6 +97,7 @@ llm-access API process
 
 llm-access usage worker process
   -> claim sealed journal file
+  -> publish current consumption progress
   -> read compressed blocks in batches
   -> append rows to local active DuckDB segment
   -> seal/compact/archive DuckDB segments into JuiceFS
@@ -432,6 +436,53 @@ JSON lines for selected events.
 The CLI is the raw journal inspection path. The frontend should not duplicate
 this functionality.
 
+## Worker Progress Reporting
+
+The worker exposes consumption progress as structured status, not raw journal
+content. The status is updated when a file is claimed, after every successfully
+committed block, when a file is deleted, and when an error or retry state is
+entered.
+
+The worker-only endpoint is:
+
+```text
+GET /admin/llm-access/usage-worker/status
+```
+
+The main API service exposes a combined frontend endpoint:
+
+```text
+GET /admin/llm-access/usage-journal/status
+```
+
+The combined endpoint returns API-process producer state plus worker state. The
+API process owns producer fields such as active journal file, sealed backlog,
+and writer drop counters. Worker state is fetched from `usage_query_base_url`.
+If the worker is unavailable, the endpoint still returns producer state and a
+worker state of `unreachable` with the proxy error message.
+
+The worker progress snapshot contains:
+
+- state: `idle`, `claiming`, `importing`, `deleting`, `retrying`, `unreachable`
+- current file path, sequence, and claimed timestamp
+- total blocks, events, and compressed bytes from the sealed file footer
+- processed blocks, events, and compressed bytes
+- successfully committed DuckDB rows for the current file
+- progress percentage derived from processed events over total events
+- current batch event count
+- import rate in events per second over the current file
+- last heartbeat timestamp
+- last successful file sequence and import timestamp
+- last error message and timestamp
+
+The worker writes the same progress snapshot to `consumer-state.sqlite3` after
+each block commit. This makes progress visible after a worker restart and avoids
+requiring the frontend to infer progress by scanning files or querying DuckDB.
+
+The frontend displays this in the journal status panel as a progress bar and a
+small detail table. It must not render full event payloads or reuse the usage
+events table for journal inspection.
+
 ## Admin Status
 
 Add a small admin/runtime status surface, separate from the existing usage
@@ -451,12 +502,19 @@ events table. It reports:
 - last producer seal timestamp
 - worker running status when available
 - usage query base URL and last successful proxy check
+- worker current state
+- worker current file sequence and path
+- worker current file processed/total blocks
+- worker current file processed/total events
+- worker current file processed/total compressed bytes
+- worker current file progress percentage
+- worker import rate and heartbeat age
 - worker last successful import timestamp
 - worker last error
 - DuckDB active segment bytes and archive backlog from the tiered store
 
-The frontend only visualizes this status and backlog. It does not browse raw
-journal events.
+The frontend only visualizes this status, backlog, and worker progress. It does
+not browse raw journal events.
 
 ## Configuration
 
@@ -513,9 +571,10 @@ can preserve the existing admin usage routes.
    contract.
 5. Add the worker read-only usage query HTTP API on the independent port.
 6. Add API-process proxy compatibility for existing admin usage routes.
-7. Add idempotent DuckDB import tests that retry after a simulated post-commit
+7. Add worker progress reporting, the combined journal status endpoint, and the
+   frontend status panel.
+8. Add idempotent DuckDB import tests that retry after a simulated post-commit
    crash.
-8. Add admin status APIs and a small frontend panel for backlog/status only.
 9. Run a shadow deployment with both DuckDB and journal writes enabled.
 10. Cut over production so the API process no longer opens DuckDB analytics for
    writes.
@@ -542,6 +601,12 @@ Required test coverage:
   list/detail endpoints.
 - API-process usage route proxy returns the same response as the usage query
   service and returns `503` when the usage query service is down.
+- Worker progress status updates after claiming a file, after committing a
+  block, after deleting a file, and after an import error.
+- Combined journal status returns producer state even when the worker status
+  proxy is unreachable.
+- Frontend journal status panel renders backlog plus worker progress without
+  rendering raw usage payloads.
 - CLI `inspect` validates metadata without dumping full payloads.
 - Admin status reports backlog and dropped-file counters.
 
@@ -553,6 +618,8 @@ Required operational verification:
   model serving and SQLite accounting remain healthy.
 - Local StaticFlow can query remote usage detail through the direct usage-query
   mirror port and through the legacy API mirror path.
+- During a large import, the frontend progress bar advances as journal blocks
+  are committed into DuckDB.
 - A large diagnostic payload workload compresses into bounded journal files.
 - Retention pressure produces visible counters and logs.
 - Restarting the API process recovers the active sequence without consuming
@@ -569,6 +636,7 @@ Required operational verification:
   responsibility.
 - Allow deletion of old unconsumed sealed files under retention pressure.
 - Keep raw journal inspection in CLI, not in the usage events frontend.
-- Show only journal backlog/status in the admin frontend.
+- Show journal backlog/status and worker consumption progress in the admin
+  frontend.
 - Serve settled usage queries from the independent usage worker/query port and
   keep the old admin usage paths as compatibility proxies.
