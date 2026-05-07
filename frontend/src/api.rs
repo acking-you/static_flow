@@ -27,6 +27,46 @@ fn default_duckdb_usage_checkpoint_threshold_mib() -> u64 {
     16
 }
 
+fn default_usage_journal_max_file_bytes() -> u64 {
+    64 * 1024 * 1024
+}
+
+fn default_usage_journal_max_file_age_ms() -> u64 {
+    300_000
+}
+
+fn default_usage_journal_max_files() -> u64 {
+    128
+}
+
+fn default_usage_journal_block_target_uncompressed_bytes() -> u64 {
+    1024 * 1024
+}
+
+fn default_usage_journal_block_max_events() -> u64 {
+    1024
+}
+
+fn default_usage_journal_fsync_interval_ms() -> u64 {
+    250
+}
+
+fn default_usage_journal_zstd_level() -> i64 {
+    3
+}
+
+fn default_usage_journal_consumer_lease_ms() -> u64 {
+    300_000
+}
+
+fn default_usage_query_bind_addr() -> String {
+    "127.0.0.1:19081".to_string()
+}
+
+fn default_usage_query_base_url() -> String {
+    "http://127.0.0.1:19081".to_string()
+}
+
 // API base URL. Read at compile time from STATICFLOW_API_BASE and fall back
 // to the local development backend when the variable is absent.
 #[cfg(not(feature = "mock"))]
@@ -6084,6 +6124,47 @@ pub struct AdminLlmGatewayUsageEventsResponse {
     pub generated_at: i64,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+#[allow(dead_code, reason = "used after the usage journal status panel is wired")]
+pub struct AdminUsageWorkerProgressView {
+    pub state: String,
+    pub current_file_path: Option<String>,
+    pub current_file_sequence: Option<u64>,
+    pub processed_blocks: u64,
+    pub total_blocks: u64,
+    pub processed_events: u64,
+    pub total_events: u64,
+    pub processed_compressed_bytes: u64,
+    pub total_compressed_bytes: u64,
+    pub progress_percent: f64,
+    pub import_rate_events_per_second: f64,
+    pub heartbeat_age_ms: Option<i64>,
+    pub last_successful_file_sequence: Option<u64>,
+    pub last_successful_import_at_ms: Option<i64>,
+    pub last_error: Option<String>,
+    pub last_error_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+#[allow(dead_code, reason = "used after the usage journal status panel is wired")]
+pub struct AdminUsageJournalStatusView {
+    pub journal_enabled: bool,
+    pub journal_root: String,
+    pub active_file_sequence: Option<u64>,
+    pub active_file_bytes: u64,
+    pub sealed_file_count: u64,
+    pub sealed_bytes: u64,
+    pub oldest_sealed_age_ms: Option<i64>,
+    pub dropped_files_total: u64,
+    pub dropped_unconsumed_files_total: u64,
+    pub write_failures_total: u64,
+    pub usage_query_base_url: String,
+    pub worker: AdminUsageWorkerProgressView,
+    pub generated_at: i64,
+}
+
 /// Query options for paginating and filtering LLM gateway usage events.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct AdminLlmGatewayUsageEventsQuery {
@@ -6395,6 +6476,30 @@ pub struct LlmGatewayRuntimeConfig {
     pub duckdb_usage_memory_limit_mib: u64,
     #[serde(default = "default_duckdb_usage_checkpoint_threshold_mib")]
     pub duckdb_usage_checkpoint_threshold_mib: u64,
+    #[serde(default = "default_true")]
+    pub usage_journal_enabled: bool,
+    #[serde(default = "default_usage_journal_max_file_bytes")]
+    pub usage_journal_max_file_bytes: u64,
+    #[serde(default = "default_usage_journal_max_file_age_ms")]
+    pub usage_journal_max_file_age_ms: u64,
+    #[serde(default = "default_usage_journal_max_files")]
+    pub usage_journal_max_files: u64,
+    #[serde(default = "default_usage_journal_block_target_uncompressed_bytes")]
+    pub usage_journal_block_target_uncompressed_bytes: u64,
+    #[serde(default = "default_usage_journal_block_max_events")]
+    pub usage_journal_block_max_events: u64,
+    #[serde(default = "default_usage_journal_fsync_interval_ms")]
+    pub usage_journal_fsync_interval_ms: u64,
+    #[serde(default = "default_usage_journal_zstd_level")]
+    pub usage_journal_zstd_level: i64,
+    #[serde(default = "default_usage_journal_consumer_lease_ms")]
+    pub usage_journal_consumer_lease_ms: u64,
+    #[serde(default)]
+    pub usage_journal_delete_bad_files: bool,
+    #[serde(default = "default_usage_query_bind_addr")]
+    pub usage_query_bind_addr: String,
+    #[serde(default = "default_usage_query_base_url")]
+    pub usage_query_base_url: String,
     pub kiro_cache_kmodels_json: String,
     #[serde(default = "default_kiro_billable_model_multipliers_json")]
     pub kiro_billable_model_multipliers_json: String,
@@ -7194,6 +7299,19 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             duckdb_usage_memory_limit_mib: default_duckdb_usage_memory_limit_mib(),
             duckdb_usage_checkpoint_threshold_mib:
                 default_duckdb_usage_checkpoint_threshold_mib(),
+            usage_journal_enabled: true,
+            usage_journal_max_file_bytes: default_usage_journal_max_file_bytes(),
+            usage_journal_max_file_age_ms: default_usage_journal_max_file_age_ms(),
+            usage_journal_max_files: default_usage_journal_max_files(),
+            usage_journal_block_target_uncompressed_bytes:
+                default_usage_journal_block_target_uncompressed_bytes(),
+            usage_journal_block_max_events: default_usage_journal_block_max_events(),
+            usage_journal_fsync_interval_ms: default_usage_journal_fsync_interval_ms(),
+            usage_journal_zstd_level: default_usage_journal_zstd_level(),
+            usage_journal_consumer_lease_ms: default_usage_journal_consumer_lease_ms(),
+            usage_journal_delete_bad_files: false,
+            usage_query_bind_addr: default_usage_query_bind_addr(),
+            usage_query_base_url: default_usage_query_base_url(),
             kiro_cache_kmodels_json: r#"{"claude-haiku-4-5-20251001":2.3681034438052206e-06,"claude-opus-4-6":8.061927916785985e-06,"claude-sonnet-4-6":5.055065250835128e-06}"#.to_string(),
             kiro_billable_model_multipliers_json: default_kiro_billable_model_multipliers_json(),
             kiro_cache_policy_json: r#"{"small_input_high_credit_boost":{"target_input_tokens":100000,"credit_start":1.0,"credit_end":1.8},"prefix_tree_credit_ratio_bands":[{"credit_start":0.3,"credit_end":1.0,"cache_ratio_start":0.7,"cache_ratio_end":0.2},{"credit_start":1.0,"credit_end":2.5,"cache_ratio_start":0.2,"cache_ratio_end":0.0}],"high_credit_diagnostic_threshold":2.0}"#.to_string(),
@@ -7238,6 +7356,31 @@ pub async fn update_admin_llm_gateway_config(
         let response = api_post(&url)
             .json(config)
             .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+#[allow(dead_code, reason = "used after the usage journal status panel is wired")]
+pub async fn fetch_admin_usage_journal_status() -> Result<AdminUsageJournalStatusView, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminUsageJournalStatusView::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/usage-journal/status", admin_base());
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -10271,5 +10414,25 @@ mod tests {
         assert_eq!(config.codex_client_version, DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION);
         assert_eq!(config.duckdb_usage_memory_limit_mib, 1024);
         assert_eq!(config.duckdb_usage_checkpoint_threshold_mib, 16);
+        assert!(config.usage_journal_enabled);
+        assert_eq!(config.usage_journal_max_file_bytes, 64 * 1024 * 1024);
+        assert_eq!(config.usage_journal_max_file_age_ms, 300_000);
+        assert_eq!(config.usage_journal_max_files, 128);
+        assert_eq!(config.usage_journal_block_target_uncompressed_bytes, 1024 * 1024);
+        assert_eq!(config.usage_journal_block_max_events, 1024);
+        assert_eq!(config.usage_journal_fsync_interval_ms, 250);
+        assert_eq!(config.usage_journal_zstd_level, 3);
+        assert_eq!(config.usage_journal_consumer_lease_ms, 300_000);
+        assert!(!config.usage_journal_delete_bad_files);
+        assert_eq!(config.usage_query_bind_addr, "127.0.0.1:19081");
+        assert_eq!(config.usage_query_base_url, "http://127.0.0.1:19081");
+    }
+
+    #[test]
+    fn usage_journal_status_contract_is_available_to_admin_pages() {
+        let status = AdminUsageJournalStatusView::default();
+        let _fetch = fetch_admin_usage_journal_status;
+
+        assert_eq!(status.worker.processed_events, 0);
     }
 }

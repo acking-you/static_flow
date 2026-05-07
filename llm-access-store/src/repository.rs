@@ -1480,6 +1480,9 @@ mod tests {
         config.auth_cache_ttl_seconds = 75;
         config.codex_client_version = "0.125.0".to_string();
         config.kiro_prefix_cache_mode = "formula".to_string();
+        config.usage_journal_enabled = false;
+        config.usage_query_bind_addr = "127.0.0.1:19091".to_string();
+        config.usage_query_base_url = "http://127.0.0.1:19091".to_string();
         let updated = repo
             .update_admin_runtime_config(config)
             .await
@@ -1488,6 +1491,9 @@ mod tests {
         assert_eq!(updated.auth_cache_ttl_seconds, 75);
         assert_eq!(updated.codex_client_version, "0.125.0");
         assert_eq!(updated.kiro_prefix_cache_mode, "formula");
+        assert!(!updated.usage_journal_enabled);
+        assert_eq!(updated.usage_query_bind_addr, "127.0.0.1:19091");
+        assert_eq!(updated.usage_query_base_url, "http://127.0.0.1:19091");
 
         let stored = repo
             .get_admin_runtime_config()
@@ -1496,6 +1502,8 @@ mod tests {
         assert_eq!(stored.auth_cache_ttl_seconds, 75);
         assert_eq!(stored.codex_client_version, "0.125.0");
         assert_eq!(stored.kiro_prefix_cache_mode, "formula");
+        assert!(!stored.usage_journal_enabled);
+        assert_eq!(stored.usage_query_base_url, "http://127.0.0.1:19091");
     }
 
     #[tokio::test]

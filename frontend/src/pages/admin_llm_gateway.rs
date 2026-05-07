@@ -2656,6 +2656,54 @@ pub fn admin_llm_gateway_page() -> Html {
                     usage_event_flush_max_buffer_bytes,
                     duckdb_usage_memory_limit_mib,
                     duckdb_usage_checkpoint_threshold_mib,
+                    usage_journal_enabled: config
+                        .as_ref()
+                        .map(|current| current.usage_journal_enabled)
+                        .unwrap_or(true),
+                    usage_journal_max_file_bytes: config
+                        .as_ref()
+                        .map(|current| current.usage_journal_max_file_bytes)
+                        .unwrap_or(64 * 1024 * 1024),
+                    usage_journal_max_file_age_ms: config
+                        .as_ref()
+                        .map(|current| current.usage_journal_max_file_age_ms)
+                        .unwrap_or(300_000),
+                    usage_journal_max_files: config
+                        .as_ref()
+                        .map(|current| current.usage_journal_max_files)
+                        .unwrap_or(128),
+                    usage_journal_block_target_uncompressed_bytes: config
+                        .as_ref()
+                        .map(|current| current.usage_journal_block_target_uncompressed_bytes)
+                        .unwrap_or(1024 * 1024),
+                    usage_journal_block_max_events: config
+                        .as_ref()
+                        .map(|current| current.usage_journal_block_max_events)
+                        .unwrap_or(1024),
+                    usage_journal_fsync_interval_ms: config
+                        .as_ref()
+                        .map(|current| current.usage_journal_fsync_interval_ms)
+                        .unwrap_or(250),
+                    usage_journal_zstd_level: config
+                        .as_ref()
+                        .map(|current| current.usage_journal_zstd_level)
+                        .unwrap_or(3),
+                    usage_journal_consumer_lease_ms: config
+                        .as_ref()
+                        .map(|current| current.usage_journal_consumer_lease_ms)
+                        .unwrap_or(300_000),
+                    usage_journal_delete_bad_files: config
+                        .as_ref()
+                        .map(|current| current.usage_journal_delete_bad_files)
+                        .unwrap_or(false),
+                    usage_query_bind_addr: config
+                        .as_ref()
+                        .map(|current| current.usage_query_bind_addr.clone())
+                        .unwrap_or_else(|| "127.0.0.1:19081".to_string()),
+                    usage_query_base_url: config
+                        .as_ref()
+                        .map(|current| current.usage_query_base_url.clone())
+                        .unwrap_or_else(|| "http://127.0.0.1:19081".to_string()),
                     kiro_cache_kmodels_json: config
                         .as_ref()
                         .map(|current| current.kiro_cache_kmodels_json.clone())

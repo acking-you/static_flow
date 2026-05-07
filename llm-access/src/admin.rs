@@ -3,7 +3,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
-    net::IpAddr,
+    net::{IpAddr, SocketAddr},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -63,6 +63,18 @@ const MIN_RUNTIME_DUCKDB_USAGE_MEMORY_LIMIT_MIB: u64 = 512;
 const MAX_RUNTIME_DUCKDB_USAGE_MEMORY_LIMIT_MIB: u64 = 2_048;
 const MIN_RUNTIME_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB: u64 = 16;
 const MAX_RUNTIME_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB: u64 = 256;
+const MIN_RUNTIME_USAGE_JOURNAL_FILE_BYTES: u64 = 1_024;
+const MAX_RUNTIME_USAGE_JOURNAL_FILE_BYTES: u64 = 1024 * 1024 * 1024;
+const MIN_RUNTIME_USAGE_JOURNAL_FILE_AGE_MS: u64 = 1_000;
+const MAX_RUNTIME_USAGE_JOURNAL_FILE_AGE_MS: u64 = 24 * 60 * 60 * 1000;
+const MAX_RUNTIME_USAGE_JOURNAL_FILES: u64 = 10_000;
+const MIN_RUNTIME_USAGE_JOURNAL_BLOCK_BYTES: u64 = 1_024;
+const MAX_RUNTIME_USAGE_JOURNAL_BLOCK_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_RUNTIME_USAGE_JOURNAL_BLOCK_EVENTS: u64 = 16_384;
+const MAX_RUNTIME_USAGE_JOURNAL_FSYNC_INTERVAL_MS: u64 = 60_000;
+const MAX_RUNTIME_USAGE_JOURNAL_ZSTD_LEVEL: i64 = 22;
+const MIN_RUNTIME_USAGE_JOURNAL_CONSUMER_LEASE_MS: u64 = 1_000;
+const MAX_RUNTIME_USAGE_JOURNAL_CONSUMER_LEASE_MS: u64 = 60 * 60 * 1000;
 const MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY: u64 = 1_024;
 const MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS: u64 = 300_000;
 const DEFAULT_ADMIN_REVIEW_QUEUE_LIMIT: usize = 50;
@@ -2764,6 +2776,92 @@ fn apply_runtime_config_update(
         MAX_RUNTIME_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB,
     )?;
 
+    let usage_journal_enabled = request
+        .usage_journal_enabled
+        .unwrap_or(current.usage_journal_enabled);
+    let usage_journal_max_file_bytes = request
+        .usage_journal_max_file_bytes
+        .unwrap_or(current.usage_journal_max_file_bytes);
+    validate_range(
+        "usage_journal_max_file_bytes",
+        usage_journal_max_file_bytes,
+        MIN_RUNTIME_USAGE_JOURNAL_FILE_BYTES,
+        MAX_RUNTIME_USAGE_JOURNAL_FILE_BYTES,
+    )?;
+    let usage_journal_max_file_age_ms = request
+        .usage_journal_max_file_age_ms
+        .unwrap_or(current.usage_journal_max_file_age_ms);
+    validate_range(
+        "usage_journal_max_file_age_ms",
+        usage_journal_max_file_age_ms,
+        MIN_RUNTIME_USAGE_JOURNAL_FILE_AGE_MS,
+        MAX_RUNTIME_USAGE_JOURNAL_FILE_AGE_MS,
+    )?;
+    let usage_journal_max_files = request
+        .usage_journal_max_files
+        .unwrap_or(current.usage_journal_max_files);
+    validate_range(
+        "usage_journal_max_files",
+        usage_journal_max_files,
+        1,
+        MAX_RUNTIME_USAGE_JOURNAL_FILES,
+    )?;
+    let usage_journal_block_target_uncompressed_bytes = request
+        .usage_journal_block_target_uncompressed_bytes
+        .unwrap_or(current.usage_journal_block_target_uncompressed_bytes);
+    validate_range(
+        "usage_journal_block_target_uncompressed_bytes",
+        usage_journal_block_target_uncompressed_bytes,
+        MIN_RUNTIME_USAGE_JOURNAL_BLOCK_BYTES,
+        MAX_RUNTIME_USAGE_JOURNAL_BLOCK_BYTES,
+    )?;
+    let usage_journal_block_max_events = request
+        .usage_journal_block_max_events
+        .unwrap_or(current.usage_journal_block_max_events);
+    validate_range(
+        "usage_journal_block_max_events",
+        usage_journal_block_max_events,
+        1,
+        MAX_RUNTIME_USAGE_JOURNAL_BLOCK_EVENTS,
+    )?;
+    let usage_journal_fsync_interval_ms = request
+        .usage_journal_fsync_interval_ms
+        .unwrap_or(current.usage_journal_fsync_interval_ms);
+    validate_max(
+        "usage_journal_fsync_interval_ms",
+        usage_journal_fsync_interval_ms,
+        MAX_RUNTIME_USAGE_JOURNAL_FSYNC_INTERVAL_MS,
+    )?;
+    let usage_journal_zstd_level = request
+        .usage_journal_zstd_level
+        .unwrap_or(current.usage_journal_zstd_level);
+    validate_i64_range(
+        "usage_journal_zstd_level",
+        usage_journal_zstd_level,
+        0,
+        MAX_RUNTIME_USAGE_JOURNAL_ZSTD_LEVEL,
+    )?;
+    let usage_journal_consumer_lease_ms = request
+        .usage_journal_consumer_lease_ms
+        .unwrap_or(current.usage_journal_consumer_lease_ms);
+    validate_range(
+        "usage_journal_consumer_lease_ms",
+        usage_journal_consumer_lease_ms,
+        MIN_RUNTIME_USAGE_JOURNAL_CONSUMER_LEASE_MS,
+        MAX_RUNTIME_USAGE_JOURNAL_CONSUMER_LEASE_MS,
+    )?;
+    let usage_journal_delete_bad_files = request
+        .usage_journal_delete_bad_files
+        .unwrap_or(current.usage_journal_delete_bad_files);
+    let usage_query_bind_addr = match request.usage_query_bind_addr.as_deref() {
+        Some(value) => normalize_usage_query_bind_addr(value)?,
+        None => current.usage_query_bind_addr,
+    };
+    let usage_query_base_url = match request.usage_query_base_url.as_deref() {
+        Some(value) => normalize_usage_query_base_url(value)?,
+        None => current.usage_query_base_url,
+    };
+
     let kiro_cache_kmodels_json = request
         .kiro_cache_kmodels_json
         .unwrap_or(current.kiro_cache_kmodels_json);
@@ -2831,6 +2929,18 @@ fn apply_runtime_config_update(
         usage_event_flush_max_buffer_bytes,
         duckdb_usage_memory_limit_mib,
         duckdb_usage_checkpoint_threshold_mib,
+        usage_journal_enabled,
+        usage_journal_max_file_bytes,
+        usage_journal_max_file_age_ms,
+        usage_journal_max_files,
+        usage_journal_block_target_uncompressed_bytes,
+        usage_journal_block_max_events,
+        usage_journal_fsync_interval_ms,
+        usage_journal_zstd_level,
+        usage_journal_consumer_lease_ms,
+        usage_journal_delete_bad_files,
+        usage_query_bind_addr,
+        usage_query_base_url,
         kiro_cache_kmodels_json,
         kiro_billable_model_multipliers_json,
         kiro_cache_policy_json,
@@ -3516,6 +3626,14 @@ fn validate_range(field: &str, value: u64, min: u64, max: u64) -> Result<(), Adm
     }
 }
 
+fn validate_i64_range(field: &str, value: i64, min: i64, max: i64) -> Result<(), AdminHttpError> {
+    if (min..=max).contains(&value) {
+        Ok(())
+    } else {
+        Err(bad_request(&format!("{field} is out of range")))
+    }
+}
+
 fn validate_max(field: &str, value: u64, max: u64) -> Result<(), AdminHttpError> {
     if value <= max {
         Ok(())
@@ -3529,6 +3647,24 @@ fn validate_positive(field: &str, value: u64) -> Result<(), AdminHttpError> {
         Ok(())
     } else {
         Err(bad_request(&format!("{field} must be positive")))
+    }
+}
+
+fn normalize_usage_query_bind_addr(value: &str) -> Result<String, AdminHttpError> {
+    let trimmed = value.trim();
+    if trimmed.parse::<SocketAddr>().is_ok() {
+        Ok(trimmed.to_string())
+    } else {
+        Err(bad_request("usage_query_bind_addr is invalid"))
+    }
+}
+
+fn normalize_usage_query_base_url(value: &str) -> Result<String, AdminHttpError> {
+    let trimmed = value.trim().trim_end_matches('/');
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        Ok(trimmed.to_string())
+    } else {
+        Err(bad_request("usage_query_base_url is invalid"))
     }
 }
 
@@ -4626,12 +4762,36 @@ mod tests {
             apply_runtime_config_update(AdminRuntimeConfig::default(), UpdateAdminRuntimeConfig {
                 duckdb_usage_memory_limit_mib: Some(1024),
                 duckdb_usage_checkpoint_threshold_mib: Some(32),
+                usage_journal_enabled: Some(false),
+                usage_journal_max_file_bytes: Some(128 * 1024 * 1024),
+                usage_journal_max_file_age_ms: Some(600_000),
+                usage_journal_max_files: Some(64),
+                usage_journal_block_target_uncompressed_bytes: Some(2 * 1024 * 1024),
+                usage_journal_block_max_events: Some(2048),
+                usage_journal_fsync_interval_ms: Some(500),
+                usage_journal_zstd_level: Some(5),
+                usage_journal_consumer_lease_ms: Some(600_000),
+                usage_journal_delete_bad_files: Some(true),
+                usage_query_bind_addr: Some("127.0.0.1:19091".to_string()),
+                usage_query_base_url: Some("http://127.0.0.1:19091/".to_string()),
                 ..UpdateAdminRuntimeConfig::default()
             })
             .expect("duckdb runtime settings should be valid");
 
         assert_eq!(updated.duckdb_usage_memory_limit_mib, 1024);
         assert_eq!(updated.duckdb_usage_checkpoint_threshold_mib, 32);
+        assert!(!updated.usage_journal_enabled);
+        assert_eq!(updated.usage_journal_max_file_bytes, 128 * 1024 * 1024);
+        assert_eq!(updated.usage_journal_max_file_age_ms, 600_000);
+        assert_eq!(updated.usage_journal_max_files, 64);
+        assert_eq!(updated.usage_journal_block_target_uncompressed_bytes, 2 * 1024 * 1024);
+        assert_eq!(updated.usage_journal_block_max_events, 2048);
+        assert_eq!(updated.usage_journal_fsync_interval_ms, 500);
+        assert_eq!(updated.usage_journal_zstd_level, 5);
+        assert_eq!(updated.usage_journal_consumer_lease_ms, 600_000);
+        assert!(updated.usage_journal_delete_bad_files);
+        assert_eq!(updated.usage_query_bind_addr, "127.0.0.1:19091");
+        assert_eq!(updated.usage_query_base_url, "http://127.0.0.1:19091");
     }
 
     #[test]

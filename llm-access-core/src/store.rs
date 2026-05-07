@@ -40,6 +40,30 @@ pub const DEFAULT_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
 pub const DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB: u64 = 1024;
 /// Default DuckDB usage writer WAL checkpoint threshold in MiB.
 pub const DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB: u64 = 16;
+/// Default usage-journal write toggle.
+pub const DEFAULT_USAGE_JOURNAL_ENABLED: bool = true;
+/// Default compressed journal file rollover size.
+pub const DEFAULT_USAGE_JOURNAL_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+/// Default journal file age rollover threshold.
+pub const DEFAULT_USAGE_JOURNAL_MAX_FILE_AGE_MS: u64 = 300_000;
+/// Default maximum journal files kept on disk.
+pub const DEFAULT_USAGE_JOURNAL_MAX_FILES: u64 = 128;
+/// Default journal block target before compression.
+pub const DEFAULT_USAGE_JOURNAL_BLOCK_TARGET_UNCOMPRESSED_BYTES: u64 = 1024 * 1024;
+/// Default maximum usage events per journal block.
+pub const DEFAULT_USAGE_JOURNAL_BLOCK_MAX_EVENTS: u64 = 1024;
+/// Default journal fsync interval.
+pub const DEFAULT_USAGE_JOURNAL_FSYNC_INTERVAL_MS: u64 = 250;
+/// Default journal zstd compression level.
+pub const DEFAULT_USAGE_JOURNAL_ZSTD_LEVEL: i64 = 3;
+/// Default worker lease age before a claimed journal is recovered.
+pub const DEFAULT_USAGE_JOURNAL_CONSUMER_LEASE_MS: u64 = 300_000;
+/// Default corrupt-file policy.
+pub const DEFAULT_USAGE_JOURNAL_DELETE_BAD_FILES: bool = false;
+/// Default worker query bind address.
+pub const DEFAULT_USAGE_QUERY_BIND_ADDR: &str = "127.0.0.1:19081";
+/// Default worker query base URL used by the API process.
+pub const DEFAULT_USAGE_QUERY_BASE_URL: &str = "http://127.0.0.1:19081";
 /// Default usage maintenance toggle.
 pub const DEFAULT_USAGE_EVENT_MAINTENANCE_ENABLED: bool = true;
 /// Default usage maintenance interval.
@@ -115,6 +139,30 @@ pub struct AdminRuntimeConfig {
     pub duckdb_usage_memory_limit_mib: u64,
     /// DuckDB usage writer WAL checkpoint threshold in MiB.
     pub duckdb_usage_checkpoint_threshold_mib: u64,
+    /// Whether API workers write usage events to local journal files.
+    pub usage_journal_enabled: bool,
+    /// Maximum compressed journal file bytes before sealing.
+    pub usage_journal_max_file_bytes: u64,
+    /// Maximum journal file age before sealing.
+    pub usage_journal_max_file_age_ms: u64,
+    /// Maximum journal files retained on disk.
+    pub usage_journal_max_files: u64,
+    /// Target uncompressed bytes per journal block.
+    pub usage_journal_block_target_uncompressed_bytes: u64,
+    /// Maximum events per journal block.
+    pub usage_journal_block_max_events: u64,
+    /// Journal fsync interval in milliseconds.
+    pub usage_journal_fsync_interval_ms: u64,
+    /// Journal zstd compression level.
+    pub usage_journal_zstd_level: i64,
+    /// Worker lease age before claimed journals are recovered.
+    pub usage_journal_consumer_lease_ms: u64,
+    /// Whether corrupt journals are deleted rather than quarantined.
+    pub usage_journal_delete_bad_files: bool,
+    /// Worker query HTTP bind address.
+    pub usage_query_bind_addr: String,
+    /// Worker query base URL used by API-side compatibility routes.
+    pub usage_query_base_url: String,
     /// Kiro cache k-model coefficients JSON.
     pub kiro_cache_kmodels_json: String,
     /// Kiro billable model multiplier JSON.
@@ -156,6 +204,19 @@ impl Default for AdminRuntimeConfig {
             usage_event_flush_max_buffer_bytes: DEFAULT_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
             duckdb_usage_memory_limit_mib: DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
             duckdb_usage_checkpoint_threshold_mib: DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB,
+            usage_journal_enabled: DEFAULT_USAGE_JOURNAL_ENABLED,
+            usage_journal_max_file_bytes: DEFAULT_USAGE_JOURNAL_MAX_FILE_BYTES,
+            usage_journal_max_file_age_ms: DEFAULT_USAGE_JOURNAL_MAX_FILE_AGE_MS,
+            usage_journal_max_files: DEFAULT_USAGE_JOURNAL_MAX_FILES,
+            usage_journal_block_target_uncompressed_bytes:
+                DEFAULT_USAGE_JOURNAL_BLOCK_TARGET_UNCOMPRESSED_BYTES,
+            usage_journal_block_max_events: DEFAULT_USAGE_JOURNAL_BLOCK_MAX_EVENTS,
+            usage_journal_fsync_interval_ms: DEFAULT_USAGE_JOURNAL_FSYNC_INTERVAL_MS,
+            usage_journal_zstd_level: DEFAULT_USAGE_JOURNAL_ZSTD_LEVEL,
+            usage_journal_consumer_lease_ms: DEFAULT_USAGE_JOURNAL_CONSUMER_LEASE_MS,
+            usage_journal_delete_bad_files: DEFAULT_USAGE_JOURNAL_DELETE_BAD_FILES,
+            usage_query_bind_addr: DEFAULT_USAGE_QUERY_BIND_ADDR.to_string(),
+            usage_query_base_url: DEFAULT_USAGE_QUERY_BASE_URL.to_string(),
             kiro_cache_kmodels_json: default_kiro_cache_kmodels_json(),
             kiro_billable_model_multipliers_json: default_kiro_billable_model_multipliers_json(),
             kiro_cache_policy_json: default_kiro_cache_policy_json(),
@@ -216,6 +277,42 @@ pub struct UpdateAdminRuntimeConfig {
     /// DuckDB usage writer WAL checkpoint threshold in MiB.
     #[serde(default)]
     pub duckdb_usage_checkpoint_threshold_mib: Option<u64>,
+    /// Usage-journal write toggle.
+    #[serde(default)]
+    pub usage_journal_enabled: Option<bool>,
+    /// Maximum compressed journal file bytes before sealing.
+    #[serde(default)]
+    pub usage_journal_max_file_bytes: Option<u64>,
+    /// Maximum journal file age before sealing.
+    #[serde(default)]
+    pub usage_journal_max_file_age_ms: Option<u64>,
+    /// Maximum journal files retained on disk.
+    #[serde(default)]
+    pub usage_journal_max_files: Option<u64>,
+    /// Target uncompressed bytes per journal block.
+    #[serde(default)]
+    pub usage_journal_block_target_uncompressed_bytes: Option<u64>,
+    /// Maximum events per journal block.
+    #[serde(default)]
+    pub usage_journal_block_max_events: Option<u64>,
+    /// Journal fsync interval in milliseconds.
+    #[serde(default)]
+    pub usage_journal_fsync_interval_ms: Option<u64>,
+    /// Journal zstd compression level.
+    #[serde(default)]
+    pub usage_journal_zstd_level: Option<i64>,
+    /// Worker lease age before claimed journals are recovered.
+    #[serde(default)]
+    pub usage_journal_consumer_lease_ms: Option<u64>,
+    /// Whether corrupt journals are deleted rather than quarantined.
+    #[serde(default)]
+    pub usage_journal_delete_bad_files: Option<bool>,
+    /// Worker query HTTP bind address.
+    #[serde(default)]
+    pub usage_query_bind_addr: Option<String>,
+    /// Worker query base URL used by API-side compatibility routes.
+    #[serde(default)]
+    pub usage_query_base_url: Option<String>,
     /// Kiro cache k-model coefficients JSON.
     #[serde(default)]
     pub kiro_cache_kmodels_json: Option<String>,

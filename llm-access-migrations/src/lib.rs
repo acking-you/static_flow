@@ -44,6 +44,11 @@ const SQLITE_MIGRATIONS: &[SqlMigration] = &[
         name: "codex_account_import_jobs",
         sql: include_str!("../migrations/sqlite/0006_codex_account_import_jobs.sql"),
     },
+    SqlMigration {
+        version: 7,
+        name: "usage_journal_runtime_settings",
+        sql: include_str!("../migrations/sqlite/0007_usage_journal_runtime_settings.sql"),
+    },
 ];
 
 const DUCKDB_MIGRATIONS: &[SqlMigration] = &[
@@ -134,7 +139,7 @@ mod tests {
     fn sqlite_migrations_are_file_backed_and_versioned() {
         let migrations = super::sqlite_migrations();
 
-        assert_eq!(migrations.len(), 6);
+        assert_eq!(migrations.len(), 7);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(migrations[0].name, "init");
         assert!(migrations[0]
@@ -164,6 +169,10 @@ mod tests {
         assert!(migrations[5]
             .sql
             .contains("CREATE TABLE IF NOT EXISTS llm_account_import_jobs"));
+        assert_eq!(migrations[6].version, 7);
+        assert_eq!(migrations[6].name, "usage_journal_runtime_settings");
+        assert!(migrations[6].sql.contains("usage_journal_enabled"));
+        assert!(migrations[6].sql.contains("usage_query_base_url"));
     }
 
     #[test]
@@ -197,7 +206,7 @@ mod tests {
         let applied_count: i64 = conn
             .query_row("SELECT count(*) FROM llm_access_schema_migrations", [], |row| row.get(0))
             .expect("count migrations");
-        assert_eq!(applied_count, 6);
+        assert_eq!(applied_count, 7);
 
         let full_logging_column_count: i64 = conn
             .query_row(
@@ -223,6 +232,30 @@ mod tests {
             )
             .expect("inspect runtime config duckdb columns");
         assert_eq!(runtime_duckdb_column_count, 2);
+
+        let runtime_journal_column_count: i64 = conn
+            .query_row(
+                "SELECT count(*)
+                 FROM pragma_table_info('llm_runtime_config')
+                 WHERE name IN (
+                    'usage_journal_enabled',
+                    'usage_journal_max_file_bytes',
+                    'usage_journal_max_file_age_ms',
+                    'usage_journal_max_files',
+                    'usage_journal_block_target_uncompressed_bytes',
+                    'usage_journal_block_max_events',
+                    'usage_journal_fsync_interval_ms',
+                    'usage_journal_zstd_level',
+                    'usage_journal_consumer_lease_ms',
+                    'usage_journal_delete_bad_files',
+                    'usage_query_bind_addr',
+                    'usage_query_base_url'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .expect("inspect runtime config journal columns");
+        assert_eq!(runtime_journal_column_count, 12);
 
         conn.execute(
             "INSERT INTO llm_account_contribution_requests (
