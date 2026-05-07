@@ -2,7 +2,7 @@
 
 #[cfg(feature = "duckdb-runtime")]
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
@@ -687,6 +687,29 @@ impl DuckDbUsageRepository {
         })
         .await
         .context("duckdb key usage rollup task failed")?
+    }
+
+    /// Append only events whose event ids are not already present.
+    pub async fn append_usage_events_if_new(&self, events: &[UsageEvent]) -> anyhow::Result<usize> {
+        if events.is_empty() {
+            return Ok(0);
+        }
+        let mut seen = HashSet::new();
+        let mut new_events = Vec::new();
+        for event in events {
+            if !seen.insert(event.event_id.clone()) {
+                continue;
+            }
+            if UsageAnalyticsStore::get_usage_event(self, &event.event_id)
+                .await?
+                .is_none()
+            {
+                new_events.push(event.clone());
+            }
+        }
+        let inserted = new_events.len();
+        UsageEventSink::append_usage_events(self, &new_events).await?;
+        Ok(inserted)
     }
 }
 

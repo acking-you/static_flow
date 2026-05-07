@@ -11,6 +11,7 @@ pub mod writer;
 
 pub use config::JournalConfig;
 pub use reader::JournalReader;
+pub use state::JournalConsumerState;
 pub use status::{JournalStatusSnapshot, WorkerProgressSnapshot};
 pub use wire::{JournalUsageBatchV1, JournalUsageEventV1};
 pub use writer::JournalWriter;

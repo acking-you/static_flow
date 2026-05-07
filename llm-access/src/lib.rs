@@ -24,6 +24,8 @@ mod support;
 /// Usage-event helpers.
 pub mod usage;
 mod usage_journal;
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+pub mod usage_worker;
 
 use std::sync::Arc;
 

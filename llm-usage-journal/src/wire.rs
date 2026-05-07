@@ -192,6 +192,46 @@ impl JournalUsageEventV1 {
             stream: event.stream.clone(),
         }
     }
+
+    /// Convert the journal wire shape back into a runtime usage event.
+    pub fn into_usage_event(self) -> UsageEvent {
+        UsageEvent {
+            event_id: self.event_id,
+            created_at_ms: self.created_at_ms,
+            provider_type: self.provider_type,
+            protocol_family: self.protocol_family,
+            key_id: self.key_id,
+            key_name: self.key_name,
+            account_name: self.account_name,
+            account_group_id_at_event: self.account_group_id_at_event,
+            route_strategy_at_event: self.route_strategy_at_event,
+            request_method: self.request_method,
+            request_url: self.request_url,
+            endpoint: self.endpoint,
+            model: self.model,
+            mapped_model: self.mapped_model,
+            status_code: self.status_code,
+            request_body_bytes: self.request_body_bytes,
+            quota_failover_count: self.quota_failover_count,
+            routing_diagnostics_json: self.routing_diagnostics_json,
+            input_uncached_tokens: self.input_uncached_tokens,
+            input_cached_tokens: self.input_cached_tokens,
+            output_tokens: self.output_tokens,
+            billable_tokens: self.billable_tokens,
+            credit_usage: self.credit_usage,
+            usage_missing: self.usage_missing,
+            credit_usage_missing: self.credit_usage_missing,
+            client_ip: self.client_ip,
+            ip_region: self.ip_region,
+            request_headers_json: self.request_headers_json,
+            last_message_content: self.last_message_content,
+            client_request_body_json: self.client_request_body_json,
+            upstream_request_body_json: self.upstream_request_body_json,
+            full_request_json: self.full_request_json,
+            timing: self.timing,
+            stream: self.stream,
+        }
+    }
 }
 
 /// One compressed batch payload before compression.
