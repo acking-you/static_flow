@@ -1,5 +1,6 @@
 //! Local binary journal for llm-access usage diagnostics.
 
+pub mod cli;
 pub mod config;
 pub mod reader;
 pub mod retention;

@@ -79,7 +79,7 @@ shared/.fastembed_cache/
 .fastembed_cache
 
 data/
-bin/
+/bin/
 tmp/
 .local/
 backend/.local/
