@@ -15,6 +15,7 @@ members = [
     "llm-access-kiro",
     "llm-access-migrations",
     "llm-access-store",
+    "llm-usage-journal",
 ]
 exclude = ["deps/lance", "deps/lancedb"]
 
