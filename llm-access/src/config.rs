@@ -19,6 +19,8 @@ pub struct StorageConfig {
     pub sqlite_control: PathBuf,
     /// DuckDB analytics database path.
     pub duckdb: PathBuf,
+    /// Hot local usage journal directory.
+    pub usage_journal_dir: PathBuf,
     /// Optional tiered DuckDB analytics storage configuration.
     pub duckdb_tiered: Option<TieredDuckDbStorageConfig>,
     /// Kiro account auth directory.
@@ -124,6 +126,7 @@ where
     let mut duckdb_archive_dir = None;
     let mut duckdb_catalog_dir = None;
     let mut duckdb_rollover_bytes = None;
+    let mut usage_journal_dir = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.to_string_lossy().as_ref() {
@@ -174,12 +177,19 @@ where
                         .context("failed to parse --duckdb-rollover-bytes")?,
                 );
             },
+            "--usage-journal-dir" => {
+                usage_journal_dir = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| anyhow!("--usage-journal-dir requires a path"))?,
+                ));
+            },
             _ => return Err(usage_error()),
         }
     }
     let state_root = state_root.ok_or_else(usage_error)?;
     let sqlite_control = sqlite_control.ok_or_else(usage_error)?;
     let duckdb = duckdb.unwrap_or_else(|| state_root.join("analytics/usage.duckdb"));
+    let usage_journal_dir = usage_journal_dir.unwrap_or_else(|| state_root.join("usage-journal"));
     let duckdb_tiered = parse_tiered_duckdb_config(
         duckdb_active_dir,
         duckdb_archive_dir,
@@ -199,6 +209,7 @@ where
         state_root,
         sqlite_control,
         duckdb,
+        usage_journal_dir,
         duckdb_tiered,
     })
 }
@@ -241,8 +252,8 @@ fn usage_error() -> anyhow::Error {
     anyhow!(
         "usage: llm-access init --state-root <path> --sqlite-control <path> --duckdb \
          <path>\nusage: llm-access serve [--bind <addr>] --state-root <path> --sqlite-control \
-         <path> [--duckdb <path>] [--duckdb-active-dir <path> --duckdb-archive-dir <path> \
-         --duckdb-catalog-dir <path> --duckdb-rollover-bytes <bytes>]"
+         <path> [--duckdb <path>] [--usage-journal-dir <path>] [--duckdb-active-dir <path> \
+         --duckdb-archive-dir <path> --duckdb-catalog-dir <path> --duckdb-rollover-bytes <bytes>]"
     )
 }
 
@@ -278,6 +289,10 @@ mod tests {
         );
         assert_eq!(config.storage.duckdb, PathBuf::from("/mnt/llm-access/analytics/usage.duckdb"));
         assert_eq!(config.storage.duckdb_tiered, None);
+        assert_eq!(
+            config.storage.usage_journal_dir,
+            PathBuf::from("/mnt/llm-access/usage-journal")
+        );
         assert_eq!(config.storage.kiro_auths_dir, PathBuf::from("/mnt/llm-access/auths/kiro"));
         assert_eq!(config.storage.codex_auths_dir, PathBuf::from("/mnt/llm-access/auths/codex"));
     }
@@ -314,6 +329,30 @@ mod tests {
         assert_eq!(tiered.archive_dir, PathBuf::from("/mnt/llm-access/analytics/segments"));
         assert_eq!(tiered.catalog_dir, PathBuf::from("/mnt/llm-access/analytics/catalog"));
         assert_eq!(tiered.rollover_bytes, 536_870_912);
+    }
+
+    #[test]
+    fn parses_usage_journal_dir_outside_state_root() {
+        let command = super::CliCommand::parse([
+            "llm-access",
+            "serve",
+            "--state-root",
+            "/mnt/llm-access",
+            "--sqlite-control",
+            "/mnt/llm-access/control/llm-access.sqlite3",
+            "--usage-journal-dir",
+            "/var/lib/staticflow/llm-access/usage-journal",
+        ])
+        .expect("parse serve command");
+
+        let super::CliCommand::Serve(config) = command else {
+            panic!("expected serve command");
+        };
+
+        assert_eq!(
+            config.storage.usage_journal_dir,
+            PathBuf::from("/var/lib/staticflow/llm-access/usage-journal")
+        );
     }
 
     #[test]

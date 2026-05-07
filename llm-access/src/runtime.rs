@@ -39,6 +39,8 @@ use tokio::{
     time,
 };
 
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+use crate::usage_journal::JournalUsageEventSink;
 use crate::{config::StorageConfig, geoip::GeoIpResolver};
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -179,13 +181,18 @@ impl LlmAccessRuntime {
             DuckDbUsageConnectionConfig::from_admin_runtime_config(&initial_runtime_config),
         ));
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-        let runtime_config = Arc::new(RwLock::new(initial_runtime_config));
+        let runtime_config = Arc::new(RwLock::new(initial_runtime_config.clone()));
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let duckdb_usage =
             Arc::new(open_duckdb_usage_repository(config, duckdb_connection_config.clone())?);
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+        let journal_usage = Arc::new(JournalUsageEventSink::open(
+            config.usage_journal_dir.clone(),
+            &initial_runtime_config,
+        )?);
+        #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let (usage_accounting, usage_event_flusher) =
-            UsageAccounting::new(repository.clone(), duckdb_usage.clone(), runtime_config.clone());
+            UsageAccounting::new(repository.clone(), journal_usage, runtime_config.clone());
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let control_store: Arc<dyn ControlStore> = Arc::new(UsageAccountingControlStore::new(
             repository.clone(),
@@ -1173,7 +1180,12 @@ pub fn validate_state_root(config: &StorageConfig) -> anyhow::Result<()> {
     if !metadata.is_dir() {
         return Err(anyhow!("state root `{}` is not a directory", config.state_root.display()));
     }
-    for dir in [&config.kiro_auths_dir, &config.codex_auths_dir, &config.logs_dir] {
+    for dir in [
+        &config.kiro_auths_dir,
+        &config.codex_auths_dir,
+        &config.logs_dir,
+        &config.usage_journal_dir,
+    ] {
         std::fs::create_dir_all(dir)
             .with_context(|| format!("failed to create `{}`", dir.display()))?;
     }
@@ -1208,6 +1220,7 @@ mod tests {
             state_root: root.clone(),
             sqlite_control: root.join("control/llm-access.sqlite3"),
             duckdb: root.join("analytics/usage.duckdb"),
+            usage_journal_dir: root.join("usage-journal"),
             duckdb_tiered: None,
             kiro_auths_dir: root.join("auths/kiro"),
             codex_auths_dir: root.join("auths/codex"),
@@ -1227,6 +1240,7 @@ mod tests {
         assert!(config.kiro_auths_dir.is_dir());
         assert!(config.codex_auths_dir.is_dir());
         assert!(config.logs_dir.is_dir());
+        assert!(config.usage_journal_dir.is_dir());
         std::fs::remove_dir_all(&root).expect("cleanup");
     }
 

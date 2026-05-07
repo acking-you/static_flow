@@ -113,6 +113,39 @@ impl JournalWriter {
         Ok(())
     }
 
+    /// Flush pending events into a block.
+    pub fn flush(&mut self) -> Result<()> {
+        self.flush_pending_block()?;
+        if self.config.fsync_interval_ms == 0 {
+            self.file.sync_data().with_context(|| {
+                format!("failed to sync journal `{}`", self.active_path.display())
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Current active journal file sequence.
+    pub fn active_file_sequence(&self) -> u64 {
+        self.file_sequence
+    }
+
+    /// Current active journal file path.
+    pub fn active_path(&self) -> &std::path::Path {
+        &self.active_path
+    }
+
+    /// Current active journal creation timestamp.
+    pub fn created_at_ms(&self) -> i64 {
+        self.created_at_ms
+    }
+
+    /// Current active journal file size.
+    pub fn active_file_bytes(&self) -> Result<u64> {
+        Ok(fs::metadata(&self.active_path)
+            .with_context(|| format!("failed to stat journal `{}`", self.active_path.display()))?
+            .len())
+    }
+
     /// Seal the current file and return its sealed path.
     pub fn seal_current_file(mut self) -> Result<PathBuf> {
         self.flush_pending_block()?;

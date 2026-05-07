@@ -23,6 +23,7 @@ mod submission;
 mod support;
 /// Usage-event helpers.
 pub mod usage;
+mod usage_journal;
 
 use std::sync::Arc;
 
@@ -567,6 +568,7 @@ mod tests {
             state_root: root.clone(),
             sqlite_control: root.join("control/llm-access.sqlite3"),
             duckdb: root.join("analytics/usage.duckdb"),
+            usage_journal_dir: root.join("usage-journal"),
             duckdb_tiered: None,
             kiro_auths_dir: root.join("auths/kiro"),
             codex_auths_dir: root.join("auths/codex"),
