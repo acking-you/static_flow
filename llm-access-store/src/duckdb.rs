@@ -232,6 +232,96 @@ pub fn insert_usage_event_sql() -> &'static str {
 }
 
 #[cfg(feature = "duckdb-runtime")]
+const COMPACT_COPY_USAGE_EVENTS_SQL: &str = "
+    INSERT INTO usage_events (
+        source_seq, source_event_id, event_id, created_at_ms, created_at,
+        created_date, created_hour, provider_type, protocol_family, key_id,
+        key_name, key_status_at_event, account_name, account_group_id_at_event,
+        route_strategy_at_event, request_method, request_url, endpoint, model,
+        mapped_model, status_code, latency_ms, routing_wait_ms,
+        upstream_headers_ms, post_headers_body_ms, request_body_read_ms,
+        request_json_parse_ms, pre_handler_ms, first_sse_write_ms,
+        stream_finish_ms, stream_completed_cleanly, downstream_disconnect,
+        final_event_type, bytes_streamed, request_body_bytes,
+        quota_failover_count, routing_diagnostics_json,
+        input_uncached_tokens, input_cached_tokens, output_tokens, billable_tokens,
+        credit_usage, usage_missing, credit_usage_missing, client_ip, ip_region,
+        request_headers_json, last_message_content, client_request_body_json,
+        upstream_request_body_json, full_request_json
+    )
+    SELECT
+        source_seq, source_event_id, event_id, created_at_ms, created_at,
+        created_date, created_hour, provider_type, protocol_family, key_id,
+        key_name, key_status_at_event, account_name, account_group_id_at_event,
+        route_strategy_at_event, request_method, request_url, endpoint, model,
+        mapped_model, status_code, latency_ms, routing_wait_ms,
+        upstream_headers_ms, post_headers_body_ms, request_body_read_ms,
+        request_json_parse_ms, pre_handler_ms, first_sse_write_ms,
+        stream_finish_ms, stream_completed_cleanly, downstream_disconnect,
+        final_event_type, bytes_streamed, request_body_bytes,
+        quota_failover_count, routing_diagnostics_json,
+        input_uncached_tokens, input_cached_tokens, output_tokens, billable_tokens,
+        credit_usage, usage_missing, credit_usage_missing, client_ip, ip_region,
+        request_headers_json, last_message_content, client_request_body_json,
+        upstream_request_body_json, full_request_json
+    FROM pending_segment.usage_events;
+";
+
+#[cfg(feature = "duckdb-runtime")]
+const COMPACT_COPY_USAGE_EVENT_DETAILS_SQL: &str = "
+    INSERT INTO usage_event_details (
+        event_id, request_headers_json, routing_diagnostics_json,
+        last_message_content, client_request_body_json,
+        upstream_request_body_json, full_request_json
+    )
+    SELECT
+        event_id, request_headers_json, routing_diagnostics_json,
+        last_message_content, client_request_body_json,
+        upstream_request_body_json, full_request_json
+    FROM pending_segment.usage_event_details;
+";
+
+#[cfg(feature = "duckdb-runtime")]
+const COMPACT_COPY_USAGE_ROLLUPS_HOURLY_SQL: &str = "
+    INSERT INTO usage_rollups_hourly (
+        bucket_hour, provider_type, protocol_family, key_id, key_name,
+        account_name, account_group_id_at_event, route_strategy_at_event,
+        endpoint, model, mapped_model, status_code_class, request_count,
+        input_uncached_tokens, input_cached_tokens, output_tokens,
+        billable_tokens, credit_usage, credit_usage_missing_count,
+        avg_latency_ms, max_latency_ms, p95_latency_ms
+    )
+    SELECT
+        bucket_hour, provider_type, protocol_family, key_id, key_name,
+        account_name, account_group_id_at_event, route_strategy_at_event,
+        endpoint, model, mapped_model, status_code_class, request_count,
+        input_uncached_tokens, input_cached_tokens, output_tokens,
+        billable_tokens, credit_usage, credit_usage_missing_count,
+        avg_latency_ms, max_latency_ms, p95_latency_ms
+    FROM pending_segment.usage_rollups_hourly;
+";
+
+#[cfg(feature = "duckdb-runtime")]
+const COMPACT_COPY_USAGE_ROLLUPS_DAILY_SQL: &str = "
+    INSERT INTO usage_rollups_daily (
+        bucket_date, provider_type, protocol_family, key_id, key_name,
+        account_name, account_group_id_at_event, route_strategy_at_event,
+        endpoint, model, mapped_model, status_code_class, request_count,
+        input_uncached_tokens, input_cached_tokens, output_tokens,
+        billable_tokens, credit_usage, credit_usage_missing_count,
+        avg_latency_ms, max_latency_ms, p95_latency_ms
+    )
+    SELECT
+        bucket_date, provider_type, protocol_family, key_id, key_name,
+        account_name, account_group_id_at_event, route_strategy_at_event,
+        endpoint, model, mapped_model, status_code_class, request_count,
+        input_uncached_tokens, input_cached_tokens, output_tokens,
+        billable_tokens, credit_usage, credit_usage_missing_count,
+        avg_latency_ms, max_latency_ms, p95_latency_ms
+    FROM pending_segment.usage_rollups_daily;
+";
+
+#[cfg(feature = "duckdb-runtime")]
 const USAGE_EVENT_ONLINE_MAX_LIMIT: usize = 20;
 #[cfg(feature = "duckdb-runtime")]
 const USAGE_EVENT_ONLINE_MAX_OFFSET: usize = 200;
@@ -1165,17 +1255,16 @@ fn compact_pending_segment_to_local_file(
     conn.execute_batch(&attach_sql).with_context(|| {
         format!("failed to attach pending duckdb segment `{}`", pending_path.display())
     })?;
-    conn.execute_batch(
-        "
-        INSERT INTO usage_events SELECT * FROM pending_segment.usage_events;
-        INSERT INTO usage_event_details SELECT * FROM pending_segment.usage_event_details;
-        INSERT INTO usage_rollups_hourly SELECT * FROM pending_segment.usage_rollups_hourly;
-        INSERT INTO usage_rollups_daily SELECT * FROM pending_segment.usage_rollups_daily;
-        DETACH pending_segment;
-        CHECKPOINT;
-        ",
-    )
-    .with_context(|| {
+    let compact_sql = [
+        COMPACT_COPY_USAGE_EVENTS_SQL,
+        COMPACT_COPY_USAGE_EVENT_DETAILS_SQL,
+        COMPACT_COPY_USAGE_ROLLUPS_HOURLY_SQL,
+        COMPACT_COPY_USAGE_ROLLUPS_DAILY_SQL,
+        "DETACH pending_segment;",
+        "CHECKPOINT;",
+    ]
+    .join("\n");
+    conn.execute_batch(&compact_sql).with_context(|| {
         format!(
             "failed to compact pending duckdb segment `{}` into `{}`",
             pending_path.display(),
@@ -3067,6 +3156,83 @@ mod tests {
         assert_eq!(count, 1);
 
         std::fs::remove_dir_all(&root).expect("cleanup compact publish test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[test]
+    fn duckdb_tiered_publish_handles_reordered_pending_usage_event_columns() {
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-duckdb-test-{}-compact-reordered", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create reordered compact test directory");
+        let config = super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            catalog_dir: root.join("catalog"),
+            rollover_bytes: 1,
+        };
+        super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
+
+        let pending_path = root.join("pending-reordered.duckdb");
+        {
+            let conn = duckdb::Connection::open(&pending_path).expect("open pending source");
+            crate::initialize_duckdb_target(&conn).expect("initialize pending source");
+            let mut writer = super::DuckDbUsageWriter::new(conn).expect("open pending writer");
+            let mut event = test_usage_event();
+            event.event_id = "compact-reordered-event".to_string();
+            event.client_ip = "unknown".to_string();
+            writer
+                .insert_usage_events(&[super::UsageEventRow::from_usage_event(&event)])
+                .expect("insert pending event");
+        }
+        {
+            let conn = duckdb::Connection::open(&pending_path).expect("reopen pending source");
+            conn.execute_batch(
+                "
+                CREATE TABLE usage_events_reordered AS
+                SELECT
+                    source_seq, source_event_id, event_id, created_at_ms, created_at,
+                    created_date, created_hour, provider_type, protocol_family, key_id,
+                    key_name, key_status_at_event, account_name, account_group_id_at_event,
+                    route_strategy_at_event, request_method, request_url, endpoint, model,
+                    mapped_model, status_code, latency_ms, routing_wait_ms,
+                    upstream_headers_ms, post_headers_body_ms, request_body_read_ms,
+                    request_json_parse_ms, pre_handler_ms, first_sse_write_ms,
+                    stream_finish_ms, stream_completed_cleanly, downstream_disconnect,
+                    final_event_type, client_ip, bytes_streamed, request_body_bytes,
+                    quota_failover_count, routing_diagnostics_json,
+                    input_uncached_tokens, input_cached_tokens, output_tokens,
+                    billable_tokens, credit_usage, usage_missing, credit_usage_missing,
+                    ip_region, request_headers_json, last_message_content,
+                    client_request_body_json, upstream_request_body_json, full_request_json
+                FROM usage_events;
+                DROP TABLE usage_events;
+                ALTER TABLE usage_events_reordered RENAME TO usage_events;
+                CHECKPOINT;
+                ",
+            )
+            .expect("reorder pending source usage_events columns");
+        }
+
+        super::publish_pending_segment(&config, &pending_path, "usage-reordered-test-000001")
+            .expect("publish compacted segment with reordered usage_events");
+
+        let archive_path = config
+            .archive_dir
+            .join("usage-reordered-test-000001.duckdb");
+        let archived = super::DuckDbUsageRepository::open_read_only_conn(&archive_path)
+            .expect("open archived reordered segment");
+        let row = archived
+            .query_row(
+                "SELECT client_ip, request_body_bytes FROM usage_events WHERE event_id = ?1",
+                ["compact-reordered-event"],
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<i64>>(1)?)),
+            )
+            .expect("read archived reordered event");
+        assert_eq!(row.0.as_deref(), Some("unknown"));
+        assert_eq!(row.1, Some(1234));
+
+        std::fs::remove_dir_all(&root).expect("cleanup reordered compact publish test directory");
     }
 
     #[cfg(feature = "duckdb-runtime")]

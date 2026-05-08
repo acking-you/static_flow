@@ -75,13 +75,13 @@ pub const DEFAULT_KIRO_PREFIX_CACHE_MODE: &str = "prefix_tree";
 /// Alternate Kiro prefix cache mode retained for admin compatibility.
 pub const KIRO_PREFIX_CACHE_MODE_FORMULA: &str = "formula";
 /// Default Kiro prefix-cache budget.
-pub const DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS: u64 = 4_000_000;
+pub const DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS: u64 = 1_000_000;
 /// Default Kiro prefix-cache entry TTL.
-pub const DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS: u64 = 6 * 60 * 60;
+pub const DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS: u64 = 2 * 60 * 60;
 /// Default Kiro conversation anchor capacity.
-pub const DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES: u64 = 20_000;
+pub const DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES: u64 = 4_096;
 /// Default Kiro conversation anchor TTL.
-pub const DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS: u64 = 24 * 60 * 60;
+pub const DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS: u64 = 6 * 60 * 60;
 /// Default Kiro account channel concurrency retained in storage.
 pub const DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 1;
 /// Default Kiro account request pacing interval retained in storage.
@@ -3167,5 +3167,15 @@ mod tests {
             super::compute_kiro_billable_tokens(Some("claude-unknown-1"), 80, 10, 4, &multipliers);
 
         assert_eq!(adjusted, base);
+    }
+
+    #[test]
+    fn admin_runtime_config_uses_tightened_kiro_cache_defaults() {
+        let config = super::AdminRuntimeConfig::default();
+
+        assert_eq!(config.kiro_prefix_cache_max_tokens, 1_000_000);
+        assert_eq!(config.kiro_prefix_cache_entry_ttl_seconds, 2 * 60 * 60);
+        assert_eq!(config.kiro_conversation_anchor_max_entries, 4_096);
+        assert_eq!(config.kiro_conversation_anchor_ttl_seconds, 6 * 60 * 60);
     }
 }

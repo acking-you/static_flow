@@ -1140,7 +1140,10 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
         assert_eq!(value["mode"], "prefix_tree");
         assert_eq!(value["page_size_tokens"], 64);
-        assert_eq!(value["prefix_tree"]["max_tokens"], 4_000_000);
+        assert_eq!(
+            value["prefix_tree"]["max_tokens"],
+            llm_access_core::store::DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS
+        );
         assert_eq!(value["prefix_tree"]["resident_tokens"], 0);
         assert_eq!(value["conversation_anchors"]["entries"], 0);
         assert!(value["generated_at"].as_i64().unwrap_or_default() > 0);

@@ -50,9 +50,7 @@ use llm_access_kiro::{
             resolve_conversation_id_from_metadata, ConversionError, ResolvedConversationId,
             SessionFallbackReason, SessionIdSource, SessionTracking,
         },
-        stream::{
-            anthropic_usage_json, resolve_input_tokens, BufferedStreamContext, StreamContext,
-        },
+        stream::{anthropic_usage_json, resolve_input_tokens, StreamContext},
         supported_models_response,
         types::{MessagesRequest, OutputConfig, Thinking},
         websearch::{self, McpResponse},
@@ -122,9 +120,9 @@ struct ProviderUsageMetadata {
     ip_region: String,
     request_headers_json: String,
     last_message_content: Option<String>,
-    client_request_body_json: Option<String>,
-    upstream_request_body_json: Option<String>,
-    full_request_json: Option<String>,
+    client_request_body_json: Option<Bytes>,
+    upstream_request_body_json: Option<Bytes>,
+    full_request_json: Option<Bytes>,
 }
 
 impl ProviderUsageMetadata {
@@ -271,14 +269,19 @@ impl ProviderUsageMetadata {
 
 fn capture_client_request_body_json(meta: &mut ProviderUsageMetadata, body: &[u8]) {
     if meta.client_request_body_json.is_none() {
-        meta.client_request_body_json = Some(String::from_utf8_lossy(body).into_owned());
+        meta.client_request_body_json = Some(Bytes::copy_from_slice(body));
     }
 }
 
 fn capture_upstream_request_body_json(meta: &mut ProviderUsageMetadata, body: &[u8]) {
     if meta.upstream_request_body_json.is_none() {
-        meta.upstream_request_body_json = Some(String::from_utf8_lossy(body).into_owned());
+        meta.upstream_request_body_json = Some(Bytes::copy_from_slice(body));
     }
+}
+
+fn captured_body_json(body: &Option<Bytes>) -> Option<String> {
+    body.as_ref()
+        .map(|bytes| String::from_utf8_lossy(bytes.as_ref()).into_owned())
 }
 
 /// Shared provider request state.
@@ -1401,17 +1404,8 @@ async fn resolve_kiro_remote_media_sources(
     if !payload_has_kiro_remote_media_sources(payload) {
         return Ok(());
     }
-    let client = reqwest::Client::builder()
-        .timeout(KIRO_REMOTE_MEDIA_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|err| {
-            KiroRemoteMediaResolutionError::new(format!(
-                "failed to initialize URL source client: {err}"
-            ))
-        })?;
     let fetcher = ReqwestKiroRemoteMediaFetcher {
-        client,
+        client: KIRO_REMOTE_MEDIA_CLIENT.clone(),
     };
     resolve_kiro_remote_media_sources_with_fetcher(payload, &fetcher).await
 }
@@ -2118,8 +2112,7 @@ async fn dispatch_kiro_proxy(
                 .into_response()
         },
     };
-    let Some((public_path, buffered_for_cc)) = normalized_kiro_messages_path(request.uri().path())
-    else {
+    let Some(public_path) = normalized_kiro_messages_path(request.uri().path()) else {
         return (StatusCode::NOT_FOUND, "unsupported kiro gateway endpoint").into_response();
     };
     usage_meta.request_url = external_origin(request.headers())
@@ -2576,9 +2569,6 @@ async fn dispatch_kiro_proxy(
             _account_permit: account_permit,
         };
         if payload.stream {
-            if buffered_for_cc {
-                return buffered_kiro_stream_response(response, response_ctx).await;
-            }
             return stream_kiro_upstream_response(response, response_ctx);
         }
 
@@ -3589,106 +3579,6 @@ fn stream_kiro_upstream_response(
         })
 }
 
-async fn buffered_kiro_stream_response(
-    response: reqwest::Response,
-    ctx: KiroResponseContext,
-) -> Response {
-    let status = response.status();
-    let mut usage_meta = ctx.usage_meta.clone();
-    let bytes = match response.bytes().await {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return kiro_json_error(
-                StatusCode::BAD_GATEWAY,
-                "api_error",
-                "failed to read kiro upstream response",
-            )
-        },
-    };
-    usage_meta.mark_post_headers_body();
-    let events = match decode_kiro_events_from_bytes(&bytes) {
-        Ok(events) => events,
-        Err(err) => return kiro_json_error(StatusCode::BAD_GATEWAY, "api_error", &err),
-    };
-    let mut stream_ctx = BufferedStreamContext::new(
-        &ctx.model,
-        ctx.request_input_tokens,
-        ctx.thinking_enabled,
-        ctx.tool_name_map,
-        ctx.structured_output_tool_name.clone(),
-    );
-    for event in &events {
-        stream_ctx.process_and_buffer(event);
-    }
-    let (_resolved_input_tokens, output_tokens) = stream_ctx.final_usage();
-    let (credit_usage, credit_usage_missing) = stream_ctx.final_credit_usage();
-    let usage = build_kiro_usage_summary(
-        &ctx.model,
-        KiroUsageInputs {
-            request_input_tokens: ctx.request_input_tokens,
-            context_input_tokens: stream_ctx.context_input_tokens(),
-            output_tokens,
-            credit_usage,
-            credit_usage_missing,
-            cache_estimation_enabled: ctx.route.cache_estimation_enabled,
-        },
-        &ctx.cache_ctx,
-    );
-    let mut sse_events = stream_ctx.finish_and_get_all_events();
-    let anthropic_usage = anthropic_usage_json_from_summary_with_policy(usage, &ctx.cache_ctx);
-    for event in &mut sse_events {
-        if event.event == "message_delta" {
-            if let Some(value) = event.data.get_mut("usage") {
-                *value = anthropic_usage.clone();
-            }
-        }
-    }
-    let assistant_message = stream_ctx.final_assistant_message();
-    for event in &sse_events {
-        let encoded = event.to_sse_string();
-        usage_meta.observe_stream_write(encoded.len(), Some(event.event.as_str()));
-    }
-    usage_meta.mark_stream_completed_cleanly();
-    ctx.kiro_cache_simulator.record_success(
-        &ctx.cache_ctx.projection,
-        &assistant_message,
-        &ctx.cache_ctx.conversation_id,
-        ctx.route.cache_estimation_enabled,
-        ctx.cache_ctx.simulation_config,
-        Instant::now(),
-    );
-    if let Err(err) = record_kiro_usage(KiroUsageRecord {
-        control_store: ctx.control_store.as_ref(),
-        key: &ctx.key,
-        route: &ctx.route,
-        endpoint: &ctx.public_path,
-        model: &ctx.model,
-        status,
-        usage,
-        cache_ctx: &ctx.cache_ctx,
-        meta: &usage_meta,
-    })
-    .await
-    {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to record kiro usage: {err}"))
-            .into_response();
-    }
-    let body_stream = futures_util::stream::iter(
-        sse_events
-            .into_iter()
-            .map(|event| Ok::<Bytes, std::io::Error>(Bytes::from(event.to_sse_string()))),
-    );
-    Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .header(header::CACHE_CONTROL, "no-cache")
-        .header(header::CONNECTION, "keep-alive")
-        .body(Body::from_stream(body_stream))
-        .unwrap_or_else(|_| {
-            (StatusCode::BAD_GATEWAY, "kiro buffered response build failed").into_response()
-        })
-}
-
 async fn non_stream_kiro_response(
     response: reqwest::Response,
     ctx: KiroResponseContext,
@@ -3842,10 +3732,10 @@ struct KiroUsageInputs {
     cache_estimation_enabled: bool,
 }
 
-fn normalized_kiro_messages_path(path: &str) -> Option<(&'static str, bool)> {
+fn normalized_kiro_messages_path(path: &str) -> Option<&'static str> {
     match path {
-        "/cc/v1/messages" | "/api/kiro-gateway/cc/v1/messages" => Some(("/cc/v1/messages", true)),
-        "/v1/messages" | "/api/kiro-gateway/v1/messages" => Some(("/v1/messages", false)),
+        "/cc/v1/messages" | "/api/kiro-gateway/cc/v1/messages" => Some("/cc/v1/messages"),
+        "/v1/messages" | "/api/kiro-gateway/v1/messages" => Some("/v1/messages"),
         _ => None,
     }
 }
@@ -3886,8 +3776,7 @@ fn add_kiro_upstream_headers(
         .header("host", host)
         .header("amz-sdk-invocation-id", uuid::Uuid::new_v4().to_string())
         .header("amz-sdk-request", "attempt=1; max=3")
-        .header("authorization", format!("Bearer {access_token}"))
-        .header("connection", "close");
+        .header("authorization", format!("Bearer {access_token}"));
     Ok(upstream)
 }
 
@@ -3909,8 +3798,7 @@ fn add_kiro_mcp_headers(
         .header("host", host)
         .header("amz-sdk-invocation-id", uuid::Uuid::new_v4().to_string())
         .header("amz-sdk-request", "attempt=1; max=3")
-        .header("authorization", format!("Bearer {access_token}"))
-        .header("connection", "close");
+        .header("authorization", format!("Bearer {access_token}"));
     if let Some(profile_arn) = route
         .profile_arn
         .as_deref()
@@ -3921,8 +3809,37 @@ fn add_kiro_mcp_headers(
     Ok(upstream)
 }
 
-fn provider_client(proxy: Option<&ProviderProxyConfig>) -> anyhow::Result<reqwest::Client> {
-    let mut builder = reqwest::Client::builder();
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ProviderClientCacheKey {
+    proxy_url: String,
+    proxy_username: Option<String>,
+    proxy_password: Option<String>,
+}
+
+static DEFAULT_PROVIDER_CLIENT: std::sync::LazyLock<reqwest::Client> =
+    std::sync::LazyLock::new(|| {
+        build_provider_client(None).expect("default provider client should build")
+    });
+static PROVIDER_CLIENT_CACHE: std::sync::LazyLock<
+    Mutex<HashMap<ProviderClientCacheKey, reqwest::Client>>,
+> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static KIRO_REMOTE_MEDIA_CLIENT: std::sync::LazyLock<reqwest::Client> =
+    std::sync::LazyLock::new(|| {
+        reqwest::Client::builder()
+            .timeout(KIRO_REMOTE_MEDIA_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .pool_idle_timeout(Duration::from_secs(90))
+            .pool_max_idle_per_host(8)
+            .tcp_keepalive(Duration::from_secs(30))
+            .build()
+            .expect("kiro remote media client should build")
+    });
+
+fn build_provider_client(proxy: Option<&ProviderProxyConfig>) -> anyhow::Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder()
+        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_max_idle_per_host(8)
+        .tcp_keepalive(Duration::from_secs(30));
     if let Some(proxy_config) = proxy {
         let mut proxy = reqwest::Proxy::all(&proxy_config.proxy_url)?;
         if let Some(username) = proxy_config.proxy_username.as_deref() {
@@ -3932,6 +3849,31 @@ fn provider_client(proxy: Option<&ProviderProxyConfig>) -> anyhow::Result<reqwes
         builder = builder.proxy(proxy);
     }
     Ok(builder.build()?)
+}
+
+fn provider_client(proxy: Option<&ProviderProxyConfig>) -> anyhow::Result<reqwest::Client> {
+    let Some(proxy_config) = proxy else {
+        return Ok(DEFAULT_PROVIDER_CLIENT.clone());
+    };
+    let cache_key = ProviderClientCacheKey {
+        proxy_url: proxy_config.proxy_url.clone(),
+        proxy_username: proxy_config.proxy_username.clone(),
+        proxy_password: proxy_config.proxy_password.clone(),
+    };
+    if let Some(client) = PROVIDER_CLIENT_CACHE
+        .lock()
+        .expect("provider client cache lock")
+        .get(&cache_key)
+        .cloned()
+    {
+        return Ok(client);
+    }
+    let client = build_provider_client(Some(proxy_config))?;
+    PROVIDER_CLIENT_CACHE
+        .lock()
+        .expect("provider client cache lock")
+        .insert(cache_key, client.clone());
+    Ok(client)
 }
 
 fn proxy_cooldown_key_for_route(route: &ProviderKiroRoute) -> Option<String> {
@@ -4420,18 +4362,15 @@ async fn record_kiro_usage(record: KiroUsageRecord<'_>) -> anyhow::Result<()> {
             && record.status.is_success()
             && record.usage.input_cached_tokens <= 0);
     let client_request_body_json = capture_request_details
-        .then(|| record.meta.client_request_body_json.clone())
+        .then(|| captured_body_json(&record.meta.client_request_body_json))
         .flatten();
     let upstream_request_body_json = capture_request_details
-        .then(|| record.meta.upstream_request_body_json.clone())
+        .then(|| captured_body_json(&record.meta.upstream_request_body_json))
         .flatten();
     let full_request_json = capture_request_details
         .then(|| {
-            record
-                .meta
-                .full_request_json
-                .clone()
-                .or_else(|| record.meta.client_request_body_json.clone())
+            captured_body_json(&record.meta.full_request_json)
+                .or_else(|| captured_body_json(&record.meta.client_request_body_json))
         })
         .flatten();
     let event = UsageEvent {
@@ -4526,20 +4465,17 @@ async fn record_kiro_websearch_usage(record: KiroWebsearchUsageRecord<'_>) -> an
         last_message_content: record.meta.last_message_content.clone(),
         client_request_body_json: record
             .capture_request_details
-            .then(|| record.meta.client_request_body_json.clone())
+            .then(|| captured_body_json(&record.meta.client_request_body_json))
             .flatten(),
         upstream_request_body_json: record
             .capture_request_details
-            .then(|| record.meta.upstream_request_body_json.clone())
+            .then(|| captured_body_json(&record.meta.upstream_request_body_json))
             .flatten(),
         full_request_json: record
             .capture_request_details
             .then(|| {
-                record
-                    .meta
-                    .full_request_json
-                    .clone()
-                    .or_else(|| record.meta.client_request_body_json.clone())
+                captured_body_json(&record.meta.full_request_json)
+                    .or_else(|| captured_body_json(&record.meta.client_request_body_json))
             })
             .flatten(),
         timing: record.meta.to_timing(),
@@ -5065,9 +5001,9 @@ async fn record_codex_usage(
         ip_region: meta.ip_region.clone(),
         request_headers_json: meta.request_headers_json.clone(),
         last_message_content: meta.last_message_content.clone(),
-        client_request_body_json: meta.client_request_body_json.clone(),
-        upstream_request_body_json: meta.upstream_request_body_json.clone(),
-        full_request_json: meta.full_request_json.clone(),
+        client_request_body_json: captured_body_json(&meta.client_request_body_json),
+        upstream_request_body_json: captured_body_json(&meta.upstream_request_body_json),
+        full_request_json: captured_body_json(&meta.full_request_json),
         timing: meta.to_timing(),
         stream: meta.to_stream_details(),
     };
@@ -5665,10 +5601,19 @@ mod tests {
 
     #[test]
     fn normalized_kiro_messages_path_accepts_root_anthropic_messages() {
+        assert_eq!(super::normalized_kiro_messages_path("/v1/messages"), Some("/v1/messages"));
+    }
+
+    #[test]
+    fn normalized_kiro_messages_path_accepts_cc_messages() {
         assert_eq!(
-            super::normalized_kiro_messages_path("/v1/messages"),
-            Some(("/v1/messages", false))
+            super::normalized_kiro_messages_path("/api/kiro-gateway/cc/v1/messages"),
+            Some("/cc/v1/messages")
         );
+    }
+
+    fn captured_json_bytes(raw: &'static str) -> axum::body::Bytes {
+        axum::body::Bytes::from_static(raw.as_bytes())
     }
 
     #[derive(Default)]
@@ -7750,7 +7695,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn kiro_dispatch_buffers_cc_stream_until_context_usage_is_available() {
+    async fn kiro_dispatch_streams_cc_messages_without_buffering_special_case() {
         let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
             .lock()
             .expect("kiro upstream env lock");
@@ -7904,9 +7849,9 @@ mod tests {
             ip_region: "local".to_string(),
             request_headers_json: "{}".to_string(),
             last_message_content: Some("search query".to_string()),
-            client_request_body_json: Some(r#"{"client":true}"#.to_string()),
-            upstream_request_body_json: Some(r#"{"mcp":true}"#.to_string()),
-            full_request_json: Some(r#"{"full":true}"#.to_string()),
+            client_request_body_json: Some(captured_json_bytes(r#"{"client":true}"#)),
+            upstream_request_body_json: Some(captured_json_bytes(r#"{"mcp":true}"#)),
+            full_request_json: Some(captured_json_bytes(r#"{"full":true}"#)),
         };
 
         let route = static_kiro_route();
@@ -7981,9 +7926,9 @@ mod tests {
             ip_region: "local".to_string(),
             request_headers_json: "{}".to_string(),
             last_message_content: Some("normal cached request".to_string()),
-            client_request_body_json: Some(r#"{"client":true}"#.to_string()),
-            upstream_request_body_json: Some(r#"{"upstream":true}"#.to_string()),
-            full_request_json: Some(r#"{"full":true}"#.to_string()),
+            client_request_body_json: Some(captured_json_bytes(r#"{"client":true}"#)),
+            upstream_request_body_json: Some(captured_json_bytes(r#"{"upstream":true}"#)),
+            full_request_json: Some(captured_json_bytes(r#"{"full":true}"#)),
         };
 
         super::record_kiro_usage(super::KiroUsageRecord {

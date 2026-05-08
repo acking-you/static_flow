@@ -18,13 +18,13 @@ pub const DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS: u64 = 10;
 /// Default Kiro prefix-cache simulation mode.
 pub const DEFAULT_KIRO_PREFIX_CACHE_MODE: &str = "prefix_tree";
 /// Default maximum prompt tokens retained by the prefix-cache simulator.
-pub const DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS: u64 = 4_000_000;
+pub const DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS: u64 = 1_000_000;
 /// Default TTL for prefix-cache entries.
-pub const DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS: u64 = 6 * 60 * 60;
+pub const DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS: u64 = 2 * 60 * 60;
 /// Default number of recoverable conversation anchors.
-pub const DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES: u64 = 20_000;
+pub const DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES: u64 = 4_096;
 /// Default TTL for recoverable conversation anchors.
-pub const DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS: u64 = 24 * 60 * 60;
+pub const DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS: u64 = 6 * 60 * 60;
 
 /// Runtime settings used by Kiro provider scheduling, status refresh, and
 /// cache simulation.
