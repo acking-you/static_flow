@@ -27,6 +27,34 @@ pub struct JournalStatusSnapshot {
     pub write_failures_total: u64,
 }
 
+/// One concrete journal file visible under a journal root.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JournalFileSnapshot {
+    /// File name such as `usage-000000000123.journal`.
+    pub file_name: String,
+    /// Full path on disk.
+    pub path: String,
+    /// Parsed sequence when the name matches the journal naming scheme.
+    pub sequence: Option<u64>,
+    /// File size in bytes.
+    pub bytes: u64,
+    /// File age in milliseconds when metadata is available.
+    pub age_ms: Option<i64>,
+}
+
+/// File-level view of the current journal root.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JournalFileListsSnapshot {
+    /// Files currently being appended by the producer.
+    pub active: Vec<JournalFileSnapshot>,
+    /// Files sealed and waiting to be consumed.
+    pub sealed: Vec<JournalFileSnapshot>,
+    /// Files claimed by the worker and in progress.
+    pub consuming: Vec<JournalFileSnapshot>,
+    /// Files quarantined after a bad read/import.
+    pub bad: Vec<JournalFileSnapshot>,
+}
+
 /// Worker-side journal consumption progress snapshot.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct WorkerProgressSnapshot {

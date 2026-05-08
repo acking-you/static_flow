@@ -136,13 +136,15 @@ private env files, not in tracked docs.
   service user. The checked-in template still uses a dedicated `llm-access`
   user for fresh deployments; either is acceptable if file ownership, FUSE
   permissions, and readiness checks are consistent.
-- Current GCP systemd units verified on 2026-05-02:
+- Current GCP systemd units verified on 2026-05-07:
   - `juicefs-llm-access.service`: mounts `/mnt/llm-access`
   - `llm-access.service`: serves `127.0.0.1:19080`
+    and proxies legacy admin usage routes to the worker query port
   - `pb-mapper-server-cli@llm-access.service`: registers cloud
     `127.0.0.1:19080` as pb-mapper key `llm-access`
 - The usage-journal split adds `llm-access-usage-worker.service`, serving
-  `127.0.0.1:19081`.
+  `127.0.0.1:19081`, consuming sealed journal files, and serving DuckDB-backed
+  usage queries.
 - Current GCP llm-access logs:
   - systemd journal: `sudo journalctl -u llm-access.service -f`
   - usage worker journal:
@@ -239,6 +241,104 @@ extra swap as an emergency buffer, not as normal working memory.
   should still be the exact count for the active filter condition, including
   key/provider/time filters. Use the per-event detail endpoint by `event_id`
   when heavy fields are needed.
+
+## Current Runtime Verification Snapshot
+
+- Verified on GCP at `2026-05-07T18:32:27Z`.
+- Effective live API unit:
+  - service user: `ts_user`
+  - bind: `127.0.0.1:19080`
+  - current `ExecStart`: journal-only API process with
+    `--usage-journal-dir ${LLM_ACCESS_USAGE_JOURNAL_DIR}`
+  - effective `LLM_ACCESS_USAGE_JOURNAL_DIR`:
+    `/var/lib/staticflow/llm-access/usage-journal`
+- Effective live usage-worker unit:
+  - service user: `ts_user`
+  - bind: `127.0.0.1:19081`
+  - current `ExecStart`: worker process with local journal root,
+    local active DuckDB dir, and JuiceFS archive/catalog dirs
+  - cgroup guard observed live:
+    `MemoryHigh=2200M`, `MemoryMax=3072M`, `MemorySwapMax=1024M`
+- Live health checks that should all pass:
+  ```bash
+  curl -fsS http://127.0.0.1:19080/healthz
+  curl -fsS http://127.0.0.1:19081/admin/llm-access/usage-worker/status
+  curl -fsS -H 'Host: localhost' http://127.0.0.1:19080/admin/llm-access/usage-journal/status
+  systemctl show llm-access.service -p ActiveState -p SubState -p ExecStart -p Environment --no-pager
+  systemctl show llm-access-usage-worker.service -p ActiveState -p SubState -p ExecStart -p Environment --no-pager
+  ```
+- Healthy interpretation of the combined journal status:
+  - `journal_root` must be `/var/lib/staticflow/llm-access/usage-journal`
+  - `usage_query_base_url` must be `http://127.0.0.1:19081`
+  - `sealed_file_count == 0` with `worker.state == idle` means the producer is
+    only appending to the current open journal file and there is nothing waiting
+    to be consumed. This is healthy, not a stuck worker.
+  - `active_file_sequence` and `active_file_bytes` should move over time while
+    traffic exists.
+- Current live snapshot on 2026-05-07 showed:
+  - API `/healthz`: `{"status":"ok","service":"llm-access"}`
+  - worker status: `state=idle`, `last_error=null`
+  - combined journal status: `sealed_file_count=0`, `write_failures_total=0`,
+    `journal_root=/var/lib/staticflow/llm-access/usage-journal`
+
+## Known Residuals After Journal-Root Cutover
+
+- Historical files still exist under `/mnt/llm-access/usage-journal`. Current
+  live units no longer point there, so treat that tree as stale forensic data,
+  not the active producer/consumer root.
+- The live GCP API unit still has an older drop-in
+  `/etc/systemd/system/llm-access.service.d/zz-usage-journal-split.conf` that
+  sets `LLM_ACCESS_USAGE_JOURNAL_DIR=/mnt/llm-access/usage-journal`. The
+  effective local-root override currently comes from a later-sorting drop-in
+  `/etc/systemd/system/llm-access.service.d/zzz-usage-journal-local.conf`.
+  If that later drop-in is removed or renamed earlier alphabetically, the API
+  process will silently fall back to the JuiceFS journal root again.
+- The worker unit currently uses
+  `/etc/systemd/system/llm-access-usage-worker.service.d/zzz-usage-journal-local.conf`
+  for the same local journal override.
+- One historical pending segment currently remains under
+  `/var/lib/staticflow/llm-access/analytics-active/pending/` and has logged:
+  `Conversion Error: Could not convert string 'unknown' to INT64 when casting from source column client_ip`.
+  This is a historical archive-compaction residue. It did not break current API
+  health or the new journal path on 2026-05-07, but it means the archive lane
+  is not fully clean.
+- The live SQLite runtime config on 2026-05-07 used
+  `duckdb_usage_memory_limit_mib=2048` and
+  `duckdb_usage_checkpoint_threshold_mib=16`. Lowering the DuckDB memory limit
+  back to `1024` reproduced checkpoint OOM inside DuckDB before the systemd
+  `MemoryMax=3072M` cgroup guard was reached.
+
+## Cloud Release and Post-Release Verification
+
+- Local release preparation from this checkout:
+  ```bash
+  export CARGO_TARGET_DIR=/mnt/wsl/data4tb/static-flow-data/cargo-target/static_flow
+  ./scripts/prepare_llm_access_cloud_release.sh
+  ```
+- Remote activation:
+  ```bash
+  set -a
+  source .local/llm-access-cloud-release.env
+  set +a
+  ssh -i "$GCP_SSH_KEY" -o IdentitiesOnly=yes "$GCP_DEST" \
+    '/home/ts_user/staticflow-llm-access-release/activate_llm_access_cloud_release.sh'
+  ```
+- Required post-release checks:
+  ```bash
+  curl -fsS http://127.0.0.1:19080/healthz
+  curl -fsS http://127.0.0.1:19081/admin/llm-access/usage-worker/status
+  curl -fsS -H 'Host: localhost' http://127.0.0.1:19080/admin/llm-access/usage-journal/status
+  systemctl show llm-access.service -p ExecStart -p Environment --no-pager
+  systemctl show llm-access-usage-worker.service -p ExecStart -p Environment --no-pager
+  sudo journalctl -u llm-access.service -n 80 --no-pager -l
+  sudo journalctl -u llm-access-usage-worker.service -n 80 --no-pager -l
+  ```
+- If the combined journal status reports the old mount path or the worker
+  returns permission errors for `.../usage-journal/sealed`, check the live
+  drop-in ordering and directory ownership first:
+  - `/etc/systemd/system/llm-access.service.d/zzz-usage-journal-local.conf`
+  - `/etc/systemd/system/llm-access-usage-worker.service.d/zzz-usage-journal-local.conf`
+  - owner/group of `/var/lib/staticflow/llm-access/usage-journal`
 
 ## Emergency Recovery for Sudden Public Outage
 

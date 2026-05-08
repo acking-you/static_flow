@@ -32,6 +32,7 @@ grep -F 'ExecStart=/usr/local/bin/llm-access-usage-worker serve' "$OUT_DIR/llm-a
 grep -F -- '--bind ${LLM_ACCESS_USAGE_QUERY_BIND_ADDR}' "$OUT_DIR/llm-access-usage-worker.service"
 grep -F -- '--duckdb-active-dir ${LLM_ACCESS_DUCKDB_ACTIVE_DIR}' "$OUT_DIR/llm-access-usage-worker.service"
 grep -F -- '--usage-journal-dir ${LLM_ACCESS_USAGE_JOURNAL_DIR}' "$OUT_DIR/llm-access-usage-worker.service"
+! grep -F -- '--duckdb ${LLM_ACCESS_DUCKDB}' "$OUT_DIR/llm-access-usage-worker.service"
 grep -F 'ExecStartPre=/usr/local/bin/staticflow-wait-llm-access-state analytics' "$OUT_DIR/llm-access-usage-worker.service"
 grep -F 'Environment=STATICFLOW_LOG_SERVICE=llm-access-usage-worker' "$OUT_DIR/llm-access-usage-worker.service"
 grep -F 'Environment=LLM_ACCESS_USAGE_JOURNAL_DIR=/var/lib/staticflow/llm-access/usage-journal' "$OUT_DIR/llm-access-usage-worker.service"

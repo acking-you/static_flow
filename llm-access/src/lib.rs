@@ -114,8 +114,15 @@ pub fn bootstrap_storage(config: &StorageConfig) -> anyhow::Result<()> {
     } else {
         llm_access_store::initialize_duckdb_target_path(&config.duckdb)?;
     }
-    llm_access_store::write_duckdb_schema_file(config.duckdb.with_extension("schema.sql"))?;
+    llm_access_store::write_duckdb_schema_file(duckdb_schema_output_path(config))?;
     Ok(())
+}
+
+fn duckdb_schema_output_path(config: &StorageConfig) -> PathBuf {
+    if let Some(tiered) = &config.duckdb_tiered {
+        return tiered.catalog_dir.join("usage.schema.sql");
+    }
+    config.duckdb.with_extension("schema.sql")
 }
 
 /// Build the HTTP router.
@@ -1722,6 +1729,53 @@ mod tests {
             .unwrap_or_default()
             .ends_with("usage-journal"));
         assert_eq!(value["worker"]["state"], "unreachable");
+
+        std::fs::remove_dir_all(&root).expect("cleanup state root");
+    }
+
+    #[tokio::test]
+    async fn combined_journal_status_includes_file_level_backlog_lists() {
+        let usage_worker_base = spawn_fake_usage_worker().await;
+        let (router, root) = persistent_test_router("usage-journal-file-lists").await;
+        set_usage_query_base_url(&router, &usage_worker_base).await;
+
+        let active_dir = root.join("usage-journal/active");
+        let sealed_dir = root.join("usage-journal/sealed");
+        let consuming_dir = root.join("usage-journal/consuming");
+        let bad_dir = root.join("usage-journal/bad");
+        std::fs::create_dir_all(&active_dir).expect("active dir");
+        std::fs::create_dir_all(&sealed_dir).expect("sealed dir");
+        std::fs::create_dir_all(&consuming_dir).expect("consuming dir");
+        std::fs::create_dir_all(&bad_dir).expect("bad dir");
+        std::fs::write(active_dir.join("usage-000000000001.open"), b"active").expect("active file");
+        std::fs::write(sealed_dir.join("usage-000000000002.journal"), b"sealed")
+            .expect("sealed file");
+        std::fs::write(consuming_dir.join("usage-000000000003.journal"), b"consuming")
+            .expect("consuming file");
+        std::fs::write(bad_dir.join("usage-000000000004.journal"), b"bad").expect("bad file");
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/llm-access/usage-journal/status")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(value["sealed_files"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["consuming_files"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["bad_files"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["sealed_files"][0]["sequence"].as_u64(), Some(2));
+        assert_eq!(value["consuming_files"][0]["sequence"].as_u64(), Some(3));
+        assert_eq!(value["bad_files"][0]["sequence"].as_u64(), Some(4));
 
         std::fs::remove_dir_all(&root).expect("cleanup state root");
     }

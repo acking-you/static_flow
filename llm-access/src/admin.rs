@@ -37,7 +37,10 @@ use llm_access_kiro::{
     cache_sim::{KiroCacheRuntimeStats, KiroCacheSimulationConfig, KiroCacheSimulationMode},
     local_import,
 };
-use llm_usage_journal::{JournalStatusSnapshot, WorkerProgressSnapshot};
+use llm_usage_journal::{
+    collect_journal_file_lists, JournalFileListsSnapshot, JournalFileSnapshot,
+    JournalStatusSnapshot, WorkerProgressSnapshot,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::OwnedSemaphorePermit;
@@ -205,8 +208,21 @@ struct AdminUsageJournalStatusResponse {
     dropped_unconsumed_files_total: u64,
     write_failures_total: u64,
     usage_query_base_url: String,
+    active_files: Vec<AdminUsageJournalFileView>,
+    sealed_files: Vec<AdminUsageJournalFileView>,
+    consuming_files: Vec<AdminUsageJournalFileView>,
+    bad_files: Vec<AdminUsageJournalFileView>,
     worker: AdminUsageWorkerProgressView,
     generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminUsageJournalFileView {
+    file_name: String,
+    path: String,
+    sequence: Option<u64>,
+    bytes: u64,
+    age_ms: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1096,6 +1112,13 @@ pub(crate) async fn get_usage_journal_status(
             .unwrap_or_default();
     }
     let now = now_ms();
+    let files = match journal_file_lists(&state) {
+        Ok(files) => files,
+        Err(err) => {
+            tracing::warn!("failed to load usage journal file lists: {err:#}");
+            return internal_error("Failed to load usage journal file lists").into_response();
+        },
+    };
     let worker = usage_worker_status(&config.usage_query_base_url, now).await;
     Json(AdminUsageJournalStatusResponse {
         journal_enabled: journal.journal_enabled,
@@ -1109,6 +1132,10 @@ pub(crate) async fn get_usage_journal_status(
         dropped_unconsumed_files_total: journal.dropped_unconsumed_files_total,
         write_failures_total: journal.write_failures_total,
         usage_query_base_url: config.usage_query_base_url,
+        active_files: files.active.into_iter().map(journal_file_view).collect(),
+        sealed_files: files.sealed.into_iter().map(journal_file_view).collect(),
+        consuming_files: files.consuming.into_iter().map(journal_file_view).collect(),
+        bad_files: files.bad.into_iter().map(journal_file_view).collect(),
         worker,
         generated_at: now,
     })
@@ -2977,6 +3004,13 @@ fn producer_journal_status(state: &HttpState) -> anyhow::Result<JournalStatusSna
     inspect_journal_dir(state.usage_journal_dir.as_deref())
 }
 
+fn journal_file_lists(state: &HttpState) -> anyhow::Result<JournalFileListsSnapshot> {
+    let Some(root) = state.usage_journal_dir.as_deref() else {
+        return Ok(JournalFileListsSnapshot::default());
+    };
+    collect_journal_file_lists(root)
+}
+
 fn inspect_journal_dir(root: Option<&FsPath>) -> anyhow::Result<JournalStatusSnapshot> {
     let Some(root) = root else {
         return Ok(JournalStatusSnapshot::default());
@@ -3071,6 +3105,16 @@ fn journal_file_sequence(path: &FsPath) -> Option<u64> {
         .take_while(|ch| ch.is_ascii_digit())
         .collect::<String>();
     digits.parse().ok()
+}
+
+fn journal_file_view(file: JournalFileSnapshot) -> AdminUsageJournalFileView {
+    AdminUsageJournalFileView {
+        file_name: file.file_name,
+        path: file.path,
+        sequence: file.sequence,
+        bytes: file.bytes,
+        age_ms: file.age_ms,
+    }
 }
 
 fn file_age_ms(metadata: &fs::Metadata) -> Option<i64> {

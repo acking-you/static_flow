@@ -6139,6 +6139,16 @@ pub struct ProcessMemoryRuntimeStats {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(default)]
+pub struct AdminUsageJournalFileView {
+    pub file_name: String,
+    pub path: String,
+    pub sequence: Option<u64>,
+    pub bytes: u64,
+    pub age_ms: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
 pub struct AdminUsageWorkerProgressView {
     pub state: String,
     pub current_file_path: Option<String>,
@@ -6173,6 +6183,10 @@ pub struct AdminUsageJournalStatusView {
     pub dropped_unconsumed_files_total: u64,
     pub write_failures_total: u64,
     pub usage_query_base_url: String,
+    pub active_files: Vec<AdminUsageJournalFileView>,
+    pub sealed_files: Vec<AdminUsageJournalFileView>,
+    pub consuming_files: Vec<AdminUsageJournalFileView>,
+    pub bad_files: Vec<AdminUsageJournalFileView>,
     pub worker: AdminUsageWorkerProgressView,
     pub generated_at: i64,
 }
@@ -7399,10 +7413,21 @@ pub async fn fetch_admin_usage_journal_status() -> Result<AdminUsageJournalStatu
             let text = response.text().await.unwrap_or_default();
             return Err(format!("Failed: {text}"));
         }
-        response
-            .json()
+        let content_type = response.headers().get("content-type").unwrap_or_default();
+        let body = response
+            .text()
             .await
-            .map_err(|e| format!("Parse error: {:?}", e))
+            .map_err(|e| format!("Read error: {:?}", e))?;
+        if !content_type.contains("json") {
+            let preview = body.chars().take(120).collect::<String>();
+            return Err(format!(
+                "Unexpected response content-type `{content_type}` while loading Usage Journal \
+                 Worker: {preview}"
+            ));
+        }
+        serde_json::from_str(&body).map_err(|e| {
+            format!("Parse error: {:?}; body: {}", e, body.chars().take(120).collect::<String>())
+        })
     }
 }
 
@@ -10439,5 +10464,6 @@ mod tests {
 
         assert_eq!(status.worker.processed_events, 0);
         assert_eq!(status.worker.process_memory.rss_bytes, None);
+        assert!(status.sealed_files.is_empty());
     }
 }

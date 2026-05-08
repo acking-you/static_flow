@@ -225,6 +225,10 @@ pub const ADMIN_ROUTES: &[RouteSpec] = &[
         path: "/admin/llm-gateway/accounts/:name/refresh",
     },
     RouteSpec {
+        method: "GET",
+        path: "/admin/llm-access/usage-journal/status",
+    },
+    RouteSpec {
         method: "GET|POST",
         path: "/admin/kiro-gateway/account-groups",
     },
@@ -280,6 +284,7 @@ pub fn is_llm_access_path(path: &str) -> bool {
         || path.starts_with("/api/kiro-gateway/")
         || path.starts_with("/api/codex-gateway/")
         || path.starts_with("/api/llm-access/")
+        || path.starts_with("/admin/llm-access/")
         || path.starts_with("/admin/llm-gateway/")
         || path.starts_with("/admin/kiro-gateway/")
 }
@@ -336,6 +341,7 @@ mod tests {
         assert!(paths.contains(&"/admin/llm-gateway/accounts/import-jobs"));
         assert!(paths.contains(&"/admin/llm-gateway/accounts/import-jobs/:job_id"));
         assert!(paths.contains(&"/admin/llm-gateway/accounts/:name/refresh"));
+        assert!(paths.contains(&"/admin/llm-access/usage-journal/status"));
         assert!(paths.contains(&"/admin/kiro-gateway/keys/:key_id"));
         assert!(paths.contains(&"/admin/kiro-gateway/accounts/:name/balance"));
     }
@@ -344,6 +350,7 @@ mod tests {
     fn route_ownership_matches_llm_path_prefixes() {
         assert!(is_llm_access_path("/api/llm-gateway/status"));
         assert!(is_llm_access_path("/api/kiro-gateway/cc/v1/messages"));
+        assert!(is_llm_access_path("/admin/llm-access/usage-journal/status"));
         assert!(is_llm_access_path("/admin/kiro-gateway/accounts"));
         assert!(!is_llm_access_path("/api/articles"));
         assert!(!is_llm_access_path("/admin/local-media"));

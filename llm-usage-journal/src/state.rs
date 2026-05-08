@@ -79,9 +79,10 @@ impl JournalConsumerState {
                     id, state, current_file_path, current_file_sequence,
                     processed_blocks, total_blocks, processed_events, total_events,
                     processed_compressed_bytes, total_compressed_bytes,
-                    heartbeat_at_ms, last_error, last_error_at_ms, updated_at_ms
+                    heartbeat_at_ms, last_successful_file_sequence,
+                    last_successful_import_at_ms, last_error, last_error_at_ms, updated_at_ms
                  ) VALUES (
-                    'current', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
+                    'current', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
                  )
                  ON CONFLICT(id) DO UPDATE SET
                     state = excluded.state,
@@ -94,6 +95,8 @@ impl JournalConsumerState {
                     processed_compressed_bytes = excluded.processed_compressed_bytes,
                     total_compressed_bytes = excluded.total_compressed_bytes,
                     heartbeat_at_ms = excluded.heartbeat_at_ms,
+                    last_successful_file_sequence = excluded.last_successful_file_sequence,
+                    last_successful_import_at_ms = excluded.last_successful_import_at_ms,
                     last_error = excluded.last_error,
                     last_error_at_ms = excluded.last_error_at_ms,
                     updated_at_ms = excluded.updated_at_ms",
@@ -108,6 +111,10 @@ impl JournalConsumerState {
                     progress.processed_compressed_bytes as i64,
                     progress.total_compressed_bytes as i64,
                     progress.heartbeat_at_ms,
+                    progress
+                        .last_successful_file_sequence
+                        .map(|value| value as i64),
+                    progress.last_successful_import_at_ms,
                     progress.last_error,
                     progress.last_error_at_ms,
                     updated_at_ms,
@@ -124,7 +131,8 @@ impl JournalConsumerState {
                 "SELECT state, current_file_path, current_file_sequence,
                     processed_blocks, total_blocks, processed_events, total_events,
                     processed_compressed_bytes, total_compressed_bytes,
-                    heartbeat_at_ms, last_error, last_error_at_ms
+                    heartbeat_at_ms, last_successful_file_sequence,
+                    last_successful_import_at_ms, last_error, last_error_at_ms
                  FROM worker_progress
                  WHERE id = 'current'",
                 [],
@@ -157,12 +165,16 @@ fn initialize_consumer_state(conn: &Connection) -> Result<()> {
             processed_compressed_bytes INTEGER NOT NULL,
             total_compressed_bytes INTEGER NOT NULL,
             heartbeat_at_ms INTEGER,
+            last_successful_file_sequence INTEGER,
+            last_successful_import_at_ms INTEGER,
             last_error TEXT,
             last_error_at_ms INTEGER,
             updated_at_ms INTEGER NOT NULL
         ) STRICT, WITHOUT ROWID;",
     )
     .context("initialize usage journal consumer state")?;
+    ensure_worker_progress_column(conn, "last_successful_file_sequence", "INTEGER")?;
+    ensure_worker_progress_column(conn, "last_successful_import_at_ms", "INTEGER")?;
     Ok(())
 }
 
@@ -189,16 +201,107 @@ fn decode_progress(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerProgressSn
         progress_percent,
         import_rate_events_per_second: 0.0,
         heartbeat_at_ms: row.get(9)?,
-        last_successful_file_sequence: None,
-        last_successful_import_at_ms: None,
-        last_error: row.get(10)?,
-        last_error_at_ms: row.get(11)?,
+        last_successful_file_sequence: row
+            .get::<_, Option<i64>>(10)?
+            .map(|value| value.max(0) as u64),
+        last_successful_import_at_ms: row.get(11)?,
+        last_error: row.get(12)?,
+        last_error_at_ms: row.get(13)?,
     })
+}
+
+fn ensure_worker_progress_column(conn: &Connection, name: &str, sql_type: &str) -> Result<()> {
+    let count: i64 = conn
+        .query_row(
+            "SELECT count(*)
+             FROM pragma_table_info('worker_progress')
+             WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        )
+        .with_context(|| format!("inspect worker_progress column `{name}`"))?;
+    if count == 0 {
+        conn.execute_batch(&format!("ALTER TABLE worker_progress ADD COLUMN {name} {sql_type};"))
+            .with_context(|| format!("add worker_progress column `{name}`"))?;
+    }
+    Ok(())
 }
 
 fn idle_progress() -> WorkerProgressSnapshot {
     WorkerProgressSnapshot {
         state: "idle".to_string(),
         ..WorkerProgressSnapshot::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+    use tempfile::tempdir;
+
+    use super::JournalConsumerState;
+    use crate::status::WorkerProgressSnapshot;
+
+    #[test]
+    fn progress_snapshot_round_trips_last_successful_import_fields() {
+        let root = tempdir().expect("tempdir");
+        let state = JournalConsumerState::open(root.path()).expect("open state");
+        let progress = WorkerProgressSnapshot {
+            state: "idle".to_string(),
+            last_successful_file_sequence: Some(7),
+            last_successful_import_at_ms: Some(1_700_000_000_123),
+            ..WorkerProgressSnapshot::default()
+        };
+
+        state
+            .update_progress(&progress, 1_700_000_000_456)
+            .expect("update progress");
+
+        let restored = state.progress_snapshot().expect("progress snapshot");
+        assert_eq!(restored.last_successful_file_sequence, Some(7));
+        assert_eq!(restored.last_successful_import_at_ms, Some(1_700_000_000_123));
+    }
+
+    #[test]
+    fn open_path_migrates_legacy_worker_progress_table() {
+        let root = tempdir().expect("tempdir");
+        let path = root.path().join("consumer-state.sqlite3");
+        let conn = Connection::open(&path).expect("open sqlite");
+        conn.execute_batch(
+            "CREATE TABLE worker_progress (
+                id TEXT PRIMARY KEY CHECK (id = 'current'),
+                state TEXT NOT NULL,
+                current_file_path TEXT,
+                current_file_sequence INTEGER,
+                processed_blocks INTEGER NOT NULL,
+                total_blocks INTEGER NOT NULL,
+                processed_events INTEGER NOT NULL,
+                total_events INTEGER NOT NULL,
+                processed_compressed_bytes INTEGER NOT NULL,
+                total_compressed_bytes INTEGER NOT NULL,
+                heartbeat_at_ms INTEGER,
+                last_error TEXT,
+                last_error_at_ms INTEGER,
+                updated_at_ms INTEGER NOT NULL
+            ) STRICT, WITHOUT ROWID;",
+        )
+        .expect("legacy schema");
+        drop(conn);
+
+        let state = JournalConsumerState::open_path(path).expect("open migrated state");
+        let progress = WorkerProgressSnapshot {
+            state: "idle".to_string(),
+            last_successful_file_sequence: Some(11),
+            last_successful_import_at_ms: Some(1_700_000_000_789),
+            ..WorkerProgressSnapshot::default()
+        };
+
+        state
+            .update_progress(&progress, 1_700_000_000_800)
+            .expect("update migrated progress");
+
+        let restored = state.progress_snapshot().expect("progress snapshot");
+        assert_eq!(restored.last_successful_file_sequence, Some(11));
+        assert_eq!(restored.last_successful_import_at_ms, Some(1_700_000_000_789));
     }
 }

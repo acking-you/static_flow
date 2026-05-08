@@ -39,12 +39,12 @@ use crate::{
         AdminLlmGatewayUsageEventDetailView, AdminLlmGatewayUsageEventView,
         AdminLlmGatewayUsageEventsQuery, AdminUpstreamProxyBindingView,
         AdminUpstreamProxyCheckResponse, AdminUpstreamProxyCheckTargetView,
-        AdminUpstreamProxyConfigView, AdminUsageJournalStatusView, CodexAccountImportJobDetailView,
-        CodexAccountImportJobSummaryView, CreateAdminAccountGroupInput,
-        CreateAdminUpstreamProxyConfigInput, LlmGatewayRuntimeConfig, PatchAdminAccountGroupInput,
-        PatchAdminLlmGatewayAccountInput, PatchAdminLlmGatewayKeyRequest,
-        PatchAdminUpstreamProxyConfigInput, ProcessMemoryRuntimeStats,
-        DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION,
+        AdminUpstreamProxyConfigView, AdminUsageJournalFileView, AdminUsageJournalStatusView,
+        CodexAccountImportJobDetailView, CodexAccountImportJobSummaryView,
+        CreateAdminAccountGroupInput, CreateAdminUpstreamProxyConfigInput, LlmGatewayRuntimeConfig,
+        PatchAdminAccountGroupInput, PatchAdminLlmGatewayAccountInput,
+        PatchAdminLlmGatewayKeyRequest, PatchAdminUpstreamProxyConfigInput,
+        ProcessMemoryRuntimeStats, DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION,
     },
     components::{pagination::Pagination, search_box::SearchBox, tab_bar::render_tab_bar},
     pages::llm_access_shared::{
@@ -328,6 +328,43 @@ fn format_optional_duration_ms(age_ms: Option<i64>) -> String {
         format!("{:.1} s", age_ms as f64 / 1_000.0)
     } else {
         format!("{age_ms} ms")
+    }
+}
+
+fn format_relative_age_from_ms(now_ms: i64, timestamp_ms: Option<i64>) -> String {
+    let age_ms = timestamp_ms.map(|timestamp| now_ms.saturating_sub(timestamp));
+    format_optional_duration_ms(age_ms)
+}
+
+fn render_usage_journal_file_list(
+    title: &str,
+    files: &[AdminUsageJournalFileView],
+    empty_label: &str,
+) -> Html {
+    html! {
+        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--bg)]", "p-3")}>
+            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>
+                { title }
+            </div>
+            if files.is_empty() {
+                <div class={classes!("mt-2", "text-xs", "text-[var(--muted)]")}>{ empty_label }</div>
+            } else {
+                <div class={classes!("mt-2", "space-y-2")}>
+                    { for files.iter().map(|file| html! {
+                        <div class={classes!("rounded-md", "border", "border-[var(--border)]", "px-2.5", "py-2")}>
+                            <div class={classes!("flex", "items-center", "justify-between", "gap-2", "font-mono", "text-xs", "text-[var(--text)]")}>
+                                <span>{ file.sequence.map(|seq| format!("#{seq}")).unwrap_or_else(|| file.file_name.clone()) }</span>
+                                <span class={classes!("text-[var(--muted)]")}>{ format_optional_bytes(Some(file.bytes)) }</span>
+                            </div>
+                            <div class={classes!("mt-1", "break-all", "text-[11px]", "text-[var(--muted)]")}>{ file.path.clone() }</div>
+                            <div class={classes!("mt-1", "text-[10px]", "text-[var(--muted)]")}>
+                                { format!("age {}", format_optional_duration_ms(file.age_ms)) }
+                            </div>
+                        </div>
+                    }) }
+                </div>
+            }
+        </div>
     }
 }
 
@@ -4823,6 +4860,20 @@ pub fn admin_llm_gateway_page() -> Html {
                                 </div>
                             </div>
                             <div class={classes!("mt-3", "grid", "gap-2", "text-xs", "text-[var(--muted)]", "xl:grid-cols-2")}>
+                                <p class={classes!("m-0")}>
+                                    { format!(
+                                        "last_successful_import: {} · file {}",
+                                        format_relative_age_from_ms(
+                                            status.generated_at,
+                                            status.worker.last_successful_import_at_ms,
+                                        ),
+                                        status
+                                            .worker
+                                            .last_successful_file_sequence
+                                            .map(|seq| format!("#{seq}"))
+                                            .unwrap_or_else(|| "-".to_string())
+                                    ) }
+                                </p>
                                 <p class={classes!("m-0", "break-all")}>
                                     { format!("journal_root: {}", status.journal_root) }
                                 </p>
@@ -4839,6 +4890,12 @@ pub fn admin_llm_gateway_page() -> Html {
                                         { format!("worker_error: {error}") }
                                     </p>
                                 }
+                            </div>
+                            <div class={classes!("mt-4", "grid", "gap-3", "xl:grid-cols-2")}>
+                                { render_usage_journal_file_list("sealed files", &status.sealed_files, "no sealed backlog") }
+                                { render_usage_journal_file_list("consuming files", &status.consuming_files, "worker is not holding a file") }
+                                { render_usage_journal_file_list("bad files", &status.bad_files, "no quarantined files") }
+                                { render_usage_journal_file_list("active files", &status.active_files, "no active journal file") }
                             </div>
                         } else if let Some(error) = (*usage_journal_error).clone() {
                             <div class={classes!("mt-4", "rounded-lg", "border", "border-red-500/30", "bg-red-500/10", "p-3", "text-sm", "text-red-700", "dark:text-red-200")}>
