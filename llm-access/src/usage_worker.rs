@@ -137,7 +137,7 @@ impl UsageWorker {
         max_blocks: Option<usize>,
         finalize_file: bool,
     ) -> anyhow::Result<bool> {
-        self.delete_orphan_consuming_files()?;
+        self.recover_orphan_consuming_files()?;
         let Some(claim) = self.claim_oldest_sealed_file()? else {
             self.state.update_progress(&idle_progress(), now_ms())?;
             return Ok(false);
@@ -194,7 +194,7 @@ impl UsageWorker {
         Ok(None)
     }
 
-    fn delete_orphan_consuming_files(&self) -> anyhow::Result<()> {
+    fn recover_orphan_consuming_files(&self) -> anyhow::Result<()> {
         let consuming_dir = self.journal_root.join("consuming");
         if !consuming_dir.exists() {
             return Ok(());
@@ -213,11 +213,23 @@ impl UsageWorker {
             let Some(sequence) = parse_journal_sequence(&path) else {
                 continue;
             };
-            if self.state.is_consumed(sequence)?
-                || file_age_ms(&metadata) >= self.consumer_lease_ms as i64
-            {
+            if self.state.is_consumed(sequence)? {
                 fs::remove_file(&path).with_context(|| {
                     format!("failed to delete orphan consuming journal `{}`", path.display())
+                })?;
+                continue;
+            }
+            if file_age_ms(&metadata) >= self.consumer_lease_ms as i64 {
+                let sealed_path = self.journal_root.join("sealed").join(
+                    path.file_name()
+                        .ok_or_else(|| anyhow!("consuming journal file has no name"))?,
+                );
+                fs::rename(&path, &sealed_path).with_context(|| {
+                    format!(
+                        "failed to recover stale consuming journal `{}` back to `{}`",
+                        path.display(),
+                        sealed_path.display()
+                    )
                 })?;
             }
         }
@@ -452,7 +464,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn worker_deletes_stale_consuming_file_before_importing_next_sealed_file() {
+    async fn worker_recovers_stale_consuming_file_before_importing_next_sealed_file() {
         let fixture = UsageWorkerFixture::new_with_consumer_lease_ms(1);
         fixture.write_stale_consuming_event("evt-stale-consuming");
         fixture.write_sealed_event("evt-fresh-sealed");
@@ -461,8 +473,11 @@ mod tests {
         fixture.run_one_import().await.expect("import");
 
         assert!(!fixture.consuming_path(0).exists());
+        assert!(fixture.duckdb_event_exists("evt-stale-consuming").await);
+        assert!(!fixture.duckdb_event_exists("evt-fresh-sealed").await);
+
+        fixture.run_one_import().await.expect("second import");
         assert!(fixture.duckdb_event_exists("evt-fresh-sealed").await);
-        assert!(!fixture.duckdb_event_exists("evt-stale-consuming").await);
     }
 
     #[tokio::test]

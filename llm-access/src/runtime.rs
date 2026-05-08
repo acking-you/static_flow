@@ -163,8 +163,12 @@ impl LlmAccessRuntime {
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let journal_usage_for_status = journal_usage.clone();
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-        let (usage_accounting, usage_event_flusher) =
-            UsageAccounting::new(repository.clone(), journal_usage, runtime_config.clone());
+        let (usage_accounting, usage_event_flusher) = UsageAccounting::new(
+            repository.clone(),
+            journal_usage.clone(),
+            journal_usage,
+            runtime_config.clone(),
+        );
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let control_store: Arc<dyn ControlStore> = Arc::new(UsageAccountingControlStore::new(
             repository.clone(),
@@ -542,6 +546,7 @@ struct UsageAccounting {
 impl UsageAccounting {
     fn new(
         rollup_sink: Arc<dyn UsageEventSink>,
+        journal_sink: Arc<JournalUsageEventSink>,
         analytics_sink: Arc<dyn UsageEventSink>,
         runtime_config: Arc<RwLock<AdminRuntimeConfig>>,
     ) -> (Arc<Self>, Arc<UsageEventFlusherHandle>) {
@@ -549,6 +554,7 @@ impl UsageAccounting {
         let pending_rollups = Arc::new(PendingUsageRollups::default());
         let handle = spawn_usage_event_flusher(
             rollup_sink,
+            journal_sink,
             analytics_sink,
             pending_rollups.clone(),
             runtime_config,
@@ -664,6 +670,7 @@ fn max_optional_ms(current: Option<i64>, next: Option<i64>) -> Option<i64> {
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 fn spawn_usage_event_flusher(
     rollup_sink: Arc<dyn UsageEventSink>,
+    journal_sink: Arc<JournalUsageEventSink>,
     analytics_sink: Arc<dyn UsageEventSink>,
     pending_rollups: Arc<PendingUsageRollups>,
     runtime_config: Arc<RwLock<AdminRuntimeConfig>>,
@@ -727,6 +734,7 @@ fn spawn_usage_event_flusher(
                         }
                     }
                     _ = time::sleep(flush_config.flush_interval) => {
+                        journal_sink.maintain();
                         retry_failed_batch_on_timer = flush_usage_event_buffer(
                             UsageEventFlushTargets {
                                 rollup_sink: rollup_sink.as_ref(),
@@ -848,6 +856,7 @@ fn spawn_usage_event_flusher(
                     }
                 }
                 _ = time::sleep(flush_config.flush_interval) => {
+                    journal_sink.maintain();
                     if !buffer.is_empty() || !analytics_retry_buffer.is_empty() {
                         retry_failed_batch_on_timer = flush_usage_event_buffer(
                             UsageEventFlushTargets {
@@ -1375,6 +1384,17 @@ mod tests {
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    fn test_journal_sink() -> (tempfile::TempDir, Arc<crate::usage_journal::JournalUsageEventSink>)
+    {
+        let root = tempfile::tempdir().expect("tempdir");
+        let sink = Arc::new(
+            crate::usage_journal::JournalUsageEventSink::open_for_tests(root.path().to_path_buf())
+                .expect("journal sink"),
+        );
+        (root, sink)
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     fn sample_authenticated_key() -> AuthenticatedKey {
         AuthenticatedKey {
             key_id: "key-runtime".to_string(),
@@ -1442,6 +1462,7 @@ mod tests {
     async fn usage_accounting_buffers_rollups_and_overlays_auth_until_flush() {
         let rollup_sink = Arc::new(RecordingUsageEventSink::default());
         let analytics_sink = Arc::new(RecordingUsageEventSink::default());
+        let (_journal_root, journal_sink) = test_journal_sink();
         let runtime_config = Arc::new(RwLock::new(AdminRuntimeConfig {
             usage_event_flush_batch_size: 2,
             usage_event_flush_interval_seconds: 3600,
@@ -1450,6 +1471,7 @@ mod tests {
         }));
         let (accounting, _handle) = super::UsageAccounting::new(
             rollup_sink.clone(),
+            journal_sink,
             analytics_sink.clone(),
             runtime_config,
         );
@@ -1497,6 +1519,7 @@ mod tests {
     async fn batched_usage_sink_flushes_when_batch_size_reached() {
         let rollup_sink = Arc::new(RecordingUsageEventSink::default());
         let analytics_sink = Arc::new(RecordingUsageEventSink::default());
+        let (_journal_root, journal_sink) = test_journal_sink();
         let runtime_config = Arc::new(RwLock::new(AdminRuntimeConfig {
             usage_event_flush_batch_size: 2,
             usage_event_flush_interval_seconds: 3600,
@@ -1505,6 +1528,7 @@ mod tests {
         }));
         let (sink, _handle) = super::UsageAccounting::new(
             rollup_sink.clone(),
+            journal_sink,
             analytics_sink.clone(),
             runtime_config,
         );
@@ -1531,14 +1555,19 @@ mod tests {
     async fn batched_usage_sink_flushes_remaining_events_when_sender_closes() {
         let rollup_sink = Arc::new(RecordingUsageEventSink::default());
         let analytics_sink = Arc::new(RecordingUsageEventSink::default());
+        let (_journal_root, journal_sink) = test_journal_sink();
         let runtime_config = Arc::new(RwLock::new(AdminRuntimeConfig {
             usage_event_flush_batch_size: 256,
             usage_event_flush_interval_seconds: 3600,
             usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
             ..AdminRuntimeConfig::default()
         }));
-        let (sink, _handle) =
-            super::UsageAccounting::new(rollup_sink, analytics_sink.clone(), runtime_config);
+        let (sink, _handle) = super::UsageAccounting::new(
+            rollup_sink,
+            journal_sink,
+            analytics_sink.clone(),
+            runtime_config,
+        );
 
         sink.append_usage_event(&sample_usage_event("evt-1"))
             .await
@@ -1555,14 +1584,19 @@ mod tests {
     async fn batched_usage_sink_flushes_remaining_events_on_shutdown_signal() {
         let rollup_sink = Arc::new(RecordingUsageEventSink::default());
         let analytics_sink = Arc::new(RecordingUsageEventSink::default());
+        let (_journal_root, journal_sink) = test_journal_sink();
         let runtime_config = Arc::new(RwLock::new(AdminRuntimeConfig {
             usage_event_flush_batch_size: 256,
             usage_event_flush_interval_seconds: 3600,
             usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
             ..AdminRuntimeConfig::default()
         }));
-        let (sink, handle) =
-            super::UsageAccounting::new(rollup_sink, analytics_sink.clone(), runtime_config);
+        let (sink, handle) = super::UsageAccounting::new(
+            rollup_sink,
+            journal_sink,
+            analytics_sink.clone(),
+            runtime_config,
+        );
 
         sink.append_usage_event(&sample_usage_event("evt-1"))
             .await

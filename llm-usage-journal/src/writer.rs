@@ -16,6 +16,7 @@ use crate::{
         BlockHeaderV1, FileFooterV1, FileHeaderV1, JournalUsageBatchV1, JournalUsageEventV1,
         FILE_MAGIC_V1, FORMAT_VERSION_V1, SCHEMA_VERSION_V1,
     },
+    writer_state::JournalWriterState,
 };
 
 pub(crate) const BLOCK_TAG: &[u8; 4] = b"BLK1";
@@ -60,7 +61,8 @@ impl JournalWriter {
             )
         })?;
 
-        let file_sequence = next_file_sequence(&config.root_dir)?;
+        let mut writer_state = JournalWriterState::open(&config.root_dir)?;
+        let file_sequence = writer_state.allocate_next_file_sequence(&config.root_dir)?;
         let active_path = config
             .root_dir
             .join("active")
@@ -144,6 +146,11 @@ impl JournalWriter {
         Ok(fs::metadata(&self.active_path)
             .with_context(|| format!("failed to stat journal `{}`", self.active_path.display()))?
             .len())
+    }
+
+    /// Return true once this writer has persisted at least one event block.
+    pub fn has_written_events(&self) -> bool {
+        self.event_count > 0
     }
 
     /// Seal the current file and return its sealed path.
@@ -270,7 +277,7 @@ pub(crate) fn write_record<T: serde::Serialize>(
     Ok(())
 }
 
-fn write_file_header(file: &mut File, header: &FileHeaderV1) -> Result<()> {
+pub(crate) fn write_file_header(file: &mut File, header: &FileHeaderV1) -> Result<()> {
     file.write_all(FILE_MAGIC_V1)
         .context("failed to write journal magic")?;
     let bytes = postcard::to_allocvec(header)?;
@@ -279,29 +286,6 @@ fn write_file_header(file: &mut File, header: &FileHeaderV1) -> Result<()> {
     file.write_all(&bytes)
         .context("failed to write journal header bytes")?;
     Ok(())
-}
-
-fn next_file_sequence(root: &std::path::Path) -> Result<u64> {
-    let mut max_sequence = None;
-    for subdir in ["active", "sealed", "consuming"] {
-        let dir = root.join(subdir);
-        if !dir.exists() {
-            continue;
-        }
-        for entry in fs::read_dir(&dir)
-            .with_context(|| format!("failed to read journal dir `{}`", dir.display()))?
-        {
-            let entry = entry?;
-            let Some(sequence) =
-                parse_sequence_from_file_name(&entry.file_name().to_string_lossy())
-            else {
-                continue;
-            };
-            max_sequence =
-                Some(max_sequence.map_or(sequence, |current: u64| current.max(sequence)));
-        }
-    }
-    Ok(max_sequence.map_or(0, |sequence| sequence.saturating_add(1)))
 }
 
 pub(crate) fn parse_sequence_from_file_name(file_name: &str) -> Option<u64> {
