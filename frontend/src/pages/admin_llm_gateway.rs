@@ -368,6 +368,31 @@ fn render_usage_journal_file_list(
     }
 }
 
+fn render_usage_journal_current_file_card(
+    title: &str,
+    file: Option<&AdminUsageJournalFileView>,
+    empty_label: &str,
+) -> Html {
+    html! {
+        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--bg)]", "p-3")}>
+            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ title }</div>
+            if let Some(file) = file {
+                <div class={classes!("mt-1", "font-mono", "text-lg", "font-bold")}>
+                    { file.sequence.map(|seq| format!("#{seq}")).unwrap_or_else(|| file.file_name.clone()) }
+                </div>
+                <div class={classes!("text-xs", "text-[var(--muted)]")}>
+                    { format_optional_bytes(Some(file.bytes)) }
+                </div>
+                <div class={classes!("mt-1", "break-all", "text-[10px]", "text-[var(--muted)]")}>
+                    { file.path.clone() }
+                </div>
+            } else {
+                <div class={classes!("mt-2", "text-xs", "text-[var(--muted)]")}>{ empty_label }</div>
+            }
+        </div>
+    }
+}
+
 fn usage_worker_state_tone(state: &str) -> &'static str {
     match state {
         "idle" => "bg-emerald-500/12 text-emerald-700 dark:text-emerald-200",
@@ -4796,7 +4821,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
 
                         if let Some(status) = (*usage_journal_status).clone() {
-                            <div class={classes!("mt-4", "grid", "gap-3", "md:grid-cols-2", "xl:grid-cols-5")}>
+                            <div class={classes!("mt-4", "grid", "gap-3", "md:grid-cols-2", "xl:grid-cols-6")}>
                                 <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--bg)]", "p-3")}>
                                     <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "worker" }</div>
                                     <div class={classes!("mt-2", "flex", "items-center", "gap-2", "flex-wrap")}>
@@ -4834,15 +4859,16 @@ pub fn admin_llm_gateway_page() -> Html {
                                         { format!("{} · oldest {}", format_optional_bytes(Some(status.sealed_bytes)), format_optional_duration_ms(status.oldest_sealed_age_ms)) }
                                     </div>
                                 </div>
-                                <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--bg)]", "p-3")}>
-                                    <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "active file" }</div>
-                                    <div class={classes!("mt-1", "font-mono", "text-lg", "font-bold")}>
-                                        { status.active_file_sequence.map(|seq| format!("#{seq}")).unwrap_or_else(|| "-".to_string()) }
-                                    </div>
-                                    <div class={classes!("text-xs", "text-[var(--muted)]")}>
-                                        { format_optional_bytes(Some(status.active_file_bytes)) }
-                                    </div>
-                                </div>
+                                { render_usage_journal_current_file_card(
+                                    "producer file",
+                                    status.producer_current_file.as_ref(),
+                                    "producer is not holding an active file",
+                                ) }
+                                { render_usage_journal_current_file_card(
+                                    "worker file",
+                                    status.current_consuming_file.as_ref(),
+                                    "worker is not holding a consuming file",
+                                ) }
                                 <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--bg)]", "p-3")}>
                                     <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "import progress" }</div>
                                     <div class={classes!("mt-1", "font-mono", "text-lg", "font-bold")}>
@@ -4893,9 +4919,9 @@ pub fn admin_llm_gateway_page() -> Html {
                             </div>
                             <div class={classes!("mt-4", "grid", "gap-3", "xl:grid-cols-2")}>
                                 { render_usage_journal_file_list("sealed files", &status.sealed_files, "no sealed backlog") }
-                                { render_usage_journal_file_list("consuming files", &status.consuming_files, "worker is not holding a file") }
+                                { render_usage_journal_file_list("orphan consuming files", &status.orphan_consuming_files, "no orphan consuming files") }
                                 { render_usage_journal_file_list("bad files", &status.bad_files, "no quarantined files") }
-                                { render_usage_journal_file_list("active files", &status.active_files, "no active journal file") }
+                                { render_usage_journal_file_list("orphan active files", &status.orphan_active_files, "no orphan active files") }
                             </div>
                         } else if let Some(error) = (*usage_journal_error).clone() {
                             <div class={classes!("mt-4", "rounded-lg", "border", "border-red-500/30", "bg-red-500/10", "p-3", "text-sm", "text-red-700", "dark:text-red-200")}>

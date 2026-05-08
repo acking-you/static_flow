@@ -102,6 +102,7 @@ struct DiskJournalUsageWriter {
 impl DiskJournalUsageWriter {
     fn open(root_dir: PathBuf, runtime_config: &AdminRuntimeConfig) -> anyhow::Result<Self> {
         let config = journal_config_from_runtime(root_dir, runtime_config);
+        delete_orphan_active_files(&config.root_dir)?;
         Ok(Self {
             enabled: runtime_config.usage_journal_enabled,
             writer: JournalWriter::open(config.clone())?,
@@ -220,6 +221,29 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+fn delete_orphan_active_files(root_dir: &Path) -> anyhow::Result<()> {
+    let active_dir = root_dir.join("active");
+    if !active_dir.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(&active_dir)
+        .with_context(|| format!("failed to read active journal dir `{}`", active_dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = entry.metadata().with_context(|| {
+            format!("failed to stat orphan active journal `{}`", path.display())
+        })?;
+        if !metadata.is_file() {
+            continue;
+        }
+        fs::remove_file(&path).with_context(|| {
+            format!("failed to delete orphan active journal `{}`", path.display())
+        })?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use llm_access_core::{
@@ -255,6 +279,36 @@ mod tests {
 
         let status = sink.status_snapshot().expect("status");
         assert_eq!(status.write_failures_total, 1);
+    }
+
+    #[tokio::test]
+    async fn journal_sink_startup_deletes_orphan_active_files() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let config = llm_usage_journal::JournalConfig::new(root.path().to_path_buf());
+
+        let mut writer = llm_usage_journal::JournalWriter::open(config.clone()).expect("writer 0");
+        writer
+            .append_events(&[test_usage_event("evt-sealed")])
+            .expect("append sealed");
+        writer.seal_current_file().expect("seal writer 0");
+
+        let mut orphan_writer =
+            llm_usage_journal::JournalWriter::open(config).expect("writer orphan");
+        orphan_writer
+            .append_events(&[test_usage_event("evt-orphan-active")])
+            .expect("append orphan");
+        orphan_writer.flush().expect("flush orphan");
+        drop(orphan_writer);
+
+        let sink =
+            JournalUsageEventSink::open_for_tests(root.path().to_path_buf()).expect("open sink");
+        let status = sink.status_snapshot().expect("status");
+
+        assert_eq!(status.active_file_sequence, Some(1));
+        let active_entries = std::fs::read_dir(root.path().join("active"))
+            .expect("read active dir")
+            .count();
+        assert_eq!(active_entries, 1);
     }
 
     struct FailingJournalWriter;

@@ -73,7 +73,11 @@ fn run() -> anyhow::Result<()> {
     } else {
         DuckDbUsageRepository::open_path_with_connection_config(storage.duckdb, connection_config)?
     };
-    let worker = UsageWorker::new(storage.usage_journal_dir, Arc::new(duckdb))?;
+    let worker = UsageWorker::new(
+        storage.usage_journal_dir,
+        Arc::new(duckdb),
+        runtime_config.usage_journal_consumer_lease_ms,
+    )?;
     let app = router(&worker);
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()

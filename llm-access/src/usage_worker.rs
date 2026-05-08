@@ -28,6 +28,7 @@ pub struct UsageWorker {
     journal_root: PathBuf,
     state: JournalConsumerState,
     duckdb_usage: Arc<DuckDbUsageRepository>,
+    consumer_lease_ms: u64,
 }
 
 /// Build the usage worker HTTP router.
@@ -89,6 +90,7 @@ impl UsageWorker {
     pub fn new(
         journal_root: PathBuf,
         duckdb_usage: Arc<DuckDbUsageRepository>,
+        consumer_lease_ms: u64,
     ) -> anyhow::Result<Self> {
         for subdir in ["sealed", "consuming", "bad"] {
             fs::create_dir_all(journal_root.join(subdir)).with_context(|| {
@@ -100,6 +102,7 @@ impl UsageWorker {
             journal_root,
             state,
             duckdb_usage,
+            consumer_lease_ms: consumer_lease_ms.max(1),
         })
     }
 
@@ -134,6 +137,7 @@ impl UsageWorker {
         max_blocks: Option<usize>,
         finalize_file: bool,
     ) -> anyhow::Result<bool> {
+        self.delete_orphan_consuming_files()?;
         let Some(claim) = self.claim_oldest_sealed_file()? else {
             self.state.update_progress(&idle_progress(), now_ms())?;
             return Ok(false);
@@ -188,6 +192,36 @@ impl UsageWorker {
             }));
         }
         Ok(None)
+    }
+
+    fn delete_orphan_consuming_files(&self) -> anyhow::Result<()> {
+        let consuming_dir = self.journal_root.join("consuming");
+        if !consuming_dir.exists() {
+            return Ok(());
+        }
+        for entry in fs::read_dir(&consuming_dir).with_context(|| {
+            format!("failed to read consuming journal dir `{}`", consuming_dir.display())
+        })? {
+            let entry = entry?;
+            let path = entry.path();
+            let metadata = entry.metadata().with_context(|| {
+                format!("failed to stat consuming journal `{}`", path.display())
+            })?;
+            if !metadata.is_file() {
+                continue;
+            }
+            let Some(sequence) = parse_journal_sequence(&path) else {
+                continue;
+            };
+            if self.state.is_consumed(sequence)?
+                || file_age_ms(&metadata) >= self.consumer_lease_ms as i64
+            {
+                fs::remove_file(&path).with_context(|| {
+                    format!("failed to delete orphan consuming journal `{}`", path.display())
+                })?;
+            }
+        }
+        Ok(())
     }
 
     async fn import_claimed_file(
@@ -333,6 +367,15 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+fn file_age_ms(metadata: &fs::Metadata) -> i64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| now_ms().saturating_sub(duration.as_millis() as i64))
+        .unwrap_or(i64::MAX)
+}
+
 /// Run the import loop until the process is stopped.
 pub async fn run_forever(worker: UsageWorker) -> anyhow::Result<()> {
     loop {
@@ -346,7 +389,7 @@ pub async fn run_forever(worker: UsageWorker) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, sync::Arc};
+    use std::{path::PathBuf, sync::Arc, time::Duration};
 
     use axum::{
         body::{to_bytes, Body},
@@ -405,6 +448,20 @@ mod tests {
         fixture.run_one_import().await.expect("retry");
 
         assert_eq!(fixture.count_duckdb_event("evt-idempotent").await, 1);
+    }
+
+    #[tokio::test]
+    async fn worker_deletes_stale_consuming_file_before_importing_next_sealed_file() {
+        let fixture = UsageWorkerFixture::new_with_consumer_lease_ms(1);
+        fixture.write_stale_consuming_event("evt-stale-consuming");
+        fixture.write_sealed_event("evt-fresh-sealed");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        fixture.run_one_import().await.expect("import");
+
+        assert!(!fixture.consuming_path(0).exists());
+        assert!(fixture.duckdb_event_exists("evt-fresh-sealed").await);
+        assert!(!fixture.duckdb_event_exists("evt-stale-consuming").await);
     }
 
     #[tokio::test]
@@ -505,6 +562,10 @@ mod tests {
 
     impl UsageWorkerFixture {
         fn new() -> Self {
+            Self::new_with_consumer_lease_ms(300_000)
+        }
+
+        fn new_with_consumer_lease_ms(consumer_lease_ms: u64) -> Self {
             let temp_dir = tempfile::tempdir().expect("tempdir");
             let journal_root = temp_dir.path().join("journal");
             let duckdb = Arc::new(
@@ -516,8 +577,10 @@ mod tests {
                 })
                 .expect("open duckdb"),
             );
-            let worker =
-                Arc::new(UsageWorker::new(journal_root.clone(), duckdb.clone()).expect("worker"));
+            let worker = Arc::new(
+                UsageWorker::new(journal_root.clone(), duckdb.clone(), consumer_lease_ms)
+                    .expect("worker"),
+            );
             Self {
                 _temp_dir: temp_dir,
                 journal_root,
@@ -552,6 +615,13 @@ mod tests {
             writer.seal_current_file().expect("seal");
         }
 
+        fn write_stale_consuming_event(&self, event_id: &str) {
+            self.write_sealed_event(event_id);
+            std::fs::create_dir_all(self.journal_root.join("consuming")).expect("consuming dir");
+            std::fs::rename(self.sealed_path(0), self.consuming_path(0))
+                .expect("move to consuming");
+        }
+
         async fn run_one_import(&self) -> anyhow::Result<bool> {
             self.worker.run_one_import().await
         }
@@ -567,6 +637,12 @@ mod tests {
         fn sealed_path(&self, sequence: u64) -> PathBuf {
             self.journal_root
                 .join("sealed")
+                .join(format!("usage-{sequence:012}.journal"))
+        }
+
+        fn consuming_path(&self, sequence: u64) -> PathBuf {
+            self.journal_root
+                .join("consuming")
                 .join(format!("usage-{sequence:012}.journal"))
         }
 

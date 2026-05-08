@@ -208,6 +208,10 @@ struct AdminUsageJournalStatusResponse {
     dropped_unconsumed_files_total: u64,
     write_failures_total: u64,
     usage_query_base_url: String,
+    producer_current_file: Option<AdminUsageJournalFileView>,
+    orphan_active_files: Vec<AdminUsageJournalFileView>,
+    current_consuming_file: Option<AdminUsageJournalFileView>,
+    orphan_consuming_files: Vec<AdminUsageJournalFileView>,
     active_files: Vec<AdminUsageJournalFileView>,
     sealed_files: Vec<AdminUsageJournalFileView>,
     consuming_files: Vec<AdminUsageJournalFileView>,
@@ -216,7 +220,7 @@ struct AdminUsageJournalStatusResponse {
     generated_at: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct AdminUsageJournalFileView {
     file_name: String,
     path: String,
@@ -225,7 +229,7 @@ struct AdminUsageJournalFileView {
     age_ms: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 struct AdminUsageWorkerProgressView {
     state: String,
     current_file_path: Option<String>,
@@ -244,6 +248,14 @@ struct AdminUsageWorkerProgressView {
     last_error: Option<String>,
     last_error_at_ms: Option<i64>,
     process_memory: ProcessMemoryStats,
+}
+
+#[derive(Debug, Default)]
+struct PartitionedUsageJournalFiles {
+    producer_current_file: Option<AdminUsageJournalFileView>,
+    orphan_active_files: Vec<AdminUsageJournalFileView>,
+    current_consuming_file: Option<AdminUsageJournalFileView>,
+    orphan_consuming_files: Vec<AdminUsageJournalFileView>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1120,6 +1132,7 @@ pub(crate) async fn get_usage_journal_status(
         },
     };
     let worker = usage_worker_status(&config.usage_query_base_url, now).await;
+    let partitioned = partition_usage_journal_files(&journal, &files, &worker);
     Json(AdminUsageJournalStatusResponse {
         journal_enabled: journal.journal_enabled,
         journal_root: journal.journal_root,
@@ -1132,6 +1145,10 @@ pub(crate) async fn get_usage_journal_status(
         dropped_unconsumed_files_total: journal.dropped_unconsumed_files_total,
         write_failures_total: journal.write_failures_total,
         usage_query_base_url: config.usage_query_base_url,
+        producer_current_file: partitioned.producer_current_file,
+        orphan_active_files: partitioned.orphan_active_files,
+        current_consuming_file: partitioned.current_consuming_file,
+        orphan_consuming_files: partitioned.orphan_consuming_files,
         active_files: files.active.into_iter().map(journal_file_view).collect(),
         sealed_files: files.sealed.into_iter().map(journal_file_view).collect(),
         consuming_files: files.consuming.into_iter().map(journal_file_view).collect(),
@@ -3117,6 +3134,113 @@ fn journal_file_view(file: JournalFileSnapshot) -> AdminUsageJournalFileView {
     }
 }
 
+fn partition_usage_journal_files(
+    journal: &JournalStatusSnapshot,
+    files: &JournalFileListsSnapshot,
+    worker: &AdminUsageWorkerProgressView,
+) -> PartitionedUsageJournalFiles {
+    let producer_current_file = producer_current_journal_file(journal, &files.active);
+    let orphan_active_files = files
+        .active
+        .iter()
+        .filter(|file| file.sequence != journal.active_file_sequence)
+        .cloned()
+        .map(journal_file_view)
+        .collect();
+    let current_consuming_file = worker_current_journal_file(worker, &files.consuming);
+    let orphan_consuming_files = files
+        .consuming
+        .iter()
+        .filter(|file| {
+            !matches_worker_current_file(
+                file,
+                worker.current_file_sequence,
+                worker.current_file_path.as_deref(),
+            )
+        })
+        .cloned()
+        .map(journal_file_view)
+        .collect();
+    PartitionedUsageJournalFiles {
+        producer_current_file,
+        orphan_active_files,
+        current_consuming_file,
+        orphan_consuming_files,
+    }
+}
+
+fn producer_current_journal_file(
+    journal: &JournalStatusSnapshot,
+    active_files: &[JournalFileSnapshot],
+) -> Option<AdminUsageJournalFileView> {
+    let sequence = journal.active_file_sequence?;
+    if let Some(file) = active_files
+        .iter()
+        .find(|file| file.sequence == Some(sequence))
+    {
+        return Some(journal_file_view(file.clone()));
+    }
+    Some(AdminUsageJournalFileView {
+        file_name: format!("usage-{sequence:012}.open"),
+        path: FsPath::new(&journal.journal_root)
+            .join("active")
+            .join(format!("usage-{sequence:012}.open"))
+            .display()
+            .to_string(),
+        sequence: Some(sequence),
+        bytes: journal.active_file_bytes,
+        age_ms: None,
+    })
+}
+
+fn worker_current_journal_file(
+    worker: &AdminUsageWorkerProgressView,
+    consuming_files: &[JournalFileSnapshot],
+) -> Option<AdminUsageJournalFileView> {
+    let matched = consuming_files
+        .iter()
+        .find(|file| {
+            matches_worker_current_file(
+                file,
+                worker.current_file_sequence,
+                worker.current_file_path.as_deref(),
+            )
+        })
+        .cloned();
+    match matched {
+        Some(file) => Some(journal_file_view(file)),
+        None if worker.current_file_sequence.is_some() || worker.current_file_path.is_some() => {
+            let sequence = worker.current_file_sequence;
+            let file_name = worker
+                .current_file_path
+                .as_deref()
+                .and_then(|path| FsPath::new(path).file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| {
+                    sequence
+                        .map(|seq| format!("usage-{seq:012}.journal"))
+                        .unwrap_or_else(|| "current-consuming-file".to_string())
+                });
+            Some(AdminUsageJournalFileView {
+                file_name,
+                path: worker.current_file_path.clone().unwrap_or_default(),
+                sequence,
+                bytes: worker.total_compressed_bytes,
+                age_ms: None,
+            })
+        },
+        None => None,
+    }
+}
+
+fn matches_worker_current_file(
+    file: &JournalFileSnapshot,
+    current_sequence: Option<u64>,
+    current_path: Option<&str>,
+) -> bool {
+    file.sequence == current_sequence || current_path.is_some_and(|path| file.path == path)
+}
+
 fn file_age_ms(metadata: &fs::Metadata) -> Option<i64> {
     let modified = metadata.modified().ok()?;
     let modified_ms = modified
@@ -4880,6 +5004,82 @@ mod tests {
         assert!(updated.usage_journal_delete_bad_files);
         assert_eq!(updated.usage_query_bind_addr, "127.0.0.1:19091");
         assert_eq!(updated.usage_query_base_url, "http://127.0.0.1:19091");
+    }
+
+    #[test]
+    fn usage_journal_file_lists_split_current_and_orphan_files() {
+        let journal = JournalStatusSnapshot {
+            journal_enabled: true,
+            journal_root: "/tmp/journal".to_string(),
+            active_file_sequence: Some(9),
+            active_file_bytes: 4096,
+            ..JournalStatusSnapshot::default()
+        };
+        let files = JournalFileListsSnapshot {
+            active: vec![
+                JournalFileSnapshot {
+                    file_name: "usage-000000000007.open".to_string(),
+                    path: "/tmp/journal/active/usage-000000000007.open".to_string(),
+                    sequence: Some(7),
+                    bytes: 1024,
+                    age_ms: Some(1000),
+                },
+                JournalFileSnapshot {
+                    file_name: "usage-000000000009.open".to_string(),
+                    path: "/tmp/journal/active/usage-000000000009.open".to_string(),
+                    sequence: Some(9),
+                    bytes: 4096,
+                    age_ms: Some(200),
+                },
+            ],
+            consuming: vec![
+                JournalFileSnapshot {
+                    file_name: "usage-000000000003.journal".to_string(),
+                    path: "/tmp/journal/consuming/usage-000000000003.journal".to_string(),
+                    sequence: Some(3),
+                    bytes: 8192,
+                    age_ms: Some(3000),
+                },
+                JournalFileSnapshot {
+                    file_name: "usage-000000000004.journal".to_string(),
+                    path: "/tmp/journal/consuming/usage-000000000004.journal".to_string(),
+                    sequence: Some(4),
+                    bytes: 16384,
+                    age_ms: Some(4000),
+                },
+            ],
+            ..JournalFileListsSnapshot::default()
+        };
+        let worker = AdminUsageWorkerProgressView {
+            state: "importing".to_string(),
+            current_file_path: Some(
+                "/tmp/journal/consuming/usage-000000000004.journal".to_string(),
+            ),
+            current_file_sequence: Some(4),
+            total_compressed_bytes: 16384,
+            ..AdminUsageWorkerProgressView::default()
+        };
+
+        let partitioned = partition_usage_journal_files(&journal, &files, &worker);
+
+        assert_eq!(
+            partitioned
+                .producer_current_file
+                .as_ref()
+                .and_then(|file| file.sequence),
+            Some(9)
+        );
+        assert_eq!(partitioned.orphan_active_files.len(), 1);
+        assert_eq!(partitioned.orphan_active_files[0].sequence, Some(7));
+        assert_eq!(
+            partitioned
+                .current_consuming_file
+                .as_ref()
+                .and_then(|file| file.sequence),
+            Some(4)
+        );
+        assert_eq!(partitioned.orphan_consuming_files.len(), 1);
+        assert_eq!(partitioned.orphan_consuming_files[0].sequence, Some(3));
     }
 
     #[test]
