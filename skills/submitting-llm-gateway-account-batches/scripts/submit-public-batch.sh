@@ -9,10 +9,10 @@ Usage:
 Required:
   --dir DIR                 Directory containing *.json auth files
   --base-url API_BASE       API base, for example http://127.0.0.1:19080/api
-  --message TEXT            contributor_message applied to the batch
+  --message TEXT            reviewer-facing contributor_message for the batch
 
 Options:
-  --requester-email EMAIL   Top-level requester_email for every item
+  --requester-email EMAIL   Optional top-level requester_email for every item
   --github-id ID            Top-level github_id
   --frontend-page-url URL   Top-level frontend_page_url
   --batch-size N            Max items per request, default 200
@@ -51,14 +51,8 @@ derive_account_name() {
   printf '%s_%s' "$base" "$hash"
 }
 
-extract_item_email() {
-  local file_path
-  file_path=$1
-  jq -r '.email // .outlook_email // empty' "$file_path"
-}
-
 build_item_json() {
-  local file_path account_name auth_json item_email
+  local file_path account_name auth_json
   file_path=$1
   account_name=$2
   auth_json=$(jq -c . "$file_path")
@@ -70,20 +64,10 @@ build_item_json() {
     return 0
   fi
 
-  item_email=""
-  item_email=$(extract_item_email "$file_path")
-  if [[ -n "$item_email" ]]; then
-    jq -cn \
-      --arg account_name "$account_name" \
-      --arg requester_email "$item_email" \
-      --argjson auth_json "$auth_json" \
-      '{account_name: $account_name, requester_email: $requester_email, auth_json: $auth_json}'
-  else
-    jq -cn \
-      --arg account_name "$account_name" \
-      --argjson auth_json "$auth_json" \
-      '{account_name: $account_name, auth_json: $auth_json}'
-  fi
+  jq -cn \
+    --arg account_name "$account_name" \
+    --argjson auth_json "$auth_json" \
+    '{account_name: $account_name, auth_json: $auth_json}'
 }
 
 dir=""
