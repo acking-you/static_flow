@@ -6,6 +6,7 @@ mod codex_refresh;
 mod codex_status;
 /// Command-line and environment configuration.
 pub mod config;
+mod email;
 mod geoip;
 /// Local Kiro endpoints.
 pub mod kiro;
@@ -76,6 +77,7 @@ struct HttpState {
     public_submission_store: Arc<dyn PublicSubmissionStore>,
     public_submit_guard: Arc<submission::PublicSubmitGuard>,
     public_status_store: Arc<dyn PublicStatusStore>,
+    email_notifier: Option<Arc<email::EmailNotifier>>,
 }
 
 /// Run `llm-access` from process arguments.
@@ -157,6 +159,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         public_submission_store: runtime.public_submission_store(),
         public_submit_guard: Arc::new(submission::PublicSubmitGuard::default()),
         public_status_store: runtime.public_status_store(),
+        email_notifier: runtime.email_notifier(),
     };
     Router::new()
         .route("/healthz", get(healthz))

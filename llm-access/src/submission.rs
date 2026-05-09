@@ -2,7 +2,6 @@
 
 use std::{
     collections::HashMap,
-    str::FromStr,
     sync::{Arc, RwLock},
 };
 
@@ -12,16 +11,20 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use lettre::message::Mailbox;
 use llm_access_core::store::{
     NewPublicAccountContributionRequest, NewPublicSponsorRequest, NewPublicTokenRequest,
-    PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED, PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
+    PUBLIC_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT, PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED,
+    PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::Url;
 
-use crate::{geoip::GeoIpResolver, HttpState};
+use crate::{
+    geoip::GeoIpResolver,
+    support::{load_support_config, render_payment_email_markdown},
+    HttpState,
+};
 
 const MAX_PUBLIC_TOKEN_WISH_REASON_CHARS: usize = 4000;
 const MAX_PUBLIC_TOKEN_WISH_QUOTA: u64 = 100_000_000_000;
@@ -195,14 +198,60 @@ pub(crate) async fn submit_public_sponsor_request(
         .create_public_sponsor_request(request)
         .await
     {
-        Ok(()) => Json(SubmitLlmGatewaySponsorRequestResponse {
-            request_id,
-            status: PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED,
-            payment_email_sent: false,
-        })
-        .into_response(),
+        Ok(()) => {
+            let (status, payment_email_sent, failure_reason) =
+                match send_sponsor_payment_email(&state, &request_id).await {
+                    Ok(true) => (PUBLIC_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT, true, None),
+                    Ok(false) => (
+                        PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED,
+                        false,
+                        Some("email notifier is not configured".to_string()),
+                    ),
+                    Err(err) => {
+                        (PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED, false, Some(err.to_string()))
+                    },
+                };
+            let sent_at_ms = payment_email_sent.then(now_ms);
+            if state
+                .public_submission_store
+                .record_public_sponsor_payment_email_result(&request_id, sent_at_ms, failure_reason)
+                .await
+                .is_err()
+            {
+                return internal_error("public submission store error").into_response();
+            }
+            Json(SubmitLlmGatewaySponsorRequestResponse {
+                request_id,
+                status,
+                payment_email_sent,
+            })
+            .into_response()
+        },
         Err(_) => internal_error("public submission store error").into_response(),
     }
+}
+
+async fn send_sponsor_payment_email(state: &HttpState, request_id: &str) -> anyhow::Result<bool> {
+    let Some(notifier) = state.email_notifier.clone() else {
+        return Ok(false);
+    };
+    let sponsor_request = state
+        .admin_review_queue_store
+        .get_admin_sponsor_request(request_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("sponsor request not found after create"))?;
+    let config = load_support_config()?;
+    let markdown = render_payment_email_markdown(&config)?;
+    notifier
+        .send_llm_sponsor_payment_instructions(
+            &sponsor_request.requester_email,
+            &config.payment_email_subject,
+            &markdown,
+            &config.base_dir,
+            config.reply_to_email.as_deref(),
+        )
+        .await?;
+    Ok(true)
 }
 
 async fn normalize_token_request(
@@ -369,10 +418,7 @@ fn normalize_requester_email_input(value: Option<String>) -> anyhow::Result<Opti
             if raw.chars().count() > 254 {
                 anyhow::bail!("`requester_email` must be <= 254 chars");
             }
-            let trimmed = raw.trim();
-            Mailbox::from_str(trimmed)
-                .map_err(|err| anyhow::anyhow!("invalid email address: {trimmed}: {err}"))?;
-            Ok(Some(trimmed.to_string()))
+            Ok(Some(static_flow_email::normalize_email(raw)?))
         },
         None => Ok(None),
     }

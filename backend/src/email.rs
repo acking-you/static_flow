@@ -1,18 +1,6 @@
-use std::{
-    collections::HashMap,
-    env,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::path::Path;
 
 use anyhow::{Context, Result};
-use lettre::{
-    message::{header::ContentType, Attachment, Mailbox, MultiPart, SinglePart},
-    transport::smtp::authentication::Credentials,
-    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
-};
-use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag};
-use serde::Deserialize;
 use static_flow_shared::{
     article_request_store::ArticleRequestRecord,
     llm_gateway_store::{
@@ -23,126 +11,17 @@ use static_flow_shared::{
 };
 use url::Url;
 
-const DEFAULT_EMAIL_ACCOUNTS_FILE: &str = "backend/.local/email_accounts.json";
-const FALLBACK_EMAIL_ACCOUNTS_FILE: &str = ".local/email_accounts.json";
-const DEFAULT_SMTP_HOST: &str = "smtp.gmail.com";
-const DEFAULT_SMTP_PORT: u16 = 587;
-
-#[derive(Debug, Clone, Deserialize)]
-struct EmailAccountsConfig {
-    public_mailbox: PublicMailboxConfig,
-    admin_mailbox: AdminMailboxConfig,
-    #[serde(default)]
-    admin_recipient: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct PublicMailboxConfig {
-    #[serde(default)]
-    smtp_host: Option<String>,
-    #[serde(default)]
-    smtp_port: Option<u16>,
-    username: String,
-    app_password: String,
-    #[serde(default)]
-    display_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct AdminMailboxConfig {
-    username: String,
-    app_password: String,
-}
-
 #[derive(Clone)]
 pub struct EmailNotifier {
-    from_mailbox: Mailbox,
-    admin_recipient: String,
-    mailer: AsyncSmtpTransport<Tokio1Executor>,
-}
-
-#[derive(Debug)]
-struct InlineEmailAsset {
-    content_id: String,
-    filename: String,
-    bytes: Vec<u8>,
-    content_type: ContentType,
-}
-
-#[derive(Debug)]
-struct RenderedMarkdownEmail {
-    html_fragment: String,
-    inline_assets: Vec<InlineEmailAsset>,
+    inner: static_flow_email::EmailNotifier,
 }
 
 impl EmailNotifier {
     pub fn from_env() -> Result<Option<Self>> {
-        let path = resolve_email_accounts_file_path();
-        if !path.exists() {
-            tracing::warn!(
-                "email notifier disabled: credentials file not found at {}",
-                path.display()
-            );
-            return Ok(None);
-        }
-
-        let raw = std::fs::read_to_string(&path)
-            .with_context(|| format!("failed to read email accounts file {}", path.display()))?;
-        let config: EmailAccountsConfig = serde_json::from_str(&raw)
-            .with_context(|| format!("invalid email accounts JSON: {}", path.display()))?;
-        let notifier = Self::build(config)?;
-        tracing::info!("email notifier enabled using credentials file {}", path.display());
-        Ok(Some(notifier))
-    }
-
-    fn build(config: EmailAccountsConfig) -> Result<Self> {
-        let public_username =
-            normalize_required_string(config.public_mailbox.username, "public_mailbox.username")?;
-        let public_password = normalize_app_password(
-            config.public_mailbox.app_password,
-            "public_mailbox.app_password",
-        )?;
-        let smtp_host = config
-            .public_mailbox
-            .smtp_host
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| DEFAULT_SMTP_HOST.to_string());
-        let smtp_port = config.public_mailbox.smtp_port.unwrap_or(DEFAULT_SMTP_PORT);
-
-        let admin_username =
-            normalize_required_string(config.admin_mailbox.username, "admin_mailbox.username")?;
-        // Keep admin mailbox password validated in config even if current flow doesn't
-        // send from it.
-        let _admin_password = normalize_app_password(
-            config.admin_mailbox.app_password,
-            "admin_mailbox.app_password",
-        )?;
-        let admin_recipient = match normalize_optional_string(config.admin_recipient) {
-            Some(value) => normalize_email(value)?,
-            None => normalize_email(admin_username)?,
-        };
-
-        let sender_email = normalize_email(public_username)?;
-        let display_name = normalize_optional_string(config.public_mailbox.display_name)
-            .unwrap_or_else(|| "StaticFlow".to_string());
-        let from_mailbox = Mailbox::from_str(&format!("{display_name} <{sender_email}>"))
-            .context("invalid sender mailbox")?;
-
-        let credentials = Credentials::new(sender_email.clone(), public_password);
-        let builder = if smtp_port == 465 {
-            AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp_host)
-                .with_context(|| format!("invalid smtp relay host: {smtp_host}"))?
-        } else {
-            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&smtp_host)
-                .with_context(|| format!("invalid smtp starttls host: {smtp_host}"))?
-        };
-        let mailer = builder.port(smtp_port).credentials(credentials).build();
-
-        Ok(Self {
-            from_mailbox,
-            admin_recipient,
-            mailer,
+        static_flow_email::EmailNotifier::from_env().map(|notifier| {
+            notifier.map(|inner| Self {
+                inner,
+            })
         })
     }
 
@@ -162,7 +41,7 @@ impl EmailNotifier {
             wish.created_at,
             wish.wish_message,
         );
-        self.send_markdown_email(&self.admin_recipient, &subject, &body_markdown)
+        self.send_markdown_email(self.inner.admin_recipient(), &subject, &body_markdown)
             .await
     }
 
@@ -220,7 +99,7 @@ impl EmailNotifier {
             req.created_at,
             req.request_message,
         );
-        self.send_markdown_email(&self.admin_recipient, &subject, &body_markdown)
+        self.send_markdown_email(self.inner.admin_recipient(), &subject, &body_markdown)
             .await
     }
 
@@ -278,7 +157,7 @@ impl EmailNotifier {
             request.frontend_page_url.as_deref().unwrap_or("-"),
             request.request_reason,
         );
-        self.send_markdown_email(&self.admin_recipient, &subject, &body_markdown)
+        self.send_markdown_email(self.inner.admin_recipient(), &subject, &body_markdown)
             .await
     }
 
@@ -307,7 +186,7 @@ impl EmailNotifier {
             request.frontend_page_url.as_deref().unwrap_or("-"),
             request.contributor_message,
         );
-        self.send_markdown_email(&self.admin_recipient, &subject, &body_markdown)
+        self.send_markdown_email(self.inner.admin_recipient(), &subject, &body_markdown)
             .await
     }
 
@@ -353,7 +232,7 @@ impl EmailNotifier {
             request.frontend_page_url.as_deref().unwrap_or("-"),
             request.contributor_message,
         );
-        self.send_markdown_email(&self.admin_recipient, &subject, &body_markdown)
+        self.send_markdown_email(self.inner.admin_recipient(), &subject, &body_markdown)
             .await
     }
 
@@ -490,7 +369,8 @@ impl EmailNotifier {
         subject: &str,
         markdown_body: &str,
     ) -> Result<()> {
-        self.send_markdown_email_with_options(to, subject, markdown_body, None, None)
+        self.inner
+            .send_markdown_email(to, subject, markdown_body)
             .await
     }
 
@@ -502,256 +382,10 @@ impl EmailNotifier {
         asset_base_dir: Option<&Path>,
         reply_to: Option<&str>,
     ) -> Result<()> {
-        let to_mailbox =
-            Mailbox::from_str(to).with_context(|| format!("invalid recipient: {to}"))?;
-        let rendered = render_markdown_email(markdown_body, asset_base_dir)?;
-        let html_body = build_html_email_document(subject, &rendered.html_fragment);
-        let plain_part = SinglePart::builder()
-            .header(ContentType::TEXT_PLAIN)
-            .body(markdown_body.to_string());
-        let html_part = SinglePart::builder()
-            .header(ContentType::TEXT_HTML)
-            .body(html_body);
-        let multipart = if rendered.inline_assets.is_empty() {
-            MultiPart::alternative()
-                .singlepart(plain_part)
-                .singlepart(html_part)
-        } else {
-            let related = rendered.inline_assets.into_iter().fold(
-                MultiPart::related().singlepart(html_part),
-                |multipart, asset| {
-                    multipart.singlepart(
-                        Attachment::new_inline_with_name(asset.content_id, asset.filename)
-                            .body(asset.bytes, asset.content_type),
-                    )
-                },
-            );
-            MultiPart::alternative()
-                .singlepart(plain_part)
-                .multipart(related)
-        };
-        let mut builder = Message::builder()
-            .from(self.from_mailbox.clone())
-            .to(to_mailbox)
-            .subject(subject);
-        if let Some(reply_to) = reply_to {
-            let reply_to_mailbox = Mailbox::from_str(reply_to)
-                .with_context(|| format!("invalid reply-to recipient: {reply_to}"))?;
-            builder = builder.reply_to(reply_to_mailbox);
-        }
-        let email = builder
-            .multipart(multipart)
-            .context("failed to build email message")?;
-        self.mailer
-            .send(email)
+        self.inner
+            .send_markdown_email_with_options(to, subject, markdown_body, asset_base_dir, reply_to)
             .await
-            .context("failed to send email via SMTP")?;
-        Ok(())
     }
-}
-
-fn render_markdown_email(
-    markdown: &str,
-    asset_base_dir: Option<&Path>,
-) -> Result<RenderedMarkdownEmail> {
-    let mut options = Options::empty();
-    options.insert(Options::ENABLE_TABLES);
-    options.insert(Options::ENABLE_STRIKETHROUGH);
-    options.insert(Options::ENABLE_TASKLISTS);
-    options.insert(Options::ENABLE_GFM);
-    let mut inline_assets = Vec::new();
-    let mut inline_asset_ids = HashMap::<PathBuf, String>::new();
-    let mut render_error = None::<anyhow::Error>;
-    let parser = Parser::new_ext(markdown, options).map(|event| match event {
-        Event::Start(Tag::Image {
-            link_type,
-            dest_url,
-            title,
-            id,
-        }) => {
-            if render_error.is_some() {
-                return Event::Start(Tag::Image {
-                    link_type,
-                    dest_url,
-                    title,
-                    id,
-                });
-            }
-            let mut resolved_dest_url = dest_url;
-            if let Some(base_dir) = asset_base_dir {
-                match maybe_register_inline_asset(
-                    base_dir,
-                    resolved_dest_url.as_ref(),
-                    &mut inline_assets,
-                    &mut inline_asset_ids,
-                ) {
-                    Ok(Some(content_id)) => {
-                        resolved_dest_url =
-                            CowStr::Boxed(format!("cid:{content_id}").into_boxed_str());
-                    },
-                    Ok(None) => {},
-                    Err(err) => render_error = Some(err),
-                }
-            }
-            Event::Start(Tag::Image {
-                link_type,
-                dest_url: resolved_dest_url,
-                title,
-                id,
-            })
-        },
-        other => other,
-    });
-    let mut output = String::new();
-    html::push_html(&mut output, parser);
-    if let Some(err) = render_error {
-        return Err(err);
-    }
-    Ok(RenderedMarkdownEmail {
-        html_fragment: output,
-        inline_assets,
-    })
-}
-
-fn build_html_email_document(subject: &str, content_html: &str) -> String {
-    let escaped_subject = escape_html(subject);
-    format!(
-        r#"<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{}</title>
-  <style>
-    .sf-content a {{
-      color: #2563eb;
-      text-decoration: underline;
-      word-break: break-all;
-    }}
-    .sf-content img {{
-      max-width: 100%;
-      height: auto;
-      border-radius: 8px;
-      display: block;
-      margin: 12px 0;
-    }}
-    .sf-content pre {{
-      white-space: pre-wrap;
-      background: #f8fafc;
-      border: 1px solid #e5e7eb;
-      border-radius: 8px;
-      padding: 10px;
-      overflow-x: auto;
-    }}
-    .sf-content code {{
-      background: #f3f4f6;
-      border-radius: 4px;
-      padding: 2px 4px;
-    }}
-  </style>
-</head>
-<body style="margin:0;padding:0;background:#f5f7fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;color:#1f2937;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:24px 12px;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:720px;background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;padding:22px;">
-          <tr>
-            <td style="font-size:20px;font-weight:700;color:#111827;padding-bottom:14px;border-bottom:1px solid #eef2f7;">{}</td>
-          </tr>
-          <tr>
-            <td style="padding-top:18px;font-size:15px;line-height:1.65;">
-              <div class="sf-content" style="word-break:break-word;">
-                {}
-              </div>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"#,
-        escaped_subject, escaped_subject, content_html
-    )
-}
-
-fn maybe_register_inline_asset(
-    base_dir: &Path,
-    dest_url: &str,
-    inline_assets: &mut Vec<InlineEmailAsset>,
-    inline_asset_ids: &mut HashMap<PathBuf, String>,
-) -> Result<Option<String>> {
-    if !should_inline_local_image_reference(dest_url) {
-        return Ok(None);
-    }
-    let clean_ref = dest_url.split(['#', '?']).next().unwrap_or(dest_url).trim();
-    if clean_ref.is_empty() {
-        return Ok(None);
-    }
-    let candidate = Path::new(clean_ref);
-    let resolved_path =
-        if candidate.is_absolute() { candidate.to_path_buf() } else { base_dir.join(candidate) };
-    let canonical_path = resolved_path.canonicalize().with_context(|| {
-        format!("failed to resolve local email image asset {}", resolved_path.display())
-    })?;
-    if let Some(existing_content_id) = inline_asset_ids.get(&canonical_path) {
-        return Ok(Some(existing_content_id.clone()));
-    }
-
-    let bytes = std::fs::read(&canonical_path).with_context(|| {
-        format!("failed to read local email image {}", canonical_path.display())
-    })?;
-    let filename = canonical_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_string)
-        .with_context(|| format!("invalid local email image path {}", canonical_path.display()))?;
-    let content_type = detect_inline_asset_content_type(&canonical_path)?;
-    let content_id = format!("sf-inline-{}", inline_assets.len() + 1);
-    inline_assets.push(InlineEmailAsset {
-        content_id: content_id.clone(),
-        filename,
-        bytes,
-        content_type,
-    });
-    inline_asset_ids.insert(canonical_path, content_id.clone());
-    Ok(Some(content_id))
-}
-
-fn should_inline_local_image_reference(dest_url: &str) -> bool {
-    let trimmed = dest_url.trim();
-    !(trimmed.is_empty()
-        || trimmed.starts_with("http://")
-        || trimmed.starts_with("https://")
-        || trimmed.starts_with("cid:")
-        || trimmed.starts_with("data:")
-        || trimmed.starts_with("mailto:")
-        || trimmed.starts_with('#'))
-}
-
-fn detect_inline_asset_content_type(path: &Path) -> Result<ContentType> {
-    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
-        anyhow::bail!("local email image {} has no file extension", path.display());
-    };
-    let mime = match ext.to_ascii_lowercase().as_str() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "svg" => "image/svg+xml",
-        _ => {
-            anyhow::bail!("local email image {} has unsupported extension .{}", path.display(), ext)
-        },
-    };
-    ContentType::parse(mime).context("failed to parse inline asset content type")
-}
-
-fn escape_html(raw: &str) -> String {
-    raw.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
 }
 
 pub fn normalize_requester_email_input(value: Option<String>) -> Result<Option<String>> {
@@ -760,7 +394,7 @@ pub fn normalize_requester_email_input(value: Option<String>) -> Result<Option<S
             if raw.chars().count() > 254 {
                 anyhow::bail!("`requester_email` must be <= 254 chars");
             }
-            Ok(Some(normalize_email(raw)?))
+            Ok(Some(static_flow_email::normalize_email(raw)?))
         },
         None => Ok(None),
     }
@@ -865,57 +499,10 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
     }
 }
 
-fn resolve_email_accounts_file_path() -> PathBuf {
-    if let Ok(raw) = env::var("EMAIL_ACCOUNTS_FILE") {
-        let trimmed = raw.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
-
-    let default_path = PathBuf::from(DEFAULT_EMAIL_ACCOUNTS_FILE);
-    if default_path.exists() {
-        return default_path;
-    }
-
-    let fallback_path = PathBuf::from(FALLBACK_EMAIL_ACCOUNTS_FILE);
-    if fallback_path.exists() {
-        return fallback_path;
-    }
-
-    default_path
-}
-
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
     value
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
-}
-
-fn normalize_required_string(value: String, field_name: &str) -> Result<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        anyhow::bail!("{field_name} is required");
-    }
-    Ok(trimmed.to_string())
-}
-
-fn normalize_email(value: String) -> Result<String> {
-    let trimmed = value.trim();
-    Mailbox::from_str(trimmed).with_context(|| format!("invalid email address: {trimmed}"))?;
-    Ok(trimmed.to_string())
-}
-
-fn normalize_app_password(value: String, field_name: &str) -> Result<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        anyhow::bail!("{field_name} is required");
-    }
-    let compact: String = trimmed.chars().filter(|ch| !ch.is_whitespace()).collect();
-    if compact.is_empty() {
-        anyhow::bail!("{field_name} is required");
-    }
-    Ok(compact)
 }
 
 fn validate_frontend_url(raw: &str) -> Result<()> {
@@ -932,11 +519,9 @@ fn validate_frontend_url(raw: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::{
-        build_gpt2api_login_url, build_html_email_document, build_music_player_url,
-        normalize_frontend_page_url_input, normalize_requester_email_input, render_markdown_email,
+        build_gpt2api_login_url, build_music_player_url, normalize_frontend_page_url_input,
+        normalize_requester_email_input,
     };
 
     #[test]
@@ -979,47 +564,5 @@ mod tests {
     fn normalize_frontend_page_url_rejects_non_http_scheme() {
         let err = normalize_frontend_page_url_input(Some("javascript:alert(1)".to_string()));
         assert!(err.is_err());
-    }
-
-    #[test]
-    fn render_markdown_to_html_keeps_links_and_images() {
-        let markdown =
-            "查看 [文档](https://example.com/docs)\n\n![cover](https://example.com/cover.png)";
-        let rendered = render_markdown_email(markdown, None).expect("should render markdown");
-        assert!(rendered
-            .html_fragment
-            .contains("href=\"https://example.com/docs\""));
-        assert!(rendered
-            .html_fragment
-            .contains("src=\"https://example.com/cover.png\""));
-        assert!(rendered.inline_assets.is_empty());
-    }
-
-    #[test]
-    fn render_markdown_email_inlines_local_images() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("static-flow-email-test-{}", std::process::id()));
-        fs::create_dir_all(&temp_dir).expect("should create temp dir");
-        let image_path = temp_dir.join("qr.png");
-        fs::write(&image_path, b"fake-png-bytes").expect("should write fake image");
-
-        let rendered = render_markdown_email("![qr](qr.png)", Some(&temp_dir))
-            .expect("should inline local image");
-        assert!(rendered.html_fragment.contains("src=\"cid:sf-inline-1\""));
-        assert_eq!(rendered.inline_assets.len(), 1);
-        assert_eq!(rendered.inline_assets[0].filename, "qr.png");
-
-        fs::remove_file(&image_path).expect("should remove fake image");
-        fs::remove_dir_all(&temp_dir).expect("should remove temp dir");
-    }
-
-    #[test]
-    fn build_html_email_document_wraps_rendered_markdown() {
-        let rendered = render_markdown_email("[播放链接](https://example.com/media/audio/1)", None)
-            .expect("should render markdown");
-        let html = build_html_email_document("测试主题", &rendered.html_fragment);
-        assert!(html.contains("<!doctype html>"));
-        assert!(html.contains("class=\"sf-content\""));
-        assert!(html.contains("href=\"https://example.com/media/audio/1\""));
     }
 }

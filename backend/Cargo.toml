@@ -29,10 +29,9 @@ maxminddb = "0.27"
 async-stream = "0.3"
 eventsource-stream = "0.2"
 futures-util = "0.3"
-lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-native-tls"] }
 url = "2.5"
 urlencoding = "2.1"
-pulldown-cmark = "0.12"
+pulldown-cmark = { workspace = true }
 better_mimalloc_rs = { workspace = true }
 better_mimalloc_sys = { version = "0.1.1", default-features = false, features = ["extended"] }
 backtrace = "0.3"
@@ -42,6 +41,7 @@ memory-stats = "1.2"
 rustc-demangle = "0.1"
 static-flow-shared = { path = "../shared" }
 static-flow-runtime = { path = "../runtime" }
+static-flow-email = { path = "../email-notifier" }
 static-flow-media-types = { path = "../media-types", optional = true }
 llm-access-core = { path = "../llm-access-core" }
 llm-access-codex = { path = "../llm-access-codex" }

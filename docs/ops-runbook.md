@@ -124,8 +124,13 @@ private env files, not in tracked docs.
   - archived immutable DuckDB segments:
     `/mnt/llm-access/analytics/segments`
   - DuckDB segment catalog: `/mnt/llm-access/analytics/catalog`
+  - email credentials: `/mnt/llm-access/config/email_accounts.json`
   - API bind address: `127.0.0.1:19080`
   - usage worker bind address: `127.0.0.1:19081`
+- Gmail notification credentials must live on JuiceFS, not VM-local `/etc`.
+  `llm-access.service` should set
+  `EMAIL_ACCOUNTS_FILE=/mnt/llm-access/config/email_accounts.json`; keep the
+  file mode `0600` and do not log credential contents.
 - Service ownership after the usage split:
   - `llm-access.service`: provider traffic, SQLite control/rollups, account
     status refreshers, and compact local usage journal production.

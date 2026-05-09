@@ -20,7 +20,8 @@ use llm_access_core::{
         NewPublicTokenRequest, ProviderCodexAuthUpdate, ProviderCodexRoute, ProviderKiroAuthUpdate,
         ProviderProxyConfig, PublicAccessKey, PublicAccountContribution, PublicSponsor,
         PublicUsageLookupKey, PUBLIC_ACCOUNT_CONTRIBUTION_STATUS_VALIDATED,
-        PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED, PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
+        PUBLIC_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT, PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED,
+        PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
     },
 };
 use llm_access_kiro::cache_policy::{resolve_effective_kiro_cache_policy, KiroCachePolicy};
@@ -4121,11 +4122,38 @@ impl SqliteControlStore {
                     &request.fingerprint,
                     &request.client_ip,
                     &request.ip_region,
-                    "email notifier is not configured",
+                    Option::<String>::None,
                     request.created_at_ms,
                 ],
             )
             .context("create public sponsor request")?;
+        Ok(())
+    }
+
+    /// Update a public sponsor request with payment email delivery state.
+    pub fn record_public_sponsor_payment_email_result(
+        &self,
+        request_id: &str,
+        sent_at_ms: Option<i64>,
+        failure_reason: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let status = if sent_at_ms.is_some() {
+            PUBLIC_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT
+        } else {
+            PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED
+        };
+        let updated_at_ms = sent_at_ms.unwrap_or_else(now_ms);
+        self.conn
+            .execute(
+                "UPDATE llm_sponsor_requests
+                 SET status = ?2,
+                     failure_reason = ?3,
+                     payment_email_sent_at_ms = ?4,
+                     updated_at_ms = ?5
+                 WHERE request_id = ?1",
+                params![request_id, status, failure_reason, sent_at_ms, updated_at_ms],
+            )
+            .context("record public sponsor payment email result")?;
         Ok(())
     }
 
@@ -5404,7 +5432,7 @@ mod tests {
         assert_eq!(token_status, "pending");
         assert_eq!(account_status, "pending");
         assert_eq!(sponsor_status, "submitted");
-        assert_eq!(sponsor_failure.as_deref(), Some("email notifier is not configured"));
+        assert_eq!(sponsor_failure.as_deref(), None);
     }
 
     #[test]
@@ -5524,10 +5552,7 @@ mod tests {
             .expect("list sponsor requests");
         assert_eq!(sponsor_page.total, 1);
         assert_eq!(sponsor_page.requests[0].request_id, "llmsponsor-review");
-        assert_eq!(
-            sponsor_page.requests[0].failure_reason.as_deref(),
-            Some("email notifier is not configured")
-        );
+        assert_eq!(sponsor_page.requests[0].failure_reason.as_deref(), None);
     }
 
     #[test]

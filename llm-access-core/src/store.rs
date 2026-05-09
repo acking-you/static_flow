@@ -93,6 +93,8 @@ pub const PUBLIC_TOKEN_REQUEST_STATUS_PENDING: &str = "pending";
 pub const PUBLIC_ACCOUNT_CONTRIBUTION_STATUS_VALIDATED: &str = "validated";
 /// Submitted status used by public sponsor requests before payment email.
 pub const PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED: &str = "submitted";
+/// Sponsor status used after payment instructions were sent.
+pub const PUBLIC_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT: &str = "payment_email_sent";
 /// Active managed key status.
 pub const KEY_STATUS_ACTIVE: &str = "active";
 /// Disabled managed key status.
@@ -1856,6 +1858,14 @@ pub trait PublicSubmissionStore: Send + Sync {
         &self,
         request: NewPublicSponsorRequest,
     ) -> anyhow::Result<()>;
+
+    /// Persist the payment-email result for one public sponsor request.
+    async fn record_public_sponsor_payment_email_result(
+        &self,
+        request_id: &str,
+        sent_at_ms: Option<i64>,
+        failure_reason: Option<String>,
+    ) -> anyhow::Result<()>;
 }
 
 /// Admin runtime config queries used by the standalone frontend surface.
@@ -2382,6 +2392,15 @@ impl PublicSubmissionStore for EmptyPublicSubmissionStore {
     async fn create_public_sponsor_request(
         &self,
         _request: NewPublicSponsorRequest,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn record_public_sponsor_payment_email_result(
+        &self,
+        _request_id: &str,
+        _sent_at_ms: Option<i64>,
+        _failure_reason: Option<String>,
     ) -> anyhow::Result<()> {
         Ok(())
     }

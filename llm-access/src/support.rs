@@ -11,6 +11,7 @@ use serde::Deserialize;
 const DEFAULT_SUPPORT_DIR: &str = "backend/.local/llm_access_support";
 const FALLBACK_SUPPORT_DIR: &str = ".local/llm_access_support";
 const SUPPORT_CONFIG_FILE: &str = "config.json";
+const PAYMENT_EMAIL_TEMPLATE_FILE: &str = "payment_email.md";
 pub(crate) const ALIPAY_QR_FILE: &str = "alipay_qr.png";
 pub(crate) const WECHAT_QR_FILE: &str = "wechat_qr.png";
 pub(crate) const QQ_GROUP_QR_FILE: &str = "qq_group_qr.png";
@@ -19,11 +20,15 @@ pub(crate) const QQ_GROUP_QR_FILE: &str = "qq_group_qr.png";
 #[derive(Debug, Clone)]
 pub(crate) struct LlmAccessSupportConfig {
     pub base_dir: PathBuf,
+    pub owner_display_name: String,
     pub sponsor_title: String,
     pub sponsor_intro: String,
     pub group_name: String,
     pub qq_group_number: String,
     pub group_invite_text: String,
+    pub payment_email_subject: String,
+    pub payment_email_signature: String,
+    pub reply_to_email: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -48,6 +53,10 @@ pub(crate) struct SupportAsset {
 }
 
 impl LlmAccessSupportConfig {
+    pub fn payment_template_path(&self) -> PathBuf {
+        self.base_dir.join(PAYMENT_EMAIL_TEMPLATE_FILE)
+    }
+
     fn asset_path(&self, file_name: &str) -> PathBuf {
         self.base_dir.join(file_name)
     }
@@ -101,22 +110,42 @@ fn load_support_config_from_dir(base_dir: PathBuf) -> Result<LlmAccessSupportCon
         owner_display_name,
         reply_to_email,
     } = parsed;
-    let _ = (
-        normalize_required(owner_display_name, "owner_display_name")?,
-        normalize_required(payment_email_subject, "payment_email_subject")?,
-        normalize_required(payment_email_signature, "payment_email_signature")?,
-        reply_to_email
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-    );
     Ok(LlmAccessSupportConfig {
         base_dir,
+        owner_display_name: normalize_required(owner_display_name, "owner_display_name")?,
         sponsor_title: normalize_required(sponsor_title, "sponsor_title")?,
         sponsor_intro: normalize_required(sponsor_intro, "sponsor_intro")?,
         group_name: normalize_required(group_name, "group_name")?,
         qq_group_number: normalize_required(qq_group_number, "qq_group_number")?,
         group_invite_text: normalize_required(group_invite_text, "group_invite_text")?,
+        payment_email_subject: normalize_required(payment_email_subject, "payment_email_subject")?,
+        payment_email_signature: normalize_required(
+            payment_email_signature,
+            "payment_email_signature",
+        )?,
+        reply_to_email: reply_to_email
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
     })
+}
+
+pub(crate) fn render_payment_email_markdown(config: &LlmAccessSupportConfig) -> Result<String> {
+    let template_path = config.payment_template_path();
+    let mut markdown = std::fs::read_to_string(&template_path).with_context(|| {
+        format!("failed to read llm access payment email template {}", template_path.display())
+    })?;
+    for (placeholder, value) in [
+        ("{{ owner_display_name }}", config.owner_display_name.as_str()),
+        ("{{ sponsor_title }}", config.sponsor_title.as_str()),
+        ("{{ sponsor_intro }}", config.sponsor_intro.as_str()),
+        ("{{ group_name }}", config.group_name.as_str()),
+        ("{{ qq_group_number }}", config.qq_group_number.as_str()),
+        ("{{ group_invite_text }}", config.group_invite_text.as_str()),
+        ("{{ payment_email_signature }}", config.payment_email_signature.as_str()),
+    ] {
+        markdown = markdown.replace(placeholder, value);
+    }
+    Ok(markdown)
 }
 
 pub(crate) fn load_support_asset(file_name: &str) -> Result<SupportAsset> {

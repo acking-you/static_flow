@@ -2086,6 +2086,15 @@ pub(crate) async fn approve_and_issue_llm_gateway_token_request(
     if matches!(current.status.as_str(), "issued" | "rejected") {
         return conflict("LLM gateway token request is finalized").into_response();
     }
+    let Some(notifier) = state.email_notifier.clone() else {
+        return internal_error(
+            "Failed to send llm gateway token email: email notifier is not configured",
+        )
+        .into_response();
+    };
+    if current.issued_key_id.is_some() {
+        return conflict("LLM gateway token request already has an issued key").into_response();
+    }
     let key = if current.issued_key_id.is_none() {
         let secret = generate_secret();
         Some(NewAdminKey {
@@ -2105,12 +2114,25 @@ pub(crate) async fn approve_and_issue_llm_gateway_token_request(
     } else {
         None
     };
+    let email_key = key.clone();
     match state
         .admin_review_queue_store
         .issue_admin_token_request(&request_id, key, review_queue_action(request))
         .await
     {
-        Ok(Some(request)) => Json(request).into_response(),
+        Ok(Some(request)) => {
+            let Some(email_key) = email_key.as_ref() else {
+                return internal_error("Failed to send llm gateway token email").into_response();
+            };
+            if notifier
+                .send_user_llm_token_issued_notification(&request, email_key)
+                .await
+                .is_err()
+            {
+                return internal_error("Failed to send llm gateway token email").into_response();
+            }
+            Json(request).into_response()
+        },
         Ok(None) => not_found("LLM gateway token request not found").into_response(),
         Err(_) => internal_error("Failed to issue llm gateway token request").into_response(),
     }
@@ -2279,6 +2301,17 @@ pub(crate) async fn approve_and_issue_llm_gateway_account_contribution_request(
         return conflict("LLM gateway account contribution request must be validated before issue")
             .into_response();
     }
+    let Some(notifier) = state.email_notifier.clone() else {
+        return internal_error(
+            "Failed to send llm gateway account contribution email: email notifier is not \
+             configured",
+        )
+        .into_response();
+    };
+    if current.issued_key_id.is_some() {
+        return conflict("LLM gateway account contribution request already has an issued key")
+            .into_response();
+    }
     let action = review_queue_action(request);
     let imported_account_name = current
         .imported_account_name
@@ -2333,12 +2366,27 @@ pub(crate) async fn approve_and_issue_llm_gateway_account_contribution_request(
     } else {
         (None, None)
     };
+    let email_key = key.clone();
     match state
         .admin_review_queue_store
         .issue_admin_account_contribution_request(&request_id, account, account_group, key, action)
         .await
     {
-        Ok(Some(request)) => Json(request).into_response(),
+        Ok(Some(request)) => {
+            let Some(email_key) = email_key.as_ref() else {
+                return internal_error("Failed to send llm gateway account contribution email")
+                    .into_response();
+            };
+            if notifier
+                .send_user_llm_account_contribution_issued_notification(&request, email_key)
+                .await
+                .is_err()
+            {
+                return internal_error("Failed to send llm gateway account contribution email")
+                    .into_response();
+            }
+            Json(request).into_response()
+        },
         Ok(None) => not_found("LLM gateway account contribution request not found").into_response(),
         Err(_) => internal_error("Failed to issue llm gateway account contribution request")
             .into_response(),

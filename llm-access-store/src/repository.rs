@@ -1069,6 +1069,28 @@ impl PublicSubmissionStore for SqliteControlRepository {
         .await
         .context("sqlite control repository public sponsor request task failed")?
     }
+
+    async fn record_public_sponsor_payment_email_result(
+        &self,
+        request_id: &str,
+        sent_at_ms: Option<i64>,
+        failure_reason: Option<String>,
+    ) -> anyhow::Result<()> {
+        let request_id = request_id.to_string();
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.record_public_sponsor_payment_email_result(
+                &request_id,
+                sent_at_ms,
+                failure_reason.as_deref(),
+            )
+        })
+        .await
+        .context("sqlite control repository public sponsor email result task failed")?
+    }
 }
 
 #[async_trait]

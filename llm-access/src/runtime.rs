@@ -60,6 +60,7 @@ pub struct LlmAccessRuntime {
     public_usage_store: Arc<dyn PublicUsageStore>,
     public_submission_store: Arc<dyn PublicSubmissionStore>,
     public_status_store: Arc<dyn PublicStatusStore>,
+    email_notifier: Option<Arc<crate::email::EmailNotifier>>,
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     usage_journal_sink: Option<Arc<JournalUsageEventSink>>,
     usage_journal_dir: Option<PathBuf>,
@@ -85,6 +86,7 @@ struct LlmAccessStores {
     public_usage_store: Arc<dyn PublicUsageStore>,
     public_submission_store: Arc<dyn PublicSubmissionStore>,
     public_status_store: Arc<dyn PublicStatusStore>,
+    email_notifier: Option<Arc<crate::email::EmailNotifier>>,
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     usage_journal_sink: Option<Arc<JournalUsageEventSink>>,
     usage_journal_dir: Option<PathBuf>,
@@ -111,6 +113,7 @@ impl LlmAccessRuntime {
             public_usage_store: Arc::new(EmptyPublicUsageStore),
             public_submission_store: Arc::new(EmptyPublicSubmissionStore),
             public_status_store: Arc::new(EmptyPublicStatusStore),
+            email_notifier: None,
             #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
             usage_journal_sink: None,
             usage_journal_dir: None,
@@ -137,6 +140,7 @@ impl LlmAccessRuntime {
             public_usage_store: stores.public_usage_store,
             public_submission_store: stores.public_submission_store,
             public_status_store: stores.public_status_store,
+            email_notifier: stores.email_notifier,
             #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
             usage_journal_sink: stores.usage_journal_sink,
             usage_journal_dir: stores.usage_journal_dir,
@@ -150,6 +154,7 @@ impl LlmAccessRuntime {
         validate_state_root(config)?;
         let geoip = GeoIpResolver::from_env()?;
         geoip.warmup().await;
+        let email_notifier = crate::email::EmailNotifier::from_env()?.map(Arc::new);
         let repository = Arc::new(SqliteControlRepository::open_path(&config.sqlite_control)?);
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let initial_runtime_config = repository.get_admin_runtime_config().await?;
@@ -231,6 +236,7 @@ impl LlmAccessRuntime {
             public_usage_store,
             public_submission_store,
             public_status_store,
+            email_notifier,
             #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
             usage_journal_sink: Some(journal_usage_for_status),
             usage_journal_dir: Some(config.usage_journal_dir.clone()),
@@ -330,6 +336,10 @@ impl LlmAccessRuntime {
     /// Public status store used by unauthenticated public endpoints.
     pub fn public_status_store(&self) -> Arc<dyn PublicStatusStore> {
         Arc::clone(&self.public_status_store)
+    }
+
+    pub(crate) fn email_notifier(&self) -> Option<Arc<crate::email::EmailNotifier>> {
+        self.email_notifier.clone()
     }
 
     /// Flush queued usage events before shutdown.

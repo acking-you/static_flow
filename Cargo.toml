@@ -7,6 +7,7 @@ members = [
     "cli",
     "media-service",
     "media-types",
+    "email-notifier",
     "gateway",
     "runtime",
     "llm-access",

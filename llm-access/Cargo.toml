@@ -29,7 +29,6 @@ llm-access-core = { path = "../llm-access-core" }
 llm-access-kiro = { path = "../llm-access-kiro" }
 llm-access-store = { path = "../llm-access-store" }
 llm-usage-journal = { path = "../llm-usage-journal" }
-lettre = { version = "0.11", default-features = false, features = ["builder"] }
 maxminddb = "0.27"
 rand = "0.8"
 reqwest = { workspace = true, features = ["stream"] }
@@ -37,6 +36,7 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+static-flow-email = { path = "../email-notifier" }
 static-flow-runtime = { path = "../runtime" }
 tokio = { workspace = true }
 tower-http = { workspace = true }
