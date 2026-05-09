@@ -2271,6 +2271,26 @@ pub(crate) async fn validate_llm_gateway_account_contribution_request(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccountContributionIssueEmailPolicy {
+    SkipNoRecipient,
+    SkipNoNotifier,
+    Send,
+}
+
+fn account_contribution_issue_email_policy(
+    request: &core_store::AdminAccountContributionRequest,
+    notifier_available: bool,
+) -> AccountContributionIssueEmailPolicy {
+    if request.requester_email.trim().is_empty() {
+        return AccountContributionIssueEmailPolicy::SkipNoRecipient;
+    }
+    if !notifier_available {
+        return AccountContributionIssueEmailPolicy::SkipNoNotifier;
+    }
+    AccountContributionIssueEmailPolicy::Send
+}
+
 pub(crate) async fn approve_and_issue_llm_gateway_account_contribution_request(
     State(state): State<HttpState>,
     headers: HeaderMap,
@@ -2301,13 +2321,6 @@ pub(crate) async fn approve_and_issue_llm_gateway_account_contribution_request(
         return conflict("LLM gateway account contribution request must be validated before issue")
             .into_response();
     }
-    let Some(notifier) = state.email_notifier.clone() else {
-        return internal_error(
-            "Failed to send llm gateway account contribution email: email notifier is not \
-             configured",
-        )
-        .into_response();
-    };
     if current.issued_key_id.is_some() {
         return conflict("LLM gateway account contribution request already has an issued key")
             .into_response();
@@ -2373,17 +2386,35 @@ pub(crate) async fn approve_and_issue_llm_gateway_account_contribution_request(
         .await
     {
         Ok(Some(request)) => {
-            let Some(email_key) = email_key.as_ref() else {
-                return internal_error("Failed to send llm gateway account contribution email")
-                    .into_response();
-            };
-            if notifier
-                .send_user_llm_account_contribution_issued_notification(&request, email_key)
-                .await
-                .is_err()
+            match account_contribution_issue_email_policy(&request, state.email_notifier.is_some())
             {
-                return internal_error("Failed to send llm gateway account contribution email")
-                    .into_response();
+                AccountContributionIssueEmailPolicy::SkipNoRecipient => {},
+                AccountContributionIssueEmailPolicy::SkipNoNotifier => {
+                    tracing::warn!(
+                        request_id = %request.request_id,
+                        account_name = %request.account_name,
+                        "skipping issued account contribution email because email notifier is not configured",
+                    );
+                },
+                AccountContributionIssueEmailPolicy::Send => {
+                    if let (Some(email_key), Some(notifier)) =
+                        (email_key.as_ref(), state.email_notifier.as_ref())
+                    {
+                        if let Err(err) = notifier
+                            .send_user_llm_account_contribution_issued_notification(
+                                &request, email_key,
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                request_id = %request.request_id,
+                                account_name = %request.account_name,
+                                requester_email = %request.requester_email,
+                                "failed to send issued account contribution email: {err:#}",
+                            );
+                        }
+                    }
+                },
             }
             Json(request).into_response()
         },
@@ -4908,6 +4939,34 @@ fn internal_error(message: &str) -> AdminHttpError {
 mod tests {
     use super::*;
 
+    fn sample_account_contribution_request(
+        requester_email: &str,
+    ) -> core_store::AdminAccountContributionRequest {
+        core_store::AdminAccountContributionRequest {
+            request_id: "req-1".to_string(),
+            account_name: "codex-alpha".to_string(),
+            account_id: Some("acct-alpha".to_string()),
+            id_token: "id-token".to_string(),
+            access_token: "access-token".to_string(),
+            refresh_token: "refresh-token".to_string(),
+            requester_email: requester_email.to_string(),
+            contributor_message: "thanks".to_string(),
+            github_id: Some("octocat".to_string()),
+            frontend_page_url: Some("https://example.com/llm-access".to_string()),
+            status: core_store::PUBLIC_ACCOUNT_CONTRIBUTION_STATUS_VALIDATED.to_string(),
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "Local".to_string(),
+            admin_note: None,
+            failure_reason: None,
+            imported_account_name: Some("codex-alpha".to_string()),
+            issued_key_id: Some("llm-key-1".to_string()),
+            issued_key_name: Some("contrib-req-1".to_string()),
+            created_at: 10,
+            updated_at: 10,
+            processed_at: Some(10),
+        }
+    }
+
     fn empty_key_patch_request() -> PatchLlmGatewayKeyRequest {
         PatchLlmGatewayKeyRequest {
             name: None,
@@ -5293,5 +5352,35 @@ mod tests {
         assert_eq!(normalized.items[0].requested_name, "codex_primary");
         assert_eq!(normalized.items[0].requested_account_id.as_deref(), Some("acct-1"));
         assert!(normalized.items[0].raw_auth_json.contains("device_id"));
+    }
+
+    #[test]
+    fn account_contribution_issue_email_policy_skips_blank_recipient() {
+        let request = sample_account_contribution_request("   ");
+
+        assert_eq!(
+            account_contribution_issue_email_policy(&request, false),
+            AccountContributionIssueEmailPolicy::SkipNoRecipient
+        );
+    }
+
+    #[test]
+    fn account_contribution_issue_email_policy_skips_when_notifier_missing() {
+        let request = sample_account_contribution_request("user@example.com");
+
+        assert_eq!(
+            account_contribution_issue_email_policy(&request, false),
+            AccountContributionIssueEmailPolicy::SkipNoNotifier
+        );
+    }
+
+    #[test]
+    fn account_contribution_issue_email_policy_sends_when_recipient_and_notifier_exist() {
+        let request = sample_account_contribution_request("user@example.com");
+
+        assert_eq!(
+            account_contribution_issue_email_policy(&request, true),
+            AccountContributionIssueEmailPolicy::Send
+        );
     }
 }

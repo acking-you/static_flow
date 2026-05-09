@@ -142,7 +142,8 @@ async fn refresh_codex_status(
                 tokio::time::sleep(jitter).await;
             }
         }
-        refreshed[index] = refresh_account_status(
+        let previous = refreshed[index].clone();
+        let next = refresh_account_status(
             account,
             account_store.as_ref(),
             route_store.as_ref(),
@@ -150,6 +151,7 @@ async fn refresh_codex_status(
             false,
         )
         .await;
+        refreshed[index] = merge_background_refresh_result(previous, next);
         status_store
             .save_codex_rate_limit_status(build_status_snapshot(
                 refreshed.clone(),
@@ -338,8 +340,41 @@ async fn refresh_account_status(
             buckets,
         },
         Err(err) => AccountStatusRefresh::Error {
-            account: account_error_status(account, now, &err.to_string()),
+            account: account_error_status(account, now, &format!("{err:#}")),
         },
+    }
+}
+
+fn merge_background_refresh_result(
+    previous: AccountStatusRefresh,
+    refreshed: AccountStatusRefresh,
+) -> AccountStatusRefresh {
+    match (previous, refreshed) {
+        (
+            AccountStatusRefresh::Ready {
+                mut account,
+                buckets,
+            },
+            AccountStatusRefresh::Error {
+                account: error_account,
+            },
+        ) => {
+            account.last_usage_checked_at = error_account.last_usage_checked_at;
+            tracing::warn!(
+                account_name = %account.name,
+                last_usage_success_at = account.last_usage_success_at.unwrap_or(0),
+                error = %error_account
+                    .usage_error_message
+                    .as_deref()
+                    .unwrap_or("unknown Codex usage refresh error"),
+                "background Codex usage refresh failed; preserving last known good snapshot",
+            );
+            AccountStatusRefresh::Ready {
+                account,
+                buckets,
+            }
+        },
+        (_, refreshed) => refreshed,
     }
 }
 
@@ -922,5 +957,76 @@ mod tests {
         assert_eq!(snapshot.accounts[0].primary_remaining_percent, Some(70.0));
         assert_eq!(snapshot.accounts[1].secondary_remaining_percent, Some(39.0));
         assert_eq!(snapshot.buckets.len(), 2);
+    }
+
+    #[test]
+    fn background_refresh_preserves_last_good_account_status_after_transient_error() {
+        let previous_bucket = sample_bucket("alpha", 70.0, 80.0);
+        let previous = AccountStatusRefresh::Ready {
+            account: account_ready_status(
+                &sample_admin_account("alpha"),
+                900,
+                std::slice::from_ref(&previous_bucket),
+            ),
+            buckets: vec![previous_bucket.clone()],
+        };
+        let refreshed = AccountStatusRefresh::Error {
+            account: account_error_status(
+                &sample_admin_account("alpha"),
+                1200,
+                "request Codex usage status: deadline has elapsed",
+            ),
+        };
+
+        let merged = merge_background_refresh_result(previous, refreshed);
+
+        match merged {
+            AccountStatusRefresh::Ready {
+                account,
+                buckets,
+            } => {
+                assert_eq!(account.primary_remaining_percent, Some(70.0));
+                assert_eq!(account.secondary_remaining_percent, Some(80.0));
+                assert_eq!(account.last_usage_checked_at, Some(1200));
+                assert_eq!(account.last_usage_success_at, Some(900));
+                assert_eq!(account.usage_error_message, None);
+                assert_eq!(buckets.len(), 1);
+                assert_eq!(buckets[0].account_name.as_deref(), Some("alpha"));
+            },
+            _ => panic!("expected ready snapshot"),
+        }
+    }
+
+    #[test]
+    fn background_refresh_keeps_error_when_no_last_good_snapshot_exists() {
+        let previous = AccountStatusRefresh::Error {
+            account: account_error_status(
+                &sample_admin_account("alpha"),
+                900,
+                "usage refresh pending for standalone llm-access",
+            ),
+        };
+        let refreshed = AccountStatusRefresh::Error {
+            account: account_error_status(
+                &sample_admin_account("alpha"),
+                1200,
+                "request Codex usage status: deadline has elapsed",
+            ),
+        };
+
+        let merged = merge_background_refresh_result(previous, refreshed.clone());
+
+        match merged {
+            AccountStatusRefresh::Error {
+                account,
+            } => {
+                assert_eq!(account.last_usage_checked_at, Some(1200));
+                assert_eq!(
+                    account.usage_error_message.as_deref(),
+                    Some("request Codex usage status: deadline has elapsed")
+                );
+            },
+            _ => panic!("expected error snapshot"),
+        }
     }
 }
