@@ -25,7 +25,7 @@ pub const DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 1;
 pub const DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS: u64 = 0;
 
 /// Default Kiro client version string sent in request headers.
-pub const DEFAULT_KIRO_VERSION: &str = "0.11.107";
+pub const DEFAULT_KIRO_VERSION: &str = "0.12.155";
 
 /// Default system/OS version string sent in request headers.
 pub const DEFAULT_SYSTEM_VERSION: &str = "darwin#24.6.0";

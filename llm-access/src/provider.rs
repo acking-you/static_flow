@@ -55,9 +55,7 @@ use llm_access_kiro::{
         types::{MessagesRequest, OutputConfig, Thinking},
         websearch::{self, McpResponse},
     },
-    auth_file::{
-        KiroAuthRecord, DEFAULT_KIRO_VERSION, DEFAULT_NODE_VERSION, DEFAULT_SYSTEM_VERSION,
-    },
+    auth_file::KiroAuthRecord,
     cache_policy::{
         adjust_input_tokens_for_cache_creation_cost_with_policy, default_kiro_cache_policy,
         prefix_tree_credit_ratio_cap_basis_points_with_policy, validate_kiro_cache_policy,
@@ -67,7 +65,6 @@ use llm_access_kiro::{
         KiroCacheRuntimeStats, KiroCacheSimulationConfig, KiroCacheSimulationMode,
         KiroCacheSimulator, PromptProjection,
     },
-    machine_id,
     parser::decoder::EventStreamDecoder,
     scheduler::{KiroRequestLease, KiroRequestScheduler},
     token,
@@ -78,7 +75,10 @@ use llm_access_kiro::{
 };
 use serde_json::Value;
 
-use crate::{activity::RequestActivityTracker, codex_refresh, geoip::GeoIpResolver, kiro_refresh};
+use crate::{
+    activity::RequestActivityTracker, codex_refresh, geoip::GeoIpResolver, kiro_headers,
+    kiro_refresh,
+};
 
 const MAX_PROVIDER_PROXY_BODY_BYTES: usize = 32 * 1024 * 1024;
 const DEFAULT_WIRE_ORIGINATOR: &str = "codex_cli_rs";
@@ -1954,9 +1954,7 @@ async fn describe_kiro_images_with_sonnet_bridge(
         }
         let upstream_url = format!(
             "{}/generateAssistantResponse",
-            std::env::var("KIRO_UPSTREAM_BASE_URL")
-                .map(|value| value.trim_end_matches('/').to_string())
-                .unwrap_or_else(|_| format!("https://q.{}.amazonaws.com", route.api_region))
+            kiro_refresh::runtime_upstream_base_url(&route.api_region)
         );
         let response =
             match call_kiro_generate_for_route(&route, route_store, upstream_url, &request_body)
@@ -2401,9 +2399,7 @@ async fn dispatch_kiro_proxy(
         }
         let upstream_url = format!(
             "{}/generateAssistantResponse",
-            std::env::var("KIRO_UPSTREAM_BASE_URL")
-                .map(|value| value.trim_end_matches('/').to_string())
-                .unwrap_or_else(|_| format!("https://q.{}.amazonaws.com", route.api_region))
+            kiro_refresh::runtime_upstream_base_url(&route.api_region)
         );
         let response = match call_kiro_generate_for_route(
             &route,
@@ -3044,12 +3040,8 @@ async fn call_kiro_mcp_for_route(
     route_store: &dyn ProviderRouteStore,
     request_body: &str,
 ) -> Result<McpResponse, KiroRouteFailure> {
-    let upstream_url = format!(
-        "{}/mcp",
-        std::env::var("KIRO_UPSTREAM_BASE_URL")
-            .map(|value| value.trim_end_matches('/').to_string())
-            .unwrap_or_else(|_| format!("https://q.{}.amazonaws.com", route.api_region))
-    );
+    let upstream_url =
+        format!("{}/mcp", kiro_refresh::runtime_upstream_base_url(&route.api_region));
     let mut force_refresh = false;
     let mut last_failure: Option<KiroRouteFailure> = None;
     let mut attempt = 0usize;
@@ -3170,8 +3162,8 @@ async fn send_kiro_generate_request(
 ) -> anyhow::Result<reqwest::Response> {
     let client = provider_client(route.proxy.as_ref())?;
     Ok(add_kiro_upstream_headers(
-        client.post(upstream_url),
-        route,
+        client.post(&upstream_url),
+        &upstream_url,
         &call_ctx.access_token,
         Some(&call_ctx.auth),
     )?
@@ -3188,7 +3180,8 @@ async fn send_kiro_mcp_request(
 ) -> anyhow::Result<reqwest::Response> {
     let client = provider_client(route.proxy.as_ref())?;
     Ok(add_kiro_mcp_headers(
-        client.post(upstream_url),
+        client.post(&upstream_url),
+        &upstream_url,
         route,
         &call_ctx.access_token,
         Some(&call_ctx.auth),
@@ -3739,65 +3732,49 @@ fn normalized_kiro_messages_path(path: &str) -> Option<&'static str> {
     }
 }
 
-fn kiro_provider_user_agents(machine_id: &str) -> (String, String) {
-    (
-        format!(
-            "aws-sdk-js/{KIRO_PROVIDER_AWS_SDK_VERSION} \
-             KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}"
-        ),
-        format!(
-            "aws-sdk-js/{KIRO_PROVIDER_AWS_SDK_VERSION} ua/2.1 os/{DEFAULT_SYSTEM_VERSION} \
-             lang/js md/nodejs#{DEFAULT_NODE_VERSION} \
-             api/codewhispererstreaming#{KIRO_PROVIDER_AWS_SDK_VERSION} m/E \
-             KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}"
-        ),
-    )
-}
-
 fn add_kiro_upstream_headers(
-    mut upstream: reqwest::RequestBuilder,
-    route: &ProviderKiroRoute,
+    upstream: reqwest::RequestBuilder,
+    upstream_url: &str,
     access_token: &str,
     auth_record: Option<&KiroAuthRecord>,
 ) -> anyhow::Result<reqwest::RequestBuilder> {
     let auth = auth_record.ok_or_else(|| anyhow::anyhow!("invalid kiro auth record"))?;
-    let machine_id = machine_id::generate_from_auth(auth)
-        .ok_or_else(|| anyhow::anyhow!("failed to derive kiro machine id"))?;
-    let (x_amz_user_agent, user_agent) = kiro_provider_user_agents(&machine_id);
-    let host = format!("q.{}.amazonaws.com", route.api_region);
-    upstream = upstream
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header(reqwest::header::ACCEPT, "application/vnd.amazon.eventstream")
-        .header("x-amzn-codewhisperer-optout", "true")
-        .header("x-amzn-kiro-agent-mode", "vibe")
-        .header("x-amz-user-agent", x_amz_user_agent)
-        .header(reqwest::header::USER_AGENT, user_agent)
-        .header("host", host)
-        .header("amz-sdk-invocation-id", uuid::Uuid::new_v4().to_string())
-        .header("amz-sdk-request", "attempt=1; max=3")
-        .header("authorization", format!("Bearer {access_token}"));
-    Ok(upstream)
+    let host = kiro_refresh::upstream_host_header(upstream_url)?;
+    kiro_headers::add_kiro_headers(upstream, auth, kiro_headers::KiroHeaderConfig {
+        upstream_host: &host,
+        access_token,
+        service: kiro_headers::KiroAwsService::Streaming,
+        client_version: KIRO_PROVIDER_AWS_SDK_VERSION,
+        sdk_request: "attempt=1; max=3",
+        content_type: Some("application/json"),
+        accept: Some("application/vnd.amazon.eventstream"),
+        connection_close: false,
+        agent_mode: Some("vibe"),
+        include_opt_out: true,
+    })
 }
 
 fn add_kiro_mcp_headers(
     mut upstream: reqwest::RequestBuilder,
+    upstream_url: &str,
     route: &ProviderKiroRoute,
     access_token: &str,
     auth_record: Option<&KiroAuthRecord>,
 ) -> anyhow::Result<reqwest::RequestBuilder> {
     let auth = auth_record.ok_or_else(|| anyhow::anyhow!("invalid kiro auth record"))?;
-    let machine_id = machine_id::generate_from_auth(auth)
-        .ok_or_else(|| anyhow::anyhow!("failed to derive kiro machine id"))?;
-    let (x_amz_user_agent, user_agent) = kiro_provider_user_agents(&machine_id);
-    let host = format!("q.{}.amazonaws.com", route.api_region);
-    upstream = upstream
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header("x-amz-user-agent", x_amz_user_agent)
-        .header(reqwest::header::USER_AGENT, user_agent)
-        .header("host", host)
-        .header("amz-sdk-invocation-id", uuid::Uuid::new_v4().to_string())
-        .header("amz-sdk-request", "attempt=1; max=3")
-        .header("authorization", format!("Bearer {access_token}"));
+    let host = kiro_refresh::upstream_host_header(upstream_url)?;
+    upstream = kiro_headers::add_kiro_headers(upstream, auth, kiro_headers::KiroHeaderConfig {
+        upstream_host: &host,
+        access_token,
+        service: kiro_headers::KiroAwsService::Streaming,
+        client_version: KIRO_PROVIDER_AWS_SDK_VERSION,
+        sdk_request: "attempt=1; max=3",
+        content_type: Some("application/json"),
+        accept: None,
+        connection_close: false,
+        agent_mode: None,
+        include_opt_out: false,
+    })?;
     if let Some(profile_arn) = route
         .profile_arn
         .as_deref()
@@ -5835,6 +5812,13 @@ mod tests {
     struct CapturedKiroRequest {
         path: String,
         authorization: Option<String>,
+        user_agent: Option<String>,
+        x_amz_user_agent: Option<String>,
+        host: Option<String>,
+        token_type: Option<String>,
+        redirect_for_internal: Option<String>,
+        agent_mode: Option<String>,
+        opt_out: Option<String>,
         body: serde_json::Value,
     }
 
@@ -6007,6 +5991,23 @@ mod tests {
             status_refresh_interval_seconds: 300,
             minimum_remaining_credits_before_block: 0.0,
         }
+    }
+
+    fn static_kiro_route_with_auth_method_and_provider(
+        auth_method: &str,
+        provider: &str,
+    ) -> ProviderKiroRoute {
+        let mut route = static_kiro_route();
+        route.auth_json = format!(
+            r#"{{
+                "accessToken":"kiro-upstream-token",
+                "machineId":"{}",
+                "authMethod":"{auth_method}",
+                "provider":"{provider}"
+            }}"#,
+            "a".repeat(64)
+        );
+        route
     }
 
     fn kiro_route_for_selection(
@@ -6564,6 +6565,13 @@ mod tests {
                     .get(header::AUTHORIZATION)
                     .and_then(|value| value.to_str().ok())
                     .map(ToString::to_string),
+                user_agent: super::header_value(&headers, header::USER_AGENT.as_str()),
+                x_amz_user_agent: super::header_value(&headers, "x-amz-user-agent"),
+                host: super::header_value(&headers, "host"),
+                token_type: super::header_value(&headers, "TokenType"),
+                redirect_for_internal: super::header_value(&headers, "redirect-for-internal"),
+                agent_mode: super::header_value(&headers, "x-amzn-kiro-agent-mode"),
+                opt_out: super::header_value(&headers, "x-amzn-codewhisperer-optout"),
                 body,
             });
         let body = kiro_eventstream_body(vec![
@@ -6599,6 +6607,13 @@ mod tests {
                     .get(header::AUTHORIZATION)
                     .and_then(|value| value.to_str().ok())
                     .map(ToString::to_string),
+                user_agent: super::header_value(&headers, header::USER_AGENT.as_str()),
+                x_amz_user_agent: super::header_value(&headers, "x-amz-user-agent"),
+                host: super::header_value(&headers, "host"),
+                token_type: super::header_value(&headers, "TokenType"),
+                redirect_for_internal: super::header_value(&headers, "redirect-for-internal"),
+                agent_mode: super::header_value(&headers, "x-amzn-kiro-agent-mode"),
+                opt_out: super::header_value(&headers, "x-amzn-codewhisperer-optout"),
                 body,
             });
         let body = kiro_eventstream_body(vec![
@@ -6632,6 +6647,13 @@ mod tests {
                     .get(header::AUTHORIZATION)
                     .and_then(|value| value.to_str().ok())
                     .map(ToString::to_string),
+                user_agent: super::header_value(&headers, header::USER_AGENT.as_str()),
+                x_amz_user_agent: super::header_value(&headers, "x-amz-user-agent"),
+                host: super::header_value(&headers, "host"),
+                token_type: super::header_value(&headers, "TokenType"),
+                redirect_for_internal: super::header_value(&headers, "redirect-for-internal"),
+                agent_mode: super::header_value(&headers, "x-amzn-kiro-agent-mode"),
+                opt_out: super::header_value(&headers, "x-amzn-codewhisperer-optout"),
                 body: serde_json::Value::Null,
             });
         Json(json!({
@@ -6643,6 +6665,49 @@ mod tests {
                 "nextDateReset": 900.0
             }],
             "userInfo": {"userId": "upstream-user-1"}
+        }))
+        .into_response()
+    }
+
+    async fn fake_kiro_mcp(
+        State(captured): State<Arc<CapturedKiroUpstream>>,
+        headers: HeaderMap,
+        request: Request<Body>,
+    ) -> Response {
+        let path = request.uri().path().to_string();
+        let body = to_bytes(request.into_body(), usize::MAX)
+            .await
+            .expect("upstream request body");
+        let body = serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json");
+        captured
+            .requests
+            .lock()
+            .expect("captured requests")
+            .push(CapturedKiroRequest {
+                path,
+                authorization: headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                user_agent: super::header_value(&headers, header::USER_AGENT.as_str()),
+                x_amz_user_agent: super::header_value(&headers, "x-amz-user-agent"),
+                host: super::header_value(&headers, "host"),
+                token_type: super::header_value(&headers, "TokenType"),
+                redirect_for_internal: super::header_value(&headers, "redirect-for-internal"),
+                agent_mode: super::header_value(&headers, "x-amzn-kiro-agent-mode"),
+                opt_out: super::header_value(&headers, "x-amzn-codewhisperer-optout"),
+                body,
+            });
+        Json(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "content": [{
+                    "type": "text",
+                    "text": "{\"results\":[]}"
+                }],
+                "isError": false
+            }
         }))
         .into_response()
     }
@@ -6680,6 +6745,7 @@ mod tests {
     async fn spawn_fake_kiro_upstream(captured: Arc<CapturedKiroUpstream>) -> String {
         let app = Router::new()
             .route("/generateAssistantResponse", post(fake_kiro_generate))
+            .route("/mcp", post(fake_kiro_mcp))
             .route("/getUsageLimits", get(fake_kiro_usage_limits))
             .with_state(captured);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -6697,6 +6763,7 @@ mod tests {
     async fn spawn_fake_kiro_reasoning_upstream(captured: Arc<CapturedKiroUpstream>) -> String {
         let app = Router::new()
             .route("/generateAssistantResponse", post(fake_kiro_generate_reasoning))
+            .route("/mcp", post(fake_kiro_mcp))
             .route("/getUsageLimits", get(fake_kiro_usage_limits))
             .with_state(captured);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -7299,6 +7366,174 @@ mod tests {
         assert_eq!(requests[0].path, "/generateAssistantResponse");
         assert_eq!(requests[0].authorization.as_deref(), Some("Bearer kiro-upstream-token"));
         assert_eq!(requests[0].body["profileArn"], "arn:aws:kiro:test");
+    }
+
+    #[tokio::test]
+    async fn kiro_generate_headers_include_runtime_middleware_for_external_idp_internal() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("kiro upstream env lock");
+        let captured = Arc::new(CapturedKiroUpstream::default());
+        let upstream_base = spawn_fake_kiro_upstream(captured.clone()).await;
+        let expected_host = upstream_base
+            .strip_prefix("http://")
+            .expect("http upstream host")
+            .to_string();
+        std::env::set_var("KIRO_UPSTREAM_BASE_URL", upstream_base);
+
+        let route = static_kiro_route_with_auth_method_and_provider("external_idp", "Internal");
+        let state = super::ProviderState::new(
+            Arc::new(TestStore),
+            Arc::new(StaticRouteStore {
+                codex_route: ProviderCodexRoute {
+                    account_name: "codex-a".to_string(),
+                    account_group_id_at_event: None,
+                    route_strategy_at_event: RouteStrategy::Auto,
+                    auth_json: r#"{"access_token":"upstream-token"}"#.to_string(),
+                    map_gpt53_codex_to_spark: true,
+                    request_max_concurrency: None,
+                    request_min_start_interval_ms: None,
+                    account_request_max_concurrency: None,
+                    account_request_min_start_interval_ms: None,
+                    proxy: None,
+                },
+                kiro_route: route,
+            }),
+        );
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/kiro-gateway/v1/messages")
+                .header("x-api-key", "valid-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "claude-sonnet-4-6",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": false
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let requests = captured.requests.lock().expect("captured requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/generateAssistantResponse");
+        assert_eq!(requests[0].token_type.as_deref(), Some("EXTERNAL_IDP"));
+        assert_eq!(requests[0].redirect_for_internal.as_deref(), Some("true"));
+        assert_eq!(requests[0].agent_mode.as_deref(), Some("vibe"));
+        assert_eq!(requests[0].opt_out.as_deref(), Some("true"));
+        assert_eq!(requests[0].host.as_deref(), Some(expected_host.as_str()));
+        assert!(requests[0]
+            .x_amz_user_agent
+            .as_deref()
+            .is_some_and(|value| value.contains("aws-sdk-js/1.0.34")));
+        assert!(requests[0]
+            .x_amz_user_agent
+            .as_deref()
+            .is_some_and(|value| value.contains("KiroIDE-0.12.155-")));
+        assert!(requests[0]
+            .user_agent
+            .as_deref()
+            .is_some_and(|value| value.contains("api/codewhispererstreaming#1.0.34")));
+        assert!(requests[0]
+            .user_agent
+            .as_deref()
+            .is_some_and(|value| !value.contains(" m/")));
+    }
+
+    #[tokio::test]
+    async fn kiro_mcp_headers_match_streaming_client_middleware_without_chat_only_headers() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("kiro upstream env lock");
+        let captured = Arc::new(CapturedKiroUpstream::default());
+        let upstream_base = spawn_fake_kiro_upstream(captured.clone()).await;
+        let expected_host = upstream_base
+            .strip_prefix("http://")
+            .expect("http upstream host")
+            .to_string();
+        std::env::set_var("KIRO_UPSTREAM_BASE_URL", upstream_base);
+
+        let route = static_kiro_route_with_auth_method_and_provider("external_idp", "Internal");
+        let request_body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {}
+        })
+        .to_string();
+        let response =
+            super::call_kiro_mcp_for_route(&route, empty_route_store().as_ref(), &request_body)
+                .await
+                .expect("mcp response");
+
+        std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
+
+        assert!(response.result.is_some());
+        let requests = captured.requests.lock().expect("captured requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/mcp");
+        assert_eq!(requests[0].token_type.as_deref(), Some("EXTERNAL_IDP"));
+        assert_eq!(requests[0].redirect_for_internal.as_deref(), Some("true"));
+        assert_eq!(requests[0].agent_mode, None);
+        assert_eq!(requests[0].opt_out, None);
+        assert_eq!(requests[0].host.as_deref(), Some(expected_host.as_str()));
+    }
+
+    #[tokio::test]
+    async fn kiro_usage_headers_match_runtime_client_middleware_without_chat_only_headers() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("kiro upstream env lock");
+        let captured = Arc::new(CapturedKiroUpstream::default());
+        let upstream_base = spawn_fake_kiro_upstream(captured.clone()).await;
+        let expected_host = upstream_base
+            .strip_prefix("http://")
+            .expect("http upstream host")
+            .to_string();
+        std::env::set_var("KIRO_UPSTREAM_BASE_URL", upstream_base);
+
+        let route = static_kiro_route_with_auth_method_and_provider("external_idp", "Internal");
+        let usage = crate::kiro_refresh::fetch_usage_limits_for_route(
+            &route,
+            empty_route_store().as_ref(),
+            false,
+        )
+        .await
+        .expect("usage response");
+
+        std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
+
+        assert_eq!(
+            usage
+                .subscription_info
+                .as_ref()
+                .and_then(|info| info.subscription_title.as_deref()),
+            Some("Pro")
+        );
+        let requests = captured.requests.lock().expect("captured requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/getUsageLimits");
+        assert_eq!(requests[0].token_type.as_deref(), Some("EXTERNAL_IDP"));
+        assert_eq!(requests[0].redirect_for_internal.as_deref(), Some("true"));
+        assert_eq!(requests[0].agent_mode, None);
+        assert_eq!(requests[0].opt_out, None);
+        assert_eq!(requests[0].host.as_deref(), Some(expected_host.as_str()));
+        assert!(requests[0]
+            .user_agent
+            .as_deref()
+            .is_some_and(|value| value.contains("api/codewhispererruntime#1.0.0")));
+        assert!(requests[0]
+            .user_agent
+            .as_deref()
+            .is_some_and(|value| !value.contains(" m/")));
     }
 
     #[tokio::test]

@@ -23,10 +23,15 @@ use llm_access_kiro::{
 };
 use serde_json::Value;
 
+use crate::kiro_headers;
+
 const REFRESH_EARLY_MINUTES: i64 = 10;
 const KIRO_USAGE_AWS_SDK_VERSION: &str = "1.0.0";
 const KIRO_IDC_AWS_SDK_VERSION: &str = "3.980.0";
 const KIRO_IDC_AMZ_SDK_REQUEST: &str = "attempt=1; max=4";
+const KIRO_UPSTREAM_BASE_URL_ENV: &str = "KIRO_UPSTREAM_BASE_URL";
+const KIRO_RUNTIME_UPSTREAM_BASE_URL_ENV: &str = "KIRO_RUNTIME_UPSTREAM_BASE_URL";
+const KIRO_MANAGEMENT_UPSTREAM_BASE_URL_ENV: &str = "KIRO_MANAGEMENT_UPSTREAM_BASE_URL";
 
 static REFRESH_LOCKS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -129,10 +134,7 @@ pub(crate) async fn fetch_usage_limits_for_route(
 ) -> anyhow::Result<UsageLimitsResponse> {
     let ctx = ensure_context_for_route(route, store, force_refresh).await?;
     let region = ctx.auth.effective_api_region().to_string();
-    let host = format!("q.{region}.amazonaws.com");
-    let upstream_base = std::env::var("KIRO_UPSTREAM_BASE_URL")
-        .map(|value| value.trim_end_matches('/').to_string())
-        .unwrap_or_else(|_| format!("https://{host}"));
+    let upstream_base = management_upstream_base_url(&region);
     let mut url =
         format!("{upstream_base}/getUsageLimits?origin=AI_EDITOR&resourceType=AGENTIC_REQUEST");
     if let Some(profile_arn) = ctx
@@ -147,27 +149,71 @@ pub(crate) async fn fetch_usage_limits_for_route(
         url.push_str(&encoded);
     }
     let client = provider_client(route.proxy.as_ref())?;
-    let machine_id = machine_id::generate_from_auth(&ctx.auth)
-        .ok_or_else(|| anyhow!("failed to derive kiro machine id"))?;
-    let (amz_user_agent, user_agent) = usage_request_user_agents(&machine_id);
-    let response = client
-        .get(url)
-        .header("x-amz-user-agent", amz_user_agent)
-        .header("user-agent", user_agent)
-        .header("host", host)
-        .header("amz-sdk-invocation-id", uuid::Uuid::new_v4().to_string())
-        .header("amz-sdk-request", "attempt=1; max=1")
-        .header("authorization", format!("Bearer {}", ctx.access_token))
-        .header("connection", "close")
-        .send()
-        .await
-        .context("request kiro usage limits")?;
+    let host = upstream_host_header(&url)?;
+    let response = kiro_headers::add_kiro_headers(
+        client.get(url),
+        &ctx.auth,
+        kiro_headers::KiroHeaderConfig {
+            upstream_host: &host,
+            access_token: &ctx.access_token,
+            service: kiro_headers::KiroAwsService::Runtime,
+            client_version: KIRO_USAGE_AWS_SDK_VERSION,
+            sdk_request: "attempt=1; max=1",
+            content_type: None,
+            accept: None,
+            connection_close: true,
+            agent_mode: None,
+            include_opt_out: false,
+        },
+    )?
+    .send()
+    .await
+    .context("request kiro usage limits")?;
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         bail!("kiro usage limit request failed: {status} {body}");
     }
     response.json().await.context("parse kiro usage limits")
+}
+
+pub(crate) fn runtime_upstream_base_url(region: &str) -> String {
+    configured_upstream_base_url(
+        KIRO_RUNTIME_UPSTREAM_BASE_URL_ENV,
+        format!("https://runtime.{region}.kiro.dev"),
+    )
+}
+
+pub(crate) fn management_upstream_base_url(region: &str) -> String {
+    configured_upstream_base_url(
+        KIRO_MANAGEMENT_UPSTREAM_BASE_URL_ENV,
+        format!("https://management.{region}.kiro.dev"),
+    )
+}
+
+pub(crate) fn upstream_host_header(upstream_url: &str) -> anyhow::Result<String> {
+    let parsed = reqwest::Url::parse(upstream_url)
+        .with_context(|| format!("parse kiro upstream url: {upstream_url}"))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| anyhow!("kiro upstream url missing host: {upstream_url}"))?;
+    Ok(match parsed.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    })
+}
+
+fn configured_upstream_base_url(split_env_var: &str, default: String) -> String {
+    read_upstream_env(split_env_var)
+        .or_else(|| read_upstream_env(KIRO_UPSTREAM_BASE_URL_ENV))
+        .unwrap_or(default)
+}
+
+fn read_upstream_env(env_var: &str) -> Option<String> {
+    std::env::var(env_var)
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn refreshed_auth_json(original_json: &str, refreshed: &KiroAuthRecord) -> anyhow::Result<String> {
@@ -437,20 +483,6 @@ fn social_refresh_user_agent(machine_id: &str) -> String {
     format!("KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}")
 }
 
-fn usage_request_user_agents(machine_id: &str) -> (String, String) {
-    (
-        format!(
-            "aws-sdk-js/{KIRO_USAGE_AWS_SDK_VERSION} KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}"
-        ),
-        format!(
-            "aws-sdk-js/{KIRO_USAGE_AWS_SDK_VERSION} ua/2.1 os/{DEFAULT_SYSTEM_VERSION} lang/js \
-             md/nodejs#{DEFAULT_NODE_VERSION} \
-             api/codewhispererruntime#{KIRO_USAGE_AWS_SDK_VERSION} m/N,E \
-             KiroIDE-{DEFAULT_KIRO_VERSION}-{machine_id}"
-        ),
-    )
-}
-
 fn idc_refresh_amz_user_agent() -> String {
     format!("aws-sdk-js/{KIRO_IDC_AWS_SDK_VERSION} KiroIDE-{DEFAULT_KIRO_VERSION}")
 }
@@ -489,6 +521,12 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    fn clear_kiro_upstream_envs() {
+        std::env::remove_var("KIRO_RUNTIME_UPSTREAM_BASE_URL");
+        std::env::remove_var("KIRO_MANAGEMENT_UPSTREAM_BASE_URL");
+        std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
+    }
+
     #[test]
     fn invalid_refresh_grant_detection_matches_kiro_refresh_contract() {
         let body =
@@ -497,5 +535,65 @@ mod tests {
         assert!(super::is_invalid_refresh_token_grant(400, body));
         assert!(!super::is_invalid_refresh_token_grant(401, body));
         assert!(!super::is_invalid_refresh_token_grant(400, r#"{"error":"invalid_client"}"#));
+    }
+
+    #[test]
+    fn kiro_upstream_defaults_split_runtime_and_management_domains() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("kiro upstream env lock");
+        clear_kiro_upstream_envs();
+
+        assert_eq!(
+            super::runtime_upstream_base_url("us-east-1"),
+            "https://runtime.us-east-1.kiro.dev"
+        );
+        assert_eq!(
+            super::management_upstream_base_url("us-east-1"),
+            "https://management.us-east-1.kiro.dev"
+        );
+    }
+
+    #[test]
+    fn kiro_legacy_upstream_env_still_overrides_both_endpoint_families() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("kiro upstream env lock");
+        clear_kiro_upstream_envs();
+        std::env::set_var("KIRO_UPSTREAM_BASE_URL", "http://127.0.0.1:19090/");
+
+        assert_eq!(super::runtime_upstream_base_url("us-east-1"), "http://127.0.0.1:19090");
+        assert_eq!(super::management_upstream_base_url("us-east-1"), "http://127.0.0.1:19090");
+
+        clear_kiro_upstream_envs();
+    }
+
+    #[test]
+    fn kiro_split_upstream_envs_override_legacy_and_drive_host_headers() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("kiro upstream env lock");
+        clear_kiro_upstream_envs();
+        std::env::set_var("KIRO_UPSTREAM_BASE_URL", "https://q.us-east-1.amazonaws.com");
+        std::env::set_var("KIRO_RUNTIME_UPSTREAM_BASE_URL", "https://runtime.us-east-1.kiro.dev/");
+        std::env::set_var("KIRO_MANAGEMENT_UPSTREAM_BASE_URL", "http://127.0.0.1:19091/");
+
+        assert_eq!(
+            super::runtime_upstream_base_url("us-east-1"),
+            "https://runtime.us-east-1.kiro.dev"
+        );
+        assert_eq!(super::management_upstream_base_url("us-east-1"), "http://127.0.0.1:19091");
+        assert_eq!(
+            super::upstream_host_header("https://runtime.us-east-1.kiro.dev/mcp")
+                .expect("runtime host"),
+            "runtime.us-east-1.kiro.dev"
+        );
+        assert_eq!(
+            super::upstream_host_header("http://127.0.0.1:19091/getUsageLimits")
+                .expect("management host"),
+            "127.0.0.1:19091"
+        );
+
+        clear_kiro_upstream_envs();
     }
 }

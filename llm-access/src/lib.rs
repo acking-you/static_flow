@@ -10,6 +10,7 @@ mod email;
 mod geoip;
 /// Local Kiro endpoints.
 pub mod kiro;
+mod kiro_headers;
 mod kiro_refresh;
 mod kiro_status;
 mod process_memory;
