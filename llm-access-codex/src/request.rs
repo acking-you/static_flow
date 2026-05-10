@@ -136,6 +136,7 @@ pub fn prepare_gateway_request_from_bytes(
         }
         normalize_responses_request("/v1/responses", &mut adapted, thread_anchor.as_deref());
         filter_responses_request_fields("/v1/responses", &mut adapted);
+        validate_responses_request("/v1/responses", &adapted)?;
         if !original_wants_stream {
             adapted.insert("stream".to_string(), Value::Bool(true));
             force_upstream_stream = true;
@@ -149,6 +150,7 @@ pub fn prepare_gateway_request_from_bytes(
             }
             normalize_responses_request(gateway_path, root, thread_anchor.as_deref());
             filter_responses_request_fields(gateway_path, root);
+            validate_responses_request(gateway_path, root)?;
             if gateway_path == "/v1/responses" && !original_wants_stream {
                 root.insert("stream".to_string(), Value::Bool(true));
                 force_upstream_stream = true;
@@ -589,6 +591,7 @@ fn filter_responses_request_fields(path: &str, root: &mut Map<String, Value>) {
             key.as_str(),
             "model"
                 | "instructions"
+                | "previous_response_id"
                 | "input"
                 | "tools"
                 | "tool_choice"
@@ -616,6 +619,149 @@ fn filter_responses_request_fields(path: &str, root: &mut Map<String, Value>) {
         ),
         _ => true,
     });
+}
+
+fn validate_responses_request(path: &str, root: &Map<String, Value>) -> CodexGatewayResult<()> {
+    if !path.starts_with("/v1/responses") {
+        return Ok(());
+    }
+
+    validate_json_object_input_messages(root)?;
+    validate_tool_call_history(root)?;
+    Ok(())
+}
+
+fn validate_json_object_input_messages(root: &Map<String, Value>) -> CodexGatewayResult<()> {
+    let format_type = root
+        .get("text")
+        .and_then(Value::as_object)
+        .and_then(|text| text.get("format"))
+        .and_then(Value::as_object)
+        .and_then(|format| format.get("type"))
+        .and_then(Value::as_str);
+    if format_type != Some("json_object") {
+        return Ok(());
+    }
+
+    if responses_input_messages_contain_json_keyword(root.get("input")) {
+        return Ok(());
+    }
+
+    Err(bad_request(
+        "responses text.format.type `json_object` requires at least one input message containing \
+         `json`",
+    ))
+}
+
+fn responses_input_messages_contain_json_keyword(input: Option<&Value>) -> bool {
+    let Some(input) = input else {
+        return false;
+    };
+    match input {
+        Value::String(text) => text_contains_json_keyword(text),
+        Value::Array(items) => items.iter().any(response_input_item_contains_json_keyword),
+        Value::Object(_) => response_input_item_contains_json_keyword(input),
+        _ => false,
+    }
+}
+
+fn response_input_item_contains_json_keyword(item: &Value) -> bool {
+    let Some(obj) = item.as_object() else {
+        return false;
+    };
+    if obj.get("type").and_then(Value::as_str) != Some("message") {
+        return false;
+    }
+    obj.get("content")
+        .is_some_and(response_content_contains_json_keyword)
+}
+
+fn response_content_contains_json_keyword(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text_contains_json_keyword(text),
+        Value::Array(items) => items.iter().any(response_content_contains_json_keyword),
+        Value::Object(obj) => {
+            obj.get("content")
+                .is_some_and(response_content_contains_json_keyword)
+                || obj
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(text_contains_json_keyword)
+        },
+        _ => false,
+    }
+}
+
+fn text_contains_json_keyword(text: &str) -> bool {
+    text.to_ascii_lowercase().contains("json")
+}
+
+fn validate_tool_call_history(root: &Map<String, Value>) -> CodexGatewayResult<()> {
+    let Some(input) = root.get("input") else {
+        return Ok(());
+    };
+    let items = match input {
+        Value::Array(items) => items.iter().collect::<Vec<_>>(),
+        Value::Object(_) => vec![input],
+        _ => return Ok(()),
+    };
+    let allow_orphan_outputs = extract_non_empty_string(root.get("previous_response_id")).is_some();
+    let mut seen_calls = BTreeSet::new();
+    let mut pending_calls = BTreeSet::new();
+    let mut seen_outputs = BTreeSet::new();
+
+    for (index, item) in items.iter().enumerate() {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let item_type = obj.get("type").and_then(Value::as_str).unwrap_or_default();
+        match item_type {
+            "function_call" | "custom_tool_call" => {
+                let call_id =
+                    extract_non_empty_string(obj.get("call_id").or_else(|| obj.get("id")))
+                        .ok_or_else(|| {
+                            bad_request(&format!(
+                                "responses input item {index} ({item_type}) is missing call_id"
+                            ))
+                        })?;
+                if !seen_calls.insert(call_id.to_string()) {
+                    return Err(bad_request(&format!(
+                        "responses input contains duplicate function call `{call_id}`"
+                    )));
+                }
+                pending_calls.insert(call_id.to_string());
+            },
+            "function_call_output" | "custom_tool_call_output" => {
+                let call_id = extract_non_empty_string(obj.get("call_id")).ok_or_else(|| {
+                    bad_request(&format!(
+                        "responses input item {index} ({item_type}) is missing call_id"
+                    ))
+                })?;
+                if !seen_outputs.insert(call_id.to_string()) {
+                    return Err(bad_request(&format!(
+                        "responses input contains duplicate tool output for function call \
+                         `{call_id}`"
+                    )));
+                }
+                if pending_calls.remove(call_id) {
+                    continue;
+                }
+                if !allow_orphan_outputs {
+                    return Err(bad_request(&format!(
+                        "responses input contains tool output for unknown function call \
+                         `{call_id}`"
+                    )));
+                }
+            },
+            _ => {},
+        }
+    }
+
+    if let Some(call_id) = pending_calls.into_iter().next() {
+        return Err(bad_request(&format!("No tool output found for function call {call_id}")));
+    }
+
+    Ok(())
 }
 
 /// Map OpenAI chat roles into the role set accepted by the responses API.
@@ -1112,7 +1258,6 @@ fn adapt_openai_chat_completions_request(
     let tool_name_map = build_openai_tool_name_map(obj);
     let tool_name_restore_map = build_openai_tool_name_restore_map(&tool_name_map);
 
-    let mut instructions_parts = Vec::new();
     let mut input_items = Vec::<Value>::new();
 
     for (index, message) in source_messages.iter().enumerate() {
@@ -1137,10 +1282,18 @@ fn adapt_openai_chat_completions_request(
                     ));
                 }
                 let text = extract_openai_message_content_text(content);
-                if text.trim().is_empty() {
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
                     return Err(chat_message_bad_request(index, "content is empty or unsupported"));
                 }
-                instructions_parts.push(text);
+                input_items.push(json!({
+                    "type": "message",
+                    "role": "system",
+                    "content": [{
+                        "type": "input_text",
+                        "text": trimmed,
+                    }]
+                }));
             },
             "user" => {
                 let Some(content) = message_obj.get("content") else {
@@ -1184,17 +1337,24 @@ fn adapt_openai_chat_completions_request(
                     let Some(tool_calls) = raw_tool_calls.as_array() else {
                         return Err(chat_message_bad_request(index, "tool_calls must be an array"));
                     };
-                    for (index, tool_call) in tool_calls.iter().enumerate() {
+                    for (tool_call_index, tool_call) in tool_calls.iter().enumerate() {
                         let Some(tool_obj) = tool_call.as_object() else {
                             return Err(bad_request(&format!(
-                                "chat.completions assistant tool_call {index} must be an object"
+                                "chat.completions assistant tool_call {tool_call_index} must be \
+                                 an object"
                             )));
                         };
                         let call_id = tool_obj
                             .get("id")
                             .and_then(Value::as_str)
-                            .map(str::to_string)
-                            .unwrap_or_else(|| format!("call_{index}"));
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .ok_or_else(|| {
+                                bad_request(&format!(
+                                    "chat.completions assistant tool_call {tool_call_index} is \
+                                     missing id"
+                                ))
+                            })?;
                         let Some(function_name) = tool_obj
                             .get("function")
                             .and_then(|value| value.get("name"))
@@ -1203,8 +1363,8 @@ fn adapt_openai_chat_completions_request(
                             .filter(|value| !value.is_empty())
                         else {
                             return Err(bad_request(&format!(
-                                "chat.completions assistant tool_call {index} is missing \
-                                 function.name"
+                                "chat.completions assistant tool_call {tool_call_index} is \
+                                 missing function.name"
                             )));
                         };
                         let function_name =
@@ -1258,7 +1418,6 @@ fn adapt_openai_chat_completions_request(
     if let Some(model) = obj.get("model") {
         out.insert("model".to_string(), model.clone());
     }
-    out.insert("instructions".to_string(), Value::String(instructions_parts.join("\n\n")));
     out.insert("input".to_string(), Value::Array(input_items));
 
     let stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(false);
@@ -1803,13 +1962,13 @@ mod tests {
         assert_eq!(upstream["tool_choice"], "auto");
         assert_eq!(upstream["service_tier"], "flex");
         assert_eq!(upstream["client_metadata"], json!({"source":"test"}));
+        assert_eq!(upstream["previous_response_id"], "resp-1");
         assert!(
             upstream.get("max_output_tokens").is_none(),
             "responses requests should drop unsupported output limit parameters",
         );
         assert!(upstream.get("max_completion_tokens").is_none());
         assert!(upstream.get("max_tokens").is_none());
-        assert!(upstream.get("previous_response_id").is_none());
         assert!(upstream.get("verbosity").is_none());
     }
 
@@ -1835,6 +1994,188 @@ mod tests {
             serde_json::from_slice(&prepared.request_body).expect("upstream body json");
 
         assert_eq!(upstream["instructions"].as_str(), Some(codex_default_instructions()));
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_chat_keeps_system_message_in_input_for_json_object() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "response_format":{"type":"json_object"},
+                "messages":[
+                    {"role":"system","content":"Return valid JSON only."},
+                    {"role":"user","content":"hello"}
+                ]
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/chat/completions",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("chat request with system json instruction should normalize");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(upstream["text"]["format"]["type"], "json_object");
+        assert_eq!(upstream["input"][0]["type"], "message");
+        assert_eq!(upstream["input"][0]["role"], "system");
+        assert_eq!(upstream["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(upstream["input"][0]["content"][0]["text"], "Return valid JSON only.");
+        assert_eq!(upstream["instructions"].as_str(), Some(codex_default_instructions()));
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_rejects_json_object_without_json_input_message() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "text":{"format":{"type":"json_object"}},
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+            }"#,
+        );
+
+        let err = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect_err("json_object without json keyword should fail locally");
+
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("json_object"));
+        assert!(err.message.contains("input message"));
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_rejects_chat_tool_call_without_output() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "messages":[
+                    {"role":"user","content":"hello"},
+                    {"role":"assistant","tool_calls":[{"id":"callauto12","type":"function","function":{"name":"lookup","arguments":"{}"}}]}
+                ]
+            }"#,
+        );
+
+        let err = prepare_gateway_request(
+            "/v1/chat/completions",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect_err("chat request with unmatched tool call should fail locally");
+
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err
+            .message
+            .contains("No tool output found for function call callauto12"));
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_rejects_chat_tool_call_without_id() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "messages":[
+                    {"role":"user","content":"hello"},
+                    {"role":"assistant","tool_calls":[{"type":"function","function":{"name":"lookup","arguments":"{}"}}]}
+                ]
+            }"#,
+        );
+
+        let err = prepare_gateway_request(
+            "/v1/chat/completions",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect_err("chat request without tool call id should fail locally");
+
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("missing id"));
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_allows_orphan_tool_output_when_previous_response_id_exists() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "previous_response_id":"resp-1",
+                "input":[
+                    {"type":"function_call_output","call_id":"callauto12","output":"{\"ok\":true}"}
+                ]
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("incremental tool output should normalize");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(upstream["previous_response_id"], "resp-1");
+        assert_eq!(upstream["input"][0]["type"], "function_call_output");
+        assert_eq!(upstream["input"][0]["call_id"], "callauto12");
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_rejects_responses_tool_call_without_output() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "input":[
+                    {"type":"function_call","call_id":"callauto12","name":"lookup","arguments":"{}"}
+                ]
+            }"#,
+        );
+
+        let err = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect_err("responses request with unmatched tool call should fail locally");
+
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err
+            .message
+            .contains("No tool output found for function call callauto12"));
     }
 
     #[tokio::test]

@@ -106,7 +106,7 @@ fn map_response_to_chat_completion(
     let mut assistant_text = String::new();
     let mut tool_calls = Vec::<Value>::new();
     if let Some(output_items) = source.get("output").and_then(Value::as_array) {
-        for (idx, item) in output_items.iter().enumerate() {
+        for item in output_items {
             let Some(item_obj) = item.as_object() else {
                 continue;
             };
@@ -121,12 +121,14 @@ fn map_response_to_chat_completion(
                     }
                 },
                 "function_call" | "custom_tool_call" => {
-                    let call_id = item_obj
+                    let Some(call_id) = item_obj
                         .get("call_id")
                         .or_else(|| item_obj.get("id"))
                         .and_then(Value::as_str)
                         .map(str::to_string)
-                        .unwrap_or_else(|| format!("call_{idx}"));
+                    else {
+                        continue;
+                    };
                     let name = item_obj
                         .get("name")
                         .and_then(Value::as_str)
@@ -364,10 +366,50 @@ fn fill_chat_chunk_defaults(chunk: &mut Value, metadata: &ChatStreamMetadata) {
     }
 }
 
+fn stream_tool_call_identity_from_item(item: &Value) -> Option<(String, String)> {
+    let item_obj = item.as_object()?;
+    if let Some(call_id) = item_obj
+        .get("call_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let call_id = call_id.to_string();
+        return Some((format!("call:{call_id}"), call_id));
+    }
+    let item_id = item_obj
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    Some((format!("item:{item_id}"), item_id))
+}
+
+fn stream_tool_call_identity_from_event(value: &Value) -> Option<(String, String)> {
+    if let Some(call_id) = value
+        .get("call_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let call_id = call_id.to_string();
+        return Some((format!("call:{call_id}"), call_id));
+    }
+    let item_id = value
+        .get("item_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    Some((format!("item:{item_id}"), item_id))
+}
+
 /// Convert one responses stream event into an OpenAI chat chunk when possible.
 fn convert_response_value_to_chat_chunk(
     value: &Value,
     tool_name_restore_map: Option<&BTreeMap<String, String>>,
+    metadata: &mut ChatStreamMetadata,
 ) -> Option<Value> {
     let chunk_type = value
         .get("type")
@@ -386,11 +428,8 @@ fn convert_response_value_to_chat_chunk(
             let item = value.get("item").or_else(|| value.get("output_item"))?;
             let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
             if matches!(item_type, "function_call" | "custom_tool_call") {
-                let call_id = item
-                    .get("call_id")
-                    .or_else(|| item.get("id"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("call_0");
+                let (lookup_key, call_id) = stream_tool_call_identity_from_item(item)?;
+                let tool_call_index = metadata.tool_call_index(&lookup_key);
                 let name = item.get("name").and_then(Value::as_str).unwrap_or("tool");
                 let name = restore_openai_tool_name(name, tool_name_restore_map);
                 let arguments = item
@@ -413,7 +452,7 @@ fn convert_response_value_to_chat_chunk(
                         "delta": {
                             "role": "assistant",
                             "tool_calls": [{
-                                "index": 0,
+                                "index": tool_call_index,
                                 "id": call_id,
                                 "type": "function",
                                 "function": {
@@ -429,11 +468,8 @@ fn convert_response_value_to_chat_chunk(
             None
         },
         "response.function_call_arguments.delta" | "response.function_call_arguments.done" => {
-            let call_id = value
-                .get("call_id")
-                .or_else(|| value.get("item_id"))
-                .and_then(Value::as_str)
-                .unwrap_or("call_0");
+            let (lookup_key, call_id) = stream_tool_call_identity_from_event(value)?;
+            let tool_call_index = metadata.tool_call_index(&lookup_key);
             let arguments = value
                 .get("delta")
                 .or_else(|| value.get("arguments"))
@@ -452,7 +488,7 @@ fn convert_response_value_to_chat_chunk(
                     "delta": {
                         "role": "assistant",
                         "tool_calls": [{
-                            "index": 0,
+                            "index": tool_call_index,
                             "id": call_id,
                             "type": "function",
                             "function": {
@@ -533,7 +569,7 @@ pub fn convert_response_event_to_chat_chunk(
     let value =
         maybe_apply_model_alias(serde_json::from_str::<Value>(payload).ok()?, model_from, model_to);
     observe_chat_stream_metadata(&value, metadata);
-    let mut chunk = convert_response_value_to_chat_chunk(&value, tool_name_restore_map)?;
+    let mut chunk = convert_response_value_to_chat_chunk(&value, tool_name_restore_map, metadata)?;
     fill_chat_chunk_defaults(&mut chunk, metadata);
     Some(chunk)
 }
@@ -556,6 +592,69 @@ pub fn convert_json_response_to_chat_completion(
     let value = maybe_apply_model_alias(value, model_from, model_to);
     serde_json::to_vec(&map_response_to_chat_completion(&value, tool_name_restore_map))
         .map_err(|err| format!("serialize chat.completion json failed: {err}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::convert_response_value_to_chat_chunk;
+    use crate::types::ChatStreamMetadata;
+
+    #[test]
+    fn streamed_tool_calls_keep_stable_indices_per_call_id() {
+        let mut metadata = ChatStreamMetadata::default();
+        let first = json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "call_id": "callauto11",
+                "name": "alpha",
+                "arguments": "{}"
+            }
+        });
+        let second = json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "call_id": "callauto12",
+                "name": "beta",
+                "arguments": "{}"
+            }
+        });
+        let second_delta = json!({
+            "type": "response.function_call_arguments.delta",
+            "call_id": "callauto12",
+            "delta": "{\"k\":1}"
+        });
+
+        let first_chunk =
+            convert_response_value_to_chat_chunk(&first, None, &mut metadata).expect("chunk");
+        let second_chunk =
+            convert_response_value_to_chat_chunk(&second, None, &mut metadata).expect("chunk");
+        let second_delta_chunk =
+            convert_response_value_to_chat_chunk(&second_delta, None, &mut metadata)
+                .expect("chunk");
+
+        assert_eq!(first_chunk["choices"][0]["delta"]["tool_calls"][0]["index"], json!(0));
+        assert_eq!(second_chunk["choices"][0]["delta"]["tool_calls"][0]["index"], json!(1));
+        assert_eq!(second_delta_chunk["choices"][0]["delta"]["tool_calls"][0]["index"], json!(1));
+    }
+
+    #[test]
+    fn streamed_tool_call_without_any_identifier_is_dropped() {
+        let mut metadata = ChatStreamMetadata::default();
+        let value = json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "name": "alpha",
+                "arguments": "{}"
+            }
+        });
+
+        assert!(convert_response_value_to_chat_chunk(&value, None, &mut metadata).is_none());
+    }
 }
 
 /// Rewrite model aliases inside a non-streaming JSON response body.

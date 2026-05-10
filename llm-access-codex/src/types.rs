@@ -110,6 +110,23 @@ pub struct ChatStreamMetadata {
     pub model: Option<String>,
     /// Last observed created timestamp.
     pub created: Option<i64>,
+    /// Stable chat chunk indices assigned to streamed tool calls.
+    pub tool_call_indices: BTreeMap<String, usize>,
+    /// Next tool call index to allocate for a newly observed streamed call.
+    pub next_tool_call_index: usize,
+}
+
+impl ChatStreamMetadata {
+    /// Assign a stable OpenAI chat chunk index to one streamed tool call.
+    pub fn tool_call_index(&mut self, lookup_key: &str) -> usize {
+        if let Some(index) = self.tool_call_indices.get(lookup_key).copied() {
+            return index;
+        }
+        let index = self.next_tool_call_index;
+        self.tool_call_indices.insert(lookup_key.to_string(), index);
+        self.next_tool_call_index += 1;
+        index
+    }
 }
 
 /// Adapted responses body plus shortened tool-name restore map.
