@@ -187,6 +187,8 @@ Use the following skill by default according to task type:
   `kiro-usage-day-report`
 - Recalibrating Kiro cache-estimation coefficients from usage samples:
   `kiro-kmodel-calibrator`
+- Automating pickup-code ZIP retrieval from plus.keria.cc.cd:
+  `keria-plus-pickup`
 - Validating, issuing, and patching pending LLM Gateway account contributions in bulk:
   `approving-llm-gateway-account-batches`
 - Searching local Codex session history:
