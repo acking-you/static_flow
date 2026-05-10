@@ -91,6 +91,8 @@ const KIRO_REMOTE_MEDIA_TIMEOUT: Duration = Duration::from_secs(15);
 const KIRO_LAST_MESSAGE_PART_PREVIEW_CHARS: usize = 320;
 const KIRO_LAST_MESSAGE_TOTAL_PREVIEW_CHARS: usize = 1_024;
 const KIRO_VISION_BRIDGE_MODEL: &str = "claude-sonnet-4.6";
+const MAX_CODEX_ROUTE_ATTEMPTS: usize = 3;
+const CODEX_QUOTA_EXHAUSTION_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 const KIRO_VISION_BRIDGE_PROMPT: &str = "Describe the attached image(s) for another Claude model \
                                          that will answer the user's request. Include visible \
                                          text, objects, colors, layout, charts, tables, and \
@@ -294,6 +296,7 @@ pub struct ProviderState {
     dispatcher: Arc<dyn ProviderDispatcher>,
     kiro_cache_simulator: Arc<KiroCacheSimulator>,
     request_limiter: Arc<RequestLimiter>,
+    codex_account_cooldowns: Arc<CodexAccountCooldowns>,
     kiro_request_scheduler: Arc<KiroRequestScheduler>,
     request_activity: Arc<RequestActivityTracker>,
 }
@@ -308,6 +311,7 @@ pub struct ProviderDispatchDeps {
     admin_config_store: Arc<dyn AdminConfigStore>,
     kiro_cache_simulator: Arc<KiroCacheSimulator>,
     request_limiter: Arc<RequestLimiter>,
+    codex_account_cooldowns: Arc<CodexAccountCooldowns>,
     kiro_request_scheduler: Arc<KiroRequestScheduler>,
 }
 
@@ -385,6 +389,7 @@ impl ProviderState {
             dispatcher,
             kiro_cache_simulator: Arc::new(KiroCacheSimulator::default()),
             request_limiter: Arc::new(RequestLimiter::default()),
+            codex_account_cooldowns: Arc::new(CodexAccountCooldowns::default()),
             kiro_request_scheduler: KiroRequestScheduler::new(),
             request_activity,
         }
@@ -410,6 +415,7 @@ impl ProviderState {
             admin_config_store: Arc::clone(&self.admin_config_store),
             kiro_cache_simulator: Arc::clone(&self.kiro_cache_simulator),
             request_limiter: Arc::clone(&self.request_limiter),
+            codex_account_cooldowns: Arc::clone(&self.codex_account_cooldowns),
             kiro_request_scheduler: Arc::clone(&self.kiro_request_scheduler),
         }
     }
@@ -440,6 +446,16 @@ struct LimitRejection {
     min_start_interval_ms: Option<u64>,
     wait: Option<Duration>,
     elapsed_since_last_start_ms: Option<u64>,
+}
+
+#[derive(Default)]
+struct CodexAccountCooldowns {
+    blocked_until: Mutex<HashMap<String, Instant>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ActiveCooldown {
+    remaining: Duration,
 }
 
 impl Drop for LimitPermit {
@@ -491,6 +507,33 @@ impl RequestLimiter {
             elapsed_since_last_start_ms: elapsed_since_last_start
                 .map(|elapsed| elapsed.as_millis().min(u128::from(u64::MAX)) as u64),
         })
+    }
+}
+
+impl CodexAccountCooldowns {
+    fn cooldown_for_account(&self, account_name: &str) -> Option<ActiveCooldown> {
+        let Ok(mut blocked_until) = self.blocked_until.lock() else {
+            return None;
+        };
+        let blocked_until_at = blocked_until.get(account_name).copied()?;
+        let remaining = blocked_until_at.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            blocked_until.remove(account_name);
+            return None;
+        }
+        Some(ActiveCooldown {
+            remaining,
+        })
+    }
+
+    fn mark_account_cooldown(&self, account_name: &str, cooldown: Duration) {
+        if cooldown.is_zero() {
+            return;
+        }
+        let Ok(mut blocked_until) = self.blocked_until.lock() else {
+            return;
+        };
+        blocked_until.insert(account_name.to_string(), Instant::now() + cooldown);
     }
 }
 
@@ -565,6 +608,7 @@ fn kiro_key_limit_response(rejection: &LimitRejection) -> Response {
 
 async fn select_codex_route_with_account_permit(
     limiter: &Arc<RequestLimiter>,
+    codex_account_cooldowns: &Arc<CodexAccountCooldowns>,
     routes: &[ProviderCodexRoute],
     failed_accounts: &HashSet<String>,
 ) -> Result<(ProviderCodexRoute, LimitPermit), Response> {
@@ -575,9 +619,21 @@ async fn select_codex_route_with_account_permit(
     }
     loop {
         let mut saw_limit = false;
+        let mut saw_quota_cooldown = false;
         let mut shortest_wait: Option<LimitRejection> = None;
         for route in routes {
             if failed_accounts.contains(&route.account_name) {
+                continue;
+            }
+            if let Some(cooldown) =
+                codex_account_cooldowns.cooldown_for_account(&route.account_name)
+            {
+                saw_quota_cooldown = true;
+                tracing::debug!(
+                    account = %route.account_name,
+                    cooldown_remaining_ms = cooldown.remaining.as_millis() as u64,
+                    "skipping codex account on temporary quota cooldown"
+                );
                 continue;
             }
             match limiter.try_acquire(
@@ -613,6 +669,9 @@ async fn select_codex_route_with_account_permit(
         if saw_limit {
             wait_for_limit(shortest_wait.as_ref()).await;
             continue;
+        }
+        if saw_quota_cooldown {
+            return Err((StatusCode::TOO_MANY_REQUESTS, "quota_exceeded").into_response());
         }
         return Err((StatusCode::SERVICE_UNAVAILABLE, "no usable codex account is configured")
             .into_response());
@@ -791,6 +850,7 @@ async fn dispatch_codex_proxy(
         geoip,
         admin_config_store,
         request_limiter,
+        codex_account_cooldowns,
         ..
     } = deps;
     let mut usage_meta = ProviderUsageMetadata::from_request_parts(
@@ -881,10 +941,12 @@ async fn dispatch_codex_proxy(
     };
     let mut key_permit = Some(key_permit);
     let mut failed_accounts = HashSet::new();
+    let mut attempt_count = 0_usize;
     loop {
         let route_started = Instant::now();
         let (route, account_permit) = match select_codex_route_with_account_permit(
             &request_limiter,
+            &codex_account_cooldowns,
             &routes,
             &failed_accounts,
         )
@@ -894,6 +956,7 @@ async fn dispatch_codex_proxy(
             Err(response) => return response,
         };
         usage_meta.add_routing_wait(clamp_duration_ms(route_started.elapsed()));
+        attempt_count = attempt_count.saturating_add(1);
         let mut auth = match codex_refresh::ensure_context_for_route(
             &route,
             route_store.as_ref(),
@@ -908,7 +971,14 @@ async fn dispatch_codex_proxy(
             },
             Err(_) => {
                 usage_meta.mark_failover();
-                failed_accounts.insert(route.account_name);
+                failed_accounts.insert(route.account_name.clone());
+                if attempt_count >= MAX_CODEX_ROUTE_ATTEMPTS {
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        "all eligible codex accounts failed for this request",
+                    )
+                        .into_response();
+                }
                 continue;
             },
         };
@@ -922,7 +992,14 @@ async fn dispatch_codex_proxy(
             Ok(client) => client,
             Err(_) => {
                 usage_meta.mark_failover();
-                failed_accounts.insert(route.account_name);
+                failed_accounts.insert(route.account_name.clone());
+                if attempt_count >= MAX_CODEX_ROUTE_ATTEMPTS {
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        "all eligible codex accounts failed for this request",
+                    )
+                        .into_response();
+                }
                 continue;
             },
         };
@@ -940,7 +1017,14 @@ async fn dispatch_codex_proxy(
             },
             Err(_) => {
                 usage_meta.mark_failover();
-                failed_accounts.insert(route.account_name);
+                failed_accounts.insert(route.account_name.clone());
+                if attempt_count >= MAX_CODEX_ROUTE_ATTEMPTS {
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        "all eligible codex accounts failed for this request",
+                    )
+                        .into_response();
+                }
                 continue;
             },
         };
@@ -967,26 +1051,75 @@ async fn dispatch_codex_proxy(
                         },
                         Err(_) => {
                             usage_meta.mark_failover();
-                            failed_accounts.insert(route.account_name);
+                            failed_accounts.insert(route.account_name.clone());
+                            if attempt_count >= MAX_CODEX_ROUTE_ATTEMPTS {
+                                return (
+                                    StatusCode::BAD_GATEWAY,
+                                    "all eligible codex accounts failed for this request",
+                                )
+                                    .into_response();
+                            }
                             continue;
                         },
                     };
                 },
                 Err(_) => {
                     usage_meta.mark_failover();
-                    failed_accounts.insert(route.account_name);
+                    failed_accounts.insert(route.account_name.clone());
+                    if attempt_count >= MAX_CODEX_ROUTE_ATTEMPTS {
+                        return (
+                            StatusCode::BAD_GATEWAY,
+                            "all eligible codex accounts failed for this request",
+                        )
+                            .into_response();
+                    }
                     continue;
                 },
             }
         }
-        if !response.status().is_success()
+        if response.status().is_success() {
+            let permits = vec![
+                key_permit
+                    .take()
+                    .expect("codex key permit should be held until response is returned"),
+                account_permit,
+            ];
+            return adapt_codex_upstream_response(
+                prepared,
+                response,
+                key,
+                route,
+                control_store,
+                permits,
+                usage_meta,
+            )
+            .await;
+        }
+        let status = response.status();
+        let upstream_headers = response.headers().clone();
+        let content_type = upstream_headers
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("application/json")
+            .to_string();
+        let bytes = match response.bytes().await {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                return (StatusCode::BAD_GATEWAY, "codex upstream response read failed")
+                    .into_response()
+            },
+        };
+        if let Some(cooldown) = codex_quota_exhaustion_cooldown(status, &bytes) {
+            codex_account_cooldowns.mark_account_cooldown(&route.account_name, cooldown);
+        }
+        if attempt_count < MAX_CODEX_ROUTE_ATTEMPTS
             && routes.iter().any(|candidate| {
                 !failed_accounts.contains(&candidate.account_name)
                     && candidate.account_name != route.account_name
             })
         {
             usage_meta.mark_failover();
-            failed_accounts.insert(route.account_name);
+            failed_accounts.insert(route.account_name.clone());
             continue;
         }
         let permits = vec![
@@ -995,14 +1128,21 @@ async fn dispatch_codex_proxy(
                 .expect("codex key permit should be held until response is returned"),
             account_permit,
         ];
-        return adapt_codex_upstream_response(
-            prepared,
-            response,
-            key,
-            route,
-            control_store,
-            permits,
-            usage_meta,
+        return adapt_codex_upstream_response_from_parts(
+            CodexUpstreamResponseParts {
+                status,
+                upstream_headers,
+                content_type,
+                bytes,
+            },
+            CodexCompletedResponseContext {
+                prepared,
+                key,
+                route,
+                control_store,
+                permits,
+                usage_meta,
+            },
         )
         .await;
     }
@@ -1111,6 +1251,59 @@ async fn adapt_codex_upstream_response(
             return (StatusCode::BAD_GATEWAY, "codex upstream response read failed").into_response()
         },
     };
+    adapt_codex_upstream_response_from_parts(
+        CodexUpstreamResponseParts {
+            status,
+            upstream_headers,
+            content_type,
+            bytes,
+        },
+        CodexCompletedResponseContext {
+            prepared,
+            key,
+            route,
+            control_store,
+            permits,
+            usage_meta,
+        },
+    )
+    .await
+}
+
+struct CodexUpstreamResponseParts {
+    status: StatusCode,
+    upstream_headers: reqwest::header::HeaderMap,
+    content_type: String,
+    bytes: Bytes,
+}
+
+struct CodexCompletedResponseContext {
+    prepared: PreparedGatewayRequest,
+    key: AuthenticatedKey,
+    route: ProviderCodexRoute,
+    control_store: Arc<dyn ControlStore>,
+    permits: Vec<LimitPermit>,
+    usage_meta: ProviderUsageMetadata,
+}
+
+async fn adapt_codex_upstream_response_from_parts(
+    parts: CodexUpstreamResponseParts,
+    ctx: CodexCompletedResponseContext,
+) -> Response {
+    let CodexUpstreamResponseParts {
+        status,
+        upstream_headers,
+        content_type,
+        bytes,
+    } = parts;
+    let CodexCompletedResponseContext {
+        prepared,
+        key,
+        route,
+        control_store,
+        permits: _permits,
+        mut usage_meta,
+    } = ctx;
     usage_meta.mark_post_headers_body();
     usage_meta.mark_stream_finish();
     let usage = if status.is_success() {
@@ -1169,6 +1362,46 @@ async fn adapt_codex_upstream_response(
         .unwrap_or_else(|_| {
             (StatusCode::BAD_GATEWAY, "codex upstream response build failed").into_response()
         })
+}
+
+fn codex_quota_exhaustion_cooldown(status: StatusCode, bytes: &Bytes) -> Option<Duration> {
+    if !matches!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::PAYMENT_REQUIRED | StatusCode::FORBIDDEN
+    ) {
+        return None;
+    }
+    let body = String::from_utf8_lossy(bytes.as_ref());
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes.as_ref()) {
+        for pointer in ["/error/code", "/code", "/response/error/code"] {
+            if value.pointer(pointer).and_then(serde_json::Value::as_str)
+                == Some("insufficient_quota")
+            {
+                return Some(CODEX_QUOTA_EXHAUSTION_COOLDOWN);
+            }
+        }
+        for pointer in ["/error/message", "/message", "/response/error/message"] {
+            if value
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(codex_message_indicates_usage_limit)
+            {
+                return Some(CODEX_QUOTA_EXHAUSTION_COOLDOWN);
+            }
+        }
+    }
+    if codex_message_indicates_usage_limit(&body) {
+        return Some(CODEX_QUOTA_EXHAUSTION_COOLDOWN);
+    }
+    None
+}
+
+fn codex_message_indicates_usage_limit(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("usage limit")
+        || normalized.contains("insufficient_quota")
+        || normalized.contains("quota_exceeded")
+        || normalized.contains("quota exceeded")
 }
 
 struct CodexStreamContext {
@@ -5767,6 +6000,61 @@ mod tests {
     }
 
     #[derive(Clone)]
+    struct StaticMultiCodexRouteStore {
+        codex_routes: Vec<ProviderCodexRoute>,
+        kiro_route: ProviderKiroRoute,
+    }
+
+    #[async_trait]
+    impl ProviderRouteStore for StaticMultiCodexRouteStore {
+        async fn resolve_codex_route(
+            &self,
+            _key: &AuthenticatedKey,
+        ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+            Ok(self.codex_routes.first().cloned())
+        }
+
+        async fn resolve_codex_route_candidates(
+            &self,
+            _key: &AuthenticatedKey,
+        ) -> anyhow::Result<Vec<ProviderCodexRoute>> {
+            Ok(self.codex_routes.clone())
+        }
+
+        async fn resolve_codex_account_route(
+            &self,
+            account_name: &str,
+        ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+            Ok(self
+                .codex_routes
+                .iter()
+                .find(|route| route.account_name == account_name)
+                .cloned())
+        }
+
+        async fn resolve_kiro_route(
+            &self,
+            _key: &AuthenticatedKey,
+        ) -> anyhow::Result<Option<ProviderKiroRoute>> {
+            Ok(Some(self.kiro_route.clone()))
+        }
+
+        async fn save_kiro_auth_update(
+            &self,
+            _update: ProviderKiroAuthUpdate,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn save_codex_auth_update(
+            &self,
+            _update: llm_access_core::store::ProviderCodexAuthUpdate,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
     struct CapturingKiroStatusRouteStore {
         route: Arc<Mutex<ProviderKiroRoute>>,
         updates: Arc<Mutex<Vec<AdminKiroStatusCacheUpdate>>>,
@@ -5953,38 +6241,31 @@ mod tests {
         Arc::new(EmptyProviderRouteStore)
     }
 
+    fn codex_route_for_account(account_name: &str, access_token: &str) -> ProviderCodexRoute {
+        ProviderCodexRoute {
+            account_name: account_name.to_string(),
+            account_group_id_at_event: None,
+            route_strategy_at_event: RouteStrategy::Auto,
+            auth_json: format!(r#"{{"access_token":"{access_token}"}}"#),
+            map_gpt53_codex_to_spark: true,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            account_request_max_concurrency: None,
+            account_request_min_start_interval_ms: None,
+            proxy: None,
+        }
+    }
+
     fn static_codex_route_store() -> Arc<dyn ProviderRouteStore> {
         Arc::new(StaticRouteStore {
-            codex_route: ProviderCodexRoute {
-                account_name: "codex-a".to_string(),
-                account_group_id_at_event: None,
-                route_strategy_at_event: RouteStrategy::Auto,
-                auth_json: r#"{"access_token":"upstream-token"}"#.to_string(),
-                map_gpt53_codex_to_spark: true,
-                request_max_concurrency: None,
-                request_min_start_interval_ms: None,
-                account_request_max_concurrency: None,
-                account_request_min_start_interval_ms: None,
-                proxy: None,
-            },
+            codex_route: codex_route_for_account("codex-a", "upstream-token"),
             kiro_route: static_kiro_route(),
         })
     }
 
     fn static_kiro_route_store() -> Arc<dyn ProviderRouteStore> {
         Arc::new(StaticRouteStore {
-            codex_route: ProviderCodexRoute {
-                account_name: "codex-a".to_string(),
-                account_group_id_at_event: None,
-                route_strategy_at_event: RouteStrategy::Auto,
-                auth_json: r#"{"access_token":"upstream-token"}"#.to_string(),
-                map_gpt53_codex_to_spark: true,
-                request_max_concurrency: None,
-                request_min_start_interval_ms: None,
-                account_request_max_concurrency: None,
-                account_request_min_start_interval_ms: None,
-                proxy: None,
-            },
+            codex_route: codex_route_for_account("codex-a", "upstream-token"),
             kiro_route: static_kiro_route(),
         })
     }
@@ -6615,6 +6896,218 @@ mod tests {
                 })
             )))
             .expect("upstream response")
+    }
+
+    async fn fake_codex_responses_quota_then_success(
+        State(captured): State<Arc<CapturedCodexUpstream>>,
+        headers: HeaderMap,
+        request: Request<Body>,
+    ) -> Response {
+        let path = request.uri().path().to_string();
+        let query = request.uri().query().map(ToString::to_string);
+        let body = to_bytes(request.into_body(), usize::MAX)
+            .await
+            .expect("upstream request body");
+        let body = if body.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json")
+        };
+        let authorization = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(ToString::to_string);
+        captured
+            .requests
+            .lock()
+            .expect("captured requests")
+            .push(CapturedCodexRequest {
+                path,
+                query,
+                authorization: authorization.clone(),
+                accept: headers
+                    .get(header::ACCEPT)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                user_agent: headers
+                    .get(header::USER_AGENT)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                x_client_request_id: headers
+                    .get("x-client-request-id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                session_id: headers
+                    .get("session_id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                x_codex_turn_state: headers
+                    .get("x-codex-turn-state")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                body,
+            });
+
+        if authorization.as_deref() == Some("Bearer upstream-token-a") {
+            return Response::builder()
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"error":{"code":"insufficient_quota","message":"You've hit your usage limit. Try again later."}}"#,
+                ))
+                .expect("quota upstream response");
+        }
+
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .body(Body::from(format!(
+                "event: response.output_text.delta\ndata: {}\n\nevent: \
+                 response.output_text.delta\ndata: {}\n\nevent: response.completed\ndata: {}\n\n",
+                json!({
+                    "type": "response.output_text.delta",
+                    "response_id": "resp_1",
+                    "created": 123,
+                    "model": "gpt-5.3-codex-spark",
+                    "delta": "hello "
+                }),
+                json!({
+                    "type": "response.output_text.delta",
+                    "response_id": "resp_1",
+                    "created": 123,
+                    "model": "gpt-5.3-codex-spark",
+                    "delta": "back"
+                }),
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_1",
+                        "created_at": 123,
+                        "model": "gpt-5.3-codex-spark",
+                        "output": [{
+                            "type": "message",
+                            "content": [{
+                                "type": "output_text",
+                                "text": "hello back"
+                            }]
+                        }],
+                        "usage": {
+                            "input_tokens": 12,
+                            "input_tokens_details": {
+                                "cached_tokens": 2
+                            },
+                            "output_tokens": 3
+                        }
+                    }
+                })
+            )))
+            .expect("upstream response")
+    }
+
+    async fn fake_codex_responses_fail_first_three(
+        State(captured): State<Arc<CapturedCodexUpstream>>,
+        headers: HeaderMap,
+        request: Request<Body>,
+    ) -> Response {
+        let path = request.uri().path().to_string();
+        let query = request.uri().query().map(ToString::to_string);
+        let body = to_bytes(request.into_body(), usize::MAX)
+            .await
+            .expect("upstream request body");
+        let body = if body.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json")
+        };
+        let authorization = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(ToString::to_string);
+        captured
+            .requests
+            .lock()
+            .expect("captured requests")
+            .push(CapturedCodexRequest {
+                path,
+                query,
+                authorization: authorization.clone(),
+                accept: headers
+                    .get(header::ACCEPT)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                user_agent: headers
+                    .get(header::USER_AGENT)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                x_client_request_id: headers
+                    .get("x-client-request-id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                session_id: headers
+                    .get("session_id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                x_codex_turn_state: headers
+                    .get("x-codex-turn-state")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                body,
+            });
+
+        match authorization.as_deref() {
+            Some("Bearer upstream-token-a")
+            | Some("Bearer upstream-token-b")
+            | Some("Bearer upstream-token-c") => Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"error":{"message":"temporary upstream failure"}}"#))
+                .expect("failing upstream response"),
+            _ => Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .body(Body::from(format!(
+                    "event: response.output_text.delta\ndata: {}\n\nevent: \
+                     response.output_text.delta\ndata: {}\n\nevent: response.completed\ndata: \
+                     {}\n\n",
+                    json!({
+                        "type": "response.output_text.delta",
+                        "response_id": "resp_1",
+                        "created": 123,
+                        "model": "gpt-5.3-codex-spark",
+                        "delta": "hello "
+                    }),
+                    json!({
+                        "type": "response.output_text.delta",
+                        "response_id": "resp_1",
+                        "created": 123,
+                        "model": "gpt-5.3-codex-spark",
+                        "delta": "back"
+                    }),
+                    json!({
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_1",
+                            "created_at": 123,
+                            "model": "gpt-5.3-codex-spark",
+                            "output": [{
+                                "type": "message",
+                                "content": [{
+                                    "type": "output_text",
+                                    "text": "hello back"
+                                }]
+                            }],
+                            "usage": {
+                                "input_tokens": 12,
+                                "input_tokens_details": {
+                                    "cached_tokens": 2
+                                },
+                                "output_tokens": 3
+                            }
+                        }
+                    })
+                )))
+                .expect("upstream response"),
+        }
     }
 
     async fn fake_codex_models(
@@ -7510,6 +8003,137 @@ mod tests {
         assert_eq!(event.output_tokens, 3);
         assert_eq!(event.billable_tokens, 25);
         assert!(!event.usage_missing);
+    }
+
+    #[tokio::test]
+    async fn codex_dispatch_cools_down_quota_exhausted_account_between_requests() {
+        let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("codex upstream env lock");
+        let captured = Arc::new(CapturedCodexUpstream::default());
+        let app = Router::new()
+            .route("/v1/responses", post(fake_codex_responses_quota_then_success))
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+        let route_store = Arc::new(StaticMultiCodexRouteStore {
+            codex_routes: vec![
+                codex_route_for_account("codex-a", "upstream-token-a"),
+                codex_route_for_account("codex-b", "upstream-token-b"),
+            ],
+            kiro_route: static_kiro_route(),
+        });
+        let state = super::ProviderState::new(Arc::new(TestStore), route_store);
+        let request = || {
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(header::AUTHORIZATION, "Bearer codex-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "gpt-5.3-codex",
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": false
+                    }"#,
+                ))
+                .expect("request")
+        };
+
+        let first = super::provider_entry(state.clone(), request()).await;
+        let second = super::provider_entry(state, request()).await;
+
+        std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(second.status(), StatusCode::OK);
+        let requests = captured.requests.lock().expect("captured requests");
+        let auths = requests
+            .iter()
+            .filter_map(|request| request.authorization.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(auths, vec![
+            "Bearer upstream-token-a".to_string(),
+            "Bearer upstream-token-b".to_string(),
+            "Bearer upstream-token-b".to_string(),
+        ]);
+    }
+
+    #[tokio::test]
+    async fn codex_dispatch_caps_failover_attempts_at_three_routes() {
+        let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("codex upstream env lock");
+        let captured = Arc::new(CapturedCodexUpstream::default());
+        let app = Router::new()
+            .route("/v1/responses", post(fake_codex_responses_fail_first_three))
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+        let route_store = Arc::new(StaticMultiCodexRouteStore {
+            codex_routes: vec![
+                codex_route_for_account("codex-a", "upstream-token-a"),
+                codex_route_for_account("codex-b", "upstream-token-b"),
+                codex_route_for_account("codex-c", "upstream-token-c"),
+                codex_route_for_account("codex-d", "upstream-token-d"),
+            ],
+            kiro_route: static_kiro_route(),
+        });
+        let state = super::ProviderState::new(Arc::new(TestStore), route_store);
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(header::AUTHORIZATION, "Bearer codex-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "gpt-5.3-codex",
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": false
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains("temporary upstream failure"));
+        let requests = captured.requests.lock().expect("captured requests");
+        let auths = requests
+            .iter()
+            .filter_map(|request| request.authorization.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(auths, vec![
+            "Bearer upstream-token-a".to_string(),
+            "Bearer upstream-token-b".to_string(),
+            "Bearer upstream-token-c".to_string(),
+        ]);
     }
 
     #[tokio::test]

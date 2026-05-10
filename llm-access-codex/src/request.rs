@@ -135,6 +135,7 @@ pub fn prepare_gateway_request_from_bytes(
             thread_anchor = Some(prompt_cache_key.to_string());
         }
         normalize_responses_request("/v1/responses", &mut adapted, thread_anchor.as_deref());
+        filter_responses_request_fields("/v1/responses", &mut adapted);
         if !original_wants_stream {
             adapted.insert("stream".to_string(), Value::Bool(true));
             force_upstream_stream = true;
@@ -147,6 +148,7 @@ pub fn prepare_gateway_request_from_bytes(
                 thread_anchor = Some(prompt_cache_key.to_string());
             }
             normalize_responses_request(gateway_path, root, thread_anchor.as_deref());
+            filter_responses_request_fields(gateway_path, root);
             if gateway_path == "/v1/responses" && !original_wants_stream {
                 root.insert("stream".to_string(), Value::Bool(true));
                 force_upstream_stream = true;
@@ -579,6 +581,41 @@ fn normalize_reasoning_effort(value: &str) -> Option<&'static str> {
         "xhigh" | "extra_high" => Some("xhigh"),
         _ => None,
     }
+}
+
+fn filter_responses_request_fields(path: &str, root: &mut Map<String, Value>) {
+    root.retain(|key, _| match path {
+        "/v1/responses" => matches!(
+            key.as_str(),
+            "model"
+                | "instructions"
+                | "input"
+                | "tools"
+                | "tool_choice"
+                | "parallel_tool_calls"
+                | "reasoning"
+                | "store"
+                | "stream"
+                | "include"
+                | "service_tier"
+                | "prompt_cache_key"
+                | "text"
+                | "client_metadata"
+        ),
+        "/v1/responses/compact" => matches!(
+            key.as_str(),
+            "model"
+                | "instructions"
+                | "input"
+                | "tools"
+                | "parallel_tool_calls"
+                | "reasoning"
+                | "service_tier"
+                | "prompt_cache_key"
+                | "text"
+        ),
+        _ => true,
+    });
 }
 
 /// Map OpenAI chat roles into the role set accepted by the responses API.
@@ -1732,6 +1769,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prepare_gateway_request_responses_filters_fields_not_in_codex_upstream_schema() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "input":"hello",
+                "tool_choice":"auto",
+                "service_tier":"flex",
+                "client_metadata":{"source":"test"},
+                "max_output_tokens":64,
+                "max_completion_tokens":32,
+                "max_tokens":16,
+                "previous_response_id":"resp-1",
+                "verbosity":"high"
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("responses request should normalize");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(upstream["tool_choice"], "auto");
+        assert_eq!(upstream["service_tier"], "flex");
+        assert_eq!(upstream["client_metadata"], json!({"source":"test"}));
+        assert!(
+            upstream.get("max_output_tokens").is_none(),
+            "responses requests should drop unsupported output limit parameters",
+        );
+        assert!(upstream.get("max_completion_tokens").is_none());
+        assert!(upstream.get("max_tokens").is_none());
+        assert!(upstream.get("previous_response_id").is_none());
+        assert!(upstream.get("verbosity").is_none());
+    }
+
+    #[tokio::test]
     async fn prepare_gateway_request_injects_default_instructions_for_bare_chat() {
         let headers = axum::http::HeaderMap::new();
         let body = Body::from(
@@ -1799,6 +1881,50 @@ mod tests {
             upstream.get("stream").is_none(),
             "compact requests should not inject stream control"
         );
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_compact_filters_fields_not_in_codex_compact_schema() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "input":"hello compact",
+                "tools":[{"type":"web_search"}],
+                "parallel_tool_calls":true,
+                "reasoning":{"effort":"high","summary":"auto"},
+                "text":{"verbosity":"low"},
+                "max_output_tokens":64,
+                "store":true,
+                "include":["reasoning.encrypted_content"],
+                "client_metadata":{"source":"test"},
+                "tool_choice":"required"
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses/compact",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("compact request should normalize");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(upstream["tools"], json!([{ "type": "web_search" }]));
+        assert_eq!(upstream["parallel_tool_calls"], json!(true));
+        assert_eq!(upstream["reasoning"], json!({"effort":"high","summary":"auto"}));
+        assert_eq!(upstream["text"], json!({"verbosity":"low"}));
+        assert!(upstream.get("max_output_tokens").is_none());
+        assert!(upstream.get("store").is_none());
+        assert!(upstream.get("include").is_none());
+        assert!(upstream.get("client_metadata").is_none());
+        assert!(upstream.get("tool_choice").is_none());
     }
 
     #[tokio::test]
