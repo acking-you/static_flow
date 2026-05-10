@@ -37,9 +37,9 @@ use llm_access_core::{
     provider::{ProtocolFamily, ProviderType},
     routes::provider_route_requirement,
     store::{
-        compute_kiro_billable_tokens, AdminConfigStore, AuthenticatedKey, ControlStore,
-        EmptyAdminConfigStore, ProviderCodexRoute, ProviderKiroRoute, ProviderProxyConfig,
-        ProviderRouteStore,
+        compute_kiro_billable_tokens, is_terminal_codex_auth_error, AdminConfigStore,
+        AuthenticatedKey, ControlStore, EmptyAdminConfigStore, ProviderCodexRoute,
+        ProviderKiroRoute, ProviderProxyConfig, ProviderRouteStore,
     },
     usage::{UsageEvent, UsageStreamDetails, UsageTiming},
 };
@@ -620,9 +620,23 @@ async fn select_codex_route_with_account_permit(
     loop {
         let mut saw_limit = false;
         let mut saw_quota_cooldown = false;
+        let mut saw_terminal_auth_error = false;
         let mut shortest_wait: Option<LimitRejection> = None;
         for route in routes {
             if failed_accounts.contains(&route.account_name) {
+                continue;
+            }
+            if let Some(error) = route
+                .cached_error_message
+                .as_deref()
+                .filter(|message| is_terminal_codex_auth_error(message))
+            {
+                saw_terminal_auth_error = true;
+                tracing::warn!(
+                    account = %route.account_name,
+                    error,
+                    "skipping codex account with terminal auth error"
+                );
                 continue;
             }
             if let Some(cooldown) =
@@ -672,6 +686,13 @@ async fn select_codex_route_with_account_permit(
         }
         if saw_quota_cooldown {
             return Err((StatusCode::TOO_MANY_REQUESTS, "quota_exceeded").into_response());
+        }
+        if saw_terminal_auth_error {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                "all eligible codex accounts failed for this request",
+            )
+                .into_response());
         }
         return Err((StatusCode::SERVICE_UNAVAILABLE, "no usable codex account is configured")
             .into_response());
@@ -5679,7 +5700,7 @@ fn now_seconds() -> i64 {
 )]
 mod tests {
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, HashSet},
         sync::{Arc, Mutex},
         time::{Duration, Instant},
     };
@@ -5705,7 +5726,10 @@ mod tests {
     use serde_json::json;
     use tokio::sync::Notify;
 
-    use super::ProviderDispatcher;
+    use super::{
+        select_codex_route_with_account_permit, CodexAccountCooldowns, ProviderDispatcher,
+        RequestLimiter,
+    };
 
     #[test]
     fn codex_backend_api_base_uses_upstream_codex_paths() {
@@ -6252,6 +6276,7 @@ mod tests {
             request_min_start_interval_ms: None,
             account_request_max_concurrency: None,
             account_request_min_start_interval_ms: None,
+            cached_error_message: None,
             proxy: None,
         }
     }
@@ -8137,6 +8162,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn codex_route_selection_skips_terminal_auth_error_routes() {
+        let limiter = Arc::new(RequestLimiter::default());
+        let cooldowns = Arc::new(CodexAccountCooldowns::default());
+        let mut blocked = codex_route_for_account("codex-a", "upstream-token-a");
+        blocked.cached_error_message = Some(
+            "codex refresh token returned 401 Unauthorized: \
+             {\"error\":{\"code\":\"refresh_token_reused\"}}"
+                .to_string(),
+        );
+        let healthy = codex_route_for_account("codex-b", "upstream-token-b");
+
+        let (route, _permit) = select_codex_route_with_account_permit(
+            &limiter,
+            &cooldowns,
+            &[blocked, healthy],
+            &HashSet::new(),
+        )
+        .await
+        .expect("healthy route should still be selected");
+
+        assert_eq!(route.account_name, "codex-b");
+    }
+
+    #[tokio::test]
+    async fn codex_route_selection_returns_bad_gateway_when_all_routes_have_terminal_auth_errors() {
+        let limiter = Arc::new(RequestLimiter::default());
+        let cooldowns = Arc::new(CodexAccountCooldowns::default());
+        let mut blocked_a = codex_route_for_account("codex-a", "upstream-token-a");
+        blocked_a.cached_error_message = Some(
+            "codex refresh token returned 401 Unauthorized: \
+             {\"error\":{\"code\":\"refresh_token_reused\"}}"
+                .to_string(),
+        );
+        let mut blocked_b = codex_route_for_account("codex-b", "upstream-token-b");
+        blocked_b.cached_error_message = Some(
+            "codex refresh token returned 401 Unauthorized: \
+             {\"error\":{\"code\":\"refresh_token_invalidated\"}}"
+                .to_string(),
+        );
+
+        let response = match select_codex_route_with_account_permit(
+            &limiter,
+            &cooldowns,
+            &[blocked_a, blocked_b],
+            &HashSet::new(),
+        )
+        .await
+        {
+            Ok(_) => panic!("terminal auth errors should block all routes"),
+            Err(response) => response,
+        };
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body.contains("all eligible codex accounts failed for this request"));
+    }
+
+    #[tokio::test]
     async fn kiro_dispatch_adapts_non_streaming_messages_from_eventstream() {
         let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
             .lock()
@@ -8211,6 +8297,7 @@ mod tests {
                     request_min_start_interval_ms: None,
                     account_request_max_concurrency: None,
                     account_request_min_start_interval_ms: None,
+                    cached_error_message: None,
                     proxy: None,
                 },
                 kiro_route: route,
@@ -8274,6 +8361,7 @@ mod tests {
                     request_min_start_interval_ms: None,
                     account_request_max_concurrency: None,
                     account_request_min_start_interval_ms: None,
+                    cached_error_message: None,
                     proxy: None,
                 },
                 kiro_route: route,
@@ -8588,6 +8676,7 @@ mod tests {
                     request_min_start_interval_ms: None,
                     account_request_max_concurrency: None,
                     account_request_min_start_interval_ms: None,
+                    cached_error_message: None,
                     proxy: None,
                 },
                 kiro_route: route,

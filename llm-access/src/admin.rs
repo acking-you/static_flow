@@ -1229,13 +1229,23 @@ fn apply_codex_public_status_to_admin_account(
     account.plan_type = status_account.plan_type;
     account.primary_remaining_percent = status_account.primary_remaining_percent;
     account.secondary_remaining_percent = status_account.secondary_remaining_percent;
-    account.last_refresh = status_account
+    let local_error = account.usage_error_message.clone();
+    let local_refresh = account.last_refresh.unwrap_or(0);
+    let status_checked_at = status_account.last_usage_checked_at.unwrap_or(0);
+    let merged_refresh = status_account
         .last_usage_checked_at
         .or(status_last_checked_at)
+        .map(|value| value.max(local_refresh))
         .or(account.last_refresh);
+    account.last_refresh = merged_refresh;
     account.last_usage_checked_at = status_account.last_usage_checked_at;
     account.last_usage_success_at = status_account.last_usage_success_at;
-    account.usage_error_message = status_account.usage_error_message;
+    if status_account.usage_error_message.is_some()
+        || local_error.is_none()
+        || local_refresh <= status_checked_at
+    {
+        account.usage_error_message = status_account.usage_error_message;
+    }
 }
 
 pub(crate) async fn import_llm_gateway_account(
@@ -2262,6 +2272,7 @@ pub(crate) async fn validate_llm_gateway_account_contribution_request(
         request_min_start_interval_ms: None,
         account_request_max_concurrency: None,
         account_request_min_start_interval_ms: None,
+        cached_error_message: None,
         proxy: Some(proxy),
     };
     let refreshed = match codex_refresh::refresh_auth_json_for_route(&route).await {
@@ -3874,6 +3885,7 @@ async fn refresh_validated_codex_batch_import_auth(
         request_min_start_interval_ms: None,
         account_request_max_concurrency: None,
         account_request_min_start_interval_ms: None,
+        cached_error_message: None,
         proxy: Some(proxy),
     };
     let refreshed = codex_refresh::refresh_auth_json_for_route(&route)
@@ -5480,6 +5492,65 @@ mod tests {
         assert_eq!(accounts[0].plan_type, None);
         assert_eq!(accounts[0].primary_remaining_percent, None);
         assert_eq!(accounts[0].secondary_remaining_percent, None);
+    }
+
+    #[test]
+    fn admin_codex_accounts_keep_newer_local_error_until_status_catches_up() {
+        let accounts = vec![core_store::AdminCodexAccount {
+            name: "alpha".to_string(),
+            status: "active".to_string(),
+            account_id: Some("acct-alpha".to_string()),
+            plan_type: None,
+            primary_remaining_percent: None,
+            secondary_remaining_percent: None,
+            map_gpt53_codex_to_spark: false,
+            request_max_concurrency: Some(3),
+            request_min_start_interval_ms: Some(1000),
+            proxy_mode: "inherit".to_string(),
+            proxy_config_id: None,
+            effective_proxy_source: "binding".to_string(),
+            effective_proxy_url: Some("http://127.0.0.1:11118".to_string()),
+            effective_proxy_config_name: Some("us-home1".to_string()),
+            last_refresh: Some(1300),
+            last_usage_checked_at: None,
+            last_usage_success_at: None,
+            usage_error_message: Some(
+                "codex refresh token returned 401 Unauthorized: \
+                 {\"error\":{\"code\":\"refresh_token_reused\"}}"
+                    .to_string(),
+            ),
+        }];
+        let status = core_store::CodexRateLimitStatus {
+            status: "ready".to_string(),
+            refresh_interval_seconds: 300,
+            last_checked_at: Some(1200),
+            last_success_at: Some(1200),
+            source_url: "https://chatgpt.com/backend-api/wham/usage".to_string(),
+            error_message: None,
+            accounts: vec![core_store::CodexPublicAccountStatus {
+                name: "alpha".to_string(),
+                status: "active".to_string(),
+                plan_type: Some("Pro".to_string()),
+                primary_remaining_percent: Some(62.0),
+                secondary_remaining_percent: Some(39.0),
+                last_usage_checked_at: Some(1200),
+                last_usage_success_at: Some(1200),
+                usage_error_message: None,
+            }],
+            buckets: Vec::new(),
+        };
+
+        let accounts = apply_cached_codex_status_to_admin_accounts(accounts, Some(status));
+
+        assert_eq!(accounts[0].plan_type.as_deref(), Some("Pro"));
+        assert_eq!(accounts[0].last_refresh, Some(1300));
+        assert_eq!(
+            accounts[0].usage_error_message.as_deref(),
+            Some(
+                "codex refresh token returned 401 Unauthorized: \
+                 {\"error\":{\"code\":\"refresh_token_reused\"}}"
+            )
+        );
     }
 
     #[test]

@@ -1126,6 +1126,8 @@ pub struct ProviderCodexRoute {
     /// Minimum interval between request starts configured on the selected
     /// account.
     pub account_request_min_start_interval_ms: Option<u64>,
+    /// Cached account error message captured from the latest status view.
+    pub cached_error_message: Option<String>,
     /// Resolved proxy settings for this upstream request.
     pub proxy: Option<ProviderProxyConfig>,
 }
@@ -1145,6 +1147,19 @@ pub struct ProviderCodexAuthUpdate {
     pub last_error: Option<String>,
     /// Refresh timestamp.
     pub refreshed_at_ms: i64,
+}
+
+/// Whether a Codex auth error is terminal and should immediately block
+/// request routing for that account until credentials are refreshed.
+pub fn is_terminal_codex_auth_error(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("refresh_token_invalidated")
+        || message.contains("refresh token has been invalidated")
+        || message.contains("refresh_token_reused")
+        || message.contains("refresh token has already been used")
+        || ((message.contains("codex refresh token returned 401")
+            || message.contains("codex refresh token returned 403"))
+            && message.contains("invalid_request_error"))
 }
 
 /// Resolved Kiro account selected for one provider request.

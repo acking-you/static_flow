@@ -81,7 +81,13 @@ pub(crate) async fn ensure_context_for_route(
         return Ok(latest.into_context());
     }
 
-    let refreshed = refresh_auth(&latest_route, &latest).await?;
+    let refreshed = match refresh_auth(&latest_route, &latest).await {
+        Ok(refreshed) => refreshed,
+        Err(err) => {
+            persist_codex_refresh_error(store, &latest_route, &latest, &err).await;
+            return Err(err);
+        },
+    };
     let auth_json = refreshed_auth_json(&latest_route.auth_json, &latest, &refreshed)?;
     let next_parts = parse_auth_parts(&auth_json)?;
     store
@@ -119,6 +125,33 @@ fn auth_parts_changed(previous: &CodexAuthParts, latest: &CodexAuthParts) -> boo
         || previous.refresh_token != latest.refresh_token
         || previous.id_token != latest.id_token
         || previous.account_id != latest.account_id
+}
+
+async fn persist_codex_refresh_error(
+    store: &dyn ProviderRouteStore,
+    route: &ProviderCodexRoute,
+    latest: &CodexAuthParts,
+    err: &anyhow::Error,
+) {
+    let error_message = format!("{err:#}");
+    if let Err(update_err) = store
+        .save_codex_auth_update(ProviderCodexAuthUpdate {
+            account_name: route.account_name.clone(),
+            auth_json: route.auth_json.clone(),
+            account_id: latest.account_id.clone(),
+            status: KEY_STATUS_ACTIVE.to_string(),
+            last_error: Some(error_message.clone()),
+            refreshed_at_ms: now_ms(),
+        })
+        .await
+    {
+        tracing::warn!(
+            account_name = %route.account_name,
+            error = %error_message,
+            update_error = ?update_err,
+            "failed to persist codex refresh error"
+        );
+    }
 }
 
 impl CodexAuthParts {
@@ -462,6 +495,26 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn refresh_failure_persists_last_error_on_account() {
+        let expired_route = codex_route_with_auth(auth_json(expired_token(), None));
+        let store = TestRouteStore {
+            latest_codex_route: Arc::new(Mutex::new(Some(expired_route.clone()))),
+            codex_updates: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let err = ensure_context_for_route(&expired_route, &store, false)
+            .await
+            .expect_err("missing refresh token should fail");
+
+        let err_text = format!("{err:#}");
+        assert!(!err_text.trim().is_empty());
+        let updates = store.codex_updates.lock().expect("updates");
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].account_name, "codex-account");
+        assert_eq!(updates[0].last_error.as_deref(), Some(err_text.as_str()));
+    }
+
     fn codex_route_with_auth(auth_json: String) -> ProviderCodexRoute {
         ProviderCodexRoute {
             account_name: "codex-account".to_string(),
@@ -473,6 +526,7 @@ mod tests {
             request_min_start_interval_ms: None,
             account_request_max_concurrency: None,
             account_request_min_start_interval_ms: None,
+            cached_error_message: None,
             proxy: None,
         }
     }

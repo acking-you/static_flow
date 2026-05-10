@@ -4,9 +4,10 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use llm_access_core::store::{
-    AdminCodexAccount, AdminCodexAccountStore, AdminConfigStore, AdminRuntimeConfig, CodexCredits,
-    CodexPublicAccountStatus, CodexRateLimitBucket, CodexRateLimitStatus, CodexRateLimitWindow,
-    ProviderCodexRoute, ProviderRouteStore, PublicStatusStore, KEY_STATUS_ACTIVE,
+    is_terminal_codex_auth_error, AdminCodexAccount, AdminCodexAccountStore, AdminConfigStore,
+    AdminRuntimeConfig, CodexCredits, CodexPublicAccountStatus, CodexRateLimitBucket,
+    CodexRateLimitStatus, CodexRateLimitWindow, ProviderCodexRoute, ProviderRouteStore,
+    PublicStatusStore, KEY_STATUS_ACTIVE,
 };
 use rand::Rng;
 use serde::Deserialize;
@@ -396,6 +397,24 @@ fn merge_background_refresh_result(
                 account: error_account,
             },
         ) => {
+            if error_account
+                .usage_error_message
+                .as_deref()
+                .is_some_and(is_terminal_codex_auth_error)
+            {
+                tracing::warn!(
+                    account_name = %account.name,
+                    last_usage_success_at = account.last_usage_success_at.unwrap_or(0),
+                    error = %error_account
+                        .usage_error_message
+                        .as_deref()
+                        .unwrap_or("unknown Codex usage refresh error"),
+                    "background Codex usage refresh hit terminal auth error; marking account unavailable",
+                );
+                return AccountStatusRefresh::Error {
+                    account: error_account,
+                };
+            }
             account.last_usage_checked_at = error_account.last_usage_checked_at;
             tracing::warn!(
                 account_name = %account.name,
@@ -1078,6 +1097,46 @@ mod tests {
                 );
             },
             _ => panic!("expected error snapshot"),
+        }
+    }
+
+    #[test]
+    fn background_refresh_marks_terminal_auth_error_unavailable() {
+        let previous_bucket = sample_bucket("alpha", 70.0, 80.0);
+        let previous = AccountStatusRefresh::Ready {
+            account: account_ready_status(
+                &sample_admin_account("alpha"),
+                900,
+                std::slice::from_ref(&previous_bucket),
+            ),
+            buckets: vec![previous_bucket],
+        };
+        let refreshed = AccountStatusRefresh::Error {
+            account: account_error_status(
+                &sample_admin_account("alpha"),
+                1200,
+                "codex refresh token returned 401 Unauthorized: \
+                 {\"error\":{\"code\":\"refresh_token_invalidated\"}}",
+            ),
+        };
+
+        let merged = merge_background_refresh_result(previous, refreshed);
+
+        match merged {
+            AccountStatusRefresh::Error {
+                account,
+            } => {
+                assert_eq!(account.last_usage_checked_at, Some(1200));
+                assert_eq!(account.last_usage_success_at, None);
+                assert_eq!(
+                    account.usage_error_message.as_deref(),
+                    Some(
+                        "codex refresh token returned 401 Unauthorized: \
+                         {\"error\":{\"code\":\"refresh_token_invalidated\"}}"
+                    )
+                );
+            },
+            _ => panic!("expected terminal auth error to mark account unavailable"),
         }
     }
 }

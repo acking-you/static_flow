@@ -641,6 +641,16 @@ impl SqliteControlStore {
             .into_iter()
             .map(|record| (record.account_name.clone(), record))
             .collect::<BTreeMap<_, _>>();
+        let status_by_account = self
+            .get_codex_rate_limit_status()?
+            .map(|status| {
+                status
+                    .accounts
+                    .into_iter()
+                    .map(|account| (account.name.clone(), account))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
         let proxy_context =
             self.load_provider_proxy_resolution_context(core_store::PROVIDER_CODEX)?;
         let mut routes = Vec::new();
@@ -673,6 +683,12 @@ impl SqliteControlStore {
                     .and_then(non_negative_i64_to_u64),
                 account_request_max_concurrency: settings.request_max_concurrency,
                 account_request_min_start_interval_ms: settings.request_min_start_interval_ms,
+                cached_error_message: codex_cached_error_message(
+                    &account_name,
+                    record.last_error.as_deref(),
+                    record.last_refresh_at_ms,
+                    &status_by_account,
+                ),
                 proxy,
             });
         }
@@ -1728,8 +1744,18 @@ impl SqliteControlStore {
             &settings.proxy_mode,
             settings.proxy_config_id.as_deref(),
         )?;
+        let status_by_account = self
+            .get_codex_rate_limit_status()?
+            .map(|status| {
+                status
+                    .accounts
+                    .into_iter()
+                    .map(|account| (account.name.clone(), account))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
         Ok(Some(ProviderCodexRoute {
-            account_name: record.account_name,
+            account_name: record.account_name.clone(),
             account_group_id_at_event: None,
             route_strategy_at_event: RouteStrategy::Auto,
             auth_json: record.auth_json,
@@ -1738,6 +1764,12 @@ impl SqliteControlStore {
             request_min_start_interval_ms: None,
             account_request_max_concurrency: settings.request_max_concurrency,
             account_request_min_start_interval_ms: settings.request_min_start_interval_ms,
+            cached_error_message: codex_cached_error_message(
+                &record.account_name,
+                record.last_error.as_deref(),
+                record.last_refresh_at_ms,
+                &status_by_account,
+            ),
             proxy,
         }))
     }
@@ -4662,6 +4694,29 @@ fn codex_remaining_bottleneck(status: &core_store::CodexPublicAccountStatus) -> 
         .reduce(f64::min)
 }
 
+fn codex_cached_error_message(
+    account_name: &str,
+    record_last_error: Option<&str>,
+    record_last_refresh_at_ms: Option<i64>,
+    status_by_account: &BTreeMap<String, core_store::CodexPublicAccountStatus>,
+) -> Option<String> {
+    match status_by_account.get(account_name) {
+        Some(status) => {
+            if status.usage_error_message.is_some() {
+                return status.usage_error_message.clone();
+            }
+            let local_refresh = record_last_refresh_at_ms.unwrap_or(0);
+            let status_checked_at = status.last_usage_checked_at.unwrap_or(0);
+            if local_refresh > status_checked_at {
+                record_last_error.map(str::to_string)
+            } else {
+                None
+            }
+        },
+        None => record_last_error.map(str::to_string),
+    }
+}
+
 fn effective_kiro_cache_policy_json(
     runtime_policy_json: &str,
     override_json: Option<&str>,
@@ -5979,6 +6034,155 @@ mod tests {
             .map(|route| route.account_name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["test1", "DogDu"]);
+    }
+
+    #[test]
+    fn provider_route_repository_attaches_cached_codex_error_message() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlStore::new(conn);
+
+        repo.create_admin_codex_account(&llm_access_core::store::NewAdminCodexAccount {
+            name: "DogDu".to_string(),
+            account_id: Some("acct-DogDu".to_string()),
+            auth_json: r#"{"access_token":"access-DogDu"}"#.to_string(),
+            map_gpt53_codex_to_spark: false,
+            created_at_ms: 100,
+        })
+        .expect("create codex account");
+        repo.create_admin_key(&llm_access_core::store::NewAdminKey {
+            id: "key-auto".to_string(),
+            name: "auto key".to_string(),
+            secret: "sfk_auto".to_string(),
+            key_hash: "hash-auto".to_string(),
+            provider_type: "codex".to_string(),
+            protocol_family: "openai".to_string(),
+            public_visible: false,
+            quota_billable_limit: 1000,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            created_at_ms: 110,
+        })
+        .expect("create key");
+        let mut status = codex_public_status("DogDu", 1.0, 52.0);
+        status.usage_error_message = Some(
+            "codex refresh token returned 401 Unauthorized: \
+             {\"error\":{\"code\":\"refresh_token_reused\"}}"
+                .to_string(),
+        );
+        repo.upsert_codex_rate_limit_status(
+            &llm_access_core::store::CodexRateLimitStatus {
+                status: "degraded".to_string(),
+                refresh_interval_seconds: 300,
+                last_checked_at: Some(200),
+                last_success_at: Some(200),
+                source_url: "https://chatgpt.com/backend-api/wham/usage".to_string(),
+                error_message: status.usage_error_message.clone(),
+                accounts: vec![status],
+                buckets: Vec::new(),
+            },
+            200,
+        )
+        .expect("persist codex status");
+
+        let routes = repo
+            .resolve_provider_codex_routes(&llm_access_core::store::AuthenticatedKey {
+                key_id: "key-auto".to_string(),
+                key_name: "auto key".to_string(),
+                provider_type: "codex".to_string(),
+                protocol_family: "openai".to_string(),
+                status: "active".to_string(),
+                quota_billable_limit: 1000,
+                billable_tokens_used: 0,
+            })
+            .expect("resolve routes");
+
+        assert_eq!(routes.len(), 1);
+        assert_eq!(
+            routes[0].cached_error_message.as_deref(),
+            Some(
+                "codex refresh token returned 401 Unauthorized: \
+                 {\"error\":{\"code\":\"refresh_token_reused\"}}"
+            )
+        );
+    }
+
+    #[test]
+    fn provider_route_repository_prefers_newer_local_codex_error_over_stale_ready_snapshot() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlStore::new(conn);
+
+        repo.create_admin_codex_account(&llm_access_core::store::NewAdminCodexAccount {
+            name: "DogDu".to_string(),
+            account_id: Some("acct-DogDu".to_string()),
+            auth_json: r#"{"access_token":"access-DogDu"}"#.to_string(),
+            map_gpt53_codex_to_spark: false,
+            created_at_ms: 100,
+        })
+        .expect("create codex account");
+        repo.save_codex_auth_update(&llm_access_core::store::ProviderCodexAuthUpdate {
+            account_name: "DogDu".to_string(),
+            auth_json: r#"{"access_token":"access-DogDu"}"#.to_string(),
+            account_id: Some("acct-DogDu".to_string()),
+            status: "active".to_string(),
+            last_error: Some(
+                "codex refresh token returned 401 Unauthorized: \
+                 {\"error\":{\"code\":\"refresh_token_invalidated\"}}"
+                    .to_string(),
+            ),
+            refreshed_at_ms: 300,
+        })
+        .expect("persist local auth error");
+        repo.create_admin_key(&llm_access_core::store::NewAdminKey {
+            id: "key-auto".to_string(),
+            name: "auto key".to_string(),
+            secret: "sfk_auto".to_string(),
+            key_hash: "hash-auto".to_string(),
+            provider_type: "codex".to_string(),
+            protocol_family: "openai".to_string(),
+            public_visible: false,
+            quota_billable_limit: 1000,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            created_at_ms: 110,
+        })
+        .expect("create key");
+        repo.upsert_codex_rate_limit_status(
+            &llm_access_core::store::CodexRateLimitStatus {
+                status: "ready".to_string(),
+                refresh_interval_seconds: 300,
+                last_checked_at: Some(200),
+                last_success_at: Some(200),
+                source_url: "https://chatgpt.com/backend-api/wham/usage".to_string(),
+                error_message: None,
+                accounts: vec![codex_public_status("DogDu", 1.0, 52.0)],
+                buckets: Vec::new(),
+            },
+            200,
+        )
+        .expect("persist ready codex status");
+
+        let routes = repo
+            .resolve_provider_codex_routes(&llm_access_core::store::AuthenticatedKey {
+                key_id: "key-auto".to_string(),
+                key_name: "auto key".to_string(),
+                provider_type: "codex".to_string(),
+                protocol_family: "openai".to_string(),
+                status: "active".to_string(),
+                quota_billable_limit: 1000,
+                billable_tokens_used: 0,
+            })
+            .expect("resolve routes");
+
+        assert_eq!(routes.len(), 1);
+        assert_eq!(
+            routes[0].cached_error_message.as_deref(),
+            Some(
+                "codex refresh token returned 401 Unauthorized: \
+                 {\"error\":{\"code\":\"refresh_token_invalidated\"}}"
+            )
+        );
     }
 
     fn codex_public_status(
