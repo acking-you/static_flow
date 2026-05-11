@@ -6,8 +6,8 @@ RequiresMountsFor=/mnt/llm-access
 
 [Service]
 Type=simple
-User=llm-access
-Group=llm-access
+User=ts_user
+Group=ts_user
 EnvironmentFile=/etc/llm-access/llm-access.env
 Environment=STATICFLOW_LOG_DIR=/var/log/staticflow-runtime
 Environment=STATICFLOW_LOG_SERVICE=llm-access-usage-worker
