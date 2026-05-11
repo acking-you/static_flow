@@ -6174,6 +6174,8 @@ pub struct AdminUsageWorkerProgressView {
 pub struct AdminUsageJournalStatusView {
     pub journal_enabled: bool,
     pub journal_root: String,
+    pub current_rpm: u32,
+    pub current_in_flight: u32,
     pub active_file_sequence: Option<u64>,
     pub active_file_bytes: u64,
     pub sealed_file_count: u64,

@@ -4896,8 +4896,8 @@ pub fn admin_llm_gateway_page() -> Html {
 
                 // ── Journal Tab ──
                 if *active_tab == TAB_JOURNAL {
-                <section class={classes!("grid", "gap-4")}>
-                    <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                <section class={classes!("grid", "gap-4", "min-w-0")}>
+                    <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5", "min-w-0")}>
                         <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
                             <div>
                                 <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Usage Journal" }</h2>
@@ -5031,7 +5031,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         }
                     </section>
 
-                    <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5", "min-w-0")}>
                         <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                             <div>
                                 <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Live Preview" }</h2>
@@ -5039,11 +5039,33 @@ pub fn admin_llm_gateway_page() -> Html {
                                     { "Only the current producer file is previewed. Trailing partial writes are ignored until the next full block is flushed." }
                                 </p>
                             </div>
-                            if let Some(preview) = (*usage_journal_preview).as_ref().and_then(|view| view.preview.as_ref()) {
-                                <span class={classes!("rounded-full", "border", "border-[var(--border)]", "px-3", "py-1", "text-xs", "font-semibold", "text-[var(--muted)]")}>
-                                    { format!("blocks {} · scanned {}", preview.complete_blocks, format_optional_bytes(Some(preview.bytes_scanned))) }
-                                </span>
-                            }
+                            <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                if let Some(status) = (*usage_journal_status).as_ref() {
+                                    <span class={classes!("rounded-full", "border", "border-[var(--border)]", "px-3", "py-1", "text-xs", "font-semibold", "text-[var(--muted)]")}>
+                                        { format!("RPM {}", status.current_rpm) }
+                                    </span>
+                                    <span class={classes!("rounded-full", "border", "border-[var(--border)]", "px-3", "py-1", "text-xs", "font-semibold", "text-[var(--muted)]")}>
+                                        { format!("In Flight {}", status.current_in_flight) }
+                                    </span>
+                                }
+                                if let Some(preview) = (*usage_journal_preview).as_ref().and_then(|view| view.preview.as_ref()) {
+                                    <span class={classes!("rounded-full", "border", "border-[var(--border)]", "px-3", "py-1", "text-xs", "font-semibold", "text-[var(--muted)]")}>
+                                        { format!("blocks {} · scanned {}", preview.complete_blocks, format_optional_bytes(Some(preview.bytes_scanned))) }
+                                    </span>
+                                }
+                                <button
+                                    class={classes!("btn-terminal")}
+                                    title="刷新预览"
+                                    aria-label="刷新预览"
+                                    onclick={{
+                                        let reload_usage_journal_status = reload_usage_journal_status.clone();
+                                        Callback::from(move |_| reload_usage_journal_status.emit(()))
+                                    }}
+                                    disabled={*usage_journal_loading}
+                                >
+                                    <i class={classes!("fas", if *usage_journal_loading { "fa-spinner animate-spin" } else { "fa-rotate-right" })}></i>
+                                </button>
+                            </div>
                         </div>
 
                         if let Some(preview_response) = (*usage_journal_preview).clone() {
@@ -5056,8 +5078,9 @@ pub fn admin_llm_gateway_page() -> Html {
                                         { format!("truncated_tail: {}", if preview.truncated_tail { "yes" } else { "no" }) }
                                     </p>
                                 </div>
-                                <div class={classes!("mt-4", "overflow-x-auto", "rounded-xl", "border", "border-[var(--border)]")}>
-                                    <table class={classes!("min-w-[110rem]", "w-full", "text-sm")}>
+                                <div class={classes!("mt-4", "min-w-0") }>
+                                    <div class={classes!("overflow-x-auto", "max-w-full", "rounded-xl", "border", "border-[var(--border)]")}>
+                                    <table class={classes!("min-w-[96rem]", "w-full", "text-sm")}>
                                         <thead>
                                             <tr class={classes!("text-left", "text-[var(--muted)]")}>
                                                 <th class={classes!("py-2", "pr-3")}>{ "时间 / Event ID" }</th>
@@ -5143,6 +5166,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                             }
                                         </tbody>
                                     </table>
+                                    </div>
                                 </div>
                             } else {
                                 <div class={classes!("mt-4", "text-sm", "text-[var(--muted)]")}>
@@ -7764,6 +7788,21 @@ mod tests {
         assert!(preview.contains("first line second line with extra spaces"));
         assert!(preview.ends_with("..."));
         assert!(preview.chars().count() <= 123);
+    }
+
+    #[test]
+    fn journal_preview_layout_uses_compact_table_width_and_toolbar_badges() {
+        let source =
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/pages/admin_llm_gateway.rs"));
+        let journal_start = source
+            .find("\"Live Preview\"")
+            .expect("journal preview header");
+        let journal_slice = &source[journal_start..source.len().min(journal_start + 6000)];
+
+        assert!(journal_slice.contains("min-w-[96rem]"));
+        assert!(journal_slice.contains("RPM {}"));
+        assert!(journal_slice.contains("In Flight {}"));
+        assert!(journal_slice.contains("刷新预览"));
     }
 
     #[test]
