@@ -1653,7 +1653,7 @@ pub fn normalize_responses_request(
     {
         root.remove("instructions");
     }
-    if path == "/v1/responses" {
+    if matches!(path, "/v1/responses" | "/v1/responses/compact") {
         root.insert("store".to_string(), Value::Bool(false));
         root.entry("instructions".to_string())
             .or_insert_with(|| Value::String(codex_default_instructions().to_string()));
@@ -2401,10 +2401,7 @@ mod tests {
         assert_eq!(upstream["parallel_tool_calls"], json!(true));
         assert_eq!(upstream["reasoning"], json!({"effort":"high","summary":"auto"}));
         assert_eq!(upstream["text"], json!({"verbosity":"low"}));
-        assert!(
-            upstream.get("instructions").is_none(),
-            "compact requests should omit empty instructions to match current codex payloads"
-        );
+        assert_eq!(upstream["instructions"].as_str(), Some(codex_default_instructions()));
         assert!(
             upstream.get("stream").is_none(),
             "compact requests should not inject stream control"
@@ -2448,6 +2445,7 @@ mod tests {
         assert_eq!(upstream["parallel_tool_calls"], json!(true));
         assert_eq!(upstream["reasoning"], json!({"effort":"high","summary":"auto"}));
         assert_eq!(upstream["text"], json!({"verbosity":"low"}));
+        assert_eq!(upstream["instructions"].as_str(), Some(codex_default_instructions()));
         assert!(upstream.get("max_output_tokens").is_none());
         assert!(upstream.get("store").is_none());
         assert!(upstream.get("include").is_none());
