@@ -24,6 +24,11 @@ use llm_access_codex::{
         convert_json_response_to_anthropic_message, convert_response_event_to_anthropic_sse_chunks,
         AnthropicStreamMetadata,
     },
+    continuation::{
+        expand_local_previous_response_id, rewrite_completed_response_for_local_continuation,
+        rewrite_response_value_ids, stored_response_anchor_from_rewritten_response,
+        ResponsesContinuationMetadata,
+    },
     request::{
         apply_gpt53_codex_spark_mapping, external_origin, extract_client_ip_from_headers,
         extract_last_message_content as extract_codex_last_message_content,
@@ -33,8 +38,9 @@ use llm_access_codex::{
     response::{
         adapt_completed_response_json, apply_upstream_response_headers,
         convert_json_response_to_chat_completion, convert_response_event_to_chat_chunk,
-        encode_json_sse_chunk, encode_sse_event_with_model_alias, extract_usage_from_bytes,
-        rewrite_json_response_model_alias, rewrite_json_value_model_alias, SseUsageCollector,
+        encode_json_sse_chunk, encode_sse_event, encode_sse_event_with_model_alias,
+        extract_usage_from_bytes, rewrite_json_response_model_alias,
+        rewrite_json_value_model_alias, SseUsageCollector,
     },
     types::{ChatStreamMetadata, GatewayResponseAdapter, PreparedGatewayRequest, UsageBreakdown},
 };
@@ -82,8 +88,8 @@ use llm_access_kiro::{
 use serde_json::{json, Value};
 
 use crate::{
-    activity::RequestActivityTracker, codex_refresh, geoip::GeoIpResolver, kiro_headers,
-    kiro_refresh,
+    activity::RequestActivityTracker, codex_anchor::CodexResponseAnchors, codex_refresh,
+    geoip::GeoIpResolver, kiro_headers, kiro_refresh,
 };
 
 const MAX_PROVIDER_PROXY_BODY_BYTES: usize = 32 * 1024 * 1024;
@@ -313,6 +319,7 @@ pub struct ProviderState {
     admin_config_store: Arc<dyn AdminConfigStore>,
     dispatcher: Arc<dyn ProviderDispatcher>,
     kiro_cache_simulator: Arc<KiroCacheSimulator>,
+    codex_response_anchors: Arc<CodexResponseAnchors>,
     request_limiter: Arc<RequestLimiter>,
     codex_account_cooldowns: Arc<CodexAccountCooldowns>,
     kiro_request_scheduler: Arc<KiroRequestScheduler>,
@@ -328,6 +335,7 @@ pub struct ProviderDispatchDeps {
     geoip: GeoIpResolver,
     admin_config_store: Arc<dyn AdminConfigStore>,
     kiro_cache_simulator: Arc<KiroCacheSimulator>,
+    codex_response_anchors: Arc<CodexResponseAnchors>,
     request_limiter: Arc<RequestLimiter>,
     codex_account_cooldowns: Arc<CodexAccountCooldowns>,
     kiro_request_scheduler: Arc<KiroRequestScheduler>,
@@ -353,6 +361,7 @@ impl ProviderState {
             control_store,
             route_store,
             admin_config_store,
+            Arc::new(CodexResponseAnchors::default()),
             Arc::new(RequestActivityTracker::new()),
             GeoIpResolver::disabled(),
         )
@@ -362,6 +371,7 @@ impl ProviderState {
         control_store: Arc<dyn ControlStore>,
         route_store: Arc<dyn ProviderRouteStore>,
         admin_config_store: Arc<dyn AdminConfigStore>,
+        codex_response_anchors: Arc<CodexResponseAnchors>,
         request_activity: Arc<RequestActivityTracker>,
         geoip: GeoIpResolver,
     ) -> Self {
@@ -370,6 +380,7 @@ impl ProviderState {
             route_store,
             admin_config_store,
             Arc::new(DefaultProviderDispatcher),
+            codex_response_anchors,
             request_activity,
             geoip,
         )
@@ -386,6 +397,7 @@ impl ProviderState {
             route_store,
             Arc::new(EmptyAdminConfigStore),
             dispatcher,
+            Arc::new(CodexResponseAnchors::default()),
             Arc::new(RequestActivityTracker::new()),
             GeoIpResolver::disabled(),
         )
@@ -396,6 +408,7 @@ impl ProviderState {
         route_store: Arc<dyn ProviderRouteStore>,
         admin_config_store: Arc<dyn AdminConfigStore>,
         dispatcher: Arc<dyn ProviderDispatcher>,
+        codex_response_anchors: Arc<CodexResponseAnchors>,
         request_activity: Arc<RequestActivityTracker>,
         geoip: GeoIpResolver,
     ) -> Self {
@@ -406,6 +419,7 @@ impl ProviderState {
             admin_config_store,
             dispatcher,
             kiro_cache_simulator: Arc::new(KiroCacheSimulator::default()),
+            codex_response_anchors,
             request_limiter: Arc::new(RequestLimiter::default()),
             codex_account_cooldowns: Arc::new(CodexAccountCooldowns::default()),
             kiro_request_scheduler: KiroRequestScheduler::new(),
@@ -432,6 +446,7 @@ impl ProviderState {
             geoip: self.geoip.clone(),
             admin_config_store: Arc::clone(&self.admin_config_store),
             kiro_cache_simulator: Arc::clone(&self.kiro_cache_simulator),
+            codex_response_anchors: Arc::clone(&self.codex_response_anchors),
             request_limiter: Arc::clone(&self.request_limiter),
             codex_account_cooldowns: Arc::clone(&self.codex_account_cooldowns),
             kiro_request_scheduler: Arc::clone(&self.kiro_request_scheduler),
@@ -888,6 +903,7 @@ async fn dispatch_codex_proxy(
         control_store,
         geoip,
         admin_config_store,
+        codex_response_anchors,
         request_limiter,
         codex_account_cooldowns,
         ..
@@ -967,6 +983,11 @@ async fn dispatch_codex_proxy(
     };
     usage_meta =
         usage_meta.with_request_body(&body, clamp_duration_ms(body_read_started.elapsed()));
+    let body = maybe_expand_local_codex_previous_response_id(
+        &gateway_path,
+        body,
+        codex_response_anchors.as_ref(),
+    );
     let parse_started = Instant::now();
     let prepared = match prepare_gateway_request_from_bytes(
         &gateway_path,
@@ -1206,6 +1227,7 @@ async fn dispatch_codex_proxy(
                     key,
                     route,
                     control_store,
+                    codex_response_anchors,
                     permits,
                     usage_meta,
                 },
@@ -1219,15 +1241,15 @@ async fn dispatch_codex_proxy(
                     .expect("codex key permit should be held until response is returned"),
                 account_permit,
             ];
-            return adapt_codex_upstream_response(
+            return adapt_codex_upstream_response(response, CodexUpstreamResponseContext {
                 prepared,
-                response,
                 key,
                 route,
                 control_store,
+                codex_response_anchors,
                 permits,
                 usage_meta,
-            )
+            })
             .await;
         }
         let status = response.status();
@@ -1275,6 +1297,7 @@ async fn dispatch_codex_proxy(
                 key,
                 route,
                 control_store,
+                codex_response_anchors,
                 permits,
                 usage_meta,
             },
@@ -1283,15 +1306,29 @@ async fn dispatch_codex_proxy(
     }
 }
 
-async fn adapt_codex_upstream_response(
+struct CodexUpstreamResponseContext {
     prepared: PreparedGatewayRequest,
-    response: reqwest::Response,
     key: AuthenticatedKey,
     route: ProviderCodexRoute,
     control_store: Arc<dyn ControlStore>,
+    codex_response_anchors: Arc<CodexResponseAnchors>,
     permits: Vec<LimitPermit>,
-    mut usage_meta: ProviderUsageMetadata,
+    usage_meta: ProviderUsageMetadata,
+}
+
+async fn adapt_codex_upstream_response(
+    response: reqwest::Response,
+    ctx: CodexUpstreamResponseContext,
 ) -> Response {
+    let CodexUpstreamResponseContext {
+        prepared,
+        key,
+        route,
+        control_store,
+        codex_response_anchors,
+        permits,
+        mut usage_meta,
+    } = ctx;
     let status = response.status();
     let upstream_headers = response.headers().clone();
     let content_type = upstream_headers
@@ -1347,11 +1384,25 @@ async fn adapt_codex_upstream_response(
                 );
             },
         };
-        let completed_response = rewrite_json_value_model_alias(
+        let mut completed_response = rewrite_json_value_model_alias(
             completed.response,
             prepared.model.as_deref(),
             prepared.client_visible_model.as_deref(),
         );
+        if prepared.response_adapter == GatewayResponseAdapter::Responses
+            && prepared.original_path.starts_with("/v1/responses")
+        {
+            rewrite_response_value_ids(
+                &mut completed_response,
+                &mut ResponsesContinuationMetadata::default(),
+            );
+            if let Ok(anchor) = stored_response_anchor_from_rewritten_response(
+                &prepared.request_body,
+                &completed_response,
+            ) {
+                codex_response_anchors.insert(anchor, Instant::now());
+            }
+        }
         let adapted = adapt_completed_response_json(
             completed_response,
             prepared.response_adapter,
@@ -1403,6 +1454,7 @@ async fn adapt_codex_upstream_response(
                 key,
                 route,
                 control_store,
+                codex_response_anchors,
                 permits,
                 usage_meta,
             },
@@ -1427,6 +1479,7 @@ async fn adapt_codex_upstream_response(
             key,
             route,
             control_store,
+            codex_response_anchors,
             permits,
             usage_meta,
         },
@@ -1446,6 +1499,7 @@ struct CodexCompletedResponseContext {
     key: AuthenticatedKey,
     route: ProviderCodexRoute,
     control_store: Arc<dyn ControlStore>,
+    codex_response_anchors: Arc<CodexResponseAnchors>,
     permits: Vec<LimitPermit>,
     usage_meta: ProviderUsageMetadata,
 }
@@ -1465,13 +1519,27 @@ async fn adapt_codex_upstream_response_from_parts(
         key,
         route,
         control_store,
+        codex_response_anchors,
         permits: _permits,
         mut usage_meta,
     } = ctx;
     usage_meta.mark_post_headers_body();
     usage_meta.mark_stream_finish();
+    let rewritten_responses_bytes = if status.is_success()
+        && prepared.response_adapter == GatewayResponseAdapter::Responses
+        && prepared.original_path.starts_with("/v1/responses")
+    {
+        maybe_rewrite_and_record_codex_response_anchor(
+            &prepared,
+            &bytes,
+            codex_response_anchors.as_ref(),
+        )
+    } else {
+        None
+    };
+    let effective_success_bytes = rewritten_responses_bytes.as_ref().unwrap_or(&bytes);
     let usage = if status.is_success() {
-        extract_usage_from_bytes(&bytes).unwrap_or_else(missing_codex_usage)
+        extract_usage_from_bytes(effective_success_bytes).unwrap_or_else(missing_codex_usage)
     } else {
         missing_codex_usage()
     };
@@ -1519,10 +1587,12 @@ async fn adapt_codex_upstream_response_from_parts(
         match prepared.response_adapter {
             GatewayResponseAdapter::Responses => {
                 if let Some(body) = rewrite_json_response_model_alias(
-                    &bytes,
+                    effective_success_bytes,
                     prepared.model.as_deref(),
                     prepared.client_visible_model.as_deref(),
                 ) {
+                    Body::from(body)
+                } else if let Some(body) = rewritten_responses_bytes {
                     Body::from(body)
                 } else {
                     Body::from(bytes)
@@ -1569,6 +1639,45 @@ async fn adapt_codex_upstream_response_from_parts(
         .unwrap_or_else(|_| {
             (StatusCode::BAD_GATEWAY, "codex upstream response build failed").into_response()
         })
+}
+
+fn maybe_rewrite_and_record_codex_response_anchor(
+    prepared: &PreparedGatewayRequest,
+    bytes: &Bytes,
+    anchors: &CodexResponseAnchors,
+) -> Option<Bytes> {
+    let mut response = serde_json::from_slice::<Value>(bytes).ok()?;
+    let anchor =
+        rewrite_completed_response_for_local_continuation(&prepared.request_body, &mut response)
+            .ok()?;
+    let body = serde_json::to_vec(&response).ok()?;
+    anchors.insert(anchor, Instant::now());
+    Some(Bytes::from(body))
+}
+
+fn rewrite_codex_responses_sse_event(
+    event: &eventsource_stream::Event,
+    metadata: &mut ResponsesContinuationMetadata,
+    model_from: Option<&str>,
+    model_to: Option<&str>,
+) -> Bytes {
+    let payload = event.data.trim();
+    if payload.is_empty() || payload == "[DONE]" {
+        return encode_sse_event(event);
+    }
+    let Ok(value) = serde_json::from_str::<Value>(payload) else {
+        return encode_sse_event_with_model_alias(event, model_from, model_to);
+    };
+    let mut value = rewrite_json_value_model_alias(value, model_from, model_to);
+    rewrite_response_value_ids(&mut value, metadata);
+    let data = serde_json::to_string(&value).unwrap_or_else(|_| event.data.clone());
+    let rewritten_event = eventsource_stream::Event {
+        event: event.event.clone(),
+        data,
+        id: event.id.clone(),
+        retry: event.retry,
+    };
+    encode_sse_event(&rewritten_event)
 }
 
 fn codex_quota_exhaustion_cooldown(status: StatusCode, bytes: &Bytes) -> Option<Duration> {
@@ -1660,6 +1769,7 @@ struct CodexStreamContext {
     key: AuthenticatedKey,
     route: ProviderCodexRoute,
     control_store: Arc<dyn ControlStore>,
+    codex_response_anchors: Arc<CodexResponseAnchors>,
     permits: Vec<LimitPermit>,
     usage_meta: ProviderUsageMetadata,
 }
@@ -1678,6 +1788,7 @@ fn stream_codex_upstream_response(
             key,
             route,
             control_store,
+            codex_response_anchors,
             permits,
             usage_meta,
         } = ctx;
@@ -1688,6 +1799,7 @@ fn stream_codex_upstream_response(
             .eventsource();
         let mut chat_metadata = ChatStreamMetadata::default();
         let mut anthropic_metadata = AnthropicStreamMetadata::default();
+        let mut responses_metadata = ResponsesContinuationMetadata::default();
         let mut guard = CodexStreamRecordGuard {
             prepared,
             key,
@@ -1705,8 +1817,9 @@ fn stream_codex_upstream_response(
                     guard.usage_collector.observe_event(&event);
                     match response_adapter {
                         GatewayResponseAdapter::Responses => {
-                            let bytes = encode_sse_event_with_model_alias(
+                            let bytes = rewrite_codex_responses_sse_event(
                                 &event,
+                                &mut responses_metadata,
                                 guard.prepared.model.as_deref(),
                                 guard.prepared.client_visible_model.as_deref(),
                             );
@@ -1753,6 +1866,25 @@ fn stream_codex_upstream_response(
             let bytes = Bytes::from_static(b"data: [DONE]\n\n");
             guard.observe_chunk(&bytes, Some("done"));
             yield Ok::<Bytes, std::io::Error>(bytes);
+        }
+        if response_adapter == GatewayResponseAdapter::Responses
+            && guard.prepared.original_path.starts_with("/v1/responses")
+        {
+            if let Some(mut completed) = guard.usage_collector.completed_response.clone() {
+                completed = rewrite_json_value_model_alias(
+                    completed,
+                    guard.prepared.model.as_deref(),
+                    guard.prepared.client_visible_model.as_deref(),
+                );
+                rewrite_response_value_ids(&mut completed, &mut responses_metadata);
+                if let Ok(anchor) = stored_response_anchor_from_rewritten_response(
+                    &guard.prepared.request_body,
+                    &completed,
+                ) {
+                    codex_response_anchors.insert(anchor, Instant::now());
+                }
+                guard.usage_collector.completed_response = Some(completed);
+            }
         }
         guard.finish_success().await;
     };
@@ -5205,6 +5337,7 @@ fn normalized_codex_gateway_path(path: &str) -> Option<&str> {
         "/models" | "/v1/models" => Some("/v1/models"),
         "/chat/completions" | "/v1/chat/completions" => Some("/v1/chat/completions"),
         "/responses" | "/v1/responses" => Some("/v1/responses"),
+        "/responses/compact" | "/v1/responses/compact" => Some("/v1/responses/compact"),
         "/messages" | "/v1/messages" => Some("/v1/messages"),
         value if value.starts_with("/v1/responses/") => Some(value),
         _ => None,
@@ -5287,6 +5420,37 @@ fn codex_user_agent(client_version: &str) -> String {
     format!("{DEFAULT_WIRE_ORIGINATOR}/{client_version}")
 }
 
+fn maybe_expand_local_codex_previous_response_id(
+    gateway_path: &str,
+    body: Bytes,
+    anchors: &CodexResponseAnchors,
+) -> Bytes {
+    if !matches!(gateway_path, "/v1/responses" | "/v1/responses/compact") {
+        return body;
+    }
+    let Ok(mut value) = serde_json::from_slice::<Value>(&body) else {
+        return body;
+    };
+    let Some(root) = value.as_object_mut() else {
+        return body;
+    };
+    let previous_response_id = root
+        .get("previous_response_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    if previous_response_id.is_none() {
+        return body;
+    }
+    let anchor_items = previous_response_id
+        .as_deref()
+        .and_then(|response_id| anchors.get(response_id, Instant::now()))
+        .map(|anchor| anchor.history_items);
+    expand_local_previous_response_id(root, anchor_items.as_deref());
+    serde_json::to_vec(&value).map(Bytes::from).unwrap_or(body)
+}
+
 fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
@@ -5303,29 +5467,10 @@ fn add_codex_upstream_headers(
     auth: &CodexAuthSnapshot,
     codex_client_version: &str,
 ) -> reqwest::RequestBuilder {
+    let incoming_conversation_id = header_value(request_headers, "conversation_id");
     let incoming_session_id = header_value(request_headers, "session_id");
     let incoming_client_request_id = header_value(request_headers, "x-client-request-id");
-    let mut incoming_turn_state = header_value(request_headers, "x-codex-turn-state");
-    let thread_anchor = prepared
-        .thread_anchor
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let is_compact_request = prepared.original_path.starts_with("/v1/responses/compact");
-    let effective_client_request_id = if is_compact_request {
-        incoming_client_request_id.as_deref()
-    } else {
-        thread_anchor.or(incoming_client_request_id.as_deref())
-    };
-    if let (Some(anchor), Some(legacy_session_id)) = (thread_anchor, incoming_session_id.as_deref())
-    {
-        if legacy_session_id.trim() != anchor {
-            incoming_turn_state = None;
-        }
-    } else if incoming_session_id.is_none() && thread_anchor.is_none() {
-        incoming_turn_state = None;
-    }
-    let effective_session_id = thread_anchor.or(incoming_session_id.as_deref());
+    let incoming_turn_state = header_value(request_headers, "x-codex-turn-state");
 
     upstream = upstream
         .bearer_auth(&auth.access_token)
@@ -5352,7 +5497,10 @@ fn add_codex_upstream_headers(
             .header(reqwest::header::CONTENT_TYPE, prepared.content_type.as_str())
             .body(prepared.request_body.clone());
     }
-    if let Some(client_request_id) = effective_client_request_id {
+    if let Some(conversation_id) = incoming_conversation_id.as_deref() {
+        upstream = upstream.header("conversation_id", conversation_id);
+    }
+    if let Some(client_request_id) = incoming_client_request_id.as_deref() {
         upstream = upstream.header("x-client-request-id", client_request_id);
     }
     if let Some(turn_state) = incoming_turn_state.as_deref() {
@@ -5376,7 +5524,7 @@ fn add_codex_upstream_headers(
             upstream = upstream.header(header_name, value);
         }
     }
-    if let Some(session_id) = effective_session_id {
+    if let Some(session_id) = incoming_session_id.as_deref() {
         upstream = upstream.header("session_id", session_id);
     }
     if let Some(account_id) = auth.account_id.as_deref() {
@@ -6357,6 +6505,14 @@ mod tests {
             Some("/v1/responses")
         );
         assert_eq!(
+            super::normalized_codex_gateway_path("/api/llm-gateway/responses/compact"),
+            Some("/v1/responses/compact")
+        );
+        assert_eq!(
+            super::normalized_codex_gateway_path("/api/llm-gateway/v1/responses/compact"),
+            Some("/v1/responses/compact")
+        );
+        assert_eq!(
             super::normalized_codex_gateway_path("/api/llm-gateway/messages"),
             Some("/v1/messages")
         );
@@ -6724,6 +6880,7 @@ mod tests {
         authorization: Option<String>,
         accept: Option<String>,
         user_agent: Option<String>,
+        conversation_id: Option<String>,
         x_client_request_id: Option<String>,
         session_id: Option<String>,
         x_codex_turn_state: Option<String>,
@@ -7322,6 +7479,10 @@ mod tests {
                     .get(header::USER_AGENT)
                     .and_then(|value| value.to_str().ok())
                     .map(ToString::to_string),
+                conversation_id: headers
+                    .get("conversation_id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
                 x_client_request_id: headers
                     .get("x-client-request-id")
                     .and_then(|value| value.to_str().ok())
@@ -7383,6 +7544,88 @@ mod tests {
             .expect("upstream response")
     }
 
+    async fn fake_codex_responses_json_success(
+        State(captured): State<Arc<CapturedCodexUpstream>>,
+        headers: HeaderMap,
+        request: Request<Body>,
+    ) -> Response {
+        let path = request.uri().path().to_string();
+        let query = request.uri().query().map(ToString::to_string);
+        let body = to_bytes(request.into_body(), usize::MAX)
+            .await
+            .expect("upstream request body");
+        let body = if body.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json")
+        };
+        captured
+            .requests
+            .lock()
+            .expect("captured requests")
+            .push(CapturedCodexRequest {
+                path,
+                query,
+                authorization: headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                accept: headers
+                    .get(header::ACCEPT)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                user_agent: headers
+                    .get(header::USER_AGENT)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                conversation_id: headers
+                    .get("conversation_id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                x_client_request_id: headers
+                    .get("x-client-request-id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                session_id: headers
+                    .get("session_id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                x_codex_turn_state: headers
+                    .get("x-codex-turn-state")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                body,
+            });
+
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({
+                    "id": "rs_compact_1",
+                    "created_at": 123,
+                    "model": "gpt-5.3-codex-spark",
+                    "output": [{
+                        "id": "item_compact_1",
+                        "type": "message",
+                        "content": [{
+                            "type": "output_text",
+                            "text": "hello compact back"
+                        }]
+                    }],
+                    "usage": {
+                        "input_tokens": 12,
+                        "input_tokens_details": {
+                            "cached_tokens": 2
+                        },
+                        "output_tokens": 3
+                    }
+                })
+                .to_string(),
+            ))
+            .expect("upstream json response")
+    }
+
     async fn fake_codex_responses_empty_completed_output(
         State(captured): State<Arc<CapturedCodexUpstream>>,
         headers: HeaderMap,
@@ -7410,6 +7653,10 @@ mod tests {
                     .map(ToString::to_string),
                 user_agent: headers
                     .get(header::USER_AGENT)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                conversation_id: headers
+                    .get("conversation_id")
                     .and_then(|value| value.to_str().ok())
                     .map(ToString::to_string),
                 x_client_request_id: headers
@@ -7527,6 +7774,10 @@ mod tests {
                     .get(header::USER_AGENT)
                     .and_then(|value| value.to_str().ok())
                     .map(ToString::to_string),
+                conversation_id: headers
+                    .get("conversation_id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
                 x_client_request_id: headers
                     .get("x-client-request-id")
                     .and_then(|value| value.to_str().ok())
@@ -7631,6 +7882,10 @@ mod tests {
                     .map(ToString::to_string),
                 user_agent: headers
                     .get(header::USER_AGENT)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                conversation_id: headers
+                    .get("conversation_id")
                     .and_then(|value| value.to_str().ok())
                     .map(ToString::to_string),
                 x_client_request_id: headers
@@ -7738,6 +7993,10 @@ mod tests {
                     .get(header::USER_AGENT)
                     .and_then(|value| value.to_str().ok())
                     .map(ToString::to_string),
+                conversation_id: headers
+                    .get("conversation_id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
                 x_client_request_id: headers
                     .get("x-client-request-id")
                     .and_then(|value| value.to_str().ok())
@@ -7796,6 +8055,10 @@ mod tests {
                     .get(header::USER_AGENT)
                     .and_then(|value| value.to_str().ok())
                     .map(ToString::to_string),
+                conversation_id: headers
+                    .get("conversation_id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
                 x_client_request_id: headers
                     .get("x-client-request-id")
                     .and_then(|value| value.to_str().ok())
@@ -7852,6 +8115,10 @@ mod tests {
                     .map(ToString::to_string),
                 user_agent: headers
                     .get(header::USER_AGENT)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                conversation_id: headers
+                    .get("conversation_id")
                     .and_then(|value| value.to_str().ok())
                     .map(ToString::to_string),
                 x_client_request_id: headers
@@ -7916,6 +8183,10 @@ mod tests {
                     .map(ToString::to_string),
                 user_agent: headers
                     .get(header::USER_AGENT)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                conversation_id: headers
+                    .get("conversation_id")
                     .and_then(|value| value.to_str().ok())
                     .map(ToString::to_string),
                 x_client_request_id: headers
@@ -8395,6 +8666,7 @@ mod tests {
         let captured = Arc::new(CapturedCodexUpstream::default());
         let app = Router::new()
             .route("/v1/responses", post(fake_codex_responses))
+            .route("/v1/responses/compact", post(fake_codex_responses))
             .with_state(captured.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -8501,13 +8773,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn codex_dispatch_rewrites_thread_headers_like_legacy_backend() {
+    async fn codex_dispatch_preserves_client_thread_headers() {
         let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
             .lock()
             .expect("codex upstream env lock");
         let captured = Arc::new(CapturedCodexUpstream::default());
         let app = Router::new()
             .route("/v1/responses", post(fake_codex_responses))
+            .route("/v1/responses/compact", post(fake_codex_responses))
             .with_state(captured.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -8528,6 +8801,7 @@ mod tests {
                 .uri("/v1/responses")
                 .header(header::AUTHORIZATION, "Bearer codex-secret")
                 .header(header::CONTENT_TYPE, "application/json")
+                .header("conversation_id", "conversation-header")
                 .header("session_id", "legacy-session")
                 .header("x-client-request-id", "client-request")
                 .header("x-codex-turn-state", "stale-turn-state")
@@ -8548,9 +8822,63 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let requests = captured.requests.lock().expect("captured requests");
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].session_id.as_deref(), Some("thread-anchor"));
-        assert_eq!(requests[0].x_client_request_id.as_deref(), Some("thread-anchor"));
-        assert_eq!(requests[0].x_codex_turn_state, None);
+        assert_eq!(requests[0].conversation_id.as_deref(), Some("conversation-header"));
+        assert_eq!(requests[0].session_id.as_deref(), Some("legacy-session"));
+        assert_eq!(requests[0].x_client_request_id.as_deref(), Some("client-request"));
+        assert_eq!(requests[0].x_codex_turn_state.as_deref(), Some("stale-turn-state"));
+        assert_eq!(requests[0].body["prompt_cache_key"].as_str(), Some("thread-anchor"));
+    }
+
+    #[tokio::test]
+    async fn codex_compact_uses_conversation_header_for_prompt_cache_key_without_overriding_headers(
+    ) {
+        let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("codex upstream env lock");
+        let captured = Arc::new(CapturedCodexUpstream::default());
+        let app = Router::new()
+            .route("/v1/responses", post(fake_codex_responses))
+            .route("/v1/responses/compact", post(fake_codex_responses))
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+        let state = super::ProviderState::new(Arc::new(TestStore), static_codex_route_store());
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses/compact")
+                .header(header::AUTHORIZATION, "Bearer codex-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("conversation_id", "compact-thread")
+                .body(Body::from(
+                    r#"{
+                        "model": "gpt-5.3-codex",
+                        "input": "hello"
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let requests = captured.requests.lock().expect("captured requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].conversation_id.as_deref(), Some("compact-thread"));
+        assert_eq!(requests[0].session_id, None);
+        assert_eq!(requests[0].x_client_request_id, None);
+        assert_eq!(requests[0].body["prompt_cache_key"].as_str(), Some("compact-thread"));
     }
 
     #[tokio::test]
@@ -8666,6 +8994,7 @@ mod tests {
         let captured = Arc::new(CapturedCodexUpstream::default());
         let app = Router::new()
             .route("/v1/responses", post(fake_codex_responses))
+            .route("/v1/responses/compact", post(fake_codex_responses))
             .with_state(captured.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -8791,6 +9120,193 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].protocol_family, llm_access_core::provider::ProtocolFamily::Anthropic);
         assert_eq!(events[0].endpoint, "/v1/messages");
+    }
+
+    #[tokio::test]
+    async fn codex_responses_round_trip_uses_local_previous_response_anchor() {
+        let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("codex upstream env lock");
+        let captured = Arc::new(CapturedCodexUpstream::default());
+        let app = Router::new()
+            .route("/v1/responses", post(fake_codex_responses))
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+        let state = super::ProviderState::new(Arc::new(TestStore), static_codex_route_store());
+        let first = super::provider_entry(
+            state.clone(),
+            Request::builder()
+                .method("POST")
+                .uri("/api/llm-gateway/v1/responses")
+                .header(header::AUTHORIZATION, "Bearer codex-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "gpt-5.3-codex",
+                        "input": [{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
+                        "stream": false
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_body = to_bytes(first.into_body(), usize::MAX)
+            .await
+            .expect("first response body");
+        let first_body =
+            serde_json::from_slice::<serde_json::Value>(&first_body).expect("first json response");
+        let previous_response_id = first_body["id"]
+            .as_str()
+            .expect("local response id")
+            .to_string();
+        assert!(previous_response_id.starts_with("resp_"));
+        assert!(first_body["output"][0]["id"]
+            .as_str()
+            .expect("local message id")
+            .starts_with("msg_"));
+
+        let second = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/llm-gateway/v1/responses")
+                .header(header::AUTHORIZATION, "Bearer codex-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.3-codex",
+                        "previous_response_id": previous_response_id,
+                        "input": [{
+                            "type":"message",
+                            "role":"user",
+                            "content":[{"type":"input_text","text":"next"}]
+                        }],
+                        "stream": false
+                    })
+                    .to_string(),
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+        assert_eq!(second.status(), StatusCode::OK);
+        let requests = captured.requests.lock().expect("captured requests");
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[1].body.get("previous_response_id"),
+            None,
+            "local anchor expansion should strip upstream previous_response_id"
+        );
+        let input = requests[1].body["input"]
+            .as_array()
+            .expect("upstream input array");
+        assert_eq!(input.len(), 3);
+        assert_eq!(input[0]["role"], json!("user"));
+        assert_eq!(input[1]["role"], json!("assistant"));
+        assert_eq!(input[2]["role"], json!("user"));
+    }
+
+    #[tokio::test]
+    async fn codex_compact_round_trip_uses_local_previous_response_anchor() {
+        let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("codex upstream env lock");
+        let captured = Arc::new(CapturedCodexUpstream::default());
+        let app = Router::new()
+            .route("/v1/responses", post(fake_codex_responses_json_success))
+            .route("/v1/responses/compact", post(fake_codex_responses_json_success))
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+        let state = super::ProviderState::new(Arc::new(TestStore), static_codex_route_store());
+        let first = super::provider_entry(
+            state.clone(),
+            Request::builder()
+                .method("POST")
+                .uri("/api/llm-gateway/v1/responses/compact")
+                .header(header::AUTHORIZATION, "Bearer codex-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "gpt-5.3-codex",
+                        "input": "hello compact"
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_body = to_bytes(first.into_body(), usize::MAX)
+            .await
+            .expect("first response body");
+        let first_body =
+            serde_json::from_slice::<serde_json::Value>(&first_body).expect("first json response");
+        let previous_response_id = first_body["id"]
+            .as_str()
+            .expect("local response id")
+            .to_string();
+        assert!(previous_response_id.starts_with("resp_"));
+
+        let second = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/llm-gateway/v1/responses/compact")
+                .header(header::AUTHORIZATION, "Bearer codex-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-5.3-codex",
+                        "previous_response_id": previous_response_id,
+                        "input": "next compact"
+                    })
+                    .to_string(),
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+        assert_eq!(second.status(), StatusCode::OK);
+        let requests = captured.requests.lock().expect("captured requests");
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[1].body.get("previous_response_id"),
+            None,
+            "compact local anchor expansion should strip upstream previous_response_id"
+        );
+        let input = requests[1].body["input"]
+            .as_array()
+            .expect("upstream input array");
+        assert_eq!(input.len(), 3);
+        assert_eq!(input[0]["role"], json!("user"));
+        assert_eq!(input[1]["role"], json!("assistant"));
+        assert_eq!(input[2]["role"], json!("user"));
     }
 
     #[tokio::test]
@@ -9097,7 +9613,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn codex_dispatch_rejects_chat_tool_call_without_output_with_json_error_and_usage() {
+    async fn codex_dispatch_repairs_chat_tool_call_without_output_and_records_usage() {
+        let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("codex upstream env lock");
+        let captured = Arc::new(CapturedCodexUpstream::default());
+        let app = Router::new()
+            .route("/v1/responses", post(fake_codex_responses))
+            .with_state(captured);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
         let store = Arc::new(RecordingControlStore::default());
         let state = super::ProviderState::new(store.clone(), static_codex_route_store());
         let response = super::provider_entry(
@@ -9120,32 +9654,22 @@ mod tests {
         )
         .await;
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            response
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok()),
-            Some("application/json")
-        );
+        std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+        assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("response body");
         let body = serde_json::from_slice::<serde_json::Value>(&body).expect("json response");
-        assert_eq!(body["error"]["type"], "invalid_request_error");
-        assert!(body["error"]["message"]
-            .as_str()
-            .expect("error message")
-            .contains("No tool output found for function call callauto12"));
+        assert_eq!(body["object"], "chat.completion");
+        assert_eq!(body["choices"][0]["message"]["content"], "hello back");
 
         let events = store.usage_events.lock().expect("usage events");
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].status_code, 400);
+        assert_eq!(events[0].status_code, 200);
         assert_eq!(events[0].endpoint, "/v1/chat/completions");
         assert_eq!(events[0].request_url, "/v1/chat/completions");
-        assert_eq!(events[0].account_name, None);
-        assert!(events[0].client_request_body_json.is_some());
-        assert!(events[0].upstream_request_body_json.is_none());
+        assert_eq!(events[0].account_name.as_deref(), Some("codex-a"));
     }
 
     #[tokio::test]

@@ -14,10 +14,12 @@ bytes = { workspace = true }
 eventsource-stream = "0.2"
 http = { workspace = true }
 reqwest = { workspace = true, features = ["stream", "multipart"] }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 url = "2.5"
 urlencoding = "2.1"
+uuid = { version = "1.18", features = ["v4"] }
 zstd = "0.13"

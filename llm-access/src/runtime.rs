@@ -37,7 +37,7 @@ use tokio::{
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 use crate::usage_journal::JournalUsageEventSink;
-use crate::{config::StorageConfig, geoip::GeoIpResolver};
+use crate::{codex_anchor::CodexResponseAnchors, config::StorageConfig, geoip::GeoIpResolver};
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 const USAGE_EVENT_CHANNEL_CAPACITY: usize = 1_024;
@@ -55,6 +55,7 @@ pub struct LlmAccessRuntime {
     admin_codex_account_store: Arc<dyn AdminCodexAccountStore>,
     admin_kiro_account_store: Arc<dyn AdminKiroAccountStore>,
     admin_review_queue_store: Arc<dyn AdminReviewQueueStore>,
+    codex_response_anchors: Arc<CodexResponseAnchors>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
@@ -81,6 +82,7 @@ struct LlmAccessStores {
     admin_codex_account_store: Arc<dyn AdminCodexAccountStore>,
     admin_kiro_account_store: Arc<dyn AdminKiroAccountStore>,
     admin_review_queue_store: Arc<dyn AdminReviewQueueStore>,
+    codex_response_anchors: Arc<CodexResponseAnchors>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
     public_usage_store: Arc<dyn PublicUsageStore>,
@@ -108,6 +110,7 @@ impl LlmAccessRuntime {
             admin_codex_account_store: Arc::new(EmptyAdminCodexAccountStore),
             admin_kiro_account_store: Arc::new(EmptyAdminKiroAccountStore),
             admin_review_queue_store: Arc::new(EmptyAdminReviewQueueStore),
+            codex_response_anchors: Arc::new(CodexResponseAnchors::default()),
             public_access_store: Arc::new(EmptyPublicAccessStore),
             public_community_store: Arc::new(EmptyPublicCommunityStore),
             public_usage_store: Arc::new(EmptyPublicUsageStore),
@@ -135,6 +138,7 @@ impl LlmAccessRuntime {
             admin_codex_account_store: stores.admin_codex_account_store,
             admin_kiro_account_store: stores.admin_kiro_account_store,
             admin_review_queue_store: stores.admin_review_queue_store,
+            codex_response_anchors: stores.codex_response_anchors,
             public_access_store: stores.public_access_store,
             public_community_store: stores.public_community_store,
             public_usage_store: stores.public_usage_store,
@@ -220,6 +224,21 @@ impl LlmAccessRuntime {
         let public_usage_store: Arc<dyn PublicUsageStore> = repository.clone();
         let public_submission_store: Arc<dyn PublicSubmissionStore> = repository.clone();
         let public_status_store: Arc<dyn PublicStatusStore> = repository;
+        let codex_response_anchors = Arc::new(
+            CodexResponseAnchors::open_persistent(
+                config
+                    .state_root
+                    .join("cache")
+                    .join("codex-response-anchors.json"),
+            )
+            .unwrap_or_else(|err| {
+                tracing::warn!(
+                    error = %err,
+                    "failed to open persistent codex response anchors, falling back to in-memory store"
+                );
+                CodexResponseAnchors::default()
+            }),
+        );
         Ok(Self::with_stores(LlmAccessStores {
             control_store,
             geoip,
@@ -231,6 +250,7 @@ impl LlmAccessRuntime {
             admin_codex_account_store,
             admin_kiro_account_store,
             admin_review_queue_store,
+            codex_response_anchors,
             public_access_store,
             public_community_store,
             public_usage_store,
@@ -292,6 +312,10 @@ impl LlmAccessRuntime {
     /// Admin review queue store used by local admin endpoints.
     pub fn admin_review_queue_store(&self) -> Arc<dyn AdminReviewQueueStore> {
         Arc::clone(&self.admin_review_queue_store)
+    }
+
+    pub(crate) fn codex_response_anchors(&self) -> Arc<CodexResponseAnchors> {
+        Arc::clone(&self.codex_response_anchors)
     }
 
     /// Public access store used by unauthenticated public endpoints.

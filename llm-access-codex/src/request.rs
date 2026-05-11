@@ -12,6 +12,7 @@ use serde_json::{json, Map, Value};
 
 use crate::{
     anthropic_messages::adapt_anthropic_messages_request,
+    conversation_normalizer::repair_responses_request,
     error::{
         bad_request, bad_request_with_detail, internal_error, method_not_allowed, not_found,
         CodexGatewayError, CodexGatewayResult,
@@ -136,6 +137,7 @@ pub fn prepare_gateway_request_from_bytes(
             thread_anchor = Some(prompt_cache_key.to_string());
         }
         normalize_responses_request("/v1/responses", &mut adapted, thread_anchor.as_deref());
+        repair_responses_request(&mut adapted)?;
         filter_responses_request_fields("/v1/responses", &mut adapted);
         validate_responses_request("/v1/responses", &adapted)?;
         if !original_wants_stream {
@@ -155,6 +157,7 @@ pub fn prepare_gateway_request_from_bytes(
             thread_anchor = Some(prompt_cache_key.to_string());
         }
         normalize_responses_request("/v1/responses", &mut adapted, thread_anchor.as_deref());
+        repair_responses_request(&mut adapted)?;
         filter_responses_request_fields("/v1/responses", &mut adapted);
         validate_responses_request("/v1/responses", &adapted)?;
         if !original_wants_stream {
@@ -169,6 +172,7 @@ pub fn prepare_gateway_request_from_bytes(
                 thread_anchor = Some(prompt_cache_key.to_string());
             }
             normalize_responses_request(gateway_path, root, thread_anchor.as_deref());
+            repair_responses_request(root)?;
             filter_responses_request_fields(gateway_path, root);
             validate_responses_request(gateway_path, root)?;
             if gateway_path == "/v1/responses" && !original_wants_stream {
@@ -1329,7 +1333,7 @@ fn adapt_openai_chat_completions_request(
                 let text = extract_openai_message_content_text(content);
                 let trimmed = text.trim();
                 if trimmed.is_empty() {
-                    return Err(chat_message_bad_request(index, "content is empty or unsupported"));
+                    continue;
                 }
                 input_items.push(json!({
                     "type": "message",
@@ -1352,7 +1356,7 @@ fn adapt_openai_chat_completions_request(
                 }
                 let content_items = convert_user_message_content_to_responses_items(content);
                 if content_items.is_empty() {
-                    return Err(chat_message_bad_request(index, "content is empty or unsupported"));
+                    continue;
                 }
                 input_items.push(json!({
                     "type": "message",
@@ -1436,7 +1440,7 @@ fn adapt_openai_chat_completions_request(
                     }
                 }
                 if !emitted_content && !emitted_tool_call {
-                    return Err(chat_message_bad_request(index, "content is empty or unsupported"));
+                    continue;
                 }
             },
             "tool" => {
@@ -1671,7 +1675,7 @@ pub fn normalize_responses_request(
             .or_insert(Value::Bool(false));
     }
 
-    if path == "/v1/responses" {
+    if matches!(path, "/v1/responses" | "/v1/responses/compact") {
         if let Some(thread_anchor) = thread_anchor
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -1877,7 +1881,7 @@ mod tests {
     }
 
     #[test]
-    fn adapt_openai_chat_completions_request_rejects_user_message_without_supported_content() {
+    fn adapt_openai_chat_completions_request_drops_user_message_without_supported_content() {
         let obj = json!({
             "model": "gpt-5.3-codex",
             "messages": [
@@ -1892,20 +1896,17 @@ mod tests {
             ]
         });
 
-        let err = adapt_openai_chat_completions_request(
+        let (adapted, _) = adapt_openai_chat_completions_request(
             obj.as_object().expect("sample request should be an object"),
         )
-        .expect_err("user message without supported content should be rejected");
-        assert_eq!(err.status, StatusCode::BAD_REQUEST);
-        assert!(err.message.contains("content"));
+        .expect("unsupported user content should be dropped");
+        assert_eq!(adapted["input"], json!([]));
     }
 
     #[tokio::test]
-    async fn prepare_gateway_request_preserves_raw_body_on_chat_validation_error() {
+    async fn prepare_gateway_request_rejects_chat_message_without_role() {
         let headers = axum::http::HeaderMap::new();
-        let body = Body::from(
-            r#"{"model":"gpt-5.3-codex","messages":[{"role":"user","content":[{"type":"image_url"}]}]}"#,
-        );
+        let body = Body::from(r#"{"model":"gpt-5.3-codex","messages":[{"content":"hello"}]}"#);
 
         let err = prepare_gateway_request(
             "/v1/chat/completions",
@@ -1916,10 +1917,10 @@ mod tests {
             1024 * 1024,
         )
         .await
-        .expect_err("unsupported chat payload should fail");
+        .expect_err("message without role should fail");
 
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
-        assert!(err.message.contains("content"));
+        assert!(err.message.contains("role"));
     }
 
     #[tokio::test]
@@ -2139,7 +2140,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_gateway_request_rejects_chat_tool_call_without_output() {
+    async fn prepare_gateway_request_repairs_chat_tool_call_without_output() {
         let headers = axum::http::HeaderMap::new();
         let body = Body::from(
             r#"{
@@ -2151,7 +2152,7 @@ mod tests {
             }"#,
         );
 
-        let err = prepare_gateway_request(
+        let prepared = prepare_gateway_request(
             "/v1/chat/completions",
             "",
             axum::http::Method::POST,
@@ -2160,12 +2161,12 @@ mod tests {
             1024 * 1024,
         )
         .await
-        .expect_err("chat request with unmatched tool call should fail locally");
+        .expect("chat request with unmatched tool call should be repaired");
 
-        assert_eq!(err.status, StatusCode::BAD_REQUEST);
-        assert!(err
-            .message
-            .contains("No tool output found for function call callauto12"));
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+        assert_eq!(upstream["input"].as_array().map(Vec::len), Some(1));
+        assert_eq!(upstream["input"][0]["role"], "user");
     }
 
     #[tokio::test]
@@ -2229,7 +2230,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_gateway_request_rejects_responses_tool_call_without_output() {
+    async fn prepare_gateway_request_repairs_responses_tool_call_without_output() {
         let headers = axum::http::HeaderMap::new();
         let body = Body::from(
             r#"{
@@ -2240,7 +2241,7 @@ mod tests {
             }"#,
         );
 
-        let err = prepare_gateway_request(
+        let prepared = prepare_gateway_request(
             "/v1/responses",
             "",
             axum::http::Method::POST,
@@ -2249,12 +2250,40 @@ mod tests {
             1024 * 1024,
         )
         .await
-        .expect_err("responses request with unmatched tool call should fail locally");
+        .expect("responses request with unmatched tool call should be repaired");
 
-        assert_eq!(err.status, StatusCode::BAD_REQUEST);
-        assert!(err
-            .message
-            .contains("No tool output found for function call callauto12"));
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+        assert_eq!(upstream["input"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_rewrites_invalid_message_item_ids() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "input":[
+                    {"type":"message","id":"item_bad","role":"assistant","content":[{"type":"output_text","text":"pong"}]}
+                ]
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("responses request should rewrite invalid message ids");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+        let id = upstream["input"][0]["id"].as_str().unwrap_or_default();
+        assert!(id.starts_with("msg_"));
     }
 
     #[tokio::test]

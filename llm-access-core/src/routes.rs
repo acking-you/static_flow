@@ -308,6 +308,7 @@ pub fn provider_route_requirement(path: &str) -> Option<ProviderRouteRequirement
             "/api/llm-gateway/models"
                 | "/api/llm-gateway/chat/completions"
                 | "/api/llm-gateway/responses"
+                | "/api/llm-gateway/responses/compact"
                 | "/api/llm-gateway/messages"
         )
     {
@@ -379,6 +380,10 @@ mod tests {
         assert_eq!(provider_route_requirement("/v1/messages"), Some(kiro));
         assert_eq!(provider_route_requirement("/v1/messages/count_tokens"), Some(kiro));
         assert_eq!(provider_route_requirement("/api/llm-gateway/v1/responses"), Some(codex));
+        assert_eq!(
+            provider_route_requirement("/api/llm-gateway/v1/responses/compact"),
+            Some(codex)
+        );
         assert_eq!(provider_route_requirement("/api/codex-gateway/v1/responses"), Some(codex));
         assert_eq!(provider_route_requirement("/cc/v1/messages"), Some(kiro));
         assert_eq!(provider_route_requirement("/api/kiro-gateway/v1/messages"), Some(kiro));

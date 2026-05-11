@@ -600,7 +600,7 @@ pub fn adapt_anthropic_messages_request(
             },
         }
         if input_items.len() == prior_len {
-            return Err(anthropic_messages_bad_request(index, "content is empty or unsupported"));
+            continue;
         }
     }
 
