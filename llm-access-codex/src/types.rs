@@ -114,6 +114,13 @@ pub struct ChatStreamMetadata {
     pub created: Option<i64>,
     /// Stable chat chunk indices assigned to streamed tool calls.
     pub tool_call_indices: BTreeMap<String, usize>,
+    /// Whether one streamed tool call has already emitted its start chunk.
+    pub tool_call_started: BTreeMap<String, bool>,
+    /// Whether one streamed tool call has emitted any incremental argument
+    /// delta.
+    pub tool_call_delta_seen: BTreeMap<String, bool>,
+    /// Whether the emitted start chunk already carried non-empty payload.
+    pub tool_call_start_had_payload: BTreeMap<String, bool>,
     /// Next tool call index to allocate for a newly observed streamed call.
     pub next_tool_call_index: usize,
 }
@@ -128,6 +135,43 @@ impl ChatStreamMetadata {
         self.tool_call_indices.insert(lookup_key.to_string(), index);
         self.next_tool_call_index += 1;
         index
+    }
+
+    /// Record that one streamed tool call emitted its first structural chunk.
+    pub fn mark_tool_call_started(&mut self, lookup_key: &str, had_payload: bool) -> bool {
+        let first = self
+            .tool_call_started
+            .insert(lookup_key.to_string(), true)
+            .is_none();
+        if first {
+            self.tool_call_start_had_payload
+                .insert(lookup_key.to_string(), had_payload);
+        }
+        first
+    }
+
+    /// Record that one streamed tool call emitted incremental argument input.
+    pub fn mark_tool_call_delta_seen(&mut self, lookup_key: &str) {
+        self.tool_call_delta_seen
+            .insert(lookup_key.to_string(), true);
+    }
+
+    /// Whether one streamed tool call already emitted incremental argument
+    /// input.
+    pub fn tool_call_delta_seen(&self, lookup_key: &str) -> bool {
+        self.tool_call_delta_seen
+            .get(lookup_key)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Whether the first structural chunk for this tool call already carried
+    /// payload.
+    pub fn tool_call_start_had_payload(&self, lookup_key: &str) -> bool {
+        self.tool_call_start_had_payload
+            .get(lookup_key)
+            .copied()
+            .unwrap_or(false)
     }
 }
 

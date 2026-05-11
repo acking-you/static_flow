@@ -19,7 +19,15 @@ pub struct AnthropicStreamMetadata {
     text_block_index: Option<usize>,
     text_block_started: bool,
     next_content_index: usize,
-    emitted_tool_blocks: BTreeSet<String>,
+    tool_blocks: BTreeMap<String, AnthropicToolBlockState>,
+}
+
+#[derive(Debug, Clone)]
+struct AnthropicToolBlockState {
+    index: usize,
+    delta_seen: bool,
+    start_had_payload: bool,
+    stopped: bool,
 }
 
 impl AnthropicStreamMetadata {
@@ -33,13 +41,53 @@ impl AnthropicStreamMetadata {
         index
     }
 
-    fn tool_block_index(&mut self, lookup_key: &str) -> Option<usize> {
-        if !self.emitted_tool_blocks.insert(lookup_key.to_string()) {
-            return None;
+    fn ensure_tool_block_index(&mut self, lookup_key: &str) -> usize {
+        if let Some(state) = self.tool_blocks.get(lookup_key) {
+            return state.index;
         }
         let index = self.next_content_index;
         self.next_content_index += 1;
-        Some(index)
+        self.tool_blocks
+            .insert(lookup_key.to_string(), AnthropicToolBlockState {
+                index,
+                delta_seen: false,
+                start_had_payload: false,
+                stopped: false,
+            });
+        index
+    }
+
+    fn tool_block_state(&self, lookup_key: &str) -> Option<&AnthropicToolBlockState> {
+        self.tool_blocks.get(lookup_key)
+    }
+
+    fn mark_tool_block_started(&mut self, lookup_key: &str, had_payload: bool) -> usize {
+        let index = self.ensure_tool_block_index(lookup_key);
+        let state = self
+            .tool_blocks
+            .get_mut(lookup_key)
+            .expect("tool block state exists");
+        state.start_had_payload = state.start_had_payload || had_payload;
+        index
+    }
+
+    fn mark_tool_block_delta_seen(&mut self, lookup_key: &str) -> usize {
+        let index = self.ensure_tool_block_index(lookup_key);
+        let state = self
+            .tool_blocks
+            .get_mut(lookup_key)
+            .expect("tool block state exists");
+        state.delta_seen = true;
+        index
+    }
+
+    fn mark_tool_block_stopped(&mut self, lookup_key: &str) -> Option<usize> {
+        let state = self.tool_blocks.get_mut(lookup_key)?;
+        if state.stopped {
+            return None;
+        }
+        state.stopped = true;
+        Some(state.index)
     }
 }
 
@@ -774,6 +822,29 @@ fn parse_responses_tool_input_value(item_obj: &Map<String, Value>, item_type: &s
     }
 }
 
+fn responses_tool_input_string(item_obj: &Map<String, Value>, item_type: &str) -> String {
+    let value = match item_type {
+        "custom_tool_call" => item_obj.get("input"),
+        _ => item_obj.get("arguments"),
+    };
+    value.map_or_else(String::new, |raw| {
+        if let Some(text) = raw.as_str() {
+            text.to_string()
+        } else {
+            serde_json::to_string(raw).unwrap_or_else(|_| String::new())
+        }
+    })
+}
+
+fn tool_input_delta_text(value: &Value) -> &str {
+    value
+        .get("delta")
+        .or_else(|| value.get("input"))
+        .or_else(|| value.get("arguments"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
 fn anthropic_usage_from_response(source: &Value) -> Value {
     let usage = source.get("usage").cloned().unwrap_or(Value::Null);
     let input_total = usage
@@ -987,6 +1058,25 @@ fn stream_tool_call_identity_from_item(item: &Value) -> Option<(String, String)>
     Some((format!("item:{item_id}"), item_id))
 }
 
+fn stream_tool_call_identity_from_event(value: &Value) -> Option<(String, String)> {
+    if let Some(call_id) = value
+        .get("call_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let call_id = call_id.to_string();
+        return Some((format!("call:{call_id}"), call_id));
+    }
+    let item_id = value
+        .get("item_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    Some((format!("item:{item_id}"), item_id))
+}
+
 fn push_message_start(
     chunks: &mut Vec<Bytes>,
     value: &Value,
@@ -1081,9 +1171,7 @@ fn emit_full_response_as_anthropic_stream(
                     let Some(lookup_key) = lookup_key else {
                         continue;
                     };
-                    let Some(index) = metadata.tool_block_index(&lookup_key) else {
-                        continue;
-                    };
+                    let index = metadata.mark_tool_block_started(&lookup_key, true);
                     chunks.push(encode_named_json_sse_chunk(
                         "content_block_start",
                         &json!({
@@ -1171,33 +1259,95 @@ pub fn convert_response_event_to_anthropic_sse_chunks(
             let Some((lookup_key, call_id)) = stream_tool_call_identity_from_item(item) else {
                 return Vec::new();
             };
-            let Some(index) = metadata.tool_block_index(&lookup_key) else {
-                return Vec::new();
-            };
             push_message_start(&mut chunks, &value, metadata);
+            let payload = item
+                .as_object()
+                .map(|obj| responses_tool_input_string(obj, item_type))
+                .unwrap_or_default();
+            let has_payload = !payload.is_empty() && payload != "{}";
+            let existing = metadata.tool_block_state(&lookup_key).cloned();
+            let index = metadata.mark_tool_block_started(&lookup_key, has_payload);
             let name = item.get("name").and_then(Value::as_str).unwrap_or("tool");
             let name = restore_tool_name(name, tool_name_restore_map);
+            if existing.is_none() {
+                chunks.push(encode_named_json_sse_chunk(
+                    "content_block_start",
+                    &json!({
+                        "type": "content_block_start",
+                        "index": index,
+                        "content_block": {
+                            "type": "tool_use",
+                            "id": call_id,
+                            "name": name,
+                            "input": {},
+                        }
+                    }),
+                ));
+            }
+            if chunk_type == "response.output_item.added" && existing.is_none() && has_payload {
+                chunks.push(encode_named_json_sse_chunk(
+                    "content_block_delta",
+                    &json!({
+                        "type": "content_block_delta",
+                        "index": index,
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": payload,
+                        }
+                    }),
+                ));
+            }
+            if chunk_type == "response.output_item.done" {
+                let delta_seen = existing.as_ref().is_some_and(|state| state.delta_seen);
+                let start_had_payload = existing
+                    .as_ref()
+                    .is_some_and(|state| state.start_had_payload);
+                if !delta_seen && !start_had_payload && has_payload {
+                    chunks.push(encode_named_json_sse_chunk(
+                        "content_block_delta",
+                        &json!({
+                            "type": "content_block_delta",
+                            "index": index,
+                            "delta": {
+                                "type": "input_json_delta",
+                                "partial_json": payload,
+                            }
+                        }),
+                    ));
+                }
+                if let Some(stop_index) = metadata.mark_tool_block_stopped(&lookup_key) {
+                    chunks.push(encode_named_json_sse_chunk(
+                        "content_block_stop",
+                        &json!({
+                            "type": "content_block_stop",
+                            "index": stop_index,
+                        }),
+                    ));
+                }
+            }
+        },
+        "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta" => {
+            let Some((lookup_key, _call_id)) = stream_tool_call_identity_from_event(&value) else {
+                return Vec::new();
+            };
+            let partial_json = tool_input_delta_text(&value);
+            if partial_json.is_empty() {
+                return Vec::new();
+            }
+            if metadata.tool_block_state(&lookup_key).is_none() {
+                return Vec::new();
+            }
+            push_message_start(&mut chunks, &value, metadata);
+            let index = metadata.mark_tool_block_delta_seen(&lookup_key);
             chunks.push(encode_named_json_sse_chunk(
-                "content_block_start",
+                "content_block_delta",
                 &json!({
-                    "type": "content_block_start",
+                    "type": "content_block_delta",
                     "index": index,
-                    "content_block": {
-                        "type": "tool_use",
-                        "id": call_id,
-                        "name": name,
-                        "input": item
-                            .as_object()
-                            .map(|obj| parse_responses_tool_input_value(obj, item_type))
-                            .unwrap_or_else(|| json!({})),
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": partial_json,
                     }
-                }),
-            ));
-            chunks.push(encode_named_json_sse_chunk(
-                "content_block_stop",
-                &json!({
-                    "type": "content_block_stop",
-                    "index": index,
                 }),
             ));
         },
@@ -1222,6 +1372,24 @@ pub fn convert_response_event_to_anthropic_sse_chunks(
                 ));
                 metadata.text_block_started = false;
             }
+            let open_tool_indices = metadata
+                .tool_blocks
+                .iter()
+                .filter_map(|(lookup_key, state)| {
+                    (!state.stopped).then_some((lookup_key.clone(), state.index))
+                })
+                .collect::<Vec<_>>();
+            for (lookup_key, index) in open_tool_indices {
+                if metadata.mark_tool_block_stopped(&lookup_key).is_some() {
+                    chunks.push(encode_named_json_sse_chunk(
+                        "content_block_stop",
+                        &json!({
+                            "type": "content_block_stop",
+                            "index": index,
+                        }),
+                    ));
+                }
+            }
             chunks.push(encode_named_json_sse_chunk(
                 "message_delta",
                 &json!({
@@ -1240,4 +1408,104 @@ pub fn convert_response_event_to_anthropic_sse_chunks(
     }
 
     chunks
+}
+
+#[cfg(test)]
+mod tests {
+    use eventsource_stream::Event as SseEvent;
+    use serde_json::{json, Value};
+
+    use super::{convert_response_event_to_anthropic_sse_chunks, AnthropicStreamMetadata};
+
+    fn sse_event(value: Value) -> SseEvent {
+        SseEvent {
+            event: String::new(),
+            data: serde_json::to_string(&value).expect("serialize test event"),
+            id: String::new(),
+            retry: None,
+        }
+    }
+
+    fn parse_named_sse_json(chunks: &[axum::body::Bytes], event_name: &str) -> Vec<Value> {
+        chunks
+            .iter()
+            .filter_map(|chunk| {
+                let text = std::str::from_utf8(chunk).ok()?;
+                let prefix = format!("event: {event_name}\n");
+                if !text.starts_with(&prefix) {
+                    return None;
+                }
+                let data = text.strip_prefix(&prefix)?.strip_prefix("data: ")?.trim();
+                serde_json::from_str::<Value>(data).ok()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn streamed_custom_tool_call_delta_requires_start_event() {
+        let mut metadata = AnthropicStreamMetadata::default();
+        let delta = sse_event(json!({
+            "type": "response.custom_tool_call_input.delta",
+            "call_id": "callpatch1",
+            "delta": "*** Begin Patch"
+        }));
+
+        let chunks =
+            convert_response_event_to_anthropic_sse_chunks(&delta, None, &mut metadata, None, None);
+
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn streamed_custom_tool_call_added_with_payload_emits_input_json_delta() {
+        let mut metadata = AnthropicStreamMetadata::default();
+        let added = sse_event(json!({
+            "type": "response.output_item.added",
+            "item": {
+                "type": "custom_tool_call",
+                "call_id": "callpatch1",
+                "name": "apply_patch",
+                "input": "*** Begin Patch"
+            }
+        }));
+
+        let chunks =
+            convert_response_event_to_anthropic_sse_chunks(&added, None, &mut metadata, None, None);
+
+        let starts = parse_named_sse_json(&chunks, "content_block_start");
+        let deltas = parse_named_sse_json(&chunks, "content_block_delta");
+        assert_eq!(starts.len(), 1);
+        assert_eq!(starts[0]["content_block"]["type"], json!("tool_use"));
+        assert_eq!(starts[0]["content_block"]["id"], json!("callpatch1"));
+        assert_eq!(starts[0]["content_block"]["name"], json!("apply_patch"));
+        assert_eq!(starts[0]["content_block"]["input"], json!({}));
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0]["delta"]["type"], json!("input_json_delta"));
+        assert_eq!(deltas[0]["delta"]["partial_json"], json!("*** Begin Patch"));
+    }
+
+    #[test]
+    fn streamed_custom_tool_call_done_without_prior_start_emits_full_tool_block_once() {
+        let mut metadata = AnthropicStreamMetadata::default();
+        let done = sse_event(json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "custom_tool_call",
+                "call_id": "callpatch1",
+                "name": "apply_patch",
+                "input": "*** Begin Patch"
+            }
+        }));
+
+        let chunks =
+            convert_response_event_to_anthropic_sse_chunks(&done, None, &mut metadata, None, None);
+
+        let starts = parse_named_sse_json(&chunks, "content_block_start");
+        let deltas = parse_named_sse_json(&chunks, "content_block_delta");
+        let stops = parse_named_sse_json(&chunks, "content_block_stop");
+        assert_eq!(starts.len(), 1);
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(stops.len(), 1);
+        assert_eq!(deltas[0]["delta"]["partial_json"], json!("*** Begin Patch"));
+    }
 }

@@ -99,6 +99,15 @@ fn responses_tool_call_arguments_string(item_obj: &Map<String, Value>, item_type
     )
 }
 
+fn responses_tool_call_event_delta_text(value: &Value) -> &str {
+    value
+        .get("delta")
+        .or_else(|| value.get("input"))
+        .or_else(|| value.get("arguments"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
 /// Adapt a completed responses payload into the classic chat/completions
 /// schema.
 fn map_response_to_chat_completion(
@@ -448,6 +457,19 @@ fn convert_response_value_to_chat_chunk(
                     .as_object()
                     .map(|obj| responses_tool_call_arguments_string(obj, item_type))
                     .unwrap_or_else(|| "{}".to_string());
+                let has_payload = !arguments.is_empty() && arguments != "{}";
+                let should_emit = if chunk_type == "response.output_item.added" {
+                    metadata.mark_tool_call_started(&lookup_key, has_payload)
+                } else {
+                    let first_start = metadata.mark_tool_call_started(&lookup_key, has_payload);
+                    first_start
+                        || (!metadata.tool_call_delta_seen(&lookup_key)
+                            && !metadata.tool_call_start_had_payload(&lookup_key)
+                            && has_payload)
+                };
+                if !should_emit {
+                    return None;
+                }
                 return Some(json!({
                     "id": stream_event_response_id(value),
                     "object": "chat.completion.chunk",
@@ -473,17 +495,16 @@ fn convert_response_value_to_chat_chunk(
             }
             None
         },
-        "response.function_call_arguments.delta" | "response.function_call_arguments.done" => {
+        "response.function_call_arguments.delta"
+        | "response.function_call_arguments.done"
+        | "response.custom_tool_call_input.delta" => {
             let (lookup_key, call_id) = stream_tool_call_identity_from_event(value)?;
             let tool_call_index = metadata.tool_call_index(&lookup_key);
-            let arguments = value
-                .get("delta")
-                .or_else(|| value.get("arguments"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let arguments = responses_tool_call_event_delta_text(value);
             if arguments.is_empty() {
                 return None;
             }
+            metadata.mark_tool_call_delta_seen(&lookup_key);
             Some(json!({
                 "id": stream_event_response_id(value),
                 "object": "chat.completion.chunk",
@@ -660,6 +681,48 @@ mod tests {
         });
 
         assert!(convert_response_value_to_chat_chunk(&value, None, &mut metadata).is_none());
+    }
+
+    #[test]
+    fn streamed_custom_tool_call_input_delta_uses_same_tool_index_without_duplicate_done_chunk() {
+        let mut metadata = ChatStreamMetadata::default();
+        let added = json!({
+            "type": "response.output_item.added",
+            "item": {
+                "type": "custom_tool_call",
+                "call_id": "callpatch1",
+                "name": "apply_patch",
+                "input": ""
+            }
+        });
+        let delta = json!({
+            "type": "response.custom_tool_call_input.delta",
+            "call_id": "callpatch1",
+            "delta": "*** Begin Patch"
+        });
+        let done = json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "custom_tool_call",
+                "call_id": "callpatch1",
+                "name": "apply_patch",
+                "input": "*** Begin Patch"
+            }
+        });
+
+        let start_chunk =
+            convert_response_value_to_chat_chunk(&added, None, &mut metadata).expect("start");
+        let delta_chunk =
+            convert_response_value_to_chat_chunk(&delta, None, &mut metadata).expect("delta");
+        let done_chunk = convert_response_value_to_chat_chunk(&done, None, &mut metadata);
+
+        assert_eq!(start_chunk["choices"][0]["delta"]["tool_calls"][0]["index"], json!(0));
+        assert_eq!(delta_chunk["choices"][0]["delta"]["tool_calls"][0]["index"], json!(0));
+        assert_eq!(
+            delta_chunk["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
+            json!("*** Begin Patch")
+        );
+        assert!(done_chunk.is_none());
     }
 }
 

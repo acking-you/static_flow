@@ -7544,6 +7544,123 @@ mod tests {
             .expect("upstream response")
     }
 
+    async fn fake_codex_responses_custom_tool_stream(
+        State(captured): State<Arc<CapturedCodexUpstream>>,
+        headers: HeaderMap,
+        request: Request<Body>,
+    ) -> Response {
+        let path = request.uri().path().to_string();
+        let query = request.uri().query().map(ToString::to_string);
+        let body = to_bytes(request.into_body(), usize::MAX)
+            .await
+            .expect("upstream request body");
+        let body = if body.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json")
+        };
+        captured
+            .requests
+            .lock()
+            .expect("captured requests")
+            .push(CapturedCodexRequest {
+                path,
+                query,
+                authorization: headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                accept: headers
+                    .get(header::ACCEPT)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                user_agent: headers
+                    .get(header::USER_AGENT)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                conversation_id: headers
+                    .get("conversation_id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                x_client_request_id: headers
+                    .get("x-client-request-id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                session_id: headers
+                    .get("session_id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                x_codex_turn_state: headers
+                    .get("x-codex-turn-state")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                body,
+            });
+
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .body(Body::from(format!(
+                "event: response.output_item.added\ndata: {}\n\nevent: \
+                 response.custom_tool_call_input.delta\ndata: {}\n\nevent: \
+                 response.output_item.done\ndata: {}\n\nevent: response.completed\ndata: {}\n\n",
+                json!({
+                    "type": "response.output_item.added",
+                    "response_id": "resp_1",
+                    "created": 123,
+                    "model": "gpt-5.3-codex-spark",
+                    "item": {
+                        "type": "custom_tool_call",
+                        "call_id": "callpatch1",
+                        "name": "apply_patch",
+                        "input": ""
+                    }
+                }),
+                json!({
+                    "type": "response.custom_tool_call_input.delta",
+                    "response_id": "resp_1",
+                    "created": 123,
+                    "model": "gpt-5.3-codex-spark",
+                    "call_id": "callpatch1",
+                    "delta": "*** Begin Patch"
+                }),
+                json!({
+                    "type": "response.output_item.done",
+                    "response_id": "resp_1",
+                    "created": 123,
+                    "model": "gpt-5.3-codex-spark",
+                    "item": {
+                        "type": "custom_tool_call",
+                        "call_id": "callpatch1",
+                        "name": "apply_patch",
+                        "input": "*** Begin Patch"
+                    }
+                }),
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_1",
+                        "created_at": 123,
+                        "model": "gpt-5.3-codex-spark",
+                        "output": [{
+                            "type": "custom_tool_call",
+                            "call_id": "callpatch1",
+                            "name": "apply_patch",
+                            "input": "*** Begin Patch"
+                        }],
+                        "usage": {
+                            "input_tokens": 12,
+                            "input_tokens_details": {
+                                "cached_tokens": 2
+                            },
+                            "output_tokens": 7
+                        }
+                    }
+                })
+            )))
+            .expect("custom tool upstream response")
+    }
+
     async fn fake_codex_responses_json_success(
         State(captured): State<Arc<CapturedCodexUpstream>>,
         headers: HeaderMap,
@@ -9552,6 +9669,60 @@ mod tests {
         assert!(body.contains(r#""text":"back""#));
         assert!(body.contains("event: message_stop"));
         assert!(!body.contains("[DONE]"));
+    }
+
+    #[tokio::test]
+    async fn codex_dispatch_streams_anthropic_tool_use_input_deltas_from_responses_sse() {
+        let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("codex upstream env lock");
+        let captured = Arc::new(CapturedCodexUpstream::default());
+        let app = Router::new()
+            .route("/v1/responses", post(fake_codex_responses_custom_tool_stream))
+            .with_state(captured);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+        let state = super::ProviderState::new(Arc::new(TestStore), static_codex_route_store());
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/llm-gateway/messages")
+                .header("x-api-key", "codex-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "gpt-5.3-codex",
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": true
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 response");
+        assert!(body.contains("event: content_block_start"));
+        assert!(body.contains(r#""type":"tool_use""#));
+        assert!(body.contains(r#""name":"apply_patch""#));
+        assert!(body.contains(r#""type":"input_json_delta""#));
+        assert!(body.contains(r#""partial_json":"*** Begin Patch""#));
+        assert!(body.contains("event: content_block_stop"));
     }
 
     #[tokio::test]
