@@ -2066,8 +2066,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let usage_journal_status = use_state(|| None::<AdminUsageJournalStatusView>);
     let usage_journal_preview = use_state(|| None::<AdminUsageJournalPreviewResponse>);
     let usage_journal_preview_page = use_state(|| 1_usize);
-    let selected_usage_journal_message =
-        use_state(|| None::<(String, String, String, String)>);
+    let selected_usage_journal_message = use_state(|| None::<(String, String, String, String)>);
     let usage_journal_loading = use_state(|| false);
     let usage_journal_error = use_state(|| None::<String>);
     let token_requests = use_state(Vec::<AdminLlmGatewayTokenRequestView>::new);
