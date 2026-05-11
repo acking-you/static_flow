@@ -1316,7 +1316,36 @@ async fn adapt_codex_upstream_response(
         usage_meta.mark_stream_finish();
         let completed = match completed_response_from_sse_bytes(&bytes) {
             Ok(value) => value,
-            Err(err) => return (StatusCode::BAD_GATEWAY, err).into_response(),
+            Err(err) => {
+                tracing::error!(
+                    endpoint = %prepared.original_path,
+                    status = %err.status,
+                    message = %err.message,
+                    "codex forced-SSE upstream request failed before response.completed"
+                );
+                if let Err(record_err) = record_codex_usage(
+                    control_store.as_ref(),
+                    &key,
+                    &prepared,
+                    err.status,
+                    &route,
+                    missing_codex_usage(),
+                    &usage_meta,
+                )
+                .await
+                {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("failed to record codex usage: {record_err}"),
+                    )
+                        .into_response();
+                }
+                return codex_surface_error_response(
+                    &prepared.original_path,
+                    err.status,
+                    &err.message,
+                );
+            },
         };
         let completed_response = rewrite_json_value_model_alias(
             completed.response,
@@ -1580,6 +1609,50 @@ fn codex_message_indicates_usage_limit(message: &str) -> bool {
         || normalized.contains("insufficient_quota")
         || normalized.contains("quota_exceeded")
         || normalized.contains("quota exceeded")
+}
+
+fn codex_status_from_error_json_value(value: &Value) -> Option<StatusCode> {
+    for pointer in ["/error/status", "/status", "/response/error/status"] {
+        if let Some(status) = value.pointer(pointer).and_then(Value::as_u64) {
+            if let Ok(status) = u16::try_from(status) {
+                if let Ok(status) = StatusCode::from_u16(status) {
+                    return Some(status);
+                }
+            }
+        }
+    }
+
+    for pointer in ["/error/code", "/code", "/response/error/code"] {
+        match value.pointer(pointer).and_then(Value::as_str) {
+            Some("invalid_api_key") => return Some(StatusCode::UNAUTHORIZED),
+            Some("insufficient_quota" | "quota_exceeded" | "rate_limit_exceeded") => {
+                return Some(StatusCode::TOO_MANY_REQUESTS)
+            },
+            Some("bad_gateway") => return Some(StatusCode::BAD_GATEWAY),
+            _ => {},
+        }
+    }
+
+    for pointer in ["/error/type", "/type", "/response/error/type"] {
+        match value.pointer(pointer).and_then(Value::as_str) {
+            Some("invalid_request_error") => return Some(StatusCode::BAD_REQUEST),
+            Some("authentication_error") => return Some(StatusCode::UNAUTHORIZED),
+            Some("permission_error") => return Some(StatusCode::FORBIDDEN),
+            Some("not_found_error") => return Some(StatusCode::NOT_FOUND),
+            Some("rate_limit_error") => return Some(StatusCode::TOO_MANY_REQUESTS),
+            Some("api_error") => return Some(StatusCode::BAD_GATEWAY),
+            _ => {},
+        }
+    }
+
+    if extract_error_message_from_json_value(value)
+        .as_deref()
+        .is_some_and(codex_message_indicates_usage_limit)
+    {
+        return Some(StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    None
 }
 
 struct CodexStreamContext {
@@ -4402,6 +4475,13 @@ fn extract_error_message_from_json_value(value: &Value) -> Option<String> {
             return Some(message.to_string());
         }
     }
+    if let Some(message) = value
+        .pointer("/response/error/message")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+    {
+        return Some(message);
+    }
     value
         .get("message")
         .and_then(Value::as_str)
@@ -5313,6 +5393,11 @@ struct CompletedCodexSse {
     usage: Option<UsageBreakdown>,
 }
 
+struct CompletedCodexSseError {
+    status: StatusCode,
+    message: String,
+}
+
 #[derive(Default)]
 struct CompletedCodexSseAccumulator {
     response: Option<Value>,
@@ -5321,6 +5406,7 @@ struct CompletedCodexSseAccumulator {
     delta_text: String,
     done_text: Option<String>,
     fallback_item_id: Option<String>,
+    failure: Option<Value>,
 }
 
 impl CompletedCodexSseAccumulator {
@@ -5330,6 +5416,7 @@ impl CompletedCodexSseAccumulator {
         if let Some(observed_usage) = extract_usage_from_bytes(data.as_bytes()) {
             self.usage = Some(observed_usage);
         }
+        self.capture_failure(&value);
 
         match value.get("type").and_then(Value::as_str) {
             Some("response.output_item.done") => {
@@ -5367,6 +5454,28 @@ impl CompletedCodexSseAccumulator {
         Ok(())
     }
 
+    fn capture_failure(&mut self, value: &Value) {
+        if self.failure.is_some() || self.response.is_some() {
+            return;
+        }
+        let event_type = value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let looks_like_failure = matches!(
+            event_type,
+            "error" | "response.error" | "response.failed" | "response.incomplete"
+        ) || value.pointer("/response/error").is_some()
+            || value.get("error").is_some();
+        if looks_like_failure
+            && extract_error_message_from_json_value(value)
+                .map(|message| !message.trim().is_empty())
+                .unwrap_or(false)
+        {
+            self.failure = Some(value.clone());
+        }
+    }
+
     fn capture_fallback_item_id(&mut self, value: &Value) {
         if self.fallback_item_id.is_none() {
             self.fallback_item_id = value
@@ -5376,11 +5485,16 @@ impl CompletedCodexSseAccumulator {
         }
     }
 
-    fn finish(mut self) -> Result<CompletedCodexSse, &'static str> {
-        let mut response = self
-            .response
-            .take()
-            .ok_or("codex upstream SSE stream did not include response.completed")?;
+    fn finish(mut self) -> Result<CompletedCodexSse, CompletedCodexSseError> {
+        let Some(mut response) = self.response.take() else {
+            if let Some(failure) = self.failure.as_ref() {
+                return Err(completed_codex_sse_error_from_value(failure));
+            }
+            return Err(CompletedCodexSseError {
+                status: StatusCode::BAD_GATEWAY,
+                message: "codex upstream SSE stream did not include response.completed".to_string(),
+            });
+        };
         self.patch_empty_completed_output(&mut response);
         Ok(CompletedCodexSse {
             response,
@@ -5427,13 +5541,32 @@ impl CompletedCodexSseAccumulator {
     }
 }
 
-fn completed_response_from_sse_bytes(bytes: &[u8]) -> Result<CompletedCodexSse, &'static str> {
+fn completed_codex_sse_error_from_value(value: &Value) -> CompletedCodexSseError {
+    let message = extract_error_message_from_json_value(value)
+        .map(|message| message.trim().to_string())
+        .filter(|message| !message.is_empty())
+        .unwrap_or_else(|| "Unknown upstream error".to_string());
+    let status = codex_status_from_error_json_value(value).unwrap_or(StatusCode::BAD_GATEWAY);
+    CompletedCodexSseError {
+        status,
+        message,
+    }
+}
+
+fn completed_response_from_sse_bytes(
+    bytes: &[u8],
+) -> Result<CompletedCodexSse, CompletedCodexSseError> {
     let mut accumulator = CompletedCodexSseAccumulator::default();
     for data in sse_data_payloads(bytes) {
         if data.trim() == "[DONE]" {
             continue;
         }
-        accumulator.observe_payload(&data)?;
+        accumulator
+            .observe_payload(&data)
+            .map_err(|message| CompletedCodexSseError {
+                status: StatusCode::BAD_GATEWAY,
+                message: message.to_string(),
+            })?;
     }
     accumulator.finish()
 }
@@ -7687,6 +7820,75 @@ mod tests {
             .expect("bad gateway upstream response")
     }
 
+    async fn fake_codex_responses_failed_sse(
+        State(captured): State<Arc<CapturedCodexUpstream>>,
+        headers: HeaderMap,
+        request: Request<Body>,
+    ) -> Response {
+        let path = request.uri().path().to_string();
+        let query = request.uri().query().map(ToString::to_string);
+        let body = to_bytes(request.into_body(), usize::MAX)
+            .await
+            .expect("upstream request body");
+        let body = if body.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json")
+        };
+        captured
+            .requests
+            .lock()
+            .expect("captured requests")
+            .push(CapturedCodexRequest {
+                path,
+                query,
+                authorization: headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                accept: headers
+                    .get(header::ACCEPT)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                user_agent: headers
+                    .get(header::USER_AGENT)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                x_client_request_id: headers
+                    .get("x-client-request-id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                session_id: headers
+                    .get("session_id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                x_codex_turn_state: headers
+                    .get("x-codex-turn-state")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                body,
+            });
+
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .body(Body::from(format!(
+                "event: response.failed\ndata: {}\n\n",
+                json!({
+                    "type": "response.failed",
+                    "response": {
+                        "status": "failed",
+                        "error": {
+                            "type": "invalid_request_error",
+                            "message": "tool_choice references a missing tool",
+                            "code": "invalid_tool_choice"
+                        }
+                    }
+                })
+            )))
+            .expect("failed sse upstream response")
+    }
+
     async fn fake_codex_models(
         State(captured): State<Arc<CapturedCodexUpstream>>,
         headers: HeaderMap,
@@ -8695,6 +8897,77 @@ mod tests {
         let events = store.usage_events.lock().expect("usage events");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].status_code, 502);
+        assert_eq!(events[0].endpoint, "/v1/messages");
+        assert_eq!(events[0].account_name.as_deref(), Some("codex-a"));
+    }
+
+    #[tokio::test]
+    async fn codex_dispatch_adapts_failed_sse_for_anthropic_messages() {
+        let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("codex upstream env lock");
+        let captured = Arc::new(CapturedCodexUpstream::default());
+        let app = Router::new()
+            .route("/v1/responses", post(fake_codex_responses_failed_sse))
+            .with_state(captured);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+        let store = Arc::new(RecordingControlStore::default());
+        let state = super::ProviderState::new(store.clone(), static_codex_route_store());
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/llm-gateway/v1/messages")
+                .header("x-api-key", "codex-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "gpt-5.3-codex",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "tools": [{
+                            "name": "lookup",
+                            "description": "lookup tool",
+                            "input_schema": {"type": "object", "properties": {}}
+                        }],
+                        "tool_choice": {"type": "tool", "name": "missing_tool"},
+                        "stream": false
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let body = serde_json::from_slice::<serde_json::Value>(&body).expect("json response");
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["message"], "tool_choice references a missing tool");
+
+        let events = store.usage_events.lock().expect("usage events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status_code, 400);
         assert_eq!(events[0].endpoint, "/v1/messages");
         assert_eq!(events[0].account_name.as_deref(), Some("codex-a"));
     }
