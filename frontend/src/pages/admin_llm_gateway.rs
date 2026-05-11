@@ -867,6 +867,13 @@ fn usage_journal_preview_message_table_preview(
     preview_text(&single_line, 120)
 }
 
+fn usage_journal_preview_has_full_message(
+    preview: &crate::api::AdminUsageJournalPreviewEventView,
+) -> bool {
+    let message = usage_journal_preview_message(preview);
+    message != "-"
+}
+
 async fn tokio_like_join_usage_journal(
     preview_offset: usize,
 ) -> Result<(AdminUsageJournalStatusView, AdminUsageJournalPreviewResponse), String> {
@@ -2059,6 +2066,8 @@ pub fn admin_llm_gateway_page() -> Html {
     let usage_journal_status = use_state(|| None::<AdminUsageJournalStatusView>);
     let usage_journal_preview = use_state(|| None::<AdminUsageJournalPreviewResponse>);
     let usage_journal_preview_page = use_state(|| 1_usize);
+    let selected_usage_journal_message =
+        use_state(|| None::<(String, String, String, String)>);
     let usage_journal_loading = use_state(|| false);
     let usage_journal_error = use_state(|| None::<String>);
     let token_requests = use_state(Vec::<AdminLlmGatewayTokenRequestView>::new);
@@ -4278,6 +4287,101 @@ pub fn admin_llm_gateway_page() -> Html {
         .count();
     let total_pending =
         pending_token_requests + pending_contribution_requests + pending_sponsor_requests;
+    let usage_journal_message_modal = (*selected_usage_journal_message)
+        .clone()
+        .map(|(event_id, created_at, key_name, full_message)| {
+            html! {
+                <div
+                    class={classes!(
+                        "fixed",
+                        "inset-0",
+                        "z-[90]",
+                        "flex",
+                        "items-start",
+                        "sm:items-center",
+                        "justify-center",
+                        "overflow-y-auto",
+                        "bg-slate-950/58",
+                        "backdrop-blur-sm",
+                        "px-4",
+                        "py-8"
+                    )}
+                    onclick={{
+                        let selected_usage_journal_message = selected_usage_journal_message.clone();
+                        Callback::from(move |_| selected_usage_journal_message.set(None))
+                    }}
+                >
+                    <div
+                        class={classes!(
+                            "w-full",
+                            "mx-auto",
+                            "flex",
+                            "max-h-[88vh]",
+                            "max-w-3xl",
+                            "flex-col",
+                            "overflow-y-auto",
+                            "rounded-xl",
+                            "border",
+                            "border-[var(--border)]",
+                            "bg-[var(--surface)]",
+                            "p-5",
+                            "shadow-[0_16px_48px_rgba(0,0,0,0.2)]"
+                        )}
+                        onclick={Callback::from(|event: MouseEvent| event.stop_propagation())}
+                    >
+                        <div class={classes!("flex", "items-start", "justify-between", "gap-4", "flex-wrap", "shrink-0")}>
+                            <div class={classes!("max-w-2xl")}>
+                                <p class={classes!("m-0", "text-xs", "uppercase", "tracking-[0.18em]", "text-[var(--muted)]")}>{ "Journal Last Message" }</p>
+                                <h2 class={classes!("mt-3", "text-xl", "font-black", "tracking-[-0.03em]")}>{ key_name.clone() }</h2>
+                                <p class={classes!("mt-2", "m-0", "break-all", "text-sm", "leading-6", "text-[var(--muted)]")}>
+                                    { format!("{created_at} · {event_id}") }
+                                </p>
+                            </div>
+                            <div class={classes!("flex", "gap-2", "flex-wrap")}>
+                                <button
+                                    class={classes!("btn-terminal")}
+                                    onclick={{
+                                        let on_copy = on_copy.clone();
+                                        let full_message = full_message.clone();
+                                        Callback::from(move |_| on_copy.emit(("Journal Last Message".to_string(), full_message.clone())))
+                                    }}
+                                >
+                                    { "复制全文" }
+                                </button>
+                                <button
+                                    class={classes!("btn-terminal", "btn-terminal-primary")}
+                                    onclick={{
+                                        let selected_usage_journal_message = selected_usage_journal_message.clone();
+                                        Callback::from(move |_| selected_usage_journal_message.set(None))
+                                    }}
+                                >
+                                    { "关闭" }
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class={classes!("mt-4")}>
+                            <pre class={classes!(
+                                "max-h-[62vh]",
+                                "overflow-x-auto",
+                                "overflow-y-auto",
+                                "rounded-lg",
+                                "bg-slate-950",
+                                "p-3",
+                                "text-xs",
+                                "leading-6",
+                                "text-amber-100",
+                                "whitespace-pre-wrap",
+                                "break-words"
+                            )}>
+                                { full_message }
+                            </pre>
+                        </div>
+                    </div>
+                </div>
+            }
+        });
+
     // Build the full-screen modal for a selected usage event (request detail,
     // headers, last message, copy buttons). Rendered outside the tab flow so
     // it overlays the entire viewport.
@@ -5128,6 +5232,23 @@ pub fn admin_llm_gateway_page() -> Html {
                                                 { for preview.events.iter().map(|event| {
                                                     let account_label = event.account_name.clone().unwrap_or_else(|| "not captured".to_string());
                                                     let last_message_preview = usage_journal_preview_message_table_preview(event);
+                                                    let last_message_full = usage_journal_preview_message(event);
+                                                    let has_full_message = usage_journal_preview_has_full_message(event);
+                                                    let open_preview_message = {
+                                                        let selected_usage_journal_message = selected_usage_journal_message.clone();
+                                                        let event_id = event.event_id.clone();
+                                                        let created_at = format_ms(event.created_at_ms);
+                                                        let key_name = event.key_name.clone();
+                                                        let full_message = last_message_full.clone();
+                                                        Callback::from(move |_| {
+                                                            selected_usage_journal_message.set(Some((
+                                                                event_id.clone(),
+                                                                created_at.clone(),
+                                                                key_name.clone(),
+                                                                full_message.clone(),
+                                                            )))
+                                                        })
+                                                    };
                                                     html! {
                                                         <tr class={classes!("border-t", "border-[var(--border)]", "align-top")}>
                                                             <td class={classes!("py-3", "pr-3", "min-w-[13rem]", "whitespace-nowrap")}>
@@ -5181,9 +5302,32 @@ pub fn admin_llm_gateway_page() -> Html {
                                                                 </div>
                                                             </td>
                                                             <td class={classes!("py-3", "pr-3", "min-w-[18rem]")}>
-                                                                <div class={classes!("max-w-[18rem]", "overflow-hidden", "whitespace-normal", "break-words", "text-xs", "leading-5", "text-[var(--muted)]")}>
-                                                                    { last_message_preview }
-                                                                </div>
+                                                                if has_full_message {
+                                                                    <button
+                                                                        type="button"
+                                                                        class={classes!(
+                                                                            "max-w-[18rem]",
+                                                                            "overflow-hidden",
+                                                                            "whitespace-normal",
+                                                                            "break-words",
+                                                                            "text-left",
+                                                                            "text-xs",
+                                                                            "leading-5",
+                                                                            "text-[var(--muted)]",
+                                                                            "underline",
+                                                                            "underline-offset-2",
+                                                                            "hover:text-[var(--text)]"
+                                                                        )}
+                                                                        onclick={open_preview_message}
+                                                                        title="点击查看完整内容"
+                                                                    >
+                                                                        { last_message_preview }
+                                                                    </button>
+                                                                } else {
+                                                                    <div class={classes!("max-w-[18rem]", "overflow-hidden", "whitespace-normal", "break-words", "text-xs", "leading-5", "text-[var(--muted)]")}>
+                                                                        { last_message_preview }
+                                                                    </div>
+                                                                }
                                                             </td>
                                                         </tr>
                                                     }
@@ -7712,6 +7856,7 @@ pub fn admin_llm_gateway_page() -> Html {
             </div>
 
             { usage_detail_modal.unwrap_or_default() }
+            { usage_journal_message_modal.unwrap_or_default() }
 
             if let Some((message, is_error)) = (*toast).clone() {
                 <div class={classes!(
@@ -7823,6 +7968,21 @@ mod tests {
         assert!(preview.contains("first line second line with extra spaces"));
         assert!(preview.ends_with("..."));
         assert!(preview.chars().count() <= 123);
+    }
+
+    #[test]
+    fn usage_journal_preview_message_presence_detects_real_content() {
+        let with_message = crate::api::AdminUsageJournalPreviewEventView {
+            last_message_content: Some("hello".to_string()),
+            ..crate::api::AdminUsageJournalPreviewEventView::default()
+        };
+        let without_message = crate::api::AdminUsageJournalPreviewEventView {
+            last_message_content: Some("   ".to_string()),
+            ..crate::api::AdminUsageJournalPreviewEventView::default()
+        };
+
+        assert!(usage_journal_preview_has_full_message(&with_message));
+        assert!(!usage_journal_preview_has_full_message(&without_message));
     }
 
     #[test]
