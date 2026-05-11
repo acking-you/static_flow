@@ -232,6 +232,25 @@ pub fn insert_usage_event_sql() -> &'static str {
 }
 
 #[cfg(feature = "duckdb-runtime")]
+fn duckdb_compact_connection_sql(
+    connection_config: DuckDbUsageConnectionConfig,
+    temp_dir: &str,
+) -> String {
+    format!(
+        "
+        SET memory_limit={};
+        SET threads=1;
+        SET preserve_insertion_order=false;
+        SET temp_directory={};
+        SET max_temp_directory_size={};
+        ",
+        duckdb_string_literal(&format!("{}MB", connection_config.memory_limit_mib.max(1))),
+        duckdb_string_literal(temp_dir),
+        duckdb_string_literal(DUCKDB_COMPACT_MAX_TEMP_DIRECTORY_SIZE),
+    )
+}
+
+#[cfg(feature = "duckdb-runtime")]
 const COMPACT_COPY_USAGE_EVENTS_SQL: &str = "
     INSERT INTO usage_events (
         source_seq, source_event_id, event_id, created_at_ms, created_at,
@@ -774,9 +793,6 @@ struct SegmentStats {
 }
 
 #[cfg(feature = "duckdb-runtime")]
-const DUCKDB_COMPACT_MEMORY_LIMIT: &str = "1536MB";
-
-#[cfg(feature = "duckdb-runtime")]
 const DUCKDB_COMPACT_MAX_TEMP_DIRECTORY_SIZE: &str = "8GB";
 
 #[cfg(feature = "duckdb-runtime")]
@@ -849,7 +865,7 @@ impl DuckDbUsageRepository {
         })?;
         initialize_tiered_catalog(&config)?;
         clear_stale_compacting_files(&config)?;
-        spawn_existing_pending_sealers(config.clone())?;
+        spawn_existing_pending_sealers(config.clone(), Arc::clone(&connection_config))?;
 
         let (active_path, next_sequence) = choose_active_segment(&config)?;
         let active_has_rows = active_path.exists();
@@ -896,14 +912,17 @@ impl DuckDbUsageRepository {
         Ok(conn)
     }
 
-    fn open_checkpoint_conn(path: &Path) -> anyhow::Result<duckdb::Connection> {
+    fn open_checkpoint_conn(
+        path: &Path,
+        connection_config: DuckDbUsageConnectionConfig,
+    ) -> anyhow::Result<duckdb::Connection> {
         let conn = duckdb::Connection::open(path)
             .with_context(|| format!("failed to open duckdb database `{}`", path.display()))?;
         let temp_dir = path
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("checkpointing");
-        configure_duckdb_compact_connection(&conn, &temp_dir)?;
+        configure_duckdb_compact_connection(&conn, &temp_dir, connection_config)?;
         Ok(conn)
     }
 
@@ -1197,7 +1216,10 @@ fn parse_sequence_from_segment_id(segment_id: &str) -> Option<u64> {
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn spawn_existing_pending_sealers(config: TieredDuckDbUsageConfig) -> anyhow::Result<()> {
+fn spawn_existing_pending_sealers(
+    config: TieredDuckDbUsageConfig,
+    connection_config: SharedDuckDbUsageConnectionConfig,
+) -> anyhow::Result<()> {
     let pending_dir = tiered_pending_dir(&config);
     for entry in fs::read_dir(&pending_dir).with_context(|| {
         format!("failed to read pending duckdb directory `{}`", pending_dir.display())
@@ -1210,7 +1232,7 @@ fn spawn_existing_pending_sealers(config: TieredDuckDbUsageConfig) -> anyhow::Re
                 .and_then(|stem| stem.to_str())
                 .unwrap_or("usage-recovered")
                 .to_string();
-            spawn_segment_sealer(config.clone(), path, segment_id);
+            spawn_segment_sealer(config.clone(), path, segment_id, Arc::clone(&connection_config));
         }
     }
     Ok(())
@@ -1221,6 +1243,7 @@ fn spawn_segment_sealer(
     config: TieredDuckDbUsageConfig,
     pending_path: PathBuf,
     segment_id: String,
+    connection_config: SharedDuckDbUsageConnectionConfig,
 ) {
     let _ = thread::Builder::new()
         .name("llm-access-duckdb-sealer".to_string())
@@ -1235,7 +1258,12 @@ fn spawn_segment_sealer(
             };
             let mut last_err = None;
             for attempt in 0..5 {
-                match publish_pending_segment(&config, &pending_path, &segment_id) {
+                match publish_pending_segment(
+                    &config,
+                    &pending_path,
+                    &segment_id,
+                    connection_config_snapshot(&connection_config),
+                ) {
                     Ok(()) => return,
                     Err(err) => {
                         last_err = Some(err);
@@ -1257,6 +1285,7 @@ fn publish_pending_segment(
     config: &TieredDuckDbUsageConfig,
     pending_path: &Path,
     segment_id: &str,
+    connection_config: DuckDbUsageConnectionConfig,
 ) -> anyhow::Result<()> {
     fs::create_dir_all(&config.archive_dir).with_context(|| {
         format!("failed to create archive directory `{}`", config.archive_dir.display())
@@ -1274,7 +1303,8 @@ fn publish_pending_segment(
             segment_id,
         );
     }
-    let compact_path = compact_pending_segment_to_local_file(config, pending_path, segment_id)?;
+    let compact_path =
+        compact_pending_segment_to_local_file(config, pending_path, segment_id, connection_config)?;
     let stats = validate_compacted_segment_matches_source(pending_path, &compact_path)?;
     remove_file_if_exists(&uploading_path)?;
     fs::copy(&compact_path, &uploading_path).with_context(|| {
@@ -1384,6 +1414,7 @@ fn compact_pending_segment_to_local_file(
     config: &TieredDuckDbUsageConfig,
     pending_path: &Path,
     segment_id: &str,
+    connection_config: DuckDbUsageConnectionConfig,
 ) -> anyhow::Result<PathBuf> {
     fs::create_dir_all(tiered_compacting_dir(config)).with_context(|| {
         format!(
@@ -1395,7 +1426,7 @@ fn compact_pending_segment_to_local_file(
     remove_file_if_exists(&compact_path)?;
 
     let conn = DuckDbUsageRepository::open_conn(&compact_path)?;
-    configure_duckdb_compact_connection(&conn, &tiered_compacting_dir(config))?;
+    configure_duckdb_compact_connection(&conn, &tiered_compacting_dir(config), connection_config)?;
     crate::initialize_duckdb_target(&conn)?;
     let pending_path_str = pending_path
         .to_str()
@@ -1430,6 +1461,7 @@ fn compact_pending_segment_to_local_file(
 fn configure_duckdb_compact_connection(
     conn: &duckdb::Connection,
     temp_dir: &Path,
+    connection_config: DuckDbUsageConnectionConfig,
 ) -> anyhow::Result<()> {
     fs::create_dir_all(temp_dir).with_context(|| {
         format!("failed to create duckdb compact temp directory `{}`", temp_dir.display())
@@ -1437,18 +1469,7 @@ fn configure_duckdb_compact_connection(
     let temp_dir_str = temp_dir
         .to_str()
         .ok_or_else(|| anyhow!("duckdb compact temp directory path is not valid UTF-8"))?;
-    let sql = format!(
-        "
-        SET memory_limit={};
-        SET threads=1;
-        SET preserve_insertion_order=false;
-        SET temp_directory={};
-        SET max_temp_directory_size={};
-        ",
-        duckdb_string_literal(DUCKDB_COMPACT_MEMORY_LIMIT),
-        duckdb_string_literal(temp_dir_str),
-        duckdb_string_literal(DUCKDB_COMPACT_MAX_TEMP_DIRECTORY_SIZE),
-    );
+    let sql = duckdb_compact_connection_sql(connection_config, temp_dir_str);
     conn.execute_batch(&sql)
         .context("failed to configure duckdb compact connection")
 }
@@ -1727,13 +1748,13 @@ fn append_usage_events_to_tiered(
     if state.active_has_rows
         && active_segment_disk_bytes(&state.active_path) >= config.rollover_bytes.max(1)
     {
-        rollover_active_segment(config, &mut state)?;
+        rollover_active_segment(config, &mut state, connection_config_snapshot)?;
     }
     let writer = ensure_active_tiered_writer(&mut state, connection_config_snapshot)?;
     writer.writer.insert_usage_events(rows)?;
     state.active_has_rows = true;
     if active_segment_disk_bytes(&state.active_path) >= config.rollover_bytes.max(1) {
-        rollover_active_segment(config, &mut state)?;
+        rollover_active_segment(config, &mut state, connection_config_snapshot)?;
     }
     Ok(())
 }
@@ -1769,9 +1790,10 @@ fn duckdb_wal_path(path: &Path) -> PathBuf {
 fn rollover_active_segment(
     config: &TieredDuckDbUsageConfig,
     state: &mut TieredDuckDbUsageState,
+    connection_config: DuckDbUsageConnectionConfig,
 ) -> anyhow::Result<()> {
     state.active_writer = None;
-    checkpoint_duckdb_path(&state.active_path)?;
+    checkpoint_duckdb_path(&state.active_path, connection_config)?;
     let sequence = parse_segment_sequence(&state.active_path).unwrap_or(state.next_sequence);
     let segment_id = format!("usage-{}-{sequence:012}", now_ms());
     let pending_path = tiered_pending_dir(config).join(format!("{segment_id}.duckdb"));
@@ -1788,13 +1810,21 @@ fn rollover_active_segment(
     state.active_path = new_active_path;
     state.active_has_rows = false;
     state.active_writer = None;
-    spawn_segment_sealer(config.clone(), pending_path, segment_id);
+    spawn_segment_sealer(
+        config.clone(),
+        pending_path,
+        segment_id,
+        Arc::new(RwLock::new(connection_config)),
+    );
     Ok(())
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn checkpoint_duckdb_path(path: &Path) -> anyhow::Result<()> {
-    let conn = DuckDbUsageRepository::open_checkpoint_conn(path)?;
+fn checkpoint_duckdb_path(
+    path: &Path,
+    connection_config: DuckDbUsageConnectionConfig,
+) -> anyhow::Result<()> {
+    let conn = DuckDbUsageRepository::open_checkpoint_conn(path, connection_config)?;
     conn.execute_batch("CHECKPOINT;")
         .with_context(|| format!("failed to checkpoint duckdb database `{}`", path.display()))?;
     Ok(())
@@ -2998,6 +3028,21 @@ mod tests {
 
     #[cfg(feature = "duckdb-runtime")]
     #[test]
+    fn duckdb_compact_connection_config_uses_runtime_memory_limit() {
+        let sql = super::duckdb_compact_connection_sql(
+            super::DuckDbUsageConnectionConfig {
+                memory_limit_mib: 2048,
+                checkpoint_threshold_mib: 16,
+            },
+            "/tmp/staticflow-duckdb-compact",
+        );
+
+        assert!(sql.contains("SET memory_limit='2048MB'"));
+        assert!(sql.contains("SET max_temp_directory_size='8GB'"));
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[test]
     fn tiered_active_writer_checkpoint_threshold_outgrows_rollover_threshold() {
         let config = super::TieredDuckDbUsageConfig {
             active_dir: std::path::PathBuf::from("/tmp/active"),
@@ -3833,8 +3878,13 @@ mod tests {
             .expect("create legacy source index");
         }
 
-        super::publish_pending_segment(&config, &pending_path, "usage-compact-test-000001")
-            .expect("publish compacted segment");
+        super::publish_pending_segment(
+            &config,
+            &pending_path,
+            "usage-compact-test-000001",
+            super::DuckDbUsageConnectionConfig::default(),
+        )
+        .expect("publish compacted segment");
 
         let archive_path = config.archive_dir.join("usage-compact-test-000001.duckdb");
         assert!(archive_path.exists(), "archived compact segment should exist");
@@ -3857,8 +3907,13 @@ mod tests {
             super::compacting_segment_path(&config, "usage-compact-test-000001");
         std::fs::write(&stale_compact_path, b"stale compact retry")
             .expect("write stale compact retry file");
-        super::publish_pending_segment(&config, &pending_path, "usage-compact-test-000001")
-            .expect("published segment finalization is idempotent");
+        super::publish_pending_segment(
+            &config,
+            &pending_path,
+            "usage-compact-test-000001",
+            super::DuckDbUsageConnectionConfig::default(),
+        )
+        .expect("published segment finalization is idempotent");
         assert!(
             !stale_compact_path.exists(),
             "idempotent finalization should remove stale compact retry files"
@@ -3943,8 +3998,13 @@ mod tests {
             .expect("reorder pending source usage_events columns");
         }
 
-        super::publish_pending_segment(&config, &pending_path, "usage-reordered-test-000001")
-            .expect("publish compacted segment with reordered usage_events");
+        super::publish_pending_segment(
+            &config,
+            &pending_path,
+            "usage-reordered-test-000001",
+            super::DuckDbUsageConnectionConfig::default(),
+        )
+        .expect("publish compacted segment with reordered usage_events");
 
         let archive_path = config
             .archive_dir
