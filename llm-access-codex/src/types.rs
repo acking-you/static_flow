@@ -90,6 +90,8 @@ pub enum GatewayResponseAdapter {
     Responses,
     /// Convert responses payloads back to chat/completions shape.
     ChatCompletions,
+    /// Convert responses payloads into Anthropic messages shape.
+    AnthropicMessages,
 }
 
 /// Internal normalized representation of one upstream model descriptor.

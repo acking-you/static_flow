@@ -20,6 +20,10 @@ use base64::Engine as _;
 use eventsource_stream::Eventsource;
 use futures_util::{StreamExt, TryStreamExt};
 use llm_access_codex::{
+    anthropic_messages::{
+        convert_json_response_to_anthropic_message, convert_response_event_to_anthropic_sse_chunks,
+        AnthropicStreamMetadata,
+    },
     request::{
         apply_gpt53_codex_spark_mapping, external_origin, extract_client_ip_from_headers,
         prepare_gateway_request_from_bytes, resolve_request_url_from_headers,
@@ -1346,24 +1350,47 @@ async fn adapt_codex_upstream_response_from_parts(
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to record codex usage: {err}"))
             .into_response();
     }
-    let response_content_type = if status.is_success()
-        && prepared.response_adapter == GatewayResponseAdapter::ChatCompletions
-    {
-        "application/json"
-    } else {
-        &content_type
-    };
-    let response_body = if status.is_success()
-        && prepared.response_adapter == GatewayResponseAdapter::ChatCompletions
-    {
-        match convert_json_response_to_chat_completion(
-            &bytes,
-            Some(&prepared.tool_name_restore_map),
-            prepared.model.as_deref(),
-            prepared.client_visible_model.as_deref(),
-        ) {
-            Ok(body) => Body::from(body),
-            Err(err) => return (StatusCode::BAD_GATEWAY, err).into_response(),
+    let response_content_type =
+        if status.is_success() && prepared.response_adapter != GatewayResponseAdapter::Responses {
+            "application/json"
+        } else {
+            &content_type
+        };
+    let response_body = if status.is_success() {
+        match prepared.response_adapter {
+            GatewayResponseAdapter::Responses => {
+                if let Some(body) = rewrite_json_response_model_alias(
+                    &bytes,
+                    prepared.model.as_deref(),
+                    prepared.client_visible_model.as_deref(),
+                ) {
+                    Body::from(body)
+                } else {
+                    Body::from(bytes)
+                }
+            },
+            GatewayResponseAdapter::ChatCompletions => {
+                match convert_json_response_to_chat_completion(
+                    &bytes,
+                    Some(&prepared.tool_name_restore_map),
+                    prepared.model.as_deref(),
+                    prepared.client_visible_model.as_deref(),
+                ) {
+                    Ok(body) => Body::from(body),
+                    Err(err) => return (StatusCode::BAD_GATEWAY, err).into_response(),
+                }
+            },
+            GatewayResponseAdapter::AnthropicMessages => {
+                match convert_json_response_to_anthropic_message(
+                    &bytes,
+                    Some(&prepared.tool_name_restore_map),
+                    prepared.model.as_deref(),
+                    prepared.client_visible_model.as_deref(),
+                ) {
+                    Ok(body) => Body::from(body),
+                    Err(err) => return (StatusCode::BAD_GATEWAY, err).into_response(),
+                }
+            },
         }
     } else if let Some(body) = rewrite_json_response_model_alias(
         &bytes,
@@ -1457,6 +1484,7 @@ fn stream_codex_upstream_response(
             .map_err(std::io::Error::other)
             .eventsource();
         let mut chat_metadata = ChatStreamMetadata::default();
+        let mut anthropic_metadata = AnthropicStreamMetadata::default();
         let mut guard = CodexStreamRecordGuard {
             prepared,
             key,
@@ -1495,6 +1523,18 @@ fn stream_codex_upstream_response(
                                 yield Ok::<Bytes, std::io::Error>(bytes);
                             }
                         },
+                        GatewayResponseAdapter::AnthropicMessages => {
+                            for bytes in convert_response_event_to_anthropic_sse_chunks(
+                                &event,
+                                Some(&guard.prepared.tool_name_restore_map),
+                                &mut anthropic_metadata,
+                                guard.prepared.model.as_deref(),
+                                guard.prepared.client_visible_model.as_deref(),
+                            ) {
+                                guard.observe_chunk(&bytes, Some(event.event.as_str()));
+                                yield Ok::<Bytes, std::io::Error>(bytes);
+                            }
+                        },
                     }
                 },
                 Err(err) => {
@@ -1513,7 +1553,7 @@ fn stream_codex_upstream_response(
         }
         guard.finish_success().await;
     };
-    let response_content_type = if response_adapter == GatewayResponseAdapter::ChatCompletions {
+    let response_content_type = if response_adapter != GatewayResponseAdapter::Responses {
         "text/event-stream"
     } else {
         content_type.as_str()
@@ -4798,13 +4838,19 @@ fn presented_secret<'a>(headers: &'a HeaderMap, path: &str) -> Option<&'a str> {
 }
 
 fn accepts_anthropic_api_key_header(path: &str) -> bool {
-    path == "/v1/models" || is_kiro_data_plane_route(path)
+    path == "/v1/models"
+        || is_kiro_data_plane_route(path)
+        || is_codex_anthropic_messages_route(path)
 }
 
 fn is_kiro_data_plane_route(path: &str) -> bool {
     provider_route_requirement(path)
         .map(|requirement| requirement.provider_type == ProviderType::Kiro)
         .unwrap_or(false)
+}
+
+fn is_codex_anthropic_messages_route(path: &str) -> bool {
+    normalized_codex_gateway_path(path) == Some("/v1/messages")
 }
 
 fn x_api_key_secret(headers: &HeaderMap) -> Option<&str> {
@@ -4859,7 +4905,7 @@ fn quota_exhausted_response(key: &AuthenticatedKey) -> Response {
 }
 
 fn normalized_codex_gateway_path(path: &str) -> Option<&str> {
-    if path == "/v1/models" {
+    if matches!(path, "/v1/models" | "/v1/messages") {
         return Some(path);
     }
     if path == "/v1/chat/completions"
@@ -4868,14 +4914,25 @@ fn normalized_codex_gateway_path(path: &str) -> Option<&str> {
     {
         return Some(path);
     }
-    path.strip_prefix("/api/llm-gateway")
-        .or_else(|| path.strip_prefix("/api/codex-gateway"))
-        .filter(|value| {
-            *value == "/v1/models"
-                || *value == "/v1/chat/completions"
-                || *value == "/v1/responses"
-                || value.starts_with("/v1/responses/")
-        })
+    let alias = path
+        .strip_prefix("/api/llm-gateway")
+        .or_else(|| path.strip_prefix("/api/codex-gateway"))?;
+    match alias {
+        "/models" | "/v1/models" => Some("/v1/models"),
+        "/chat/completions" | "/v1/chat/completions" => Some("/v1/chat/completions"),
+        "/responses" | "/v1/responses" => Some("/v1/responses"),
+        "/messages" | "/v1/messages" => Some("/v1/messages"),
+        value if value.starts_with("/v1/responses/") => Some(value),
+        _ => None,
+    }
+}
+
+fn codex_protocol_family_for_endpoint(endpoint: &str) -> ProtocolFamily {
+    if endpoint == "/v1/messages" || endpoint.starts_with("/v1/messages?") {
+        ProtocolFamily::Anthropic
+    } else {
+        ProtocolFamily::OpenAi
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -5199,7 +5256,7 @@ async fn record_codex_usage(
         event_id: format!("llm-usage-{}", uuid::Uuid::new_v4()),
         created_at_ms: now_millis(),
         provider_type: ProviderType::Codex,
-        protocol_family: ProtocolFamily::OpenAi,
+        protocol_family: codex_protocol_family_for_endpoint(&prepared.original_path),
         key_id: key.key_id.clone(),
         key_name: key.key_name.clone(),
         account_name: Some(route.account_name.clone()),
@@ -5873,6 +5930,42 @@ mod tests {
         assert_eq!(
             super::normalized_kiro_messages_path("/api/kiro-gateway/cc/v1/messages"),
             Some("/cc/v1/messages")
+        );
+    }
+
+    #[test]
+    fn normalized_codex_gateway_path_accepts_llm_gateway_aliases() {
+        assert_eq!(
+            super::normalized_codex_gateway_path("/api/llm-gateway/chat/completions"),
+            Some("/v1/chat/completions")
+        );
+        assert_eq!(
+            super::normalized_codex_gateway_path("/api/llm-gateway/v1/chat/completions"),
+            Some("/v1/chat/completions")
+        );
+        assert_eq!(
+            super::normalized_codex_gateway_path("/api/llm-gateway/responses"),
+            Some("/v1/responses")
+        );
+        assert_eq!(
+            super::normalized_codex_gateway_path("/api/llm-gateway/v1/responses"),
+            Some("/v1/responses")
+        );
+        assert_eq!(
+            super::normalized_codex_gateway_path("/api/llm-gateway/messages"),
+            Some("/v1/messages")
+        );
+        assert_eq!(
+            super::normalized_codex_gateway_path("/api/llm-gateway/v1/messages"),
+            Some("/v1/messages")
+        );
+        assert_eq!(
+            super::normalized_codex_gateway_path("/api/llm-gateway/models"),
+            Some("/v1/models")
+        );
+        assert_eq!(
+            super::normalized_codex_gateway_path("/api/llm-gateway/v1/models"),
+            Some("/v1/models")
         );
     }
 
@@ -7968,6 +8061,139 @@ mod tests {
         assert_eq!(requests[0].path, "/v1/responses");
         assert_eq!(requests[0].accept.as_deref(), Some("text/event-stream"));
         assert_eq!(requests[0].body["stream"], true);
+    }
+
+    #[tokio::test]
+    async fn codex_dispatch_adapts_non_streaming_anthropic_messages_from_responses_sse() {
+        let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("codex upstream env lock");
+        let captured = Arc::new(CapturedCodexUpstream::default());
+        let app = Router::new()
+            .route("/v1/responses", post(fake_codex_responses))
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+        let store = Arc::new(RecordingControlStore::default());
+        let state = super::ProviderState::new(store.clone(), static_codex_route_store());
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/llm-gateway/v1/messages")
+                .header("x-api-key", "codex-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "gpt-5.3-codex",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": false
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let body = serde_json::from_slice::<serde_json::Value>(&body).expect("json response");
+        assert_eq!(body["type"], "message");
+        assert_eq!(body["role"], "assistant");
+        assert_eq!(body["content"][0]["type"], "text");
+        assert_eq!(body["content"][0]["text"], "hello back");
+        assert_eq!(body["stop_reason"], "end_turn");
+        assert_eq!(body["usage"]["input_tokens"], 10);
+        assert_eq!(body["usage"]["cache_read_input_tokens"], 2);
+        assert_eq!(body["usage"]["output_tokens"], 3);
+
+        let requests = captured.requests.lock().expect("captured requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/v1/responses");
+        assert_eq!(requests[0].authorization.as_deref(), Some("Bearer upstream-token"));
+        assert_eq!(requests[0].accept.as_deref(), Some("text/event-stream"));
+
+        let events = store.usage_events.lock().expect("usage events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].protocol_family, llm_access_core::provider::ProtocolFamily::Anthropic);
+        assert_eq!(events[0].endpoint, "/v1/messages");
+    }
+
+    #[tokio::test]
+    async fn codex_dispatch_streams_anthropic_messages_events_from_responses_sse() {
+        let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("codex upstream env lock");
+        let captured = Arc::new(CapturedCodexUpstream::default());
+        let app = Router::new()
+            .route("/v1/responses", post(fake_codex_responses))
+            .with_state(captured);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+        let state = super::ProviderState::new(Arc::new(TestStore), static_codex_route_store());
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/llm-gateway/messages")
+                .header("x-api-key", "codex-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "gpt-5.3-codex",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": true
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 response");
+        assert!(body.contains("event: message_start"));
+        assert!(body.contains("event: content_block_start"));
+        assert!(body.contains("event: content_block_delta"));
+        assert!(body.contains(r#""type":"text_delta""#));
+        assert!(body.contains(r#""text":"hello ""#));
+        assert!(body.contains(r#""text":"back""#));
+        assert!(body.contains("event: message_stop"));
+        assert!(!body.contains("[DONE]"));
     }
 
     #[tokio::test]

@@ -11,6 +11,7 @@ use http::{header, HeaderMap, Method};
 use serde_json::{json, Map, Value};
 
 use crate::{
+    anthropic_messages::adapt_anthropic_messages_request,
     error::{
         bad_request, bad_request_with_detail, internal_error, method_not_allowed, not_found,
         CodexGatewayError, CodexGatewayResult,
@@ -106,7 +107,7 @@ pub fn prepare_gateway_request_from_bytes(
         .as_ref()
         .and_then(extract_last_message_content_from_value);
     let billable_multiplier =
-        if gateway_path == "/v1/chat/completions" || gateway_path == "/v1/responses" {
+        if matches!(gateway_path, "/v1/chat/completions" | "/v1/responses" | "/v1/messages") {
             resolve_billable_multiplier(json_value.as_ref())
         } else {
             1
@@ -131,6 +132,25 @@ pub fn prepare_gateway_request_from_bytes(
         tool_name_restore_map = restore_map;
         response_adapter = GatewayResponseAdapter::ChatCompletions;
         upstream_path = rewrite_responses_path(gateway_path, query);
+        if let Some(prompt_cache_key) = extract_non_empty_string(adapted.get("prompt_cache_key")) {
+            thread_anchor = Some(prompt_cache_key.to_string());
+        }
+        normalize_responses_request("/v1/responses", &mut adapted, thread_anchor.as_deref());
+        filter_responses_request_fields("/v1/responses", &mut adapted);
+        validate_responses_request("/v1/responses", &adapted)?;
+        if !original_wants_stream {
+            adapted.insert("stream".to_string(), Value::Bool(true));
+            force_upstream_stream = true;
+        }
+        json_value = Some(Value::Object(adapted));
+    } else if gateway_path == "/v1/messages" {
+        let Some(Value::Object(root)) = json_value.as_mut() else {
+            return Err(bad_request("messages requires a JSON object body"));
+        };
+        let (mut adapted, restore_map) = adapt_anthropic_messages_request(root)?;
+        tool_name_restore_map = restore_map;
+        response_adapter = GatewayResponseAdapter::AnthropicMessages;
+        upstream_path = "/v1/responses".to_string();
         if let Some(prompt_cache_key) = extract_non_empty_string(adapted.get("prompt_cache_key")) {
             thread_anchor = Some(prompt_cache_key.to_string());
         }
@@ -1738,6 +1758,7 @@ fn is_supported_codex_post_path(path: &str) -> bool {
         "/v1/responses"
             | "/v1/responses/compact"
             | "/v1/chat/completions"
+            | "/v1/messages"
             | "/v1/memories/trace_summarize"
             | "/v1/realtime/calls"
             | "/v1/files"
@@ -2234,6 +2255,85 @@ mod tests {
         assert!(err
             .message
             .contains("No tool output found for function call callauto12"));
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_anthropic_messages_maps_to_responses() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "max_tokens":512,
+                "stream":false,
+                "system":"Return JSON only.",
+                "tools":[{
+                    "name":"lookup_weather",
+                    "description":"Look up the weather.",
+                    "input_schema":{
+                        "type":"object",
+                        "properties":{"city":{"type":"string"}},
+                        "required":["city"]
+                    }
+                }],
+                "tool_choice":{"type":"tool","name":"lookup_weather"},
+                "thinking":{"type":"adaptive","budget_tokens":4096},
+                "output_config":{
+                    "effort":"high",
+                    "format":{
+                        "type":"json_schema",
+                        "schema":{
+                            "type":"object",
+                            "properties":{"answer":{"type":"string"}},
+                            "required":["answer"],
+                            "additionalProperties":false
+                        }
+                    }
+                },
+                "messages":[
+                    {"role":"user","content":"weather in tokyo"},
+                    {"role":"assistant","content":[
+                        {"type":"text","text":"Let me check."},
+                        {"type":"tool_use","id":"toolu_1","name":"lookup_weather","input":{"city":"Tokyo"}}
+                    ]},
+                    {"role":"user","content":[
+                        {"type":"tool_result","tool_use_id":"toolu_1","content":"{\"temp_c\":24}"}
+                    ]}
+                ]
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/messages",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("messages request should normalize");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(prepared.upstream_path, "/v1/responses");
+        assert_eq!(upstream["instructions"].as_str(), Some(codex_default_instructions()));
+        assert_eq!(upstream["input"][0]["role"], "developer");
+        assert_eq!(upstream["input"][0]["content"][0]["text"], "Return JSON only.");
+        assert_eq!(upstream["input"][1]["role"], "user");
+        assert_eq!(upstream["input"][1]["content"][0]["text"], "weather in tokyo");
+        assert_eq!(upstream["input"][2]["role"], "assistant");
+        assert_eq!(upstream["input"][2]["content"][0]["type"], "output_text");
+        assert_eq!(upstream["input"][2]["content"][0]["text"], "Let me check.");
+        assert_eq!(upstream["input"][3]["type"], "function_call");
+        assert_eq!(upstream["input"][3]["call_id"], "toolu_1");
+        assert_eq!(upstream["input"][3]["name"], "lookup_weather");
+        assert_eq!(upstream["input"][4]["type"], "function_call_output");
+        assert_eq!(upstream["input"][4]["call_id"], "toolu_1");
+        assert_eq!(upstream["text"]["format"]["type"], "json_schema");
+        assert_eq!(upstream["reasoning"]["effort"], "high");
+        assert_eq!(upstream["tool_choice"], json!({"type":"function","name":"lookup_weather"}));
+        assert_eq!(upstream["stream"], true);
     }
 
     #[tokio::test]

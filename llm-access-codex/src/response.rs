@@ -7,6 +7,7 @@ use eventsource_stream::Event as SseEvent;
 use serde_json::{json, Map, Value};
 
 use crate::{
+    anthropic_messages::map_response_to_anthropic_message,
     request::restore_openai_tool_name,
     types::{ChatStreamMetadata, GatewayResponseAdapter, UsageBreakdown},
 };
@@ -213,6 +214,9 @@ pub fn adapt_completed_response_json(
         GatewayResponseAdapter::Responses => response,
         GatewayResponseAdapter::ChatCompletions => {
             map_response_to_chat_completion(&response, tool_name_restore_map)
+        },
+        GatewayResponseAdapter::AnthropicMessages => {
+            map_response_to_anthropic_message(&response, tool_name_restore_map)
         },
     }
 }

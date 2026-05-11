@@ -303,6 +303,13 @@ pub fn provider_route_requirement(path: &str) -> Option<ProviderRouteRequirement
     } else if path.starts_with("/v1/")
         || path.starts_with("/api/codex-gateway/")
         || path.starts_with("/api/llm-gateway/v1/")
+        || matches!(
+            path,
+            "/api/llm-gateway/models"
+                | "/api/llm-gateway/chat/completions"
+                | "/api/llm-gateway/responses"
+                | "/api/llm-gateway/messages"
+        )
     {
         Some(CODEX_OPENAI_ROUTE)
     } else {
