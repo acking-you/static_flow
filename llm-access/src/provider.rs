@@ -9026,7 +9026,7 @@ mod tests {
             .expect("codex upstream env lock");
         let captured = Arc::new(CapturedCodexUpstream::default());
         let app = Router::new()
-            .route("/v1/responses", post(fake_codex_responses_json_success))
+            .route("/v1/responses", post(fake_codex_responses))
             .with_state(captured.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
