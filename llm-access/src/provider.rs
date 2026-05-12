@@ -9157,11 +9157,19 @@ mod tests {
                         "model": "gpt-5.3-codex",
                         "previous_response_id": previous_response_id,
                         "max_output_tokens": 64,
-                        "input": [{
-                            "type":"message",
-                            "role":"user",
-                            "content":[{"type":"input_text","text":"next"}]
-                        }],
+                        "input": [
+                            {
+                                "type":"message",
+                                "id":"rs_item_1",
+                                "role":"assistant",
+                                "content":[{"type":"output_text","text":"prev"}]
+                            },
+                            {
+                                "type":"message",
+                                "role":"user",
+                                "content":[{"type":"input_text","text":"next"}]
+                            }
+                        ],
                         "stream": false
                     })
                     .to_string(),
@@ -9178,11 +9186,12 @@ mod tests {
         assert_eq!(requests[1].body.get("previous_response_id"), None);
         assert_eq!(requests[1].body.get("max_output_tokens"), None);
         assert_eq!(requests[1].body.get("store"), Some(&json!(false)));
+        assert_eq!(requests[1].body["input"][0].get("id"), None);
         let input = requests[1].body["input"]
             .as_array()
             .expect("upstream input array");
-        assert_eq!(input.len(), 1);
-        assert_eq!(input[0]["role"], json!("user"));
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[1]["role"], json!("user"));
     }
 
     #[tokio::test]

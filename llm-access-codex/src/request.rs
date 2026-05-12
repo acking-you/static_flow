@@ -297,15 +297,20 @@ pub fn align_responses_store_with_upstream(
     let changed = if prepared.upstream_path.starts_with("/v1/responses/compact") {
         let removed_store = root.remove("store").is_some();
         let removed_previous_response_id = root.remove("previous_response_id").is_some();
-        removed_store || removed_previous_response_id
+        let removed_item_ids = strip_input_item_ids(root);
+        removed_store || removed_previous_response_id || removed_item_ids
     } else {
-        let store = is_azure_responses_upstream_base(upstream_base);
+        let is_azure = is_azure_responses_upstream_base(upstream_base);
+        let store = is_azure;
         let mut changed = false;
         if root.get("store") != Some(&Value::Bool(store)) {
             root.insert("store".to_string(), Value::Bool(store));
             changed = true;
         }
         if !store && root.remove("previous_response_id").is_some() {
+            changed = true;
+        }
+        if !(store && is_azure) && strip_input_item_ids(root) {
             changed = true;
         }
         changed
@@ -642,6 +647,22 @@ fn normalize_native_responses_request(path: &str, root: &mut Map<String, Value>)
     if path == "/v1/responses/compact" {
         retain_native_compact_fields(root);
     }
+}
+
+fn strip_input_item_ids(root: &mut Map<String, Value>) -> bool {
+    let Some(Value::Array(items)) = root.get_mut("input") else {
+        return false;
+    };
+    let mut removed_any = false;
+    for item in items {
+        let Some(item_obj) = item.as_object_mut() else {
+            continue;
+        };
+        if item_obj.remove("id").is_some() {
+            removed_any = true;
+        }
+    }
+    removed_any
 }
 
 fn retain_native_compact_fields(root: &mut Map<String, Value>) {
@@ -2137,6 +2158,33 @@ mod tests {
     }
 
     #[test]
+    fn align_responses_store_with_upstream_removes_input_item_ids_for_non_azure() {
+        let prepared = prepared_responses_request(
+            "/v1/responses",
+            json!({
+                "model": "gpt-5.3-codex",
+                "input": [
+                    {
+                        "type": "message",
+                        "id": "rs_item_1",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "pong"}]
+                    }
+                ]
+            }),
+        );
+
+        let aligned =
+            align_responses_store_with_upstream(&prepared, "https://chatgpt.com/backend-api/codex")
+                .expect("store alignment should succeed");
+        let body: serde_json::Value =
+            serde_json::from_slice(&aligned.request_body).expect("aligned body json");
+
+        assert_eq!(body["input"][0].get("id"), None);
+        assert_eq!(body.get("store"), Some(&json!(false)));
+    }
+
+    #[test]
     fn align_responses_store_with_upstream_sets_true_for_azure() {
         let prepared = prepared_responses_request(
             "/v1/responses",
@@ -2161,12 +2209,47 @@ mod tests {
     }
 
     #[test]
+    fn align_responses_store_with_upstream_keeps_input_item_ids_for_azure() {
+        let prepared = prepared_responses_request(
+            "/v1/responses",
+            json!({
+                "model": "gpt-5.3-codex",
+                "input": [
+                    {
+                        "type": "message",
+                        "id": "rs_item_1",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "pong"}]
+                    }
+                ],
+                "store": false
+            }),
+        );
+
+        let aligned = align_responses_store_with_upstream(
+            &prepared,
+            "https://foo.openai.azure.com/openai/deployments/bar",
+        )
+        .expect("store alignment should succeed");
+        let body: serde_json::Value =
+            serde_json::from_slice(&aligned.request_body).expect("aligned body json");
+
+        assert_eq!(body["input"][0]["id"], json!("rs_item_1"));
+        assert_eq!(body.get("store"), Some(&json!(true)));
+    }
+
+    #[test]
     fn align_responses_store_with_upstream_removes_compact_store_field() {
         let prepared = prepared_responses_request(
             "/v1/responses/compact",
             json!({
                 "model": "gpt-5.3-codex",
-                "input": "hello compact",
+                "input": [{
+                    "type": "message",
+                    "id": "rs_item_1",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "hello compact"}]
+                }],
                 "store": true,
                 "previous_response_id": "resp_compact_1"
             }),
@@ -2180,6 +2263,7 @@ mod tests {
 
         assert_eq!(body.get("store"), None);
         assert_eq!(body.get("previous_response_id"), None);
+        assert_eq!(body["input"][0].get("id"), None);
     }
 
     #[tokio::test]
