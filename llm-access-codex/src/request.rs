@@ -295,15 +295,20 @@ pub fn align_responses_store_with_upstream(
     };
 
     let changed = if prepared.upstream_path.starts_with("/v1/responses/compact") {
-        root.remove("store").is_some()
+        let removed_store = root.remove("store").is_some();
+        let removed_previous_response_id = root.remove("previous_response_id").is_some();
+        removed_store || removed_previous_response_id
     } else {
         let store = is_azure_responses_upstream_base(upstream_base);
-        if root.get("store") == Some(&Value::Bool(store)) {
-            false
-        } else {
+        let mut changed = false;
+        if root.get("store") != Some(&Value::Bool(store)) {
             root.insert("store".to_string(), Value::Bool(store));
-            true
+            changed = true;
         }
+        if !store && root.remove("previous_response_id").is_some() {
+            changed = true;
+        }
+        changed
     };
 
     if !changed {
@@ -645,7 +650,6 @@ fn retain_native_compact_fields(root: &mut Map<String, Value>) {
             key.as_str(),
             "model"
                 | "instructions"
-                | "previous_response_id"
                 | "input"
                 | "tools"
                 | "parallel_tool_calls"
@@ -2117,7 +2121,8 @@ mod tests {
             "/v1/responses",
             json!({
                 "model": "gpt-5.3-codex",
-                "input": "hello"
+                "input": "hello",
+                "previous_response_id": "resp_1"
             }),
         );
 
@@ -2128,6 +2133,7 @@ mod tests {
             serde_json::from_slice(&aligned.request_body).expect("aligned body json");
 
         assert_eq!(body.get("store"), Some(&json!(false)));
+        assert_eq!(body.get("previous_response_id"), None);
     }
 
     #[test]
@@ -2137,7 +2143,8 @@ mod tests {
             json!({
                 "model": "gpt-5.3-codex",
                 "input": "hello",
-                "store": false
+                "store": false,
+                "previous_response_id": "resp_1"
             }),
         );
 
@@ -2150,6 +2157,7 @@ mod tests {
             serde_json::from_slice(&aligned.request_body).expect("aligned body json");
 
         assert_eq!(body.get("store"), Some(&json!(true)));
+        assert_eq!(body.get("previous_response_id"), Some(&json!("resp_1")));
     }
 
     #[test]
@@ -2159,7 +2167,8 @@ mod tests {
             json!({
                 "model": "gpt-5.3-codex",
                 "input": "hello compact",
-                "store": true
+                "store": true,
+                "previous_response_id": "resp_compact_1"
             }),
         );
 
@@ -2170,6 +2179,7 @@ mod tests {
             serde_json::from_slice(&aligned.request_body).expect("aligned body json");
 
         assert_eq!(body.get("store"), None);
+        assert_eq!(body.get("previous_response_id"), None);
     }
 
     #[tokio::test]
@@ -2984,7 +2994,7 @@ mod tests {
         let upstream: serde_json::Value =
             serde_json::from_slice(&prepared.request_body).expect("upstream body json");
 
-        assert_eq!(upstream["previous_response_id"], json!("resp_compact_1"));
+        assert!(upstream.get("previous_response_id").is_none());
         assert_eq!(upstream["input"][0]["namespace"], json!("game_tools"));
         assert_eq!(upstream["tools"], json!([{ "type": "web_search" }]));
         assert_eq!(upstream["parallel_tool_calls"], json!(true));

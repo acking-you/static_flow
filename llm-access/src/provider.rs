@@ -9094,7 +9094,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn codex_responses_preserves_previous_response_id_without_local_anchor() {
+    async fn codex_responses_drops_previous_response_id_when_store_is_false() {
         let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
             .lock()
             .expect("codex upstream env lock");
@@ -9175,10 +9175,7 @@ mod tests {
         assert_eq!(second.status(), StatusCode::OK);
         let requests = captured.requests.lock().expect("captured requests");
         assert_eq!(requests.len(), 2);
-        assert_eq!(
-            requests[1].body.get("previous_response_id"),
-            Some(&json!(previous_response_id))
-        );
+        assert_eq!(requests[1].body.get("previous_response_id"), None);
         assert_eq!(requests[1].body.get("max_output_tokens"), None);
         assert_eq!(requests[1].body.get("store"), Some(&json!(false)));
         let input = requests[1].body["input"]
@@ -9269,10 +9266,7 @@ mod tests {
         assert_eq!(second.status(), StatusCode::OK);
         let requests = captured.requests.lock().expect("captured requests");
         assert_eq!(requests.len(), 2);
-        assert_eq!(
-            requests[1].body.get("previous_response_id"),
-            Some(&json!(previous_response_id))
-        );
+        assert_eq!(requests[1].body.get("previous_response_id"), None);
         assert_eq!(requests[1].body["input"], json!("next compact"));
         assert_eq!(requests[1].body.get("max_output_tokens"), None);
         assert_eq!(requests[1].body.get("store"), None);
