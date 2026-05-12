@@ -3,11 +3,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use axum::body::Bytes;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use eventsource_stream::Event as SseEvent;
 use serde_json::{json, Map, Value};
 
 use crate::{
     error::{bad_request, bad_request_with_detail, CodexGatewayError, CodexGatewayResult},
+    request::normalize_tool_parameters_schema,
     types::OpenAiChatAdaptedRequest,
     MAX_OPENAI_TOOL_NAME_LEN,
 };
@@ -100,6 +102,7 @@ fn normalize_reasoning_effort(value: &str) -> Option<&'static str> {
         "low" => Some("low"),
         "medium" => Some("medium"),
         "high" => Some("high"),
+        "max" => Some("xhigh"),
         "xhigh" | "extra_high" => Some("xhigh"),
         _ => None,
     }
@@ -266,6 +269,94 @@ fn image_source_to_responses_item(source: &Map<String, Value>) -> Result<Value, 
     }
 }
 
+fn canonical_document_media_type(media_type: &str) -> Option<&'static str> {
+    match media_type.trim().to_ascii_lowercase().as_str() {
+        "application/pdf" => Some("application/pdf"),
+        "text/csv" => Some("text/csv"),
+        "application/msword" => Some("application/msword"),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => {
+            Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        },
+        "application/vnd.ms-excel" => Some("application/vnd.ms-excel"),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => {
+            Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        },
+        "text/html" => Some("text/html"),
+        "text/plain" => Some("text/plain"),
+        "text/markdown" | "text/md" | "text/x-markdown" => Some("text/markdown"),
+        _ => None,
+    }
+}
+
+fn document_media_type_supports_text_source(media_type: &str) -> bool {
+    matches!(media_type, "text/plain" | "text/markdown" | "text/html" | "text/csv")
+}
+
+fn normalize_document_name(raw_name: Option<&str>, media_type: &str) -> String {
+    let fallback = match media_type {
+        "application/pdf" => "document.pdf",
+        "text/csv" => "document.csv",
+        "application/msword" => "document.doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => {
+            "document.docx"
+        },
+        "application/vnd.ms-excel" => "document.xls",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "document.xlsx",
+        "text/html" => "document.html",
+        "text/markdown" => "document.md",
+        _ => "document.txt",
+    };
+    raw_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+fn document_source_to_responses_item(
+    item_obj: &Map<String, Value>,
+    source: &Map<String, Value>,
+) -> Result<Value, String> {
+    let source_type = source
+        .get("type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "document source is missing type".to_string())?;
+    let media_type = source
+        .get("media_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "document source is missing media_type".to_string())?;
+    let media_type = canonical_document_media_type(media_type)
+        .ok_or_else(|| format!("unsupported document media_type `{media_type}`"))?;
+    let data = source
+        .get("data")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "document source is missing data".to_string())?;
+    let file_data = match source_type {
+        "base64" => data.trim().to_string(),
+        "text" => {
+            if !document_media_type_supports_text_source(media_type) {
+                return Err("document source.type=`text` is only supported for plain text, \
+                            markdown, html, or csv"
+                    .to_string());
+            }
+            STANDARD.encode(data.replace("\r\n", "\n").replace('\r', "\n").as_bytes())
+        },
+        other => return Err(format!("unsupported document source type `{other}`")),
+    };
+    let filename =
+        normalize_document_name(item_obj.get("name").and_then(Value::as_str), media_type);
+    Ok(json!({
+        "type": "input_file",
+        "filename": filename,
+        "file_data": format!("data:{media_type};base64,{file_data}"),
+    }))
+}
+
 fn map_user_content_item_to_responses_item(item: &Value) -> Result<Option<Value>, String> {
     let Some(item_obj) = item.as_object() else {
         return Err("user content items must be objects".to_string());
@@ -292,6 +383,13 @@ fn map_user_content_item_to_responses_item(item: &Value) -> Result<Option<Value>
                 .and_then(Value::as_object)
                 .ok_or_else(|| "image block is missing source".to_string())?;
             image_source_to_responses_item(source).map(Some)
+        },
+        "document" => {
+            let source = item_obj
+                .get("source")
+                .and_then(Value::as_object)
+                .ok_or_else(|| "document block is missing source".to_string())?;
+            document_source_to_responses_item(item_obj, source).map(Some)
         },
         other => Err(format!("unsupported user content block `{other}`")),
     }
@@ -682,8 +780,10 @@ pub fn adapt_anthropic_messages_request(
                 .and_then(|thinking| thinking.get("type"))
                 .and_then(Value::as_str)
                 .and_then(|thinking_type| {
-                    if matches!(thinking_type, "enabled" | "adaptive") {
-                        Some("medium")
+                    if thinking_type == "enabled" {
+                        Some("xhigh")
+                    } else if thinking_type == "adaptive" {
+                        Some("high")
                     } else {
                         None
                     }
@@ -722,7 +822,10 @@ pub fn adapt_anthropic_messages_request(
                     .get("input_schema")
                     .or_else(|| tool_obj.get("inputSchema"))
                 {
-                    mapped.insert("parameters".to_string(), parameters.clone());
+                    mapped.insert(
+                        "parameters".to_string(),
+                        normalize_tool_parameters_schema(parameters.clone()),
+                    );
                 }
                 Some(Value::Object(mapped))
             })
@@ -1494,8 +1597,8 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::{
-        convert_response_event_to_anthropic_sse_chunks, map_response_to_anthropic_message,
-        AnthropicStreamMetadata,
+        adapt_anthropic_messages_request, convert_response_event_to_anthropic_sse_chunks,
+        map_response_to_anthropic_message, AnthropicStreamMetadata,
     };
 
     fn sse_event(value: Value) -> SseEvent {
@@ -1651,5 +1754,39 @@ mod tests {
         assert_eq!(starts[0]["content_block"]["name"], json!("web_search"));
         assert_eq!(deltas.len(), 1);
         assert_eq!(deltas[0]["delta"]["type"], json!("input_json_delta"));
+    }
+
+    #[test]
+    fn anthropic_request_accepts_document_user_content_block() {
+        let request = json!({
+            "model": "gpt-5.5",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "name": "notes.md",
+                        "source": {
+                            "type": "text",
+                            "media_type": "text/markdown",
+                            "data": "# Heading\nbody"
+                        }
+                    }
+                ]
+            }]
+        });
+
+        let (adapted, _) = adapt_anthropic_messages_request(
+            request.as_object().expect("request should be object"),
+        )
+        .expect("document block should normalize");
+
+        assert_eq!(adapted["input"][0]["role"], json!("user"));
+        assert_eq!(adapted["input"][0]["content"][0]["type"], json!("input_file"));
+        assert_eq!(adapted["input"][0]["content"][0]["filename"], json!("notes.md"));
+        assert_eq!(
+            adapted["input"][0]["content"][0]["file_data"],
+            json!("data:text/markdown;base64,IyBIZWFkaW5nCmJvZHk=")
+        );
     }
 }

@@ -25,6 +25,7 @@ use crate::{
 
 const LLM_GATEWAY_KEY_STATUS_ACTIVE: &str = "active";
 const LLM_GATEWAY_KEY_STATUS_DISABLED: &str = "disabled";
+const DEFAULT_PUBLIC_GPT_MODEL_ID: &str = "gpt-5.5";
 
 /// Normalize an incoming OpenAI-compatible request into the upstream Codex
 /// shape.
@@ -189,6 +190,8 @@ pub fn prepare_gateway_request_from_bytes(
         ),
         None => body,
     };
+
+    let (request_body, model) = normalize_codex_public_model(request_body, model)?;
 
     Ok(PreparedGatewayRequest {
         original_path,
@@ -604,9 +607,37 @@ fn normalize_reasoning_effort(value: &str) -> Option<&'static str> {
         "low" => Some("low"),
         "medium" => Some("medium"),
         "high" => Some("high"),
+        "max" => Some("xhigh"),
         "xhigh" | "extra_high" => Some("xhigh"),
         _ => None,
     }
+}
+
+fn normalize_codex_public_model(
+    request_body: Bytes,
+    model: Option<String>,
+) -> CodexGatewayResult<(Bytes, Option<String>)> {
+    let Some(model) = model else {
+        return Ok((request_body, None));
+    };
+    if model.starts_with("gpt-") {
+        return Ok((request_body, Some(model)));
+    }
+
+    let mut value = serde_json::from_slice::<Value>(&request_body).map_err(|err| {
+        internal_error("Failed to parse llm gateway request body for model fallback", err)
+    })?;
+    let Some(root) = value.as_object_mut() else {
+        return Err(internal_error(
+            "Failed to normalize llm gateway request model",
+            "request body is not a JSON object",
+        ));
+    };
+    root.insert("model".to_string(), Value::String(DEFAULT_PUBLIC_GPT_MODEL_ID.to_string()));
+    let request_body = Bytes::from(serde_json::to_vec(&value).map_err(|err| {
+        internal_error("Failed to encode llm gateway request body after model fallback", err)
+    })?);
+    Ok((request_body, Some(DEFAULT_PUBLIC_GPT_MODEL_ID.to_string())))
 }
 
 fn filter_responses_request_fields(path: &str, root: &mut Map<String, Value>) {
@@ -808,7 +839,7 @@ fn validate_tool_call_history(root: &Map<String, Value>) -> CodexGatewayResult<(
     Ok(())
 }
 
-fn normalize_tool_parameters_schema(value: Value) -> Value {
+pub(crate) fn normalize_tool_parameters_schema(value: Value) -> Value {
     match value {
         Value::Object(mut obj) => {
             if obj
@@ -2539,6 +2570,104 @@ mod tests {
         assert_eq!(upstream["reasoning"]["effort"], "high");
         assert_eq!(upstream["tool_choice"], json!({"type":"function","name":"lookup_weather"}));
         assert_eq!(upstream["stream"], true);
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_anthropic_messages_falls_back_non_gpt_model_to_latest_gpt() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"claude-sonnet-4-6",
+                "messages":[{"role":"user","content":"hello"}]
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/messages",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("non-gpt anthropic model should fall back locally");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(prepared.model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(prepared.client_visible_model, None);
+        assert_eq!(upstream["model"], json!("gpt-5.5"));
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_anthropic_messages_maps_enabled_thinking_budget_to_xhigh() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.5",
+                "thinking":{"type":"enabled","budget_tokens":24576},
+                "messages":[{"role":"user","content":"hello"}]
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/messages",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("enabled thinking request should normalize");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(upstream["reasoning"]["effort"], "xhigh");
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_anthropic_messages_normalizes_tool_input_schema() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.5",
+                "tools":[{
+                    "name":"inspect_file",
+                    "input_schema":{
+                        "type":"object",
+                        "properties":{
+                            "payload":{
+                                "type":"object"
+                            }
+                        }
+                    }
+                }],
+                "messages":[{"role":"user","content":"hello"}]
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/messages",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("tool schema request should normalize");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(
+            upstream["tools"][0]["parameters"]["properties"]["payload"]["properties"],
+            json!({})
+        );
     }
 
     #[tokio::test]

@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true }
+base64 = "0.22.1"
 bytes = { workspace = true }
 eventsource-stream = "0.2"
 http = { workspace = true }
