@@ -321,7 +321,7 @@ mod tests {
             parse_public_model_catalog_json(&body, false).expect("catalog json should parse");
         let encoded = serde_json::to_vec(&value).expect("catalog json should encode");
         let raw_json = String::from_utf8(encoded.clone()).expect("catalog json is utf8");
-        assert!(raw_json.contains("\\n# Personality\\n"));
+        assert!(raw_json.contains("You are a coding agent running in the Codex CLI"));
 
         let decoded: serde_json::Value =
             serde_json::from_slice(&encoded).expect("encoded catalog should decode");

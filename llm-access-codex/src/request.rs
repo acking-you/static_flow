@@ -172,13 +172,13 @@ pub fn prepare_gateway_request_from_bytes(
             if let Some(prompt_cache_key) = extract_non_empty_string(root.get("prompt_cache_key")) {
                 thread_anchor = Some(prompt_cache_key.to_string());
             }
-            normalize_responses_request(gateway_path, root, thread_anchor.as_deref());
-            repair_responses_request(root)?;
-            filter_responses_request_fields(gateway_path, root);
-            validate_responses_request(gateway_path, root)?;
-            if gateway_path == "/v1/responses" && !original_wants_stream {
-                root.insert("stream".to_string(), Value::Bool(true));
-                force_upstream_stream = true;
+            if gateway_path == "/v1/responses" {
+                normalize_codex_input_message_roles(root);
+            } else {
+                normalize_responses_request(gateway_path, root, thread_anchor.as_deref());
+                repair_responses_request(root)?;
+                filter_responses_request_fields(gateway_path, root);
+                validate_responses_request(gateway_path, root)?;
             }
         }
     }
@@ -646,6 +646,7 @@ fn filter_responses_request_fields(path: &str, root: &mut Map<String, Value>) {
             key.as_str(),
             "model"
                 | "instructions"
+                | "previous_response_id"
                 | "input"
                 | "tools"
                 | "tool_choice"
@@ -681,6 +682,9 @@ fn validate_responses_request(path: &str, root: &Map<String, Value>) -> CodexGat
     }
 
     validate_json_object_input_messages(root)?;
+    if path == "/v1/responses" {
+        return Ok(());
+    }
     validate_tool_call_history(root)?;
     Ok(())
 }
@@ -1739,8 +1743,10 @@ pub fn normalize_responses_request(
     {
         root.remove("instructions");
     }
-    if matches!(path, "/v1/responses" | "/v1/responses/compact") {
+    if path == "/v1/responses/compact" {
         root.insert("store".to_string(), Value::Bool(false));
+    }
+    if matches!(path, "/v1/responses" | "/v1/responses/compact") {
         root.entry("instructions".to_string())
             .or_insert_with(|| Value::String(codex_default_instructions().to_string()));
     }
@@ -2010,7 +2016,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_gateway_request_keeps_last_message_content_without_raw_body_copy() {
+    async fn prepare_gateway_request_keeps_native_responses_body_and_last_message_content() {
         let headers = axum::http::HeaderMap::new();
         let body = Body::from(r#"{"model":"gpt-5.3-codex","input":"hello"}"#);
 
@@ -2023,22 +2029,21 @@ mod tests {
             1024 * 1024,
         )
         .await
-        .expect("responses request should normalize");
+        .expect("responses request should pass through");
 
         let upstream: serde_json::Value =
             serde_json::from_slice(&prepared.request_body).expect("upstream body json");
 
         assert!(prepared.client_request_body.is_none());
         assert_eq!(prepared.last_message_content.as_deref(), Some("hello"));
-        assert_eq!(upstream["input"][0]["type"], "message");
-        assert_eq!(upstream["input"][0]["role"], "user");
-        assert_eq!(upstream["input"][0]["content"][0]["type"], "input_text");
-        assert_eq!(upstream["input"][0]["content"][0]["text"], "hello");
-        assert_eq!(upstream["stream"], true);
+        assert_eq!(prepared.wants_stream, false);
+        assert_eq!(prepared.force_upstream_stream, false);
+        assert_eq!(upstream["input"], "hello");
+        assert!(upstream.get("stream").is_none());
     }
 
     #[tokio::test]
-    async fn prepare_gateway_request_injects_default_instructions_for_bare_responses() {
+    async fn prepare_gateway_request_does_not_inject_default_instructions_for_native_responses() {
         let headers = axum::http::HeaderMap::new();
         let body = Body::from(r#"{"model":"gpt-5.3-codex","input":"hello"}"#);
 
@@ -2051,26 +2056,26 @@ mod tests {
             1024 * 1024,
         )
         .await
-        .expect("responses request should normalize");
+        .expect("responses request should pass through");
 
         let upstream: serde_json::Value =
             serde_json::from_slice(&prepared.request_body).expect("upstream body json");
 
-        assert_eq!(upstream["instructions"].as_str(), Some(codex_default_instructions()));
-        let raw_json =
-            String::from_utf8(prepared.request_body.to_vec()).expect("request body is utf8 json");
-        assert!(raw_json.contains("\\n# Personality\\n"));
+        assert!(upstream.get("instructions").is_none());
     }
 
     #[tokio::test]
-    async fn prepare_gateway_request_responses_filters_fields_not_in_codex_upstream_schema() {
+    async fn prepare_gateway_request_responses_preserves_native_codex_fields() {
         let headers = axum::http::HeaderMap::new();
         let body = Body::from(
             r#"{
                 "model":"gpt-5.3-codex",
                 "input":"hello",
-                "tool_choice":"auto",
+                "previous_response_id":"resp_123",
+                "tools":[{"type":"function","name":"lookup","description":"Look up data.","parameters":{"type":"object","properties":{"q":{"type":"string"}}}}],
+                "tool_choice":{"type":"function","name":"lookup"},
                 "service_tier":"flex",
+                "store":true,
                 "client_metadata":{"source":"test"},
                 "max_output_tokens":64,
                 "max_completion_tokens":32,
@@ -2088,22 +2093,21 @@ mod tests {
             1024 * 1024,
         )
         .await
-        .expect("responses request should normalize");
+        .expect("responses request should pass through");
 
         let upstream: serde_json::Value =
             serde_json::from_slice(&prepared.request_body).expect("upstream body json");
 
-        assert_eq!(upstream["tool_choice"], "auto");
+        assert_eq!(upstream["tools"][0]["name"], json!("lookup"));
+        assert_eq!(upstream["tool_choice"], json!({"type":"function","name":"lookup"}));
         assert_eq!(upstream["service_tier"], "flex");
+        assert_eq!(upstream["store"], json!(true));
         assert_eq!(upstream["client_metadata"], json!({"source":"test"}));
-        assert!(upstream.get("previous_response_id").is_none());
-        assert!(
-            upstream.get("max_output_tokens").is_none(),
-            "responses requests should drop unsupported output limit parameters",
-        );
-        assert!(upstream.get("max_completion_tokens").is_none());
-        assert!(upstream.get("max_tokens").is_none());
-        assert!(upstream.get("verbosity").is_none());
+        assert_eq!(upstream["previous_response_id"], json!("resp_123"));
+        assert_eq!(upstream["max_output_tokens"], json!(64));
+        assert_eq!(upstream["max_completion_tokens"], json!(32));
+        assert_eq!(upstream["max_tokens"], json!(16));
+        assert_eq!(upstream["verbosity"], json!("high"));
     }
 
     #[tokio::test]
@@ -2198,7 +2202,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_gateway_request_rejects_json_object_without_json_input_message() {
+    async fn prepare_gateway_request_responses_skips_local_json_object_validation() {
         let headers = axum::http::HeaderMap::new();
         let body = Body::from(
             r#"{
@@ -2208,7 +2212,7 @@ mod tests {
             }"#,
         );
 
-        let err = prepare_gateway_request(
+        let prepared = prepare_gateway_request(
             "/v1/responses",
             "",
             axum::http::Method::POST,
@@ -2217,11 +2221,12 @@ mod tests {
             1024 * 1024,
         )
         .await
-        .expect_err("json_object without json keyword should fail locally");
+        .expect("native responses request should pass through");
 
-        assert_eq!(err.status, StatusCode::BAD_REQUEST);
-        assert!(err.message.contains("json_object"));
-        assert!(err.message.contains("input message"));
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+        assert_eq!(upstream["text"]["format"]["type"], "json_object");
+        assert_eq!(upstream["input"][0]["content"][0]["text"], "hello");
     }
 
     #[tokio::test]
@@ -2343,11 +2348,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_gateway_request_rejects_orphan_tool_output_without_continuation_support() {
+    async fn prepare_gateway_request_responses_preserves_previous_response_tool_output_delta() {
         let headers = axum::http::HeaderMap::new();
         let body = Body::from(
             r#"{
                 "model":"gpt-5.3-codex",
+                "previous_response_id":"resp_1",
                 "input":[
                     {"type":"function_call_output","call_id":"callauto12","output":"{\"ok\":true}"}
                 ]
@@ -2363,14 +2369,16 @@ mod tests {
             1024 * 1024,
         )
         .await
-        .expect_err("orphan tool output should be rejected");
+        .expect("responses request with previous_response_id should pass through");
 
-        assert_eq!(prepared.status, StatusCode::BAD_REQUEST);
-        assert!(prepared.message.contains("unknown function call"));
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+        assert_eq!(upstream["previous_response_id"], json!("resp_1"));
+        assert_eq!(upstream["input"][0]["type"], json!("function_call_output"));
     }
 
     #[tokio::test]
-    async fn prepare_gateway_request_repairs_custom_tool_call_to_use_input_field() {
+    async fn prepare_gateway_request_responses_preserves_custom_tool_call_shape() {
         let headers = axum::http::HeaderMap::new();
         let body = Body::from(
             r#"{
@@ -2391,14 +2399,14 @@ mod tests {
             1024 * 1024,
         )
         .await
-        .expect("custom tool call should normalize");
+        .expect("native responses request should pass through");
 
         let upstream: serde_json::Value =
             serde_json::from_slice(&prepared.request_body).expect("upstream body json");
         assert_eq!(upstream["input"][0]["type"], json!("custom_tool_call"));
         assert_eq!(upstream["input"][0]["call_id"], json!("callpatch1"));
-        assert_eq!(upstream["input"][0]["input"], json!("*** Begin Patch"));
-        assert!(upstream["input"][0].get("arguments").is_none());
+        assert_eq!(upstream["input"][0]["arguments"], json!("*** Begin Patch"));
+        assert!(upstream["input"][0].get("input").is_none());
         assert_eq!(upstream["input"][1]["type"], json!("custom_tool_call_output"));
     }
 
@@ -2437,7 +2445,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_gateway_request_repairs_responses_tool_call_without_output() {
+    async fn prepare_gateway_request_responses_preserves_unmatched_tool_calls() {
         let headers = axum::http::HeaderMap::new();
         let body = Body::from(
             r#"{
@@ -2457,15 +2465,16 @@ mod tests {
             1024 * 1024,
         )
         .await
-        .expect("responses request with unmatched tool call should be repaired");
+        .expect("native responses request should pass through");
 
         let upstream: serde_json::Value =
             serde_json::from_slice(&prepared.request_body).expect("upstream body json");
-        assert_eq!(upstream["input"], json!([]));
+        assert_eq!(upstream["input"][0]["type"], json!("function_call"));
+        assert_eq!(upstream["input"][0]["call_id"], json!("callauto12"));
     }
 
     #[tokio::test]
-    async fn prepare_gateway_request_rewrites_invalid_message_item_ids() {
+    async fn prepare_gateway_request_responses_preserves_message_item_ids() {
         let headers = axum::http::HeaderMap::new();
         let body = Body::from(
             r#"{
@@ -2485,12 +2494,11 @@ mod tests {
             1024 * 1024,
         )
         .await
-        .expect("responses request should rewrite invalid message ids");
+        .expect("native responses request should pass through");
 
         let upstream: serde_json::Value =
             serde_json::from_slice(&prepared.request_body).expect("upstream body json");
-        let id = upstream["input"][0]["id"].as_str().unwrap_or_default();
-        assert!(id.starts_with("msg_"));
+        assert_eq!(upstream["input"][0]["id"], json!("item_bad"));
     }
 
     #[tokio::test]
@@ -2875,7 +2883,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_gateway_request_decodes_zstd_json_body_before_normalizing_responses() {
+    async fn prepare_gateway_request_decodes_zstd_json_body_before_preserving_native_responses() {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("zstd"));
@@ -2894,13 +2902,13 @@ mod tests {
             1024 * 1024,
         )
         .await
-        .expect("compressed responses request should normalize");
+        .expect("compressed responses request should pass through");
 
         let upstream: serde_json::Value =
             serde_json::from_slice(&prepared.request_body).expect("upstream body json");
 
-        assert_eq!(upstream["input"][0]["content"][0]["text"], "compressed hello");
-        assert_eq!(upstream["stream"], true);
+        assert_eq!(upstream["input"], "compressed hello");
+        assert!(upstream.get("stream").is_none());
         assert!(prepared.client_request_body.is_none());
         assert_eq!(prepared.last_message_content.as_deref(), Some("compressed hello"));
     }
