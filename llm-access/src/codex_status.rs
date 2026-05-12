@@ -143,6 +143,10 @@ async fn refresh_codex_status(
                 tokio::time::sleep(jitter).await;
             }
         }
+        if let Ok(latest) = status_store.codex_rate_limit_status().await {
+            refreshed =
+                rebase_unprocessed_refresh_statuses(&accounts, refreshed, Some(latest), index);
+        }
         let previous = refreshed[index].clone();
         let next = refresh_account_status(
             account,
@@ -313,6 +317,72 @@ fn seed_full_refresh_statuses(
             }
         })
         .collect()
+}
+
+fn account_status_refresh_from_cached_snapshot(
+    account: &AdminCodexAccount,
+    existing_accounts: &mut BTreeMap<String, CodexPublicAccountStatus>,
+    existing_buckets: &mut BTreeMap<String, Vec<CodexRateLimitBucket>>,
+) -> Option<AccountStatusRefresh> {
+    if account.status != KEY_STATUS_ACTIVE {
+        return None;
+    }
+    let public_account = existing_accounts.remove(&account.name)?;
+    if public_account.status != account.status {
+        return None;
+    }
+    let buckets = existing_buckets.remove(&account.name).unwrap_or_default();
+    if !buckets.is_empty() {
+        Some(AccountStatusRefresh::Ready {
+            account: public_account,
+            buckets,
+        })
+    } else if public_account.usage_error_message.is_some() {
+        Some(AccountStatusRefresh::Error {
+            account: public_account,
+        })
+    } else {
+        Some(AccountStatusRefresh::Skipped {
+            account: public_account,
+        })
+    }
+}
+
+fn rebase_unprocessed_refresh_statuses(
+    accounts: &[AdminCodexAccount],
+    mut refreshed: Vec<AccountStatusRefresh>,
+    latest: Option<CodexRateLimitStatus>,
+    processed_until: usize,
+) -> Vec<AccountStatusRefresh> {
+    let Some(latest) = latest else {
+        return refreshed;
+    };
+    let mut existing_accounts = latest
+        .accounts
+        .into_iter()
+        .map(|account| (account.name.clone(), account))
+        .collect::<BTreeMap<_, _>>();
+    let mut existing_buckets = latest
+        .buckets
+        .into_iter()
+        .filter_map(|bucket| bucket.account_name.clone().map(|name| (name, bucket)))
+        .fold(
+            BTreeMap::<String, Vec<CodexRateLimitBucket>>::new(),
+            |mut grouped, (name, bucket)| {
+                grouped.entry(name).or_default().push(bucket);
+                grouped
+            },
+        );
+    for (index, account) in accounts.iter().enumerate().skip(processed_until) {
+        if let Some(rebased) = account_status_refresh_from_cached_snapshot(
+            account,
+            &mut existing_accounts,
+            &mut existing_buckets,
+        ) {
+            refreshed[index] = rebased;
+        }
+    }
+    refreshed
 }
 
 fn initial_account_status(account: &AdminCodexAccount) -> AccountStatusRefresh {
@@ -1027,6 +1097,78 @@ mod tests {
         assert_eq!(snapshot.accounts[0].primary_remaining_percent, Some(70.0));
         assert_eq!(snapshot.accounts[1].secondary_remaining_percent, Some(39.0));
         assert_eq!(snapshot.buckets.len(), 2);
+    }
+
+    #[test]
+    fn rebase_unprocessed_refresh_statuses_keeps_newer_manual_snapshot() {
+        let accounts = vec![sample_admin_account("alpha"), sample_admin_account("beta")];
+        let initial = vec![
+            AccountStatusRefresh::Ready {
+                account: account_ready_status(
+                    &accounts[0],
+                    900,
+                    std::slice::from_ref(&sample_bucket("alpha", 70.0, 80.0)),
+                ),
+                buckets: vec![sample_bucket("alpha", 70.0, 80.0)],
+            },
+            AccountStatusRefresh::Error {
+                account: account_error_status(
+                    &accounts[1],
+                    910,
+                    "usage refresh pending for standalone llm-access",
+                ),
+            },
+        ];
+        let latest = CodexRateLimitStatus {
+            status: "ready".to_string(),
+            refresh_interval_seconds: 300,
+            last_checked_at: Some(1200),
+            last_success_at: Some(1200),
+            source_url: "https://chatgpt.com/backend-api/wham/usage".to_string(),
+            error_message: None,
+            accounts: vec![
+                CodexPublicAccountStatus {
+                    name: "alpha".to_string(),
+                    status: KEY_STATUS_ACTIVE.to_string(),
+                    plan_type: Some("Pro".to_string()),
+                    primary_remaining_percent: Some(70.0),
+                    secondary_remaining_percent: Some(80.0),
+                    last_usage_checked_at: Some(900),
+                    last_usage_success_at: Some(900),
+                    usage_error_message: None,
+                },
+                CodexPublicAccountStatus {
+                    name: "beta".to_string(),
+                    status: KEY_STATUS_ACTIVE.to_string(),
+                    plan_type: Some("Plus".to_string()),
+                    primary_remaining_percent: Some(99.0),
+                    secondary_remaining_percent: Some(100.0),
+                    last_usage_checked_at: Some(1200),
+                    last_usage_success_at: Some(1200),
+                    usage_error_message: None,
+                },
+            ],
+            buckets: vec![sample_bucket("alpha", 70.0, 80.0), sample_bucket("beta", 99.0, 100.0)],
+        };
+
+        let rebased = rebase_unprocessed_refresh_statuses(&accounts, initial, Some(latest), 1);
+
+        match &rebased[1] {
+            AccountStatusRefresh::Ready {
+                account,
+                buckets,
+            } => {
+                assert_eq!(account.name, "beta");
+                assert_eq!(account.plan_type.as_deref(), Some("Plus"));
+                assert_eq!(account.primary_remaining_percent, Some(99.0));
+                assert_eq!(account.secondary_remaining_percent, Some(100.0));
+                assert_eq!(account.last_usage_success_at, Some(1200));
+                assert_eq!(account.usage_error_message, None);
+                assert_eq!(buckets.len(), 1);
+                assert_eq!(buckets[0].account_name.as_deref(), Some("beta"));
+            },
+            _ => panic!("expected rebased ready status"),
+        }
     }
 
     #[test]
