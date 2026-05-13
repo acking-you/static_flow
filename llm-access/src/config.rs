@@ -42,6 +42,8 @@ pub struct TieredDuckDbStorageConfig {
     pub catalog_dir: PathBuf,
     /// Rollover threshold in bytes.
     pub rollover_bytes: u64,
+    /// Optional direct object-store base URL for per-event detail payloads.
+    pub details_object_store_url: Option<String>,
 }
 
 /// HTTP service configuration.
@@ -126,6 +128,7 @@ where
     let mut duckdb_archive_dir = None;
     let mut duckdb_catalog_dir = None;
     let mut duckdb_rollover_bytes = None;
+    let mut usage_details_object_store_url = None;
     let mut usage_journal_dir = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -177,6 +180,12 @@ where
                         .context("failed to parse --duckdb-rollover-bytes")?,
                 );
             },
+            "--usage-details-object-store-url" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow!("--usage-details-object-store-url requires a URL"))?;
+                usage_details_object_store_url = Some(value.to_string_lossy().trim().to_string());
+            },
             "--usage-journal-dir" => {
                 usage_journal_dir = Some(PathBuf::from(
                     args.next()
@@ -195,6 +204,7 @@ where
         duckdb_archive_dir,
         duckdb_catalog_dir,
         duckdb_rollover_bytes,
+        usage_details_object_store_url,
     )?;
     ensure_under_root(&state_root, &sqlite_control)?;
     ensure_under_root(&state_root, &duckdb)?;
@@ -219,11 +229,13 @@ fn parse_tiered_duckdb_config(
     archive_dir: Option<PathBuf>,
     catalog_dir: Option<PathBuf>,
     rollover_bytes: Option<u64>,
+    details_object_store_url: Option<String>,
 ) -> anyhow::Result<Option<TieredDuckDbStorageConfig>> {
     let any = active_dir.is_some()
         || archive_dir.is_some()
         || catalog_dir.is_some()
-        || rollover_bytes.is_some();
+        || rollover_bytes.is_some()
+        || details_object_store_url.is_some();
     if !any {
         return Ok(None);
     }
@@ -237,6 +249,9 @@ fn parse_tiered_duckdb_config(
         rollover_bytes: rollover_bytes
             .unwrap_or(DEFAULT_TIERED_DUCKDB_ROLLOVER_BYTES)
             .max(1),
+        details_object_store_url: details_object_store_url
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
     }))
 }
 
@@ -253,7 +268,8 @@ fn usage_error() -> anyhow::Error {
         "usage: llm-access init --state-root <path> --sqlite-control <path> --duckdb \
          <path>\nusage: llm-access serve [--bind <addr>] --state-root <path> --sqlite-control \
          <path> [--duckdb <path>] [--usage-journal-dir <path>] [--duckdb-active-dir <path> \
-         --duckdb-archive-dir <path> --duckdb-catalog-dir <path> --duckdb-rollover-bytes <bytes>]"
+         --duckdb-archive-dir <path> --duckdb-catalog-dir <path> --duckdb-rollover-bytes <bytes> \
+         --usage-details-object-store-url <url>]"
     )
 }
 

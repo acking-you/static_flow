@@ -590,6 +590,7 @@ mod tests {
                     archive_dir: temp_dir.path().join("duckdb-archive"),
                     catalog_dir: temp_dir.path().join("duckdb-catalog"),
                     rollover_bytes: 1024 * 1024 * 1024,
+                    details_object_store_url: None,
                 })
                 .expect("open duckdb"),
             );

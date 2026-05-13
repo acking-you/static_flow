@@ -115,6 +115,7 @@ pub fn bootstrap_storage(config: &StorageConfig) -> anyhow::Result<()> {
                 archive_dir: tiered.archive_dir.clone(),
                 catalog_dir: tiered.catalog_dir.clone(),
                 rollover_bytes: tiered.rollover_bytes,
+                details_object_store_url: tiered.details_object_store_url.clone(),
             },
         )?;
     } else {

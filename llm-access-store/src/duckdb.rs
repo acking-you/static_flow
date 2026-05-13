@@ -4,6 +4,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
     thread,
@@ -15,6 +16,10 @@ use anyhow::{anyhow, Context};
 #[cfg(feature = "duckdb-runtime")]
 use async_trait::async_trait;
 #[cfg(feature = "duckdb-runtime")]
+use bytes::Bytes;
+#[cfg(feature = "duckdb-runtime")]
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+#[cfg(feature = "duckdb-runtime")]
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType, RouteStrategy},
     store::{
@@ -23,6 +28,13 @@ use llm_access_core::{
         DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
     },
     usage::{UsageEvent, UsageStreamDetails, UsageTiming},
+};
+#[cfg(feature = "duckdb-runtime")]
+use object_store::{
+    aws::{AmazonS3Builder, AmazonS3ConfigKey},
+    local::LocalFileSystem,
+    path::Path as ObjectPath,
+    Attribute, AttributeValue, Attributes, ObjectStore, PutOptions,
 };
 #[cfg(feature = "duckdb-runtime")]
 use rusqlite::OptionalExtension;
@@ -34,9 +46,6 @@ use crate::KeyUsageRollupSummary;
 
 #[cfg(feature = "duckdb-runtime")]
 static TIERED_SEGMENT_SEALER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[cfg(feature = "duckdb-runtime")]
-const DETAILS_SQLITE_FILE_NAME: &str = "usage-event-details.sqlite3";
 
 /// One row for the DuckDB `usage_events` wide fact table.
 #[derive(Debug, Clone, PartialEq)]
@@ -380,72 +389,6 @@ fn compact_copy_usage_events_sql(columns: &HashSet<String>) -> String {
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn compact_copy_usage_event_details_sql(
-    event_columns: &HashSet<String>,
-    pending_has_details_table: bool,
-) -> String {
-    let request_headers_expr = compact_detail_payload_expr(
-        event_columns,
-        pending_has_details_table,
-        "request_headers_json",
-        "'{}'",
-    );
-    let routing_expr = compact_detail_payload_expr(
-        event_columns,
-        pending_has_details_table,
-        "routing_diagnostics_json",
-        "CAST(NULL AS VARCHAR)",
-    );
-    let last_message_expr = compact_detail_payload_expr(
-        event_columns,
-        pending_has_details_table,
-        "last_message_content",
-        "CAST(NULL AS VARCHAR)",
-    );
-    let client_body_expr = compact_detail_payload_expr(
-        event_columns,
-        pending_has_details_table,
-        "client_request_body_json",
-        "CAST(NULL AS VARCHAR)",
-    );
-    let upstream_body_expr = compact_detail_payload_expr(
-        event_columns,
-        pending_has_details_table,
-        "upstream_request_body_json",
-        "CAST(NULL AS VARCHAR)",
-    );
-    let full_request_expr = compact_detail_payload_expr(
-        event_columns,
-        pending_has_details_table,
-        "full_request_json",
-        "CAST(NULL AS VARCHAR)",
-    );
-    let from_sql = if pending_has_details_table {
-        "FROM pending_segment.usage_events e
-    LEFT JOIN pending_segment.usage_event_details d ON d.event_id = e.event_id"
-    } else {
-        "FROM pending_segment.usage_events e"
-    };
-
-    format!(
-        "INSERT INTO usage_event_details (
-        event_id, request_headers_json, routing_diagnostics_json,
-        last_message_content, client_request_body_json,
-        upstream_request_body_json, full_request_json
-    )
-    SELECT
-        e.event_id AS event_id,
-        {request_headers_expr} AS request_headers_json,
-        {routing_expr} AS routing_diagnostics_json,
-        {last_message_expr} AS last_message_content,
-        {client_body_expr} AS client_request_body_json,
-        {upstream_body_expr} AS upstream_request_body_json,
-        {full_request_expr} AS full_request_json
-    {from_sql};"
-    )
-}
-
-#[cfg(feature = "duckdb-runtime")]
 fn compact_source_required_expr(column: &'static str) -> String {
     format!("e.{column} AS {column}")
 }
@@ -468,21 +411,6 @@ fn compact_source_expr(
 ) -> String {
     let sql = if columns.contains(column) { present_sql } else { missing_sql };
     format!("{sql} AS {column}")
-}
-
-#[cfg(feature = "duckdb-runtime")]
-fn compact_detail_payload_expr(
-    event_columns: &HashSet<String>,
-    pending_has_details_table: bool,
-    column: &'static str,
-    missing_sql: &'static str,
-) -> String {
-    match (pending_has_details_table, event_columns.contains(column)) {
-        (true, true) => format!("COALESCE(d.{column}, e.{column})"),
-        (true, false) => format!("d.{column}"),
-        (false, true) => format!("e.{column}"),
-        (false, false) => missing_sql.to_string(),
-    }
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -736,117 +664,233 @@ impl UsageEventDetailRow {
             full_request_json: row.full_request_json.clone(),
         }
     }
+
+    fn has_meaningful_payloads(&self) -> bool {
+        self.request_headers_json.trim() != "{}"
+            || self
+                .routing_diagnostics_json
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            || self
+                .last_message_content
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            || self
+                .client_request_body_json
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            || self
+                .upstream_request_body_json
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            || self
+                .full_request_json
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+    }
 }
 
 #[cfg(feature = "duckdb-runtime")]
-#[derive(Debug)]
-struct UsageEventDetailStore {
-    conn: rusqlite::Connection,
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct UsageEventDetailBlob {
+    request_headers_json: String,
+    routing_diagnostics_json: Option<String>,
+    last_message_content: Option<String>,
+    client_request_body_json: Option<String>,
+    upstream_request_body_json: Option<String>,
+    full_request_json: Option<String>,
 }
 
 #[cfg(feature = "duckdb-runtime")]
-impl UsageEventDetailStore {
-    fn open(path: &Path) -> anyhow::Result<Self> {
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "failed to create usage-event-details sqlite parent directory `{}`",
-                    parent.display()
-                )
-            })?;
+impl UsageEventDetailBlob {
+    fn from_detail_row(row: &UsageEventDetailRow) -> Self {
+        Self {
+            request_headers_json: row.request_headers_json.clone(),
+            routing_diagnostics_json: row.routing_diagnostics_json.clone(),
+            last_message_content: row.last_message_content.clone(),
+            client_request_body_json: row.client_request_body_json.clone(),
+            upstream_request_body_json: row.upstream_request_body_json.clone(),
+            full_request_json: row.full_request_json.clone(),
         }
-        let conn = rusqlite::Connection::open(path).with_context(|| {
-            format!("failed to open usage-event-details sqlite database `{}`", path.display())
-        })?;
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .context("failed to enable sqlite WAL for usage-event-details")?;
-        conn.pragma_update(None, "synchronous", "NORMAL")
-            .context("failed to set sqlite synchronous mode for usage-event-details")?;
-        conn.busy_timeout(Duration::from_secs(5))
-            .context("failed to configure usage-event-details sqlite busy timeout")?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS usage_event_details (
-                event_id TEXT PRIMARY KEY,
-                request_headers_json TEXT NOT NULL,
-                routing_diagnostics_json TEXT,
-                last_message_content TEXT,
-                client_request_body_json TEXT,
-                upstream_request_body_json TEXT,
-                full_request_json TEXT
-            ) STRICT, WITHOUT ROWID;",
-        )
-        .context("failed to initialize usage-event-details sqlite schema")?;
-        Ok(Self {
-            conn,
-        })
     }
 
-    fn insert_usage_event_details(&mut self, rows: &[UsageEventDetailRow]) -> anyhow::Result<()> {
-        if rows.is_empty() {
-            return Ok(());
+    fn into_detail_row(self, event_id: String) -> UsageEventDetailRow {
+        UsageEventDetailRow {
+            event_id,
+            request_headers_json: self.request_headers_json,
+            routing_diagnostics_json: self.routing_diagnostics_json,
+            last_message_content: self.last_message_content,
+            client_request_body_json: self.client_request_body_json,
+            upstream_request_body_json: self.upstream_request_body_json,
+            full_request_json: self.full_request_json,
         }
-        let tx = self.conn.transaction()?;
-        {
-            let mut stmt = tx.prepare(
-                "INSERT INTO usage_event_details (
-                    event_id, request_headers_json, routing_diagnostics_json,
-                    last_message_content, client_request_body_json,
-                    upstream_request_body_json, full_request_json
-                ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7
-                )
-                ON CONFLICT(event_id) DO NOTHING",
-            )?;
-            for row in rows {
-                stmt.execute(rusqlite::params![
-                    &row.event_id,
-                    &row.request_headers_json,
-                    row.routing_diagnostics_json.as_deref(),
-                    row.last_message_content.as_deref(),
-                    row.client_request_body_json.as_deref(),
-                    row.upstream_request_body_json.as_deref(),
-                    row.full_request_json.as_deref(),
-                ])?;
-            }
+    }
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug, Clone)]
+enum UsageEventDetailObjectStoreKind {
+    Local,
+    S3Compatible,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug, Clone)]
+struct UsageEventDetailObjectStore {
+    store: Arc<dyn ObjectStore>,
+    base_prefix: ObjectPath,
+    kind: UsageEventDetailObjectStoreKind,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+impl UsageEventDetailObjectStore {
+    fn from_url(url: &str) -> anyhow::Result<Option<Self>> {
+        let trimmed = url.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
         }
-        tx.commit()?;
+        let parsed = url::Url::parse(trimmed)
+            .with_context(|| format!("invalid usage details object store url `{trimmed}`"))?;
+        match parsed.scheme() {
+            "file" => {
+                let path = parsed.to_file_path().map_err(|_| {
+                    anyhow!("usage details file url `{trimmed}` is not a valid file path")
+                })?;
+                fs::create_dir_all(&path).with_context(|| {
+                    format!("failed to create usage details directory `{}`", path.display())
+                })?;
+                let store = LocalFileSystem::new_with_prefix(&path).with_context(|| {
+                    format!(
+                        "failed to open local usage details object store from `{}`",
+                        path.display()
+                    )
+                })?;
+                Ok(Some(Self {
+                    store: Arc::new(store),
+                    base_prefix: ObjectPath::default(),
+                    kind: UsageEventDetailObjectStoreKind::Local,
+                }))
+            },
+            "s3" | "s3a" | "https" => {
+                let mut builder = AmazonS3Builder::new().with_url(trimmed);
+                let env_overrides = [
+                    ("aws_access_key_id", std::env::var("R2_ACCESS_KEY_ID").ok()),
+                    ("aws_secret_access_key", std::env::var("R2_SECRET_ACCESS_KEY").ok()),
+                    ("aws_endpoint", std::env::var("R2_ENDPOINT").ok()),
+                    (
+                        "aws_default_region",
+                        std::env::var("AWS_DEFAULT_REGION")
+                            .ok()
+                            .or_else(|| Some("us-east-1".to_string())),
+                    ),
+                ];
+                for (key, value) in env_overrides {
+                    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+                        builder = builder.with_config(
+                            key.parse::<AmazonS3ConfigKey>()
+                                .expect("known object_store aws config key"),
+                            value,
+                        );
+                    }
+                }
+                let base_prefix = parsed
+                    .path()
+                    .trim_start_matches('/')
+                    .trim_end_matches('/')
+                    .to_string();
+                let store = builder.build().with_context(|| {
+                    format!(
+                        "failed to open usage details s3-compatible object store from `{trimmed}`"
+                    )
+                })?;
+                Ok(Some(Self {
+                    store: Arc::new(store),
+                    base_prefix: ObjectPath::from(base_prefix),
+                    kind: UsageEventDetailObjectStoreKind::S3Compatible,
+                }))
+            },
+            other => Err(anyhow!(
+                "unsupported usage details object store scheme `{other}` in `{trimmed}`"
+            )),
+        }
+    }
+
+    fn object_path_for_event(&self, event: &UsageEventRow) -> ObjectPath {
+        let (year, month, day) = utc_date_parts(event.created_at_ms);
+        let relative = ObjectPath::from_iter([
+            event.provider_type.as_str(),
+            &format!("{year:04}"),
+            &format!("{month:02}"),
+            &format!("{day:02}"),
+            &format!("{}.json.gz", event.event_id),
+        ]);
+        if self.base_prefix.as_ref().is_empty() {
+            relative
+        } else {
+            ObjectPath::from_iter([self.base_prefix.as_ref(), relative.as_ref()])
+        }
+    }
+
+    async fn put_rows(
+        &self,
+        rows: &[UsageEventDetailRow],
+        row_lookup: &BTreeMap<String, UsageEventRow>,
+    ) -> anyhow::Result<()> {
+        for row in rows {
+            let summary = row_lookup.get(&row.event_id).ok_or_else(|| {
+                anyhow!("missing usage summary row for detail event `{}`", row.event_id)
+            })?;
+            let blob = UsageEventDetailBlob::from_detail_row(row);
+            let encoded = gzip_json_bytes(&blob)
+                .with_context(|| format!("failed to encode usage detail `{}`", row.event_id))?;
+            let location = self.object_path_for_event(summary);
+            let attrs = match self.kind {
+                UsageEventDetailObjectStoreKind::Local => Attributes::new(),
+                UsageEventDetailObjectStoreKind::S3Compatible => Attributes::from_iter([
+                    (
+                        Attribute::ContentType,
+                        AttributeValue::from("application/json; charset=utf-8"),
+                    ),
+                    (Attribute::ContentEncoding, AttributeValue::from("gzip")),
+                ]),
+            };
+            self.store
+                .put_opts(&location, Bytes::from(encoded).into(), PutOptions {
+                    attributes: attrs,
+                    ..PutOptions::default()
+                })
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to upload usage detail object `{}` for event `{}`",
+                        location, row.event_id
+                    )
+                })?;
+        }
         Ok(())
     }
 
-    fn get_usage_event_detail(
+    async fn get_row_for_event(
         &self,
-        event_id: &str,
+        summary: &UsageEvent,
     ) -> anyhow::Result<Option<UsageEventDetailRow>> {
-        self.conn
-            .query_row(
-                "SELECT
-                    event_id,
-                    request_headers_json,
-                    routing_diagnostics_json,
-                    last_message_content,
-                    client_request_body_json,
-                    upstream_request_body_json,
-                    full_request_json
-                 FROM usage_event_details
-                 WHERE event_id = ?1",
-                rusqlite::params![event_id],
-                |row| {
-                    Ok(UsageEventDetailRow {
-                        event_id: row.get(0)?,
-                        request_headers_json: row.get(1)?,
-                        routing_diagnostics_json: row.get(2)?,
-                        last_message_content: row.get(3)?,
-                        client_request_body_json: row.get(4)?,
-                        upstream_request_body_json: row.get(5)?,
-                        full_request_json: row.get(6)?,
-                    })
-                },
-            )
-            .optional()
-            .context("query usage-event-details sqlite row")
+        let row = UsageEventRow::from_usage_event(summary);
+        let location = self.object_path_for_event(&row);
+        let bytes = match self.store.get(&location).await {
+            Ok(result) => result.bytes().await.with_context(|| {
+                format!("failed to read usage detail object bytes `{location}`")
+            })?,
+            Err(object_store::Error::NotFound {
+                ..
+            }) => return Ok(None),
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("failed to fetch usage detail object `{location}`"))
+            },
+        };
+        let blob: UsageEventDetailBlob = gunzip_json_bytes(&bytes)
+            .with_context(|| format!("failed to decode usage detail object `{location}`"))?;
+        Ok(Some(blob.into_detail_row(summary.event_id.clone())))
     }
 }
 
@@ -897,41 +941,57 @@ impl DuckDbUsageWriter {
         tx.commit()?;
         Ok(())
     }
+
+    /// Insert only the summary projection for a batch of usage events.
+    pub fn insert_usage_event_summaries_only(
+        &mut self,
+        rows: &[UsageEventRow],
+    ) -> anyhow::Result<()> {
+        self.insert_usage_event_summaries(rows)
+    }
 }
 
 #[cfg(feature = "duckdb-runtime")]
 #[derive(Debug)]
-struct HybridUsageWriter {
+struct HotUsageWriter {
     summary: DuckDbUsageWriter,
-    detail: UsageEventDetailStore,
+    detail_object_store: Option<Arc<UsageEventDetailObjectStore>>,
 }
 
 #[cfg(feature = "duckdb-runtime")]
-impl HybridUsageWriter {
+impl HotUsageWriter {
     fn open(
         duckdb_path: &Path,
-        detail_path: &Path,
         connection_config: DuckDbUsageConnectionConfig,
+        detail_object_store: Option<Arc<UsageEventDetailObjectStore>>,
     ) -> anyhow::Result<Self> {
         let summary =
             DuckDbUsageWriter::new(DuckDbUsageRepository::open_conn_with_connection_config(
                 duckdb_path,
                 connection_config,
             )?)?;
-        let detail = UsageEventDetailStore::open(detail_path)?;
         Ok(Self {
             summary,
-            detail,
+            detail_object_store,
         })
     }
 
-    fn insert_usage_events(&mut self, rows: &[UsageEventRow]) -> anyhow::Result<()> {
+    async fn insert_usage_events(&mut self, rows: &[UsageEventRow]) -> anyhow::Result<()> {
         self.summary.insert_usage_event_summaries(rows)?;
-        let detail_rows = rows
-            .iter()
-            .map(UsageEventDetailRow::from_usage_event_row)
-            .collect::<Vec<_>>();
-        self.detail.insert_usage_event_details(&detail_rows)?;
+        if let Some(detail_object_store) = &self.detail_object_store {
+            let detail_rows = rows
+                .iter()
+                .map(UsageEventDetailRow::from_usage_event_row)
+                .collect::<Vec<_>>();
+            let row_lookup = rows
+                .iter()
+                .cloned()
+                .map(|row| (row.event_id.clone(), row))
+                .collect::<BTreeMap<_, _>>();
+            detail_object_store
+                .put_rows(&detail_rows, &row_lookup)
+                .await?;
+        }
         Ok(())
     }
 }
@@ -939,19 +999,19 @@ impl HybridUsageWriter {
 #[cfg(feature = "duckdb-runtime")]
 #[derive(Debug)]
 struct PersistentUsageWriter {
-    writer: HybridUsageWriter,
+    writer: HotUsageWriter,
     connection_config: DuckDbUsageConnectionConfig,
 }
 
 #[cfg(feature = "duckdb-runtime")]
 impl PersistentUsageWriter {
-    fn open(path: &Path, connection_config: DuckDbUsageConnectionConfig) -> anyhow::Result<Self> {
+    fn open(
+        path: &Path,
+        connection_config: DuckDbUsageConnectionConfig,
+        detail_object_store: Option<Arc<UsageEventDetailObjectStore>>,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
-            writer: HybridUsageWriter::open(
-                path,
-                &details_sqlite_path_for_duckdb(path),
-                connection_config,
-            )?,
+            writer: HotUsageWriter::open(path, connection_config, detail_object_store)?,
             connection_config,
         })
     }
@@ -1124,6 +1184,8 @@ pub struct TieredDuckDbUsageConfig {
     pub catalog_dir: PathBuf,
     /// Rollover threshold in bytes for the active DuckDB file.
     pub rollover_bytes: u64,
+    /// Optional external object-store base URL for detail payloads.
+    pub details_object_store_url: Option<String>,
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1133,6 +1195,7 @@ struct TieredDuckDbUsageState {
     next_sequence: u64,
     active_has_rows: bool,
     active_writer: Option<PersistentUsageWriter>,
+    detail_object_store: Option<Arc<UsageEventDetailObjectStore>>,
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1203,11 +1266,9 @@ struct SegmentStats {
 #[derive(Debug, Clone)]
 struct ArchivedSegmentPaths {
     pending_duckdb: PathBuf,
-    pending_details: PathBuf,
     compact_duckdb: PathBuf,
     uploading_duckdb: PathBuf,
     archive_duckdb: PathBuf,
-    archive_details: PathBuf,
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1284,6 +1345,13 @@ impl DuckDbUsageRepository {
         initialize_tiered_catalog(&config)?;
         clear_stale_compacting_files(&config)?;
         spawn_existing_pending_sealers(config.clone(), Arc::clone(&connection_config))?;
+        let detail_object_store = config
+            .details_object_store_url
+            .as_deref()
+            .map(UsageEventDetailObjectStore::from_url)
+            .transpose()?
+            .flatten()
+            .map(Arc::new);
 
         let (active_path, next_sequence) = choose_active_segment(&config)?;
         let active_has_rows = active_path.exists();
@@ -1299,6 +1367,7 @@ impl DuckDbUsageRepository {
                     next_sequence,
                     active_has_rows,
                     active_writer: None,
+                    detail_object_store,
                 })),
                 connection_config,
             }),
@@ -1514,6 +1583,34 @@ fn now_ms() -> i64 {
 }
 
 #[cfg(feature = "duckdb-runtime")]
+fn utc_date_parts(timestamp_ms: i64) -> (i32, u32, u32) {
+    let datetime = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(timestamp_ms)
+        .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).expect("epoch"));
+    use chrono::Datelike;
+    (datetime.year(), datetime.month(), datetime.day())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn gzip_json_bytes<T: serde::Serialize>(value: &T) -> anyhow::Result<Vec<u8>> {
+    let json = serde_json::to_vec(value).context("serialize usage detail json")?;
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(&json)
+        .context("write gzip usage detail payload")?;
+    encoder.finish().context("finish gzip usage detail payload")
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn gunzip_json_bytes<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<T> {
+    let mut decoder = GzDecoder::new(bytes);
+    let mut json = Vec::new();
+    decoder
+        .read_to_end(&mut json)
+        .context("gunzip usage detail payload")?;
+    serde_json::from_slice(&json).context("deserialize usage detail json")
+}
+
+#[cfg(feature = "duckdb-runtime")]
 fn initialize_tiered_catalog(config: &TieredDuckDbUsageConfig) -> anyhow::Result<()> {
     let path = tiered_catalog_path(config);
     if let Some(parent) = path.parent() {
@@ -1675,12 +1772,16 @@ fn spawn_segment_sealer(
             };
             let mut last_err = None;
             for attempt in 0..5 {
-                match publish_pending_segment(
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("build tiered segment sealer runtime");
+                match runtime.block_on(publish_pending_segment_async(
                     &config,
                     &pending_path,
                     &segment_id,
                     connection_config_snapshot(&connection_config),
-                ) {
+                )) {
                     Ok(()) => return,
                     Err(err) => {
                         last_err = Some(err);
@@ -1698,7 +1799,7 @@ fn spawn_segment_sealer(
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn publish_pending_segment(
+async fn publish_pending_segment_async(
     config: &TieredDuckDbUsageConfig,
     pending_path: &Path,
     segment_id: &str,
@@ -1710,15 +1811,11 @@ fn publish_pending_segment(
     let uploading_path = uploading_archive_segment_path(config, segment_id);
     let archive_path = archive_segment_path(config, segment_id);
     let compact_path = compacting_segment_path(config, segment_id);
-    let pending_detail_path = pending_path.with_file_name(format!("{segment_id}.details.sqlite3"));
-    let archive_detail_path = archive_path.with_file_name(format!("{segment_id}.details.sqlite3"));
     let paths = ArchivedSegmentPaths {
         pending_duckdb: pending_path.to_path_buf(),
-        pending_details: pending_detail_path.clone(),
         compact_duckdb: compact_path.clone(),
         uploading_duckdb: uploading_path.clone(),
         archive_duckdb: archive_path.clone(),
-        archive_details: archive_detail_path.clone(),
     };
     if archive_path.exists() {
         return finalize_archived_segment(config, &paths, segment_id);
@@ -1726,6 +1823,7 @@ fn publish_pending_segment(
     let compact_path =
         compact_pending_segment_to_local_file(config, pending_path, segment_id, connection_config)?;
     let stats = validate_compacted_segment_matches_source(pending_path, &compact_path)?;
+    publish_pending_segment_details_if_configured(config, pending_path).await?;
     remove_file_if_exists(&uploading_path)?;
     fs::copy(&compact_path, &uploading_path).with_context(|| {
         format!(
@@ -1745,16 +1843,6 @@ fn publish_pending_segment(
         .with_context(|| format!("failed to stat archived segment `{}`", archive_path.display()))?
         .len();
     publish_segment_catalog(config, segment_id, &archive_path, &stats, size_bytes)?;
-    if pending_detail_path.exists() {
-        remove_file_if_exists(&archive_detail_path)?;
-        fs::rename(&pending_detail_path, &archive_detail_path).with_context(|| {
-            format!(
-                "failed to publish usage-event-details sqlite `{}` to `{}`",
-                pending_detail_path.display(),
-                archive_detail_path.display()
-            )
-        })?;
-    }
     remove_file_if_exists(pending_path)?;
     remove_file_if_exists(&compact_path)?;
     Ok(())
@@ -1775,16 +1863,6 @@ fn finalize_archived_segment(
     publish_segment_catalog(config, segment_id, &paths.archive_duckdb, &stats, size_bytes)?;
     remove_file_if_exists(&paths.uploading_duckdb)?;
     remove_file_if_exists(&paths.pending_duckdb)?;
-    if paths.pending_details.exists() && !paths.archive_details.exists() {
-        fs::rename(&paths.pending_details, &paths.archive_details).with_context(|| {
-            format!(
-                "failed to finalize usage-event-details sqlite `{}` to `{}`",
-                paths.pending_details.display(),
-                paths.archive_details.display()
-            )
-        })?;
-    }
-    remove_file_if_exists(&paths.pending_details)?;
     remove_file_if_exists(&paths.compact_duckdb)?;
     Ok(())
 }
@@ -1857,8 +1935,6 @@ fn compact_pending_segment_to_local_file(
 ) -> anyhow::Result<PathBuf> {
     let pending_source_conn = DuckDbUsageRepository::open_read_only_conn(pending_path)?;
     let pending_event_columns = duckdb_table_columns(&pending_source_conn, "usage_events")?;
-    let pending_has_details_table =
-        duckdb_relation_exists(&pending_source_conn, "usage_event_details");
     let pending_has_hourly_rollups =
         duckdb_relation_exists(&pending_source_conn, "usage_rollups_hourly");
     let pending_has_daily_rollups =
@@ -1887,10 +1963,7 @@ fn compact_pending_segment_to_local_file(
         format!("failed to attach pending duckdb segment `{}`", pending_path.display())
     })?;
     let copy_usage_events_sql = compact_copy_usage_events_sql(&pending_event_columns);
-    let copy_usage_event_details_sql =
-        compact_copy_usage_event_details_sql(&pending_event_columns, pending_has_details_table);
-    let mut compact_sql_parts =
-        vec![copy_usage_events_sql.as_str(), copy_usage_event_details_sql.as_str()];
+    let mut compact_sql_parts = vec![copy_usage_events_sql.as_str()];
     if pending_has_hourly_rollups {
         compact_sql_parts.push(COMPACT_COPY_USAGE_ROLLUPS_HOURLY_SQL);
     }
@@ -1954,6 +2027,44 @@ fn validate_compacted_segment_matches_source(
         ));
     }
     Ok(compacted_stats)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn collect_usage_event_detail_rows_from_conn(
+    conn: &duckdb::Connection,
+) -> anyhow::Result<Vec<(UsageEvent, UsageEventDetailRow)>> {
+    let columns = duckdb_table_columns(conn, "usage_events")?;
+    let detail_table_exists = duckdb_relation_exists(conn, "usage_event_details");
+    let select = usage_event_detail_select_exprs(&columns, detail_table_exists).join(",\n        ");
+    let from_sql = if detail_table_exists {
+        "FROM usage_events e
+    LEFT JOIN usage_event_details d ON d.event_id = e.event_id"
+    } else {
+        "FROM usage_events e"
+    };
+    let sql = format!("SELECT {select}\n    {from_sql}");
+    let mut stmt = conn
+        .prepare(&sql)
+        .context("prepare usage detail extraction query")?;
+    let mut rows = stmt
+        .query([])
+        .context("query usage detail extraction rows")?;
+    let mut result = Vec::new();
+    while let Some(row) = rows.next().context("read usage detail extraction row")? {
+        let event =
+            decode_usage_event_detail_row(row).context("decode usage detail extraction row")?;
+        let detail_row = UsageEventDetailRow {
+            event_id: event.event_id.clone(),
+            request_headers_json: event.request_headers_json.clone(),
+            routing_diagnostics_json: event.routing_diagnostics_json.clone(),
+            last_message_content: event.last_message_content.clone(),
+            client_request_body_json: event.client_request_body_json.clone(),
+            upstream_request_body_json: event.upstream_request_body_json.clone(),
+            full_request_json: event.full_request_json.clone(),
+        };
+        result.push((event, detail_row));
+    }
+    Ok(result)
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -2188,28 +2299,86 @@ fn archived_key_usage_rollups(
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn append_usage_events_to_tiered(
+async fn append_usage_events_to_tiered(
     config: &TieredDuckDbUsageConfig,
     state: &Mutex<TieredDuckDbUsageState>,
     connection_config: &SharedDuckDbUsageConnectionConfig,
     rows: &[UsageEventRow],
 ) -> anyhow::Result<()> {
     let connection_config_snapshot = connection_config_snapshot(connection_config);
+    let mut writer = {
+        let mut state = state
+            .lock()
+            .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
+        if state.active_has_rows
+            && active_segment_disk_bytes(&state.active_path) >= config.rollover_bytes.max(1)
+        {
+            rollover_active_segment(config, &mut state, connection_config_snapshot)?;
+        }
+        let should_reopen = state
+            .active_writer
+            .as_ref()
+            .map(|writer| writer.connection_config != connection_config_snapshot)
+            .unwrap_or(true);
+        if should_reopen {
+            state.active_writer = Some(PersistentUsageWriter::open(
+                &state.active_path,
+                connection_config_snapshot,
+                state.detail_object_store.clone(),
+            )?);
+        }
+        state
+            .active_writer
+            .take()
+            .ok_or_else(|| anyhow!("tiered active writer missing after initialization"))?
+    };
+    writer.writer.insert_usage_events(rows).await?;
     let mut state = state
         .lock()
         .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
-    if state.active_has_rows
-        && active_segment_disk_bytes(&state.active_path) >= config.rollover_bytes.max(1)
-    {
-        rollover_active_segment(config, &mut state, connection_config_snapshot)?;
-    }
-    let writer = ensure_active_tiered_writer(&mut state, connection_config_snapshot)?;
-    writer.writer.insert_usage_events(rows)?;
     state.active_has_rows = true;
+    state.active_writer = Some(writer);
     if active_segment_disk_bytes(&state.active_path) >= config.rollover_bytes.max(1) {
         rollover_active_segment(config, &mut state, connection_config_snapshot)?;
     }
     Ok(())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+async fn publish_pending_segment_details_if_configured(
+    config: &TieredDuckDbUsageConfig,
+    pending_path: &Path,
+) -> anyhow::Result<()> {
+    let Some(detail_store) = config
+        .details_object_store_url
+        .as_deref()
+        .map(UsageEventDetailObjectStore::from_url)
+        .transpose()?
+        .flatten()
+    else {
+        return Ok(());
+    };
+    let conn = DuckDbUsageRepository::open_read_only_conn(pending_path)?;
+    let detail_rows = collect_usage_event_detail_rows_from_conn(&conn)?;
+    if detail_rows.is_empty() {
+        return Ok(());
+    }
+    let filtered = detail_rows
+        .into_iter()
+        .filter(|(_, detail)| detail.has_meaningful_payloads())
+        .collect::<Vec<_>>();
+    if filtered.is_empty() {
+        return Ok(());
+    }
+    let row_lookup = filtered
+        .iter()
+        .map(|(event, _)| (event.event_id.clone(), UsageEventRow::from_usage_event(event)))
+        .collect::<BTreeMap<_, _>>();
+    let details = filtered
+        .into_iter()
+        .map(|(_, detail)| detail)
+        .collect::<Vec<_>>();
+    detail_store.put_rows(&details, &row_lookup).await
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -2240,15 +2409,6 @@ fn duckdb_wal_path(path: &Path) -> PathBuf {
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn details_sqlite_path_for_duckdb(path: &Path) -> PathBuf {
-    let stem = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("usage");
-    path.with_file_name(format!("{stem}.{DETAILS_SQLITE_FILE_NAME}"))
-}
-
-#[cfg(feature = "duckdb-runtime")]
 fn rollover_active_segment(
     config: &TieredDuckDbUsageConfig,
     state: &mut TieredDuckDbUsageState,
@@ -2259,8 +2419,6 @@ fn rollover_active_segment(
     let sequence = parse_segment_sequence(&state.active_path).unwrap_or(state.next_sequence);
     let segment_id = format!("usage-{}-{sequence:012}", now_ms());
     let pending_path = tiered_pending_dir(config).join(format!("{segment_id}.duckdb"));
-    let pending_detail_path =
-        tiered_pending_dir(config).join(format!("{segment_id}.details.sqlite3"));
     fs::rename(&state.active_path, &pending_path).with_context(|| {
         format!(
             "failed to move active duckdb segment `{}` to pending `{}`",
@@ -2268,16 +2426,6 @@ fn rollover_active_segment(
             pending_path.display()
         )
     })?;
-    let active_detail_path = details_sqlite_path_for_duckdb(&state.active_path);
-    if active_detail_path.exists() {
-        fs::rename(&active_detail_path, &pending_detail_path).with_context(|| {
-            format!(
-                "failed to move active usage-event-details sqlite `{}` to pending `{}`",
-                active_detail_path.display(),
-                pending_detail_path.display()
-            )
-        })?;
-    }
     let new_active_path = active_segment_path(config, state.next_sequence);
     state.next_sequence = state.next_sequence.saturating_add(1);
     initialize_duckdb_target_path(&new_active_path)?;
@@ -2315,32 +2463,12 @@ fn ensure_single_writer(
         .map(|writer| writer.connection_config != connection_config)
         .unwrap_or(true);
     if should_reopen {
-        state.writer = Some(PersistentUsageWriter::open(&state.path, connection_config)?);
+        state.writer = Some(PersistentUsageWriter::open(&state.path, connection_config, None)?);
     }
     state
         .writer
         .as_mut()
         .ok_or_else(|| anyhow!("single usage writer missing after initialization"))
-}
-
-#[cfg(feature = "duckdb-runtime")]
-fn ensure_active_tiered_writer(
-    state: &mut TieredDuckDbUsageState,
-    connection_config: DuckDbUsageConnectionConfig,
-) -> anyhow::Result<&mut PersistentUsageWriter> {
-    let should_reopen = state
-        .active_writer
-        .as_ref()
-        .map(|writer| writer.connection_config != connection_config)
-        .unwrap_or(true);
-    if should_reopen {
-        state.active_writer =
-            Some(PersistentUsageWriter::open(&state.active_path, connection_config)?);
-    }
-    state
-        .active_writer
-        .as_mut()
-        .ok_or_else(|| anyhow!("tiered active writer missing after initialization"))
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -2363,28 +2491,36 @@ impl UsageEventSink for DuckDbUsageRepository {
             .iter()
             .map(UsageEventRow::from_usage_event)
             .collect::<Vec<_>>();
-        task::spawn_blocking(move || match inner.as_ref() {
+        match inner.as_ref() {
             DuckDbUsageRepositoryInner::Single {
-                state,
-                connection_config,
+                ..
             } => {
-                let mut state = state
-                    .lock()
-                    .map_err(|_| anyhow!("single duckdb state lock poisoned"))?;
-                let writer = ensure_single_writer(
-                    &mut state,
-                    connection_config_snapshot(connection_config),
-                )?;
-                writer.writer.insert_usage_events(&rows)
+                let inner = Arc::clone(&inner);
+                task::spawn_blocking(move || match inner.as_ref() {
+                    DuckDbUsageRepositoryInner::Single {
+                        state,
+                        connection_config,
+                    } => {
+                        let mut state = state
+                            .lock()
+                            .map_err(|_| anyhow!("single duckdb state lock poisoned"))?;
+                        let writer = ensure_single_writer(
+                            &mut state,
+                            connection_config_snapshot(connection_config),
+                        )?;
+                        writer.writer.summary.insert_usage_events(&rows)
+                    },
+                    _ => unreachable!("single branch expected"),
+                })
+                .await
+                .context("duckdb usage insert task failed")?
             },
             DuckDbUsageRepositoryInner::Tiered {
                 config,
                 state,
                 connection_config,
-            } => append_usage_events_to_tiered(config, state, connection_config, &rows),
-        })
-        .await
-        .context("duckdb usage insert task failed")?
+            } => append_usage_events_to_tiered(config, state, connection_config, &rows).await,
+        }
     }
 }
 
@@ -2418,26 +2554,34 @@ impl UsageAnalyticsStore for DuckDbUsageRepository {
     async fn get_usage_event(&self, event_id: &str) -> anyhow::Result<Option<UsageEvent>> {
         let inner = Arc::clone(&self.inner);
         let event_id = event_id.to_string();
-        task::spawn_blocking(move || match inner.as_ref() {
+        match inner.as_ref() {
             DuckDbUsageRepositoryInner::Single {
-                state, ..
+                ..
             } => {
-                let path = {
-                    let state = state
-                        .lock()
-                        .map_err(|_| anyhow!("single duckdb state lock poisoned"))?;
-                    state.path.clone()
-                };
-                get_usage_event_from_path(&path, &event_id)
+                let inner = Arc::clone(&inner);
+                task::spawn_blocking(move || match inner.as_ref() {
+                    DuckDbUsageRepositoryInner::Single {
+                        state, ..
+                    } => {
+                        let path = {
+                            let state = state
+                                .lock()
+                                .map_err(|_| anyhow!("single duckdb state lock poisoned"))?;
+                            state.path.clone()
+                        };
+                        get_usage_event_from_path(&path, &event_id)
+                    },
+                    _ => unreachable!("single branch expected"),
+                })
+                .await
+                .context("duckdb usage event detail task failed")?
             },
             DuckDbUsageRepositoryInner::Tiered {
                 config,
                 state,
                 ..
-            } => get_usage_event_from_tiered(config, state, &event_id),
-        })
-        .await
-        .context("duckdb usage event detail task failed")?
+            } => get_usage_event_from_tiered(config, state, &event_id).await,
+        }
     }
 
     async fn usage_chart_points(
@@ -2858,39 +3002,46 @@ fn get_usage_event_from_active_paths(
     event_id: &str,
 ) -> anyhow::Result<Option<UsageEvent>> {
     let conn = DuckDbUsageRepository::open_read_only_conn(path)?;
-    let mut event = match get_usage_event_from_conn(&conn, event_id)? {
+    let event = match get_usage_event_from_conn(&conn, event_id)? {
         Some(event) => event,
         None => return Ok(None),
     };
-    let detail_path = details_sqlite_path_for_duckdb(path);
-    if detail_path.exists() {
-        if let Some(detail) =
-            UsageEventDetailStore::open(&detail_path)?.get_usage_event_detail(event_id)?
-        {
-            merge_usage_event_detail_payloads(&mut event, &detail);
-        }
-    }
     Ok(Some(event))
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn get_usage_event_from_tiered(
+async fn get_usage_event_from_tiered(
     config: &TieredDuckDbUsageConfig,
     state: &Mutex<TieredDuckDbUsageState>,
     event_id: &str,
 ) -> anyhow::Result<Option<UsageEvent>> {
-    {
+    let (detail_object_store, active_path) = {
         let state = state
             .lock()
             .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
-        if let Some(event) = get_usage_event_from_active_paths(&state.active_path, event_id)? {
-            return Ok(Some(event));
+        (state.detail_object_store.clone(), state.active_path.clone())
+    };
+    if let Some(mut event) = get_usage_event_from_active_paths(&active_path, event_id)? {
+        if let Some(detail_store) = detail_object_store.as_ref() {
+            if let Some(detail) = detail_store.get_row_for_event(&event).await? {
+                merge_usage_event_detail_payloads(&mut event, &detail);
+            }
         }
+        return Ok(Some(event));
     }
     let Some(segment) = locate_archived_segment(config, event_id)? else {
         return Ok(None);
     };
-    get_usage_event_from_archived_paths(&segment.archive_path, event_id)
+    let mut event = match get_usage_event_from_archived_paths(&segment.archive_path, event_id)? {
+        Some(event) => event,
+        None => return Ok(None),
+    };
+    if let Some(detail_store) = detail_object_store.as_ref() {
+        if let Some(detail) = detail_store.get_row_for_event(&event).await? {
+            merge_usage_event_detail_payloads(&mut event, &detail);
+        }
+    }
+    Ok(Some(event))
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -2899,23 +3050,10 @@ fn get_usage_event_from_archived_paths(
     event_id: &str,
 ) -> anyhow::Result<Option<UsageEvent>> {
     let conn = DuckDbUsageRepository::open_read_only_conn(path)?;
-    let mut event = match get_usage_event_from_conn(&conn, event_id)? {
+    let event = match get_usage_event_from_conn(&conn, event_id)? {
         Some(event) => event,
         None => return Ok(None),
     };
-    let detail_path = path.with_file_name(format!(
-        "{}.details.sqlite3",
-        path.file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("usage")
-    ));
-    if detail_path.exists() {
-        if let Some(detail) =
-            UsageEventDetailStore::open(&detail_path)?.get_usage_event_detail(event_id)?
-        {
-            merge_usage_event_detail_payloads(&mut event, &detail);
-        }
-    }
     Ok(Some(event))
 }
 
@@ -3280,6 +3418,15 @@ mod tests {
         assert_eq!(actual.client_request_body_json, expected.client_request_body_json);
         assert_eq!(actual.upstream_request_body_json, expected.upstream_request_body_json);
         assert_eq!(actual.full_request_json, expected.full_request_json);
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    fn details_store_url(root: &std::path::Path) -> String {
+        let path = root.join("usage-details");
+        let url = url::Url::from_directory_path(&path)
+            .expect("usage details directory url")
+            .to_string();
+        url.trim_end_matches('/').to_string()
     }
 
     #[cfg(feature = "duckdb-runtime")]
@@ -3664,13 +3811,26 @@ mod tests {
             .join(format!("llm-access-duckdb-test-{}-detail-split", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create duckdb test directory");
-        let db_path = root.join("usage.duckdb");
-        let repo = super::DuckDbUsageRepository::open_path(&db_path).expect("open duckdb usage db");
+        let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            catalog_dir: root.join("catalog"),
+            rollover_bytes: u64::MAX,
+            details_object_store_url: Some(details_store_url(&root)),
+        })
+        .expect("open tiered duckdb usage db");
         let event = test_usage_event();
 
         repo.append_usage_event(&event)
             .await
             .expect("append duckdb usage event");
+
+        let db_path = match repo.inner.as_ref() {
+            super::DuckDbUsageRepositoryInner::Tiered {
+                state, ..
+            } => state.lock().expect("lock tiered state").active_path.clone(),
+            _ => panic!("expected tiered repository"),
+        };
 
         let conn =
             super::DuckDbUsageRepository::open_read_only_conn(&db_path).expect("open read-only db");
@@ -3698,32 +3858,6 @@ mod tests {
         assert_eq!(fact_row.3, None);
         assert_eq!(fact_row.4, None);
         assert_eq!(fact_row.5, None);
-
-        let detail_store =
-            super::UsageEventDetailStore::open(&super::details_sqlite_path_for_duckdb(&db_path))
-                .expect("open detail sqlite");
-        let detail_row = detail_store
-            .get_usage_event_detail(&event.event_id)
-            .expect("query detail sqlite")
-            .expect("detail row exists");
-        assert_eq!(detail_row.request_headers_json, event.request_headers_json);
-        assert_eq!(
-            detail_row.routing_diagnostics_json.as_deref(),
-            event.routing_diagnostics_json.as_deref()
-        );
-        assert_eq!(
-            detail_row.last_message_content.as_deref(),
-            event.last_message_content.as_deref()
-        );
-        assert_eq!(
-            detail_row.client_request_body_json.as_deref(),
-            event.client_request_body_json.as_deref()
-        );
-        assert_eq!(
-            detail_row.upstream_request_body_json.as_deref(),
-            event.upstream_request_body_json.as_deref()
-        );
-        assert_eq!(detail_row.full_request_json.as_deref(), event.full_request_json.as_deref());
 
         let detail = repo
             .get_usage_event(&event.event_id)
@@ -3952,6 +4086,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
+            details_object_store_url: Some(details_store_url(&root)),
         })
         .expect("open tiered duckdb usage db");
         let mut first = test_usage_event();
@@ -4011,6 +4146,7 @@ mod tests {
             .expect("get archived tiered usage event")
             .expect("archived tiered event exists");
         assert_usage_event_round_trips(&archived_detail, &first);
+        assert_usage_event_detail_payloads(&archived_detail, &first);
 
         std::fs::remove_dir_all(&root).expect("cleanup tiered duckdb test directory");
     }
@@ -4027,6 +4163,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
+            details_object_store_url: Some(details_store_url(&root)),
         };
         std::fs::create_dir_all(&config.active_dir).expect("create active dir");
         super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
@@ -4084,6 +4221,60 @@ mod tests {
 
     #[cfg(feature = "duckdb-runtime")]
     #[tokio::test]
+    async fn duckdb_tiered_repository_reads_legacy_embedded_detail_rows_without_object_store() {
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-duckdb-test-{}-legacy-embedded-detail", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("archive")).expect("create archive dir");
+        let config = super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            catalog_dir: root.join("catalog"),
+            rollover_bytes: 1,
+            details_object_store_url: None,
+        };
+        std::fs::create_dir_all(&config.active_dir).expect("create active dir");
+        super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
+        let archive_path = config.archive_dir.join("usage-legacy-detail-000001.duckdb");
+        create_legacy_usage_archive_without_stream_columns(&archive_path);
+        let stats = super::collect_segment_stats(&archive_path).expect("collect legacy stats");
+        let size_bytes = std::fs::metadata(&archive_path)
+            .expect("legacy archive metadata")
+            .len();
+        super::publish_segment_catalog(
+            &config,
+            "usage-legacy-detail-000001",
+            &archive_path,
+            &stats,
+            size_bytes,
+        )
+        .expect("publish legacy catalog");
+
+        let repo =
+            super::DuckDbUsageRepository::open_tiered(config).expect("open tiered duckdb usage db");
+        let detail = repo
+            .get_usage_event("legacy-archive-event")
+            .await
+            .expect("get legacy archive detail")
+            .expect("legacy archive event exists");
+        assert_eq!(detail.request_headers_json, r#"{"host":["example.test"]}"#);
+        assert_eq!(detail.routing_diagnostics_json.as_deref(), Some(r#"{"route":"legacy"}"#));
+        assert_eq!(detail.last_message_content.as_deref(), Some("hello"));
+        assert_eq!(
+            detail.client_request_body_json.as_deref(),
+            Some(r#"{"model":"claude-sonnet-4-5"}"#)
+        );
+        assert_eq!(
+            detail.upstream_request_body_json.as_deref(),
+            Some(r#"{"conversationState":{}}"#)
+        );
+        assert_eq!(detail.full_request_json.as_deref(), Some(r#"{"model":"claude-sonnet-4-5"}"#));
+
+        std::fs::remove_dir_all(&root).expect("cleanup legacy embedded detail test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
     async fn duckdb_tiered_repository_skips_nonmatching_archives_before_partial_time_counts() {
         let root = std::env::temp_dir().join(format!(
             "llm-access-duckdb-test-{}-skip-nonmatching-archives",
@@ -4096,6 +4287,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
+            details_object_store_url: None,
         };
         std::fs::create_dir_all(&config.active_dir).expect("create active dir");
         super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
@@ -4178,6 +4370,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
+            details_object_store_url: None,
         })
         .expect("open tiered duckdb usage db");
 
@@ -4236,6 +4429,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
+            details_object_store_url: None,
         };
         let repo = super::DuckDbUsageRepository::open_tiered(config.clone())
             .expect("open tiered duckdb usage db");
@@ -4304,6 +4498,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
+            details_object_store_url: None,
         })
         .expect("open tiered duckdb usage db");
 
@@ -4373,6 +4568,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
+            details_object_store_url: None,
         })
         .expect("open tiered duckdb usage db");
 
@@ -4425,8 +4621,8 @@ mod tests {
     }
 
     #[cfg(feature = "duckdb-runtime")]
-    #[test]
-    fn duckdb_tiered_publish_rewrites_segment_with_current_schema() {
+    #[tokio::test]
+    async fn duckdb_tiered_publish_rewrites_segment_with_current_schema() {
         let root = std::env::temp_dir()
             .join(format!("llm-access-duckdb-test-{}-compact-publish", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -4436,6 +4632,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
+            details_object_store_url: None,
         };
         super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
 
@@ -4463,12 +4660,13 @@ mod tests {
             .expect("create legacy source index");
         }
 
-        super::publish_pending_segment(
+        super::publish_pending_segment_async(
             &config,
             &pending_path,
             "usage-compact-test-000001",
             super::DuckDbUsageConnectionConfig::default(),
         )
+        .await
         .expect("publish compacted segment");
 
         let archive_path = config.archive_dir.join("usage-compact-test-000001.duckdb");
@@ -4492,12 +4690,13 @@ mod tests {
             super::compacting_segment_path(&config, "usage-compact-test-000001");
         std::fs::write(&stale_compact_path, b"stale compact retry")
             .expect("write stale compact retry file");
-        super::publish_pending_segment(
+        super::publish_pending_segment_async(
             &config,
             &pending_path,
             "usage-compact-test-000001",
             super::DuckDbUsageConnectionConfig::default(),
         )
+        .await
         .expect("published segment finalization is idempotent");
         assert!(
             !stale_compact_path.exists(),
@@ -4528,8 +4727,8 @@ mod tests {
     }
 
     #[cfg(feature = "duckdb-runtime")]
-    #[test]
-    fn duckdb_tiered_publish_handles_reordered_pending_usage_event_columns() {
+    #[tokio::test]
+    async fn duckdb_tiered_publish_handles_reordered_pending_usage_event_columns() {
         let root = std::env::temp_dir()
             .join(format!("llm-access-duckdb-test-{}-compact-reordered", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -4539,6 +4738,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
+            details_object_store_url: None,
         };
         super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
 
@@ -4583,12 +4783,13 @@ mod tests {
             .expect("reorder pending source usage_events columns");
         }
 
-        super::publish_pending_segment(
+        super::publish_pending_segment_async(
             &config,
             &pending_path,
             "usage-reordered-test-000001",
             super::DuckDbUsageConnectionConfig::default(),
         )
+        .await
         .expect("publish compacted segment with reordered usage_events");
 
         let archive_path = config
@@ -4610,8 +4811,8 @@ mod tests {
     }
 
     #[cfg(feature = "duckdb-runtime")]
-    #[test]
-    fn duckdb_tiered_publish_backfills_details_from_legacy_wide_pending_segment() {
+    #[tokio::test]
+    async fn duckdb_tiered_publish_backfills_details_from_legacy_wide_pending_segment() {
         let root = std::env::temp_dir().join(format!(
             "llm-access-duckdb-test-{}-legacy-pending-detail-backfill",
             std::process::id()
@@ -4623,18 +4824,20 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
+            details_object_store_url: Some(details_store_url(&root)),
         };
         super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
 
         let pending_path = root.join("pending-legacy-wide.duckdb");
         create_legacy_usage_archive_without_stream_columns(&pending_path);
 
-        super::publish_pending_segment(
+        super::publish_pending_segment_async(
             &config,
             &pending_path,
             "usage-legacy-pending-000001",
             super::DuckDbUsageConnectionConfig::default(),
         )
+        .await
         .expect("publish compacted legacy pending segment");
 
         let archive_path = config
@@ -4667,30 +4870,25 @@ mod tests {
         assert_eq!(fact_row.4, None);
         assert_eq!(fact_row.5, None);
 
-        let detail_row = archived
-            .query_row(
-                "SELECT request_headers_json, routing_diagnostics_json, last_message_content,
-                        client_request_body_json, upstream_request_body_json, full_request_json
-                 FROM usage_event_details WHERE event_id = 'legacy-archive-event'",
-                [],
-                |row| {
-                    Ok((
-                        row.get::<_, Option<String>>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                        row.get::<_, Option<String>>(5)?,
-                    ))
-                },
-            )
-            .expect("read archived detail row");
-        assert_eq!(detail_row.0.as_deref(), Some(r#"{"host":["example.test"]}"#));
-        assert_eq!(detail_row.1.as_deref(), Some(r#"{"route":"legacy"}"#));
-        assert_eq!(detail_row.2.as_deref(), Some("hello"));
-        assert_eq!(detail_row.3.as_deref(), Some(r#"{"model":"claude-sonnet-4-5"}"#));
-        assert_eq!(detail_row.4.as_deref(), Some(r#"{"conversationState":{}}"#));
-        assert_eq!(detail_row.5.as_deref(), Some(r#"{"model":"claude-sonnet-4-5"}"#));
+        let repo = super::DuckDbUsageRepository::open_tiered(config.clone())
+            .expect("open tiered duckdb usage db");
+        let detail = repo
+            .get_usage_event("legacy-archive-event")
+            .await
+            .expect("get legacy event detail")
+            .expect("legacy event exists");
+        assert_eq!(detail.request_headers_json, r#"{"host":["example.test"]}"#);
+        assert_eq!(detail.routing_diagnostics_json.as_deref(), Some(r#"{"route":"legacy"}"#));
+        assert_eq!(detail.last_message_content.as_deref(), Some("hello"));
+        assert_eq!(
+            detail.client_request_body_json.as_deref(),
+            Some(r#"{"model":"claude-sonnet-4-5"}"#)
+        );
+        assert_eq!(
+            detail.upstream_request_body_json.as_deref(),
+            Some(r#"{"conversationState":{}}"#)
+        );
+        assert_eq!(detail.full_request_json.as_deref(), Some(r#"{"model":"claude-sonnet-4-5"}"#));
 
         std::fs::remove_dir_all(&root).expect("cleanup legacy pending compact test directory");
     }

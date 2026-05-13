@@ -67,6 +67,7 @@ fn run() -> anyhow::Result<()> {
                 archive_dir: tiered.archive_dir,
                 catalog_dir: tiered.catalog_dir,
                 rollover_bytes: tiered.rollover_bytes,
+                details_object_store_url: tiered.details_object_store_url,
             },
             connection_config,
         )?

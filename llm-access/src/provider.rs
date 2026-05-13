@@ -5658,6 +5658,7 @@ async fn record_codex_usage(
     usage: UsageBreakdown,
     meta: &ProviderUsageMetadata,
 ) -> anyhow::Result<()> {
+    let capture_request_details = !status.is_success();
     let event = UsageEvent {
         event_id: format!("llm-usage-{}", uuid::Uuid::new_v4()),
         created_at_ms: now_millis(),
@@ -5695,9 +5696,18 @@ async fn record_codex_usage(
         ip_region: meta.ip_region.clone(),
         request_headers_json: meta.request_headers_json.clone(),
         last_message_content: meta.last_message_content.clone(),
-        client_request_body_json: captured_body_json(&meta.client_request_body_json),
-        upstream_request_body_json: captured_body_json(&meta.upstream_request_body_json),
-        full_request_json: captured_body_json(&meta.full_request_json),
+        client_request_body_json: capture_request_details
+            .then(|| captured_body_json(&meta.client_request_body_json))
+            .flatten(),
+        upstream_request_body_json: capture_request_details
+            .then(|| captured_body_json(&meta.upstream_request_body_json))
+            .flatten(),
+        full_request_json: capture_request_details
+            .then(|| {
+                captured_body_json(&meta.full_request_json)
+                    .or_else(|| captured_body_json(&meta.client_request_body_json))
+            })
+            .flatten(),
         timing: meta.to_timing(),
         stream: meta.to_stream_details(),
     };
@@ -9641,6 +9651,9 @@ mod tests {
         assert_eq!(event.output_tokens, 3);
         assert_eq!(event.billable_tokens, 25);
         assert!(!event.usage_missing);
+        assert_eq!(event.client_request_body_json, None);
+        assert_eq!(event.upstream_request_body_json, None);
+        assert_eq!(event.full_request_json, None);
     }
 
     #[tokio::test]
