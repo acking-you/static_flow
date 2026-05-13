@@ -2573,6 +2573,108 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn router_patch_auto_refresh_disable_primes_codex_usage_immediately() {
+        let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("Codex upstream env lock");
+        let upstream_base = spawn_fake_codex_usage_upstream(true).await;
+        std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+        let (router, root) = persistent_test_router("codex-account-auto-refresh-disable").await;
+        let repo = llm_access_store::repository::SqliteControlRepository::open_path(
+            root.join("control/llm-access.sqlite3"),
+        )
+        .expect("open sqlite control repository");
+        repo.create_admin_codex_account(NewAdminCodexAccount {
+            name: "codex_short".to_string(),
+            account_id: Some("acct-short".to_string()),
+            auth_json: serde_json::json!({
+                "access_token": "short-lived-access-token",
+                "account_id": "acct-short"
+            })
+            .to_string(),
+            map_gpt53_codex_to_spark: false,
+            auto_refresh_enabled: true,
+            created_at_ms: 100,
+        })
+        .await
+        .expect("create codex account");
+        repo.save_codex_rate_limit_status(CodexRateLimitStatus {
+            status: "degraded".to_string(),
+            refresh_interval_seconds: 300,
+            last_checked_at: Some(200),
+            last_success_at: None,
+            source_url: "https://chatgpt.com/backend-api/wham/usage".to_string(),
+            error_message: Some(
+                "usage refresh degraded for 1 active account(s): codex_short: usage refresh \
+                 pending for standalone llm-access"
+                    .to_string(),
+            ),
+            accounts: vec![CodexPublicAccountStatus {
+                name: "codex_short".to_string(),
+                status: "active".to_string(),
+                plan_type: None,
+                primary_remaining_percent: None,
+                secondary_remaining_percent: None,
+                last_usage_checked_at: Some(200),
+                last_usage_success_at: None,
+                usage_error_message: Some(
+                    "usage refresh pending for standalone llm-access".to_string(),
+                ),
+            }],
+            buckets: Vec::new(),
+        })
+        .await
+        .expect("seed pending cached codex status");
+
+        let patch_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/admin/llm-gateway/accounts/codex_short")
+                    .header(header::HOST, "localhost")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"auto_refresh_enabled":false}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("patch response");
+        assert_eq!(patch_response.status(), StatusCode::OK);
+
+        let accounts_response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/llm-gateway/accounts")
+                    .header(header::HOST, "localhost")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("accounts response");
+
+        std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+        std::fs::remove_dir_all(&root).expect("cleanup state root");
+
+        assert_eq!(accounts_response.status(), StatusCode::OK);
+        let body = to_bytes(accounts_response.into_body(), usize::MAX)
+            .await
+            .expect("accounts body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("accounts json");
+        let account = value["accounts"]
+            .as_array()
+            .expect("accounts array")
+            .iter()
+            .find(|item| item["name"] == "codex_short")
+            .expect("account present");
+        assert_eq!(account["auto_refresh_enabled"], false);
+        assert_eq!(account["plan_type"], "Pro");
+        assert_eq!(account["primary_remaining_percent"], 75.0);
+        assert_eq!(account["secondary_remaining_percent"], 88.0);
+        assert!(account["last_usage_success_at"].is_number());
+        assert!(account["usage_error_message"].is_null());
+    }
+
+    #[tokio::test]
     async fn router_patches_admin_kiro_account_status_and_hides_disabled_route() {
         let (router, root) = persistent_test_router("kiro-account-disable").await;
         let repo = llm_access_store::repository::SqliteControlRepository::open_path(

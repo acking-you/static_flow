@@ -1532,7 +1532,7 @@ pub(crate) async fn patch_llm_gateway_account(
         Ok(patch) => patch,
         Err(response) => return response.into_response(),
     };
-    let refresh_public_status = patch.status.is_some();
+    let refresh_public_status = should_refresh_codex_public_status_after_patch(&patch);
     if let Some(Some(proxy_id)) = patch.proxy_config_id.as_ref() {
         let proxy = match state
             .admin_proxy_store
@@ -1555,20 +1555,14 @@ pub(crate) async fn patch_llm_gateway_account(
         .patch_admin_codex_account(&name, patch)
         .await
     {
-        Ok(Some(account)) => {
+        Ok(Some(mut account)) => {
             if refresh_public_status {
-                if let Err(err) = codex_status::prime_single_codex_account_status(
-                    &state.admin_config_store,
-                    &state.admin_codex_account_store,
-                    &state.provider_state.route_store(),
-                    &state.public_status_store,
-                    &account.name,
-                )
-                .await
+                if let Err(err) =
+                    refresh_codex_public_status_after_account_update(&state, &mut account).await
                 {
                     tracing::warn!(
                         account_name = %account.name,
-                        "failed to refresh Codex public status after account status update: {err:#}"
+                        "failed to refresh Codex public status after account update: {err:#}"
                     );
                 }
             }
@@ -1577,6 +1571,41 @@ pub(crate) async fn patch_llm_gateway_account(
         Ok(None) => not_found("LLM gateway account not found").into_response(),
         Err(_) => internal_error("Failed to update llm gateway account").into_response(),
     }
+}
+
+fn should_refresh_codex_public_status_after_patch(patch: &AdminCodexAccountPatch) -> bool {
+    patch.status.is_some()
+        || patch.auto_refresh_enabled.is_some()
+        || patch.proxy_mode.is_some()
+        || patch.proxy_config_id.is_some()
+}
+
+async fn refresh_codex_public_status_after_account_update(
+    state: &HttpState,
+    account: &mut core_store::AdminCodexAccount,
+) -> anyhow::Result<()> {
+    let route_store = state.provider_state.route_store();
+    let refreshed_status = if account.status == KEY_STATUS_ACTIVE && !account.auto_refresh_enabled {
+        codex_status::refresh_single_codex_account_usage_only(
+            &state.admin_config_store,
+            &state.admin_codex_account_store,
+            &route_store,
+            &state.public_status_store,
+            &account.name,
+        )
+        .await?
+    } else {
+        codex_status::prime_single_codex_account_status(
+            &state.admin_config_store,
+            &state.admin_codex_account_store,
+            &route_store,
+            &state.public_status_store,
+            &account.name,
+        )
+        .await?
+    };
+    apply_codex_public_status_to_admin_account(account, refreshed_status, None);
+    Ok(())
 }
 
 pub(crate) async fn delete_llm_gateway_account(
