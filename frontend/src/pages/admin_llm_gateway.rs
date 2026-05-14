@@ -2239,6 +2239,9 @@ pub fn admin_llm_gateway_page() -> Html {
     let kiro_proxy_binding_input = use_state(String::new);
     let saving_proxy_binding_provider = use_state(|| None::<String>);
     let migrating_legacy_kiro_proxy = use_state(|| false);
+    let proxy_config_search = use_state(String::new);
+    let proxy_config_active_query = use_state(String::new);
+    let proxy_config_show_active_only = use_state(|| false);
     let saving_runtime_config = use_state(|| false);
     // Group the create-key inputs into a single state. Saves juggling five
     // separate `use_state` clones across the form and the submit callback.
@@ -5292,6 +5295,51 @@ pub fn admin_llm_gateway_page() -> Html {
         })
     };
 
+    // ── Proxy config: filter ──
+    let proxy_query_lower = (*proxy_config_active_query).trim().to_lowercase();
+    let proxy_configs_filtered: Vec<&AdminUpstreamProxyConfigView> = proxy_configs
+        .iter()
+        .filter(|pc| {
+            proxy_query_lower.is_empty()
+                || pc.name.to_lowercase().contains(&proxy_query_lower)
+                || pc.proxy_url.to_lowercase().contains(&proxy_query_lower)
+                || pc.proxy_username.as_deref().unwrap_or("").to_lowercase().contains(&proxy_query_lower)
+                || pc.id.to_lowercase().contains(&proxy_query_lower)
+        })
+        .filter(|pc| !*proxy_config_show_active_only || pc.status.as_str() != "disabled")
+        .collect();
+    let on_proxy_search_submit = {
+        let proxy_config_search = proxy_config_search.clone();
+        let proxy_config_active_query = proxy_config_active_query.clone();
+        Callback::from(move |_: ()| {
+            proxy_config_active_query.set((*proxy_config_search).clone());
+        })
+    };
+    let on_proxy_search_input = {
+        let proxy_config_search = proxy_config_search.clone();
+        Callback::from(move |e: InputEvent| {
+            if let Some(target) = e.target_dyn_into::<HtmlInputElement>() {
+                proxy_config_search.set(target.value());
+            }
+        })
+    };
+    let on_proxy_search_keydown = {
+        let on_proxy_search_submit = on_proxy_search_submit.clone();
+        Callback::from(move |e: KeyboardEvent| {
+            if e.key() == "Enter" {
+                on_proxy_search_submit.emit(());
+            }
+        })
+    };
+    let on_proxy_search_clear = {
+        let proxy_config_search = proxy_config_search.clone();
+        let proxy_config_active_query = proxy_config_active_query.clone();
+        Callback::from(move |_: MouseEvent| {
+            proxy_config_search.set(String::new());
+            proxy_config_active_query.set(String::new());
+        })
+    };
+
     html! {
         <main class={classes!(
             "min-h-screen",
@@ -6469,16 +6517,74 @@ pub fn admin_llm_gateway_page() -> Html {
                                 </button>
                             </div>
                         </div>
-                        <div class={classes!("mt-5", "grid", "gap-4")}>
-                            if (*proxy_configs).is_empty() && !*loading {
+                        // Search & filter for proxy configs
+                        <div class={classes!("mt-4", "flex", "items-center", "gap-2")}>
+                            <div class={classes!("relative", "flex-1")}>
+                                <input
+                                    type="text"
+                                    class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "pr-16", "text-sm", "placeholder:text-[var(--muted)]")}
+                                    placeholder="搜索代理配置..."
+                                    value={(*proxy_config_search).clone()}
+                                    oninput={on_proxy_search_input.clone()}
+                                    onkeydown={on_proxy_search_keydown.clone()}
+                                />
+                                if !(*proxy_config_search).is_empty() {
+                                    <button
+                                        type="button"
+                                        class={classes!("absolute", "right-10", "top-1/2", "-translate-y-1/2", "text-[var(--muted)]", "hover:text-[var(--text)]", "text-sm", "px-1")}
+                                        onclick={on_proxy_search_clear.clone()}
+                                    >
+                                        { "✕" }
+                                    </button>
+                                }
+                                <button
+                                    type="button"
+                                    class={classes!("absolute", "right-2", "top-1/2", "-translate-y-1/2", "rounded", "bg-[var(--primary)]", "px-2", "py-0.5", "text-xs", "text-white")}
+                                    onclick={{
+                                        let on_proxy_search_submit = on_proxy_search_submit.clone();
+                                        Callback::from(move |_: MouseEvent| on_proxy_search_submit.emit(()))
+                                    }}
+                                >
+                                    { "搜索" }
+                                </button>
+                            </div>
+                            <button
+                                type="button"
+                                class={classes!(
+                                    "rounded-full", "px-3", "py-1.5", "text-xs", "font-semibold", "border", "transition-colors",
+                                    if *proxy_config_show_active_only {
+                                        "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-400/50"
+                                    } else {
+                                        "bg-[var(--surface)] text-[var(--muted)] border-[var(--border)] hover:text-[var(--text)]"
+                                    }
+                                )}
+                                onclick={{
+                                    let proxy_config_show_active_only = proxy_config_show_active_only.clone();
+                                    Callback::from(move |_| {
+                                        proxy_config_show_active_only.set(!*proxy_config_show_active_only);
+                                    })
+                                }}
+                            >
+                                { "Active" }
+                            </button>
+                        </div>
+                        <div class={classes!("mt-2", "text-xs", "text-[var(--muted)]")}>
+                            { format!("共 {} 个配置 (匹配 {})", proxy_configs.len(), proxy_configs_filtered.len()) }
+                        </div>
+                        <div class={classes!("mt-3", "grid", "gap-4")}>
+                            if proxy_configs_filtered.is_empty() {
                                 <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
-                                    { "当前还没有可复用的代理配置。" }
+                                    { if (*proxy_configs).is_empty() {
+                                        "当前还没有可复用的代理配置。"
+                                    } else {
+                                        "没有匹配的代理配置。尝试调整搜索条件或清除筛选。"
+                                    }}
                                 </div>
                             } else {
-                                { for proxy_configs.iter().map(|proxy_config| html! {
+                                { for proxy_configs_filtered.iter().map(|proxy_config| html! {
                                     <ProxyConfigEditorCard
                                         key={proxy_config.id.clone()}
-                                        proxy_config={proxy_config.clone()}
+                                        proxy_config={(*proxy_config).clone()}
                                         on_changed={reload.clone()}
                                         on_copy={on_copy.clone()}
                                         on_flash={flash.clone()}
