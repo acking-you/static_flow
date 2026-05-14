@@ -72,6 +72,14 @@ const TOKEN_REQUEST_PAGE_SIZE: usize = 20;
 const ACCOUNT_CONTRIBUTION_REQUEST_PAGE_SIZE: usize = 20;
 const SPONSOR_REQUEST_PAGE_SIZE: usize = 20;
 const ADMIN_CODEX_IMPORT_JOB_LIST_LIMIT: usize = 10;
+const ACCOUNT_PAGE_SIZE: usize = 8;
+const ACCOUNT_ACCENT_BORDERS: &[&str] = &[
+    "border-l-4 border-l-teal-500/70",
+    "border-l-4 border-l-violet-500/70",
+    "border-l-4 border-l-amber-500/70",
+    "border-l-4 border-l-sky-500/70",
+    "border-l-4 border-l-rose-500/70",
+];
 
 const TAB_OVERVIEW: &str = "overview";
 const TAB_KEYS: &str = "keys";
@@ -243,6 +251,75 @@ fn account_configured_proxy_label(account: &AccountSummaryView) -> String {
             })
             .unwrap_or_else(|| "configured: fixed".to_string()),
         _ => "configured: inherit provider".to_string(),
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum AccountSortMode {
+    None,
+    PrimaryAsc,
+    PrimaryDesc,
+    SecondaryAsc,
+    SecondaryDesc,
+}
+
+fn account_matches_filter(acc: &AccountSummaryView, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let q = query.to_lowercase();
+    acc.name.to_lowercase().contains(&q)
+        || acc.status.to_lowercase().contains(&q)
+        || acc.plan_type.as_deref().unwrap_or("").to_lowercase().contains(&q)
+        || acc.account_id.as_deref().unwrap_or("").to_lowercase().contains(&q)
+        || acc.route_weight_tier.to_lowercase().contains(&q)
+}
+
+fn account_is_unhealthy(acc: &AccountSummaryView) -> bool {
+    acc.status == "disabled"
+        || acc.auth_refresh_error_message.is_some()
+        || acc.usage_error_message.is_some()
+}
+
+fn account_primary_pct(acc: &AccountSummaryView) -> f64 {
+    acc.primary_remaining_percent.unwrap_or(100.0)
+}
+
+fn account_secondary_pct(acc: &AccountSummaryView) -> f64 {
+    acc.secondary_remaining_percent.unwrap_or(100.0)
+}
+
+fn sort_accounts(entries: &mut [&AccountSummaryView], mode: AccountSortMode) {
+    match mode {
+        AccountSortMode::None => {}
+        AccountSortMode::PrimaryAsc => {
+            entries.sort_by(|a, b| {
+                account_primary_pct(a)
+                    .partial_cmp(&account_primary_pct(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+        AccountSortMode::PrimaryDesc => {
+            entries.sort_by(|a, b| {
+                account_primary_pct(b)
+                    .partial_cmp(&account_primary_pct(a))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+        AccountSortMode::SecondaryAsc => {
+            entries.sort_by(|a, b| {
+                account_secondary_pct(a)
+                    .partial_cmp(&account_secondary_pct(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+        AccountSortMode::SecondaryDesc => {
+            entries.sort_by(|a, b| {
+                account_secondary_pct(b)
+                    .partial_cmp(&account_secondary_pct(a))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
     }
 }
 
@@ -2230,6 +2307,11 @@ pub fn admin_llm_gateway_page() -> Html {
     let account_request_max_inputs = use_state(BTreeMap::<String, String>::new);
     let account_request_min_inputs = use_state(BTreeMap::<String, String>::new);
     let show_import_form = use_state(|| false);
+    let account_search = use_state(String::new);
+    let account_active_query = use_state(String::new);
+    let account_sort_mode = use_state(|| AccountSortMode::None);
+    let account_show_unhealthy = use_state(|| false);
+    let account_page = use_state(|| 1_usize);
     let active_tab = use_state(|| TAB_OVERVIEW.to_string());
     let on_tab_click = {
         let active_tab = active_tab.clone();
@@ -5152,6 +5234,62 @@ pub fn admin_llm_gateway_page() -> Html {
         Callback::from(move |v: String| account_groups_search.set(v))
     };
 
+    // ── Account tab: filter / sort / paginate ──
+    let account_query_lower = (*account_active_query).trim().to_lowercase();
+    let mut account_filtered: Vec<&AccountSummaryView> = accounts
+        .iter()
+        .filter(|acc| account_matches_filter(acc, &account_query_lower))
+        .filter(|acc| !*account_show_unhealthy || account_is_unhealthy(acc))
+        .collect();
+    sort_accounts(&mut account_filtered, *account_sort_mode);
+    let account_total_pages = account_filtered.len().max(1).div_ceil(ACCOUNT_PAGE_SIZE.max(1));
+    let account_current_page = (*account_page).clamp(1, account_total_pages);
+    let account_page_entries: Vec<&AccountSummaryView> = account_filtered
+        .iter()
+        .skip((account_current_page - 1) * ACCOUNT_PAGE_SIZE)
+        .take(ACCOUNT_PAGE_SIZE)
+        .copied()
+        .collect();
+    let on_account_page_change = {
+        let account_page = account_page.clone();
+        Callback::from(move |p: usize| account_page.set(p))
+    };
+    let on_account_search_submit = {
+        let account_search = account_search.clone();
+        let account_active_query = account_active_query.clone();
+        let account_page = account_page.clone();
+        Callback::from(move |_: ()| {
+            account_active_query.set((*account_search).clone());
+            account_page.set(1);
+        })
+    };
+    let on_account_search_input = {
+        let account_search = account_search.clone();
+        Callback::from(move |e: InputEvent| {
+            if let Some(target) = e.target_dyn_into::<HtmlInputElement>() {
+                account_search.set(target.value());
+            }
+        })
+    };
+    let on_account_search_keydown = {
+        let on_account_search_submit = on_account_search_submit.clone();
+        Callback::from(move |e: KeyboardEvent| {
+            if e.key() == "Enter" {
+                on_account_search_submit.emit(());
+            }
+        })
+    };
+    let on_account_search_clear = {
+        let account_search = account_search.clone();
+        let account_active_query = account_active_query.clone();
+        let account_page = account_page.clone();
+        Callback::from(move |_: MouseEvent| {
+            account_search.set(String::new());
+            account_active_query.set(String::new());
+            account_page.set(1);
+        })
+    };
+
     html! {
         <main class={classes!(
             "min-h-screen",
@@ -6977,10 +7115,143 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
                     }
 
-                    // Account list
-                    if !accounts.is_empty() {
-                        <div class={classes!("mt-4", "space-y-2")}>
-                            { for accounts.iter().map(|acc| {
+                    // Account search + sort + filter toolbar
+                    <div class={classes!("mt-4", "space-y-4")}>
+                        // Search bar
+                        <div class={classes!("flex", "items-center", "gap-2")}>
+                            <input
+                                type="text"
+                                class={classes!("flex-1", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-sm", "placeholder:text-[var(--muted)]", "focus:outline-none", "focus:ring-2", "focus:ring-[var(--primary)]/40")}
+                                placeholder="搜索账号名称、状态、plan、ID、权重..."
+                                value={(*account_search).clone()}
+                                oninput={on_account_search_input.clone()}
+                                onkeydown={on_account_search_keydown.clone()}
+                            />
+                            if !(*account_search).is_empty() {
+                                <button
+                                    type="button"
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-sm", "text-[var(--muted)]", "hover:text-[var(--text)]", "transition-colors")}
+                                    onclick={on_account_search_clear.clone()}
+                                >
+                                    { "清除" }
+                                </button>
+                            }
+                            <button
+                                type="button"
+                                class={classes!("rounded-lg", "bg-[var(--primary)]", "px-4", "py-2", "text-sm", "font-medium", "text-white", "hover:opacity-90", "transition-opacity")}
+                                onclick={Callback::from({
+                                    let on_account_search_submit = on_account_search_submit.clone();
+                                    move |_| on_account_search_submit.emit(())
+                                })}
+                            >
+                                { "搜索" }
+                            </button>
+                        </div>
+                        // Sort & filter toolbar
+                        <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                            <button
+                                type="button"
+                                class={classes!(
+                                    "rounded-full", "px-3", "py-1.5", "text-xs", "font-semibold", "border", "transition-colors",
+                                    if *account_show_unhealthy {
+                                        "bg-red-500/15 text-red-700 dark:text-red-300 border-red-400/50"
+                                    } else {
+                                        "bg-[var(--surface)] text-[var(--muted)] border-[var(--border)] hover:text-[var(--text)]"
+                                    }
+                                )}
+                                onclick={{
+                                    let account_show_unhealthy = account_show_unhealthy.clone();
+                                    let account_page = account_page.clone();
+                                    Callback::from(move |_| {
+                                        account_show_unhealthy.set(!*account_show_unhealthy);
+                                        account_page.set(1);
+                                    })
+                                }}
+                            >
+                                { "异常" }
+                            </button>
+                            <span class={classes!("w-px", "h-5", "bg-[var(--border)]")} />
+                            <button
+                                type="button"
+                                class={classes!(
+                                    "rounded-full", "px-3", "py-1.5", "text-xs", "font-semibold", "border", "transition-colors",
+                                    if matches!(*account_sort_mode, AccountSortMode::PrimaryAsc | AccountSortMode::PrimaryDesc) {
+                                        "bg-teal-500/15 text-teal-700 dark:text-teal-300 border-teal-400/50"
+                                    } else {
+                                        "bg-[var(--surface)] text-[var(--muted)] border-[var(--border)] hover:text-[var(--text)]"
+                                    }
+                                )}
+                                onclick={{
+                                    let account_sort_mode = account_sort_mode.clone();
+                                    let account_page = account_page.clone();
+                                    Callback::from(move |_| {
+                                        let next = match *account_sort_mode {
+                                            AccountSortMode::PrimaryAsc => AccountSortMode::PrimaryDesc,
+                                            AccountSortMode::PrimaryDesc => AccountSortMode::None,
+                                            _ => AccountSortMode::PrimaryAsc,
+                                        };
+                                        account_sort_mode.set(next);
+                                        account_page.set(1);
+                                    })
+                                }}
+                            >
+                                { match *account_sort_mode {
+                                    AccountSortMode::PrimaryAsc => "5h ↑",
+                                    AccountSortMode::PrimaryDesc => "5h ↓",
+                                    _ => "5h",
+                                }}
+                            </button>
+                            <button
+                                type="button"
+                                class={classes!(
+                                    "rounded-full", "px-3", "py-1.5", "text-xs", "font-semibold", "border", "transition-colors",
+                                    if matches!(*account_sort_mode, AccountSortMode::SecondaryAsc | AccountSortMode::SecondaryDesc) {
+                                        "bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-400/50"
+                                    } else {
+                                        "bg-[var(--surface)] text-[var(--muted)] border-[var(--border)] hover:text-[var(--text)]"
+                                    }
+                                )}
+                                onclick={{
+                                    let account_sort_mode = account_sort_mode.clone();
+                                    let account_page = account_page.clone();
+                                    Callback::from(move |_| {
+                                        let next = match *account_sort_mode {
+                                            AccountSortMode::SecondaryAsc => AccountSortMode::SecondaryDesc,
+                                            AccountSortMode::SecondaryDesc => AccountSortMode::None,
+                                            _ => AccountSortMode::SecondaryAsc,
+                                        };
+                                        account_sort_mode.set(next);
+                                        account_page.set(1);
+                                    })
+                                }}
+                            >
+                                { match *account_sort_mode {
+                                    AccountSortMode::SecondaryAsc => "周限额 ↑",
+                                    AccountSortMode::SecondaryDesc => "周限额 ↓",
+                                    _ => "周限额",
+                                }}
+                            </button>
+                        </div>
+                        // Summary line
+                        <div class={classes!("flex", "items-center", "justify-between", "text-xs", "text-[var(--muted)]")}>
+                            <span>{ format!("共 {} 个账号 (匹配 {})", accounts.len(), account_filtered.len()) }</span>
+                            if account_total_pages > 1 {
+                                <span>{ format!("第 {} / {} 页", account_current_page, account_total_pages) }</span>
+                            }
+                        </div>
+                    </div>
+                    // Account card grid
+                    if account_page_entries.is_empty() {
+                        <div class={classes!("mt-4", "rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-sm", "text-[var(--muted)]")}>
+                            { if accounts.is_empty() {
+                                "当前还没有导入任何 Codex 账号。可以先导入账号，或者点击上方「刷新列表」确认后端是否已加载本地账号文件。"
+                            } else {
+                                "没有匹配的账号。尝试调整搜索条件或清除筛选。"
+                            }}
+                        </div>
+                    } else {
+                        <div class={classes!("mt-4", "grid", "gap-4", "sm:grid-cols-2")}>
+                            { for account_page_entries.iter().enumerate().map(|(idx, acc)| {
                                 let acc_name_for_toggle = acc.name.clone();
                                 let acc_name_for_auto_refresh_toggle = acc.name.clone();
                                 let acc_name_for_status_toggle = acc.name.clone();
@@ -7086,67 +7357,67 @@ pub fn admin_llm_gateway_page() -> Html {
                                 let show_spark_toggle = is_pro || spark_mapping_enabled;
                                 let account_busy =
                                     (*account_action_inflight).contains(&acc_name);
+                                let accent = ACCOUNT_ACCENT_BORDERS[idx % ACCOUNT_ACCENT_BORDERS.len()];
                                 html! {
-                                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "px-4", "py-3", "flex-wrap")}>
-                                        <div class={classes!("flex", "items-center", "gap-3")}>
-                                            <div class={key_status_badge(&acc_status)}>{ acc_status.clone() }</div>
-                                            <div>
-                                                <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                                                    <span class={classes!("font-bold")}>{ acc_name.clone() }</span>
-                                                    if let Some(ref plan_type) = acc_plan_type {
-                                                        <span class={classes!("rounded-full", "bg-sky-500/12", "px-2.5", "py-1", "text-xs", "font-semibold", "text-sky-700", "dark:text-sky-200")}>
-                                                            { plan_type.clone() }
-                                                        </span>
-                                                    }
-                                                    if let Some(ref aid) = acc_account_id {
-                                                        <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>{ aid.clone() }</span>
-                                                    }
-                                                </div>
-                                                <div class={classes!("mt-1", "text-xs", "font-mono", "text-[var(--muted)]")}>
-                                                    { configured_proxy_line.clone() }
-                                                </div>
-                                                <div class={classes!("mt-1", "text-xs", "font-mono", "text-[var(--muted)]")}>
+                                    <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "overflow-hidden")} style={format!("border-left: 3px solid {}", accent)}>
+                                        // Card header
+                                        <div class={classes!("px-4", "pt-3", "pb-2")}>
+                                            <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                                <div class={key_status_badge(&acc_status)}>{ acc_status.clone() }</div>
+                                                <span class={classes!("font-bold", "text-sm", "break-all")}>{ acc_name.clone() }</span>
+                                                if let Some(ref plan_type) = acc_plan_type {
+                                                    <span class={classes!("rounded-full", "bg-sky-500/12", "px-2.5", "py-0.5", "text-xs", "font-semibold", "text-sky-700", "dark:text-sky-200")}>
+                                                        { plan_type.clone() }
+                                                    </span>
+                                                }
+                                                if acc_status != "disabled" {
+                                                    <span class={classes!("ml-auto", "text-xs", "font-mono", "text-[var(--muted)]")}>
+                                                        { format!("5h {} · wk {}", primary_pct, secondary_pct) }
+                                                    </span>
+                                                }
+                                            </div>
+                                            // Info section
+                                            <div class={classes!("mt-2", "space-y-0.5", "text-xs", "font-mono", "text-[var(--muted)]")}>
+                                                if let Some(ref aid) = acc_account_id {
+                                                    <div class={classes!("break-all")}>{ format!("id: {}", aid) }</div>
+                                                }
+                                                <div>{ configured_proxy_line.clone() }</div>
+                                                <div>
                                                     { effective_proxy_line.clone() }
                                                     if let Some(proxy_name) = acc.effective_proxy_config_name.as_deref() {
                                                         { format!(" · {}", proxy_name) }
                                                     }
                                                 </div>
-                                                <div class={classes!("mt-1", "text-xs", "font-mono", "text-[var(--muted)]")}>
-                                                    { scheduler_line.clone() }
-                                                </div>
-                                                <div class={classes!("mt-1", "text-xs", "font-mono", "text-[var(--muted)]")}>
-                                                    { format!("route weight tier: {}", acc.route_weight_tier) }
-                                                </div>
-                                                <div class={classes!("mt-1", "text-xs", "font-mono", "text-[var(--muted)]", "flex", "gap-3", "flex-wrap")}>
+                                                <div>{ scheduler_line.clone() }</div>
+                                                <div>{ format!("route weight tier: {}", acc.route_weight_tier) }</div>
+                                                <div class={classes!("flex", "gap-3", "flex-wrap")}>
                                                     <span>{ if auto_refresh_enabled { "auto refresh on" } else { "auto refresh off" } }</span>
                                                     <span>{ format!("token refresh {}", last_refresh_line) }</span>
                                                     <span>{ access_token_expiry_line.clone() }</span>
+                                                </div>
+                                                <div class={classes!("flex", "gap-3", "flex-wrap")}>
                                                     <span>{ format!("usage checked {}", last_usage_checked_line) }</span>
                                                     <span>{ format!("usage success {}", last_usage_success_line) }</span>
                                                 </div>
-                                                if let Some(auth_error) = acc.auth_refresh_error_message.as_deref() {
-                                                    <div class={classes!("mt-2", "max-w-3xl", "text-xs", "leading-5", "text-amber-700", "dark:text-amber-300")}>
-                                                        { format!("auth refresh error: {}", auth_error) }
-                                                    </div>
-                                                }
-                                                if let Some(usage_error) = acc.usage_error_message.as_deref() {
-                                                    <div class={classes!("mt-2", "max-w-3xl", "text-xs", "leading-5", "text-amber-700", "dark:text-amber-300")}>
-                                                        { format!("usage refresh error: {}", usage_error) }
-                                                    </div>
-                                                }
                                             </div>
-                                        </div>
-                                        <div class={classes!("flex", "items-center", "gap-3", "flex-wrap", "justify-end")}>
-                                            if acc_status != "disabled" {
-                                                <span class={classes!("text-xs", "text-[var(--muted)]")}>
-                                                    { format!("5h {} / wk {}", primary_pct, secondary_pct) }
-                                                </span>
+                                            if let Some(auth_error) = acc.auth_refresh_error_message.as_deref() {
+                                                <div class={classes!("mt-2", "text-xs", "leading-5", "text-amber-700", "dark:text-amber-300", "break-all")}>
+                                                    { format!("auth refresh error: {}", auth_error) }
+                                                </div>
                                             }
+                                            if let Some(usage_error) = acc.usage_error_message.as_deref() {
+                                                <div class={classes!("mt-2", "text-xs", "leading-5", "text-amber-700", "dark:text-amber-300", "break-all")}>
+                                                    { format!("usage refresh error: {}", usage_error) }
+                                                </div>
+                                            }
+                                        </div>
+                                        // Controls section
+                                        <div class={classes!("border-t", "border-[var(--border)]", "px-4", "py-3")}>
                                             <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
                                                 <input
                                                     type="number"
-                                                    class={classes!("w-28", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2.5", "py-2", "text-xs")}
-                                                    placeholder="账号并发"
+                                                    class={classes!("w-24", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2", "py-1.5", "text-xs")}
+                                                    placeholder="并发"
                                                     value={selected_request_max_value.clone()}
                                                     oninput={{
                                                         let account_request_max_inputs = account_request_max_inputs.clone();
@@ -7161,8 +7432,8 @@ pub fn admin_llm_gateway_page() -> Html {
                                                 />
                                                 <input
                                                     type="number"
-                                                    class={classes!("w-32", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2.5", "py-2", "text-xs")}
-                                                    placeholder="账号间隔 ms"
+                                                    class={classes!("w-28", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2", "py-1.5", "text-xs")}
+                                                    placeholder="间隔 ms"
                                                     value={selected_request_min_value.clone()}
                                                     oninput={{
                                                         let account_request_min_inputs = account_request_min_inputs.clone();
@@ -7176,7 +7447,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     }}
                                                 />
                                                 <select
-                                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-xs")}
+                                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2", "py-1.5", "text-xs")}
                                                     value={selected_proxy_value.clone()}
                                                     onchange={{
                                                         let account_proxy_inputs = account_proxy_inputs.clone();
@@ -7189,19 +7460,19 @@ pub fn admin_llm_gateway_page() -> Html {
                                                         })
                                                     }}
                                                 >
-                                                    <option value="inherit" selected={selected_proxy_value == "inherit"}>{ "继承 Provider Proxy" }</option>
-                                                    <option value="direct" selected={selected_proxy_value == "direct"}>{ "Direct / 不走代理" }</option>
+                                                    <option value="inherit" selected={selected_proxy_value == "inherit"}>{ "继承 Proxy" }</option>
+                                                    <option value="direct" selected={selected_proxy_value == "direct"}>{ "Direct" }</option>
                                                     { for proxy_configs.iter().map(|proxy_config| {
                                                         let option_value = format!("fixed:{}", proxy_config.id);
                                                         html! {
                                                             <option value={option_value.clone()} selected={selected_proxy_value == option_value}>
-                                                                { format!("固定到 {} · {}", proxy_config.name, proxy_config.proxy_url) }
+                                                                { format!("{} · {}", proxy_config.name, proxy_config.proxy_url) }
                                                             </option>
                                                         }
                                                     }) }
                                                 </select>
                                                 <select
-                                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-xs")}
+                                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2", "py-1.5", "text-xs")}
                                                     value={selected_route_weight_tier.clone()}
                                                     onchange={{
                                                         let account_route_weight_tier_inputs = account_route_weight_tier_inputs.clone();
@@ -7214,48 +7485,46 @@ pub fn admin_llm_gateway_page() -> Html {
                                                         })
                                                     }}
                                                 >
-                                                    <option value="auto" selected={selected_route_weight_tier == "auto"}>{ "权重 Auto" }</option>
+                                                    <option value="auto" selected={selected_route_weight_tier == "auto"}>{ "Auto" }</option>
                                                     <option value="free" selected={selected_route_weight_tier == "free"}>{ "Free" }</option>
                                                     <option value="plus" selected={selected_route_weight_tier == "plus"}>{ "Plus" }</option>
-                                                    <option value="pro5x" selected={selected_route_weight_tier == "pro5x"}>{ "Pro 5x" }</option>
-                                                    <option value="pro20x" selected={selected_route_weight_tier == "pro20x"}>{ "Pro 20x" }</option>
+                                                    <option value="pro5x" selected={selected_route_weight_tier == "pro5x"}>{ "Pro5x" }</option>
+                                                    <option value="pro20x" selected={selected_route_weight_tier == "pro20x"}>{ "Pro20x" }</option>
                                                 </select>
                                                 <button
                                                     class={classes!("btn-terminal")}
                                                     onclick={Callback::from(move |_| on_save_account_settings.emit(acc_name_for_settings_save.clone()))}
                                                     disabled={account_busy}
                                                 >
-                                                    { if account_busy { "处理中..." } else { "保存设置" } }
+                                                    { if account_busy { "..." } else { "保存" } }
                                                 </button>
+                                            </div>
+                                            <div class={classes!("mt-2", "flex", "items-center", "gap-2", "flex-wrap")}>
                                                 <button
                                                     class={classes!("btn-terminal")}
                                                     onclick={Callback::from(move |_| on_refresh_account_auth.emit(acc_name_for_auth_refresh.clone()))}
                                                     disabled={account_busy}
                                                 >
-                                                    { if account_busy { "处理中..." } else { "刷新 Token" } }
+                                                    { if account_busy { "..." } else { "刷新 Token" } }
                                                 </button>
                                                 <button
                                                     class={classes!("btn-terminal")}
                                                     onclick={Callback::from(move |_| on_refresh_account_usage.emit(acc_name_for_usage_refresh.clone()))}
                                                     disabled={account_busy}
                                                 >
-                                                    { if account_busy { "处理中..." } else { "刷新 Usage" } }
+                                                    { if account_busy { "..." } else { "刷新 Usage" } }
                                                 </button>
                                                 <button
                                                     class={classes!("btn-terminal")}
                                                     onclick={Callback::from(move |_| on_probe_account_models.emit(acc_name_for_models_probe.clone()))}
                                                     disabled={account_busy}
                                                 >
-                                                    { if account_busy { "处理中..." } else { "测试 Models" } }
+                                                    { if account_busy { "..." } else { "测试 Models" } }
                                                 </button>
                                                 <button
                                                     class={classes!(
                                                         "btn-terminal",
-                                                        if auto_refresh_enabled {
-                                                            "btn-terminal-primary"
-                                                        } else {
-                                                            ""
-                                                        }
+                                                        if auto_refresh_enabled { "btn-terminal-primary" } else { "" }
                                                     )}
                                                     onclick={Callback::from(move |_| {
                                                         on_toggle_account_auto_refresh.emit((
@@ -7265,15 +7534,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     })}
                                                     disabled={account_busy}
                                                 >
-                                                    {
-                                                        if account_busy {
-                                                            "切换中..."
-                                                        } else if auto_refresh_enabled {
-                                                            "Auto Refresh 已开"
-                                                        } else {
-                                                            "Auto Refresh 已关"
-                                                        }
-                                                    }
+                                                    { if account_busy { "..." } else if auto_refresh_enabled { "Auto ✓" } else { "Auto ✗" } }
                                                 </button>
                                                 <button
                                                     class={classes!("btn-terminal")}
@@ -7285,61 +7546,44 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     })}
                                                     disabled={account_busy}
                                                 >
-                                                    {
-                                                        if account_busy {
-                                                            "处理中..."
-                                                        } else if account_disabled {
-                                                            "启用"
-                                                        } else {
-                                                            "禁用"
-                                                        }
-                                                    }
+                                                    { if account_busy { "..." } else if account_disabled { "启用" } else { "禁用" } }
+                                                </button>
+                                                if show_spark_toggle {
+                                                    <button
+                                                        class={classes!(
+                                                            "btn-terminal",
+                                                            if spark_mapping_enabled { "btn-terminal-primary" } else { "" }
+                                                        )}
+                                                        onclick={Callback::from(move |_| {
+                                                            on_toggle_account_spark_mapping.emit((
+                                                                acc_name_for_toggle.clone(),
+                                                                !spark_mapping_enabled,
+                                                            ))
+                                                        })}
+                                                        disabled={account_busy}
+                                                        title="把客户端请求的 gpt-5.3-codex 映射到该账号上游的 gpt-5.3-codex-spark"
+                                                    >
+                                                        { if account_busy { "..." } else if spark_mapping_enabled { "Spark ✓" } else { "Spark" } }
+                                                    </button>
+                                                }
+                                                <button
+                                                    class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")}
+                                                    onclick={Callback::from(move |_| on_delete.emit(acc_name_for_delete.clone()))}
+                                                >
+                                                    { "删除" }
                                                 </button>
                                             </div>
-                                            if show_spark_toggle {
-                                                <button
-                                                    class={classes!(
-                                                        "btn-terminal",
-                                                        if spark_mapping_enabled {
-                                                            "btn-terminal-primary"
-                                                        } else {
-                                                            ""
-                                                        }
-                                                    )}
-                                                    onclick={Callback::from(move |_| {
-                                                        on_toggle_account_spark_mapping.emit((
-                                                            acc_name_for_toggle.clone(),
-                                                            !spark_mapping_enabled,
-                                                        ))
-                                                    })}
-                                                    disabled={account_busy}
-                                                    title="把客户端请求的 gpt-5.3-codex 映射到该账号上游的 gpt-5.3-codex-spark"
-                                                >
-                                                    {
-                                                        if account_busy {
-                                                            "切换中..."
-                                                        } else if spark_mapping_enabled {
-                                                            "Spark 映射已开"
-                                                        } else {
-                                                            "启用 Spark 映射"
-                                                        }
-                                                    }
-                                                </button>
-                                            }
-                                            <button
-                                                class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")}
-                                                onclick={Callback::from(move |_| on_delete.emit(acc_name_for_delete.clone()))}
-                                            >
-                                                { "删除" }
-                                            </button>
                                         </div>
                                     </div>
                                 }
                             }) }
                         </div>
-                    } else {
-                        <div class={classes!("mt-4", "rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-6", "text-sm", "text-[var(--muted)]")}>
-                            { "当前还没有导入任何 Codex 账号。可以先导入账号，或者点击上方“刷新列表”确认后端是否已加载本地账号文件。" }
+                        <div class={classes!("mt-4")}>
+                            <Pagination
+                                current_page={account_current_page}
+                                total_pages={account_total_pages}
+                                on_page_change={on_account_page_change.clone()}
+                            />
                         </div>
                     }
                 </section>
@@ -8125,7 +8369,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         <div>
                             <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Sponsors" }</h2>
                             <p class={classes!("mt-1", "m-0", "text-xs", "text-[var(--muted)]")}>
-                                { "这批请求是“先填邮箱，再发付款说明邮件”的人工确认流。你确认对方已经按邮件说明完成赞助后，再在这里标记通过。" }
+                                { "这批请求是「先填邮箱，再发付款说明邮件」的人工确认流。你确认对方已经按邮件说明完成赞助后，再在这里标记通过。" }
                             </p>
                         </div>
                         <button
