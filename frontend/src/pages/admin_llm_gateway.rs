@@ -2311,6 +2311,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let account_active_query = use_state(String::new);
     let account_sort_mode = use_state(|| AccountSortMode::None);
     let account_show_unhealthy = use_state(|| false);
+    let account_show_active_only = use_state(|| false);
     let account_page = use_state(|| 1_usize);
     let active_tab = use_state(|| TAB_OVERVIEW.to_string());
     let on_tab_click = {
@@ -5240,6 +5241,7 @@ pub fn admin_llm_gateway_page() -> Html {
         .iter()
         .filter(|acc| account_matches_filter(acc, &account_query_lower))
         .filter(|acc| !*account_show_unhealthy || account_is_unhealthy(acc))
+        .filter(|acc| !*account_show_active_only || acc.status.as_str() != "disabled")
         .collect();
     sort_accounts(&mut account_filtered, *account_sort_mode);
     let account_total_pages = account_filtered.len().max(1).div_ceil(ACCOUNT_PAGE_SIZE.max(1));
@@ -7170,6 +7172,27 @@ pub fn admin_llm_gateway_page() -> Html {
                             >
                                 { "异常" }
                             </button>
+                            <button
+                                type="button"
+                                class={classes!(
+                                    "rounded-full", "px-3", "py-1.5", "text-xs", "font-semibold", "border", "transition-colors",
+                                    if *account_show_active_only {
+                                        "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-400/50"
+                                    } else {
+                                        "bg-[var(--surface)] text-[var(--muted)] border-[var(--border)] hover:text-[var(--text)]"
+                                    }
+                                )}
+                                onclick={{
+                                    let account_show_active_only = account_show_active_only.clone();
+                                    let account_page = account_page.clone();
+                                    Callback::from(move |_| {
+                                        account_show_active_only.set(!*account_show_active_only);
+                                        account_page.set(1);
+                                    })
+                                }}
+                            >
+                                { "Active" }
+                            </button>
                             <span class={classes!("w-px", "h-5", "bg-[var(--border)]")} />
                             <button
                                 type="button"
@@ -7359,23 +7382,60 @@ pub fn admin_llm_gateway_page() -> Html {
                                     (*account_action_inflight).contains(&acc_name);
                                 let accent = ACCOUNT_ACCENT_BORDERS[idx % ACCOUNT_ACCENT_BORDERS.len()];
                                 html! {
-                                    <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "overflow-hidden")} style={format!("border-left: 3px solid {}", accent)}>
+                                    <div class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "overflow-hidden", "transition-all", "duration-200", "hover:shadow-lg", "hover:shadow-black/5", accent)}>
                                         // Card header
-                                        <div class={classes!("px-4", "pt-3", "pb-2")}>
+                                        <div class={classes!("p-5", "pb-3")}>
                                             <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                                                <div class={key_status_badge(&acc_status)}>{ acc_status.clone() }</div>
+                                                <span class={classes!(
+                                                    "inline-flex", "items-center", "gap-1.5", "shrink-0",
+                                                    "rounded-full", "px-2", "py-0.5",
+                                                    "font-mono", "text-[10px]", "font-semibold", "uppercase", "tracking-wider",
+                                                    "bg-[var(--surface-alt)]",
+                                                    match acc_status.as_str() {
+                                                        "active" | "ready" => "text-emerald-600",
+                                                        "disabled" => "text-red-600",
+                                                        _ => "text-[var(--muted)]",
+                                                    }
+                                                )}>
+                                                    <span class={classes!(
+                                                        "inline-block", "h-1.5", "w-1.5", "rounded-full",
+                                                        match acc_status.as_str() {
+                                                            "active" | "ready" => "bg-emerald-500",
+                                                            "disabled" => "bg-red-500",
+                                                            _ => "bg-slate-400",
+                                                        }
+                                                    )} />
+                                                    { acc_status.clone() }
+                                                </span>
                                                 <span class={classes!("font-bold", "text-sm", "break-all")}>{ acc_name.clone() }</span>
                                                 if let Some(ref plan_type) = acc_plan_type {
-                                                    <span class={classes!("rounded-full", "bg-sky-500/12", "px-2.5", "py-0.5", "text-xs", "font-semibold", "text-sky-700", "dark:text-sky-200")}>
+                                                    <span class={classes!("rounded-full", "bg-[var(--surface-alt)]", "px-2.5", "py-0.5", "shrink-0", "font-mono", "text-[10px]", "font-medium", "text-[var(--muted)]")}>
                                                         { plan_type.clone() }
                                                     </span>
                                                 }
-                                                if acc_status != "disabled" {
-                                                    <span class={classes!("ml-auto", "text-xs", "font-mono", "text-[var(--muted)]")}>
-                                                        { format!("5h {} · wk {}", primary_pct, secondary_pct) }
-                                                    </span>
-                                                }
                                             </div>
+                                            if acc_status != "disabled" {
+                                                <div class={classes!("mt-3", "space-y-2.5")}>
+                                                    <div>
+                                                        <div class={classes!("flex", "items-center", "justify-between", "gap-2", "mb-1")}>
+                                                            <span class={classes!("font-mono", "text-[11px]", "font-semibold", "text-[var(--muted)]", "uppercase", "tracking-wider")}>{ "5H" }</span>
+                                                            <span class={classes!("font-mono", "text-sm", "font-black", "text-[var(--text)]")}>{ primary_pct.clone() }</span>
+                                                        </div>
+                                                        <div class={classes!("h-2", "overflow-hidden", "rounded-full", "bg-[var(--surface-alt)]")}>
+                                                            <div class={classes!("h-full", "rounded-full", "transition-[width]", "duration-500", "bg-[linear-gradient(90deg,#0f766e,#14b8a6)]")} style={format!("width: {:.1}%;", acc.primary_remaining_percent.unwrap_or(100.0).clamp(0.0, 100.0))} />
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <div class={classes!("flex", "items-center", "justify-between", "gap-2", "mb-1")}>
+                                                            <span class={classes!("font-mono", "text-[11px]", "font-semibold", "text-[var(--muted)]", "uppercase", "tracking-wider")}>{ "WEEK" }</span>
+                                                            <span class={classes!("font-mono", "text-sm", "font-black", "text-[var(--text)]")}>{ secondary_pct.clone() }</span>
+                                                        </div>
+                                                        <div class={classes!("h-2", "overflow-hidden", "rounded-full", "bg-[var(--surface-alt)]")}>
+                                                            <div class={classes!("h-full", "rounded-full", "transition-[width]", "duration-500", "bg-[linear-gradient(90deg,#2563eb,#7c3aed)]")} style={format!("width: {:.1}%;", acc.secondary_remaining_percent.unwrap_or(100.0).clamp(0.0, 100.0))} />
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            }
                                             // Info section
                                             <div class={classes!("mt-2", "space-y-0.5", "text-xs", "font-mono", "text-[var(--muted)]")}>
                                                 if let Some(ref aid) = acc_account_id {
@@ -7412,7 +7472,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                             }
                                         </div>
                                         // Controls section
-                                        <div class={classes!("border-t", "border-[var(--border)]", "px-4", "py-3")}>
+                                        <div class={classes!("border-t", "border-[var(--border)]", "px-5", "py-3")}>
                                             <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
                                                 <input
                                                     type="number"
