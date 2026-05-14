@@ -73,6 +73,7 @@ const ACCOUNT_CONTRIBUTION_REQUEST_PAGE_SIZE: usize = 20;
 const SPONSOR_REQUEST_PAGE_SIZE: usize = 20;
 const ADMIN_CODEX_IMPORT_JOB_LIST_LIMIT: usize = 10;
 const ACCOUNT_PAGE_SIZE: usize = 8;
+const KEY_PAGE_SIZE: usize = 8;
 const ACCOUNT_ACCENT_BORDERS: &[&str] = &[
     "border-l-4 border-l-teal-500/70",
     "border-l-4 border-l-violet-500/70",
@@ -261,6 +262,33 @@ enum AccountSortMode {
     PrimaryDesc,
     SecondaryAsc,
     SecondaryDesc,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum KeySortMode {
+    None,
+    QuotaAsc,
+    QuotaDesc,
+    UsageAsc,
+    UsageDesc,
+}
+
+fn sort_keys(entries: &mut Vec<&AdminLlmGatewayKeyView>, mode: KeySortMode) {
+    match mode {
+        KeySortMode::None => {}
+        KeySortMode::QuotaAsc => entries.sort_by_key(|k| k.remaining_billable),
+        KeySortMode::QuotaDesc => entries.sort_by_key(|k| std::cmp::Reverse(k.remaining_billable)),
+        KeySortMode::UsageAsc => entries.sort_by(|a, b| {
+            a.usage_credit_total
+                .partial_cmp(&b.usage_credit_total)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        KeySortMode::UsageDesc => entries.sort_by(|a, b| {
+            b.usage_credit_total
+                .partial_cmp(&a.usage_credit_total)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+    }
 }
 
 fn account_matches_filter(acc: &AccountSummaryView, query: &str) -> bool {
@@ -1099,7 +1127,11 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                 "border",
                 "border-[var(--border)]",
                 "bg-[var(--surface)]",
-                "p-4"
+                "p-5",
+                "transition-all",
+                "duration-200",
+                "hover:shadow-lg",
+                "hover:shadow-black/5"
             )}>
                 <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                     <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
@@ -1310,7 +1342,11 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
             "border",
             "border-[var(--border)]",
             "bg-[var(--surface)]",
-            "p-4"
+            "p-5",
+            "transition-all",
+            "duration-200",
+            "hover:shadow-lg",
+            "hover:shadow-black/5"
         )}>
             <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                 <div class={classes!("flex", "items-center", "gap-2")}>
@@ -1466,9 +1502,9 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                 </button>
             </div>
 
-            <div class={classes!("mt-3", "flex", "items-center", "gap-3", "flex-wrap")}>
-                <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
-                    <span class={classes!("text-[var(--muted)]")}>{ "路由" }</span>
+            <div class={classes!("mt-3", "flex", "items-center", "gap-3", "flex-wrap", "overflow-hidden")}>
+                <label class={classes!("flex", "items-center", "gap-2", "text-sm", "min-w-0")}>
+                    <span class={classes!("text-[var(--muted)]", "shrink-0")}>{ "路由" }</span>
                     <select
                         key={format!("{}-route-{}", key_item.id, (*route_strategy).clone())}
                         class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
@@ -1486,11 +1522,11 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     </select>
                 </label>
                 if *route_strategy == "fixed" {
-                    <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
-                        <span class={classes!("text-[var(--muted)]")}>{ "单账号组" }</span>
+                    <label class={classes!("flex", "items-center", "gap-2", "text-sm", "min-w-0")}>
+                        <span class={classes!("text-[var(--muted)]", "shrink-0")}>{ "单账号组" }</span>
                         <select
                             key={format!("{}-group-fixed-{}", key_item.id, (*account_group_id).clone())}
-                            class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
+                            class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm", "max-w-[220px]", "truncate")}
                             onchange={{
                                 let account_group_id = account_group_id.clone();
                                 Callback::from(move |event: Event| {
@@ -1507,11 +1543,11 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                         </select>
                     </label>
                 } else {
-                    <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
-                        <span class={classes!("text-[var(--muted)]")}>{ "账号组" }</span>
+                    <label class={classes!("flex", "items-center", "gap-2", "text-sm", "min-w-0")}>
+                        <span class={classes!("text-[var(--muted)]", "shrink-0")}>{ "账号组" }</span>
                         <select
                             key={format!("{}-group-auto-{}", key_item.id, (*account_group_id).clone())}
-                            class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
+                            class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm", "max-w-[220px]", "truncate")}
                             onchange={{
                                 let account_group_id = account_group_id.clone();
                                 Callback::from(move |event: Event| {
@@ -1528,7 +1564,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                         </select>
                     </label>
                 }
-                <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                <span class={classes!("text-xs", "text-[var(--muted)]", "min-w-0", "break-all")}>
                     { current_route_summary }
                 </span>
             </div>
@@ -2163,6 +2199,9 @@ pub fn admin_llm_gateway_page() -> Html {
     let config = use_state(|| None::<LlmGatewayRuntimeConfig>);
     let keys = use_state(Vec::<AdminLlmGatewayKeyView>::new);
     let keys_search = use_state(String::new);
+    let keys_sort_mode = use_state(|| KeySortMode::None);
+    let keys_show_active_only = use_state(|| false);
+    let keys_page = use_state(|| 1_usize);
     let account_groups = use_state(Vec::<AdminAccountGroupView>::new);
     let account_groups_search = use_state(String::new);
     let usage_events = use_state(Vec::<AdminLlmGatewayUsageEventView>::new);
@@ -5195,6 +5234,24 @@ pub fn admin_llm_gateway_page() -> Html {
         .as_ref()
         .clone()
     };
+    // ── Keys tab: filter / sort / paginate ──
+    let mut keys_filtered_refs: Vec<&AdminLlmGatewayKeyView> = filtered_keys
+        .iter()
+        .filter(|k| !*keys_show_active_only || k.status.as_str() != "disabled")
+        .collect();
+    sort_keys(&mut keys_filtered_refs, *keys_sort_mode);
+    let keys_total_pages = keys_filtered_refs.len().max(1).div_ceil(KEY_PAGE_SIZE.max(1));
+    let keys_current_page = (*keys_page).clamp(1, keys_total_pages);
+    let keys_page_entries: Vec<&AdminLlmGatewayKeyView> = keys_filtered_refs
+        .iter()
+        .skip((keys_current_page - 1) * KEY_PAGE_SIZE)
+        .take(KEY_PAGE_SIZE)
+        .copied()
+        .collect();
+    let on_keys_page_change = {
+        let keys_page = keys_page.clone();
+        Callback::from(move |p: usize| keys_page.set(p))
+    };
     let usage_key_query_lower = (*usage_key_search).trim().to_lowercase();
     let filtered_usage_keys: Vec<AdminLlmGatewayKeyView> = {
         let q = usage_key_query_lower.clone();
@@ -6621,25 +6678,111 @@ pub fn admin_llm_gateway_page() -> Html {
                             placeholder={AttrValue::Static("搜索 key 名称 / id / provider / 状态")}
                         />
                     </div>
-                    if !keys_query_lower.is_empty() {
-                        <p class={classes!("mt-2", "text-xs", "text-[var(--muted)]", "font-mono")}>
-                            { format!("匹配 {}/{}", filtered_keys.len(), keys.len()) }
-                        </p>
-                    }
-                    <div class={classes!("mt-5", "grid", "gap-4", "2xl:grid-cols-2")}>
-                        if keys.is_empty() && !*loading {
+                    // Sort & filter toolbar
+                    <div class={classes!("mt-3", "flex", "items-center", "gap-2", "flex-wrap")}>
+                        <button
+                            type="button"
+                            class={classes!(
+                                "rounded-full", "px-3", "py-1.5", "text-xs", "font-semibold", "border", "transition-colors",
+                                if *keys_show_active_only {
+                                    "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-400/50"
+                                } else {
+                                    "bg-[var(--surface)] text-[var(--muted)] border-[var(--border)] hover:text-[var(--text)]"
+                                }
+                            )}
+                            onclick={{
+                                let keys_show_active_only = keys_show_active_only.clone();
+                                let keys_page = keys_page.clone();
+                                Callback::from(move |_| {
+                                    keys_show_active_only.set(!*keys_show_active_only);
+                                    keys_page.set(1);
+                                })
+                            }}
+                        >
+                            { "Active" }
+                        </button>
+                        <span class={classes!("w-px", "h-5", "bg-[var(--border)]")} />
+                        <button
+                            type="button"
+                            class={classes!(
+                                "rounded-full", "px-3", "py-1.5", "text-xs", "font-semibold", "border", "transition-colors",
+                                if matches!(*keys_sort_mode, KeySortMode::QuotaAsc | KeySortMode::QuotaDesc) {
+                                    "bg-teal-500/15 text-teal-700 dark:text-teal-300 border-teal-400/50"
+                                } else {
+                                    "bg-[var(--surface)] text-[var(--muted)] border-[var(--border)] hover:text-[var(--text)]"
+                                }
+                            )}
+                            onclick={{
+                                let keys_sort_mode = keys_sort_mode.clone();
+                                let keys_page = keys_page.clone();
+                                Callback::from(move |_| {
+                                    let next = match *keys_sort_mode {
+                                        KeySortMode::QuotaAsc => KeySortMode::QuotaDesc,
+                                        KeySortMode::QuotaDesc => KeySortMode::None,
+                                        _ => KeySortMode::QuotaAsc,
+                                    };
+                                    keys_sort_mode.set(next);
+                                    keys_page.set(1);
+                                })
+                            }}
+                        >
+                            { match *keys_sort_mode {
+                                KeySortMode::QuotaAsc => "Quota \u{2191}",
+                                KeySortMode::QuotaDesc => "Quota \u{2193}",
+                                _ => "Quota",
+                            }}
+                        </button>
+                        <button
+                            type="button"
+                            class={classes!(
+                                "rounded-full", "px-3", "py-1.5", "text-xs", "font-semibold", "border", "transition-colors",
+                                if matches!(*keys_sort_mode, KeySortMode::UsageAsc | KeySortMode::UsageDesc) {
+                                    "bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-400/50"
+                                } else {
+                                    "bg-[var(--surface)] text-[var(--muted)] border-[var(--border)] hover:text-[var(--text)]"
+                                }
+                            )}
+                            onclick={{
+                                let keys_sort_mode = keys_sort_mode.clone();
+                                let keys_page = keys_page.clone();
+                                Callback::from(move |_| {
+                                    let next = match *keys_sort_mode {
+                                        KeySortMode::UsageAsc => KeySortMode::UsageDesc,
+                                        KeySortMode::UsageDesc => KeySortMode::None,
+                                        _ => KeySortMode::UsageAsc,
+                                    };
+                                    keys_sort_mode.set(next);
+                                    keys_page.set(1);
+                                })
+                            }}
+                        >
+                            { match *keys_sort_mode {
+                                KeySortMode::UsageAsc => "Usage \u{2191}",
+                                KeySortMode::UsageDesc => "Usage \u{2193}",
+                                _ => "Usage",
+                            }}
+                        </button>
+                    </div>
+                    <div class={classes!("mt-2", "flex", "items-center", "justify-between", "text-xs", "text-[var(--muted)]")}>
+                        <span>{ format!("共 {} 个 Key (匹配 {})", keys.len(), keys_filtered_refs.len()) }</span>
+                        if keys_total_pages > 1 {
+                            <span class={classes!("font-mono")}>{ format!("{}/{}", keys_current_page, keys_total_pages) }</span>
+                        }
+                    </div>
+                    <div class={classes!("mt-3", "grid", "gap-4", "2xl:grid-cols-2")}>
+                        if keys_page_entries.is_empty() {
                             <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
-                                { "当前还没有可管理的 key。" }
-                            </div>
-                        } else if filtered_keys.is_empty() {
-                            <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-6", "text-center", "text-[var(--muted)]")}>
-                                { "当前过滤条件下没有匹配的 key。" }
+                                { if keys.is_empty() {
+                                    "当前还没有可管理的 key。"
+                                } else {
+                                    "当前过滤条件下没有匹配的 key。"
+                                }}
                             </div>
                         } else {
-                            { for filtered_keys.iter().map(|key_item| html! {
+                            { for keys_page_entries.iter().map(|key_item| html! {
                                 <KeyEditorCard
                                     key={key_item.id.clone()}
-                                    key_item={key_item.clone()}
+                                    key_item={(*key_item).clone()}
                                     on_changed={reload.clone()}
                                     on_refresh={on_refresh_key.clone()}
                                     on_copy={on_copy.clone()}
@@ -6650,6 +6793,13 @@ pub fn admin_llm_gateway_page() -> Html {
                                 />
                             }) }
                         }
+                    </div>
+                    <div class={classes!("mt-4")}>
+                        <Pagination
+                            current_page={keys_current_page}
+                            total_pages={keys_total_pages}
+                            on_page_change={on_keys_page_change.clone()}
+                        />
                     </div>
                 </section>
                 } // end TAB_KEYS
