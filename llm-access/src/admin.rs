@@ -72,6 +72,8 @@ const MIN_RUNTIME_DUCKDB_USAGE_MEMORY_LIMIT_MIB: u64 = 512;
 const MAX_RUNTIME_DUCKDB_USAGE_MEMORY_LIMIT_MIB: u64 = 2_048;
 const MIN_RUNTIME_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB: u64 = 16;
 const MAX_RUNTIME_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB: u64 = 256;
+const MIN_RUNTIME_USAGE_ANALYTICS_RETENTION_DAYS: u64 = 1;
+const MAX_RUNTIME_USAGE_ANALYTICS_RETENTION_DAYS: u64 = 365;
 const MIN_RUNTIME_USAGE_JOURNAL_FILE_BYTES: u64 = 1_024;
 const MAX_RUNTIME_USAGE_JOURNAL_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 const MIN_RUNTIME_USAGE_JOURNAL_FILE_AGE_MS: u64 = 1_000;
@@ -3238,6 +3240,15 @@ fn apply_runtime_config_update(
         MIN_RUNTIME_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB,
         MAX_RUNTIME_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB,
     )?;
+    let usage_analytics_retention_days = request
+        .usage_analytics_retention_days
+        .unwrap_or(current.usage_analytics_retention_days);
+    validate_range(
+        "usage_analytics_retention_days",
+        usage_analytics_retention_days,
+        MIN_RUNTIME_USAGE_ANALYTICS_RETENTION_DAYS,
+        MAX_RUNTIME_USAGE_ANALYTICS_RETENTION_DAYS,
+    )?;
 
     let usage_journal_enabled = request
         .usage_journal_enabled
@@ -3396,6 +3407,7 @@ fn apply_runtime_config_update(
         usage_event_flush_max_buffer_bytes,
         duckdb_usage_memory_limit_mib,
         duckdb_usage_checkpoint_threshold_mib,
+        usage_analytics_retention_days,
         usage_journal_enabled,
         usage_journal_max_file_bytes,
         usage_journal_max_file_age_ms,
@@ -5776,6 +5788,7 @@ mod tests {
                 usage_journal_zstd_level: Some(5),
                 usage_journal_consumer_lease_ms: Some(600_000),
                 usage_journal_delete_bad_files: Some(true),
+                usage_analytics_retention_days: Some(14),
                 usage_query_bind_addr: Some("127.0.0.1:19091".to_string()),
                 usage_query_base_url: Some("http://127.0.0.1:19091/".to_string()),
                 ..UpdateAdminRuntimeConfig::default()
@@ -5794,8 +5807,22 @@ mod tests {
         assert_eq!(updated.usage_journal_zstd_level, 5);
         assert_eq!(updated.usage_journal_consumer_lease_ms, 600_000);
         assert!(updated.usage_journal_delete_bad_files);
+        assert_eq!(updated.usage_analytics_retention_days, 14);
         assert_eq!(updated.usage_query_bind_addr, "127.0.0.1:19091");
         assert_eq!(updated.usage_query_base_url, "http://127.0.0.1:19091");
+    }
+
+    #[test]
+    fn runtime_config_update_rejects_zero_usage_analytics_retention_days() {
+        let err =
+            apply_runtime_config_update(AdminRuntimeConfig::default(), UpdateAdminRuntimeConfig {
+                usage_analytics_retention_days: Some(0),
+                ..UpdateAdminRuntimeConfig::default()
+            })
+            .expect_err("zero retention days should be rejected");
+
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("usage_analytics_retention_days"));
     }
 
     #[test]

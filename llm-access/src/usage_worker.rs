@@ -3,13 +3,13 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{anyhow, Context};
 use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
-use llm_access_core::store::UsageEventSink;
+use llm_access_core::store::{UsageEventSink, DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS};
 use llm_access_store::duckdb::DuckDbUsageRepository;
 use llm_usage_journal::{JournalConsumerState, JournalReader, WorkerProgressSnapshot};
 
@@ -29,12 +29,14 @@ pub struct UsageWorker {
     state: JournalConsumerState,
     duckdb_usage: Arc<DuckDbUsageRepository>,
     consumer_lease_ms: u64,
+    usage_analytics_retention_days: Arc<RwLock<u64>>,
 }
 
 /// Build the usage worker HTTP router.
 pub fn router(worker: &UsageWorker) -> Router {
     let query_state = UsageQueryState {
         usage_analytics_store: worker.duckdb_usage.clone(),
+        retention_days: worker.usage_analytics_retention_days.clone(),
     };
     Router::new()
         .route("/admin/llm-gateway/usage", get(list_llm_usage_events))
@@ -92,6 +94,21 @@ impl UsageWorker {
         duckdb_usage: Arc<DuckDbUsageRepository>,
         consumer_lease_ms: u64,
     ) -> anyhow::Result<Self> {
+        Self::new_with_retention_days(
+            journal_root,
+            duckdb_usage,
+            consumer_lease_ms,
+            DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS,
+        )
+    }
+
+    /// Create a worker with an explicit analytics retention horizon.
+    pub fn new_with_retention_days(
+        journal_root: PathBuf,
+        duckdb_usage: Arc<DuckDbUsageRepository>,
+        consumer_lease_ms: u64,
+        usage_analytics_retention_days: u64,
+    ) -> anyhow::Result<Self> {
         for subdir in ["sealed", "consuming", "bad"] {
             fs::create_dir_all(journal_root.join(subdir)).with_context(|| {
                 format!("failed to create journal dir `{}`", journal_root.join(subdir).display())
@@ -103,7 +120,47 @@ impl UsageWorker {
             state,
             duckdb_usage,
             consumer_lease_ms: consumer_lease_ms.max(1),
+            usage_analytics_retention_days: Arc::new(RwLock::new(
+                usage_analytics_retention_days.max(1),
+            )),
         })
+    }
+
+    /// Update the retention horizon used by query responses and maintenance.
+    pub fn set_usage_analytics_retention_days(&self, days: u64) {
+        if let Ok(mut current) = self.usage_analytics_retention_days.write() {
+            *current = days.max(1);
+        }
+    }
+
+    /// Return the current retained usage analytics horizon.
+    pub fn usage_analytics_retention_days(&self) -> u64 {
+        self.usage_analytics_retention_days
+            .read()
+            .map(|value| *value)
+            .unwrap_or(DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS)
+            .max(1)
+    }
+
+    /// Run storage maintenance for the current retention horizon.
+    pub async fn run_maintenance(&self, now_ms: i64) -> anyhow::Result<()> {
+        let report = self
+            .duckdb_usage
+            .prune_usage_analytics(now_ms, self.usage_analytics_retention_days())
+            .await?;
+        if report.deleted_segments > 0
+            || report.deleted_files > 0
+            || report.deleted_orphan_files > 0
+        {
+            tracing::info!(
+                deleted_segments = report.deleted_segments,
+                deleted_files = report.deleted_files,
+                deleted_orphan_files = report.deleted_orphan_files,
+                retention_days = self.usage_analytics_retention_days(),
+                "pruned llm access usage analytics"
+            );
+        }
+        Ok(())
     }
 
     /// Import one sealed journal file if one is available.
@@ -121,7 +178,8 @@ impl UsageWorker {
         self.state.progress_snapshot()
     }
 
-    fn record_error(&self, err: &anyhow::Error) {
+    /// Persist a terminal worker error in the progress state.
+    pub fn record_error(&self, err: &anyhow::Error) {
         let mut progress = self.progress_snapshot().unwrap_or_else(|_| idle_progress());
         progress.state = "error".to_string();
         progress.heartbeat_at_ms = Some(now_ms());
@@ -391,10 +449,22 @@ fn file_age_ms(metadata: &fs::Metadata) -> i64 {
 
 /// Run the import loop until the process is stopped.
 pub async fn run_forever(worker: UsageWorker) -> anyhow::Result<()> {
+    const USAGE_ANALYTICS_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+    let mut last_maintenance = None::<std::time::Instant>;
     loop {
         if let Err(err) = worker.run_one_import().await {
             worker.record_error(&err);
             return Err(err);
+        }
+        if last_maintenance
+            .map(|last| last.elapsed() >= USAGE_ANALYTICS_MAINTENANCE_INTERVAL)
+            .unwrap_or(true)
+        {
+            if let Err(err) = worker.run_maintenance(now_ms()).await {
+                worker.record_error(&err);
+                return Err(err);
+            }
+            last_maintenance = Some(std::time::Instant::now());
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }

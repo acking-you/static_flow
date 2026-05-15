@@ -61,6 +61,11 @@ const SQLITE_MIGRATIONS: &[SqlMigration] = &[
         name: "codex_weighted_routing",
         sql: include_str!("../migrations/sqlite/0008_codex_weighted_routing.sql"),
     },
+    SqlMigration {
+        version: 10,
+        name: "usage_analytics_retention",
+        sql: include_str!("../migrations/sqlite/0009_usage_analytics_retention.sql"),
+    },
 ];
 
 const DUCKDB_MIGRATIONS: &[SqlMigration] = &[
@@ -151,7 +156,7 @@ mod tests {
     fn sqlite_migrations_are_file_backed_and_versioned() {
         let migrations = super::sqlite_migrations();
 
-        assert_eq!(migrations.len(), 8);
+        assert_eq!(migrations.len(), 10);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(migrations[0].name, "init");
         assert!(migrations[0]
@@ -188,6 +193,12 @@ mod tests {
         assert_eq!(migrations[7].version, 8);
         assert_eq!(migrations[7].name, "account_contribution_public_wall_visibility");
         assert!(migrations[7].sql.contains("show_on_public_wall"));
+        assert_eq!(migrations[8].version, 9);
+        assert_eq!(migrations[8].name, "codex_weighted_routing");
+        assert!(migrations[8].sql.contains("codex_weight_free"));
+        assert_eq!(migrations[9].version, 10);
+        assert_eq!(migrations[9].name, "usage_analytics_retention");
+        assert!(migrations[9].sql.contains("usage_analytics_retention_days"));
     }
 
     #[test]
@@ -221,7 +232,7 @@ mod tests {
         let applied_count: i64 = conn
             .query_row("SELECT count(*) FROM llm_access_schema_migrations", [], |row| row.get(0))
             .expect("count migrations");
-        assert_eq!(applied_count, 8);
+        assert_eq!(applied_count, 10);
 
         let full_logging_column_count: i64 = conn
             .query_row(
@@ -247,6 +258,17 @@ mod tests {
             )
             .expect("inspect runtime config duckdb columns");
         assert_eq!(runtime_duckdb_column_count, 2);
+
+        let runtime_retention_column_count: i64 = conn
+            .query_row(
+                "SELECT count(*)
+                 FROM pragma_table_info('llm_runtime_config')
+                 WHERE name = 'usage_analytics_retention_days'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("inspect usage analytics retention column");
+        assert_eq!(runtime_retention_column_count, 1);
 
         let runtime_codex_weight_column_count: i64 = conn
             .query_row(

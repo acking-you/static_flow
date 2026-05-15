@@ -1244,6 +1244,18 @@ pub struct DuckDbUsageRepository {
     inner: Arc<DuckDbUsageRepositoryInner>,
 }
 
+/// Summary of one usage analytics retention pass.
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UsageAnalyticsPruneReport {
+    /// Archived segments removed from the catalog.
+    pub deleted_segments: usize,
+    /// Catalog-referenced DuckDB files removed from disk.
+    pub deleted_files: usize,
+    /// DuckDB files removed because no catalog row referenced them.
+    pub deleted_orphan_files: usize,
+}
+
 #[cfg(feature = "duckdb-runtime")]
 #[derive(Debug)]
 enum DuckDbUsageRepositoryInner {
@@ -1494,6 +1506,33 @@ impl DuckDbUsageRepository {
                 connection_config,
             }),
         })
+    }
+
+    /// Prune tiered usage analytics outside the retained day window.
+    pub async fn prune_usage_analytics(
+        &self,
+        now_ms: i64,
+        retention_days: u64,
+    ) -> anyhow::Result<UsageAnalyticsPruneReport> {
+        match self.inner.as_ref() {
+            DuckDbUsageRepositoryInner::Single {
+                ..
+            } => Ok(UsageAnalyticsPruneReport::default()),
+            DuckDbUsageRepositoryInner::Tiered {
+                config,
+                state,
+                connection_config,
+            } => {
+                prune_tiered_usage_analytics(
+                    config,
+                    state,
+                    connection_config,
+                    now_ms,
+                    retention_days,
+                )
+                .await
+            },
+        }
     }
 
     fn open_conn_with_connection_config(
@@ -2467,6 +2506,199 @@ fn active_segment_disk_bytes(path: &Path) -> u64 {
         + fs::metadata(duckdb_wal_path(path))
             .map(|meta| meta.len())
             .unwrap_or(0)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+const USAGE_ANALYTICS_RETENTION_DAY_MS: i64 = 86_400_000;
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug)]
+struct RetentionSegmentCandidate {
+    segment_id: String,
+    archive_path: PathBuf,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+async fn prune_tiered_usage_analytics(
+    config: &TieredDuckDbUsageConfig,
+    state: &Mutex<TieredDuckDbUsageState>,
+    connection_config: &SharedDuckDbUsageConnectionConfig,
+    now_ms: i64,
+    retention_days: u64,
+) -> anyhow::Result<UsageAnalyticsPruneReport> {
+    let cutoff_ms = usage_analytics_retention_cutoff_ms(now_ms, retention_days);
+    let mut deleted_files = rollover_expired_active_segment(
+        config,
+        state,
+        connection_config_snapshot(connection_config),
+        cutoff_ms,
+    )?;
+    let expired_segments = delete_expired_segments_from_catalog(config, cutoff_ms)?;
+    for segment in &expired_segments {
+        deleted_files =
+            deleted_files.saturating_add(remove_duckdb_segment_files(&segment.archive_path)?);
+    }
+    let deleted_orphan_files = prune_orphan_archived_duckdb_files(config)?;
+    Ok(UsageAnalyticsPruneReport {
+        deleted_segments: expired_segments.len(),
+        deleted_files,
+        deleted_orphan_files,
+    })
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn usage_analytics_retention_cutoff_ms(now_ms: i64, retention_days: u64) -> i64 {
+    let retention_days = i64::try_from(retention_days.max(1)).unwrap_or(i64::MAX);
+    now_ms.saturating_sub(retention_days.saturating_mul(USAGE_ANALYTICS_RETENTION_DAY_MS))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn rollover_expired_active_segment(
+    config: &TieredDuckDbUsageConfig,
+    state: &Mutex<TieredDuckDbUsageState>,
+    connection_config: DuckDbUsageConnectionConfig,
+    cutoff_ms: i64,
+) -> anyhow::Result<usize> {
+    let mut state = state
+        .lock()
+        .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
+    if !state.active_has_rows {
+        return Ok(0);
+    }
+    state.active_writer = None;
+    checkpoint_duckdb_path(&state.active_path, connection_config)?;
+    let stats = collect_segment_stats(&state.active_path)?;
+    if stats.row_count == 0 {
+        state.active_has_rows = false;
+        return Ok(0);
+    }
+    if stats.end_ms.is_some_and(|end_ms| end_ms < cutoff_ms) {
+        return discard_expired_active_segment(config, &mut state, connection_config);
+    }
+    Ok(0)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn discard_expired_active_segment(
+    config: &TieredDuckDbUsageConfig,
+    state: &mut TieredDuckDbUsageState,
+    connection_config: DuckDbUsageConnectionConfig,
+) -> anyhow::Result<usize> {
+    state.active_writer = None;
+    let expired_path = state.active_path.clone();
+    let new_active_path = active_segment_path(config, state.next_sequence);
+    state.next_sequence = state.next_sequence.saturating_add(1);
+    let deleted_files = remove_duckdb_segment_files(&expired_path)?;
+    initialize_duckdb_target_path_with_connection_config(&new_active_path, connection_config)?;
+    state.active_path = new_active_path;
+    state.active_has_rows = false;
+    state.active_writer = None;
+    Ok(deleted_files)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn delete_expired_segments_from_catalog(
+    config: &TieredDuckDbUsageConfig,
+    cutoff_ms: i64,
+) -> anyhow::Result<Vec<RetentionSegmentCandidate>> {
+    let mut catalog = rusqlite::Connection::open(tiered_catalog_path(config))
+        .context("failed to open tiered usage catalog for retention prune")?;
+    let candidates = {
+        let mut stmt = catalog
+            .prepare(
+                "SELECT segment_id, archive_path
+                 FROM usage_segments
+                 WHERE state = 'archived'
+                   AND end_ms IS NOT NULL
+                   AND end_ms < ?1
+                 ORDER BY end_ms ASC, segment_id ASC",
+            )
+            .context("prepare expired usage segment lookup")?;
+        let rows = stmt
+            .query_map([cutoff_ms], |row| {
+                Ok(RetentionSegmentCandidate {
+                    segment_id: row.get(0)?,
+                    archive_path: PathBuf::from(row.get::<_, String>(1)?),
+                })
+            })
+            .context("query expired usage segments")?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .context("collect expired usage segments")?
+    };
+    if candidates.is_empty() {
+        return Ok(candidates);
+    }
+    let tx = catalog
+        .transaction()
+        .context("begin usage retention catalog transaction")?;
+    for candidate in &candidates {
+        tx.execute("DELETE FROM usage_segment_events WHERE segment_id = ?1", rusqlite::params![
+            candidate.segment_id.as_str()
+        ])
+        .context("delete expired segment event locators")?;
+        tx.execute(
+            "DELETE FROM usage_segment_key_rollups WHERE segment_id = ?1",
+            rusqlite::params![candidate.segment_id.as_str()],
+        )
+        .context("delete expired segment rollups")?;
+        tx.execute("DELETE FROM usage_segments WHERE segment_id = ?1", rusqlite::params![
+            candidate.segment_id.as_str()
+        ])
+        .context("delete expired usage segment")?;
+    }
+    tx.commit()
+        .context("commit usage retention catalog transaction")?;
+    Ok(candidates)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn remove_duckdb_segment_files(path: &Path) -> anyhow::Result<usize> {
+    let existed = path.exists();
+    remove_file_if_exists(path)?;
+    remove_file_if_exists(&duckdb_wal_path(path))?;
+    Ok(usize::from(existed))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn prune_orphan_archived_duckdb_files(config: &TieredDuckDbUsageConfig) -> anyhow::Result<usize> {
+    let referenced = catalog_archived_duckdb_paths(config)?;
+    let mut deleted = 0usize;
+    for entry in fs::read_dir(&config.archive_dir).with_context(|| {
+        format!("failed to read archive duckdb directory `{}`", config.archive_dir.display())
+    })? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !path.is_file()
+            || !file_name.ends_with(".duckdb")
+            || file_name.ends_with(".uploading.duckdb")
+        {
+            continue;
+        }
+        if referenced.contains(&path) {
+            continue;
+        }
+        deleted = deleted.saturating_add(remove_duckdb_segment_files(&path)?);
+    }
+    Ok(deleted)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn catalog_archived_duckdb_paths(
+    config: &TieredDuckDbUsageConfig,
+) -> anyhow::Result<HashSet<PathBuf>> {
+    let catalog = rusqlite::Connection::open(tiered_catalog_path(config))
+        .context("failed to open tiered usage catalog for orphan prune")?;
+    let mut stmt = catalog
+        .prepare("SELECT archive_path FROM usage_segments WHERE state = 'archived'")
+        .context("prepare archived path lookup")?;
+    let rows = stmt
+        .query_map([], |row| Ok(PathBuf::from(row.get::<_, String>(0)?)))
+        .context("query archived paths")?;
+    rows.collect::<Result<HashSet<_>, _>>()
+        .context("collect archived paths")
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -4735,6 +4967,109 @@ mod tests {
 
     #[cfg(feature = "duckdb-runtime")]
     #[tokio::test]
+    async fn duckdb_tiered_retention_prunes_expired_archived_segments() {
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-duckdb-test-{}-retention-prune", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create tiered retention test directory");
+        let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            catalog_dir: root.join("catalog"),
+            rollover_bytes: 1,
+            details_object_store_url: None,
+        })
+        .expect("open tiered duckdb usage db");
+        let now_ms = 1_700_864_000_000;
+        let day_ms = 86_400_000;
+        let mut expired = test_usage_event();
+        expired.event_id = "expired-retention-event".to_string();
+        expired.created_at_ms = now_ms - 8 * day_ms;
+        let mut retained = test_usage_event();
+        retained.event_id = "retained-retention-event".to_string();
+        retained.created_at_ms = now_ms - 2 * day_ms;
+
+        repo.append_usage_event(&expired)
+            .await
+            .expect("append expired event");
+        repo.append_usage_event(&retained)
+            .await
+            .expect("append retained event");
+        wait_for_archived_duckdb_file_count(&root.join("archive"), 2).await;
+
+        let report = repo
+            .prune_usage_analytics(now_ms, 7)
+            .await
+            .expect("prune expired usage analytics");
+
+        assert_eq!(report.deleted_segments, 1);
+        assert_eq!(report.deleted_files, 1);
+        assert!(repo
+            .get_usage_event(&expired.event_id)
+            .await
+            .expect("lookup expired event")
+            .is_none());
+        assert!(repo
+            .get_usage_event(&retained.event_id)
+            .await
+            .expect("lookup retained event")
+            .is_some());
+        wait_for_archived_duckdb_file_count(&root.join("archive"), 1).await;
+
+        std::fs::remove_dir_all(&root).expect("cleanup tiered retention test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn duckdb_tiered_retention_discards_expired_active_segment() {
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-duckdb-test-{}-retention-active-prune", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create active retention test directory");
+        let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            catalog_dir: root.join("catalog"),
+            rollover_bytes: u64::MAX,
+            details_object_store_url: None,
+        })
+        .expect("open tiered duckdb usage db");
+        let now_ms = 1_700_864_000_000;
+        let day_ms = 86_400_000;
+        let mut expired = test_usage_event();
+        expired.event_id = "expired-active-retention-event".to_string();
+        expired.created_at_ms = now_ms - 8 * day_ms;
+
+        repo.append_usage_event(&expired)
+            .await
+            .expect("append expired active event");
+        assert!(repo
+            .get_usage_event(&expired.event_id)
+            .await
+            .expect("lookup expired active event before prune")
+            .is_some());
+        assert_eq!(duckdb_file_count(&root.join("active")), 1);
+
+        let report = repo
+            .prune_usage_analytics(now_ms, 7)
+            .await
+            .expect("prune expired active usage analytics");
+
+        assert_eq!(report.deleted_segments, 0);
+        assert_eq!(report.deleted_files, 1);
+        assert!(repo
+            .get_usage_event(&expired.event_id)
+            .await
+            .expect("lookup expired active event after prune")
+            .is_none());
+        assert_eq!(duckdb_file_count(&root.join("active")), 1);
+        assert_eq!(duckdb_file_count(&root.join("archive")), 0);
+
+        std::fs::remove_dir_all(&root).expect("cleanup active retention test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
     async fn duckdb_tiered_rolls_over_existing_oversized_active_before_append() {
         let root = std::env::temp_dir()
             .join(format!("llm-access-duckdb-test-{}-tiered-pre-rollover", std::process::id()));
@@ -5203,14 +5538,7 @@ mod tests {
     async fn wait_for_archived_duckdb_file_count(archive_dir: &std::path::Path, expected: usize) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
-            let archived = std::fs::read_dir(archive_dir)
-                .ok()
-                .into_iter()
-                .flat_map(|entries| entries.filter_map(Result::ok))
-                .filter(|entry| {
-                    entry.path().extension().and_then(|ext| ext.to_str()) == Some("duckdb")
-                })
-                .count();
+            let archived = duckdb_file_count(archive_dir);
             if archived >= expected {
                 return;
             }
@@ -5219,6 +5547,16 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    fn duckdb_file_count(dir: &std::path::Path) -> usize {
+        std::fs::read_dir(dir)
+            .ok()
+            .into_iter()
+            .flat_map(|entries| entries.filter_map(Result::ok))
+            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("duckdb"))
+            .count()
     }
 
     #[cfg(feature = "duckdb-runtime")]

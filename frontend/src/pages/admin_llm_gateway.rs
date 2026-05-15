@@ -275,7 +275,7 @@ enum KeySortMode {
 
 fn sort_keys(entries: &mut Vec<&AdminLlmGatewayKeyView>, mode: KeySortMode) {
     match mode {
-        KeySortMode::None => {}
+        KeySortMode::None => {},
         KeySortMode::QuotaAsc => entries.sort_by_key(|k| k.remaining_billable),
         KeySortMode::QuotaDesc => entries.sort_by_key(|k| std::cmp::Reverse(k.remaining_billable)),
         KeySortMode::UsageAsc => entries.sort_by(|a, b| {
@@ -298,8 +298,18 @@ fn account_matches_filter(acc: &AccountSummaryView, query: &str) -> bool {
     let q = query.to_lowercase();
     acc.name.to_lowercase().contains(&q)
         || acc.status.to_lowercase().contains(&q)
-        || acc.plan_type.as_deref().unwrap_or("").to_lowercase().contains(&q)
-        || acc.account_id.as_deref().unwrap_or("").to_lowercase().contains(&q)
+        || acc
+            .plan_type
+            .as_deref()
+            .unwrap_or("")
+            .to_lowercase()
+            .contains(&q)
+        || acc
+            .account_id
+            .as_deref()
+            .unwrap_or("")
+            .to_lowercase()
+            .contains(&q)
         || acc.route_weight_tier.to_lowercase().contains(&q)
 }
 
@@ -319,35 +329,35 @@ fn account_secondary_pct(acc: &AccountSummaryView) -> f64 {
 
 fn sort_accounts(entries: &mut [&AccountSummaryView], mode: AccountSortMode) {
     match mode {
-        AccountSortMode::None => {}
+        AccountSortMode::None => {},
         AccountSortMode::PrimaryAsc => {
             entries.sort_by(|a, b| {
                 account_primary_pct(a)
                     .partial_cmp(&account_primary_pct(b))
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-        }
+        },
         AccountSortMode::PrimaryDesc => {
             entries.sort_by(|a, b| {
                 account_primary_pct(b)
                     .partial_cmp(&account_primary_pct(a))
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-        }
+        },
         AccountSortMode::SecondaryAsc => {
             entries.sort_by(|a, b| {
                 account_secondary_pct(a)
                     .partial_cmp(&account_secondary_pct(b))
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-        }
+        },
         AccountSortMode::SecondaryDesc => {
             entries.sort_by(|a, b| {
                 account_secondary_pct(b)
                     .partial_cmp(&account_secondary_pct(a))
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-        }
+        },
     }
 }
 
@@ -2209,6 +2219,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let usage_page = use_state(|| 1_usize);
     let usage_current_rpm = use_state(|| 0_u32);
     let usage_current_in_flight = use_state(|| 0_u32);
+    let usage_retention_days = use_state(|| 7_u64);
     let usage_loading = use_state(|| false);
     let usage_error = use_state(|| None::<String>);
     let usage_key_filter = use_state(String::new);
@@ -2267,6 +2278,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let usage_flush_max_buffer_bytes_input = use_state(|| (8 * 1024 * 1024_u64).to_string());
     let duckdb_usage_memory_limit_mib_input = use_state(|| "1024".to_string());
     let duckdb_usage_checkpoint_threshold_mib_input = use_state(|| "16".to_string());
+    let usage_analytics_retention_days_input = use_state(|| "7".to_string());
     let proxy_configs = use_state(Vec::<AdminUpstreamProxyConfigView>::new);
     let proxy_bindings = use_state(Vec::<AdminUpstreamProxyBindingView>::new);
     let create_proxy_name = use_state(|| "shared-upstream".to_string());
@@ -2369,6 +2381,7 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_page = usage_page.clone();
         let usage_current_rpm = usage_current_rpm.clone();
         let usage_current_in_flight = usage_current_in_flight.clone();
+        let usage_retention_days = usage_retention_days.clone();
         let usage_loading = usage_loading.clone();
         let usage_error = usage_error.clone();
         let usage_key_filter = usage_key_filter.clone();
@@ -2386,6 +2399,7 @@ pub fn admin_llm_gateway_page() -> Html {
                 let usage_page = usage_page.clone();
                 let usage_current_rpm = usage_current_rpm.clone();
                 let usage_current_in_flight = usage_current_in_flight.clone();
+                let usage_retention_days = usage_retention_days.clone();
                 let usage_loading = usage_loading.clone();
                 let usage_error = usage_error.clone();
                 let usage_key_filter = usage_key_filter.clone();
@@ -2414,6 +2428,7 @@ pub fn admin_llm_gateway_page() -> Html {
                             usage_total.set(resp.total);
                             usage_current_rpm.set(resp.current_rpm);
                             usage_current_in_flight.set(resp.current_in_flight);
+                            usage_retention_days.set(resp.retention_days);
                             usage_events.set(resp.events);
                             let actual_page = (resp.offset / resp.limit.max(1)).saturating_add(1);
                             usage_page.set(actual_page.max(1));
@@ -2611,6 +2626,7 @@ pub fn admin_llm_gateway_page() -> Html {
         let duckdb_usage_memory_limit_mib_input = duckdb_usage_memory_limit_mib_input.clone();
         let duckdb_usage_checkpoint_threshold_mib_input =
             duckdb_usage_checkpoint_threshold_mib_input.clone();
+        let usage_analytics_retention_days_input = usage_analytics_retention_days_input.clone();
         let codex_proxy_binding_input = codex_proxy_binding_input.clone();
         let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
         let usage_page = usage_page.clone();
@@ -2650,6 +2666,7 @@ pub fn admin_llm_gateway_page() -> Html {
             let duckdb_usage_memory_limit_mib_input = duckdb_usage_memory_limit_mib_input.clone();
             let duckdb_usage_checkpoint_threshold_mib_input =
                 duckdb_usage_checkpoint_threshold_mib_input.clone();
+            let usage_analytics_retention_days_input = usage_analytics_retention_days_input.clone();
             let codex_proxy_binding_input = codex_proxy_binding_input.clone();
             let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
             let usage_page = usage_page.clone();
@@ -2758,6 +2775,8 @@ pub fn admin_llm_gateway_page() -> Html {
                             .set(cfg.duckdb_usage_memory_limit_mib.to_string());
                         duckdb_usage_checkpoint_threshold_mib_input
                             .set(cfg.duckdb_usage_checkpoint_threshold_mib.to_string());
+                        usage_analytics_retention_days_input
+                            .set(cfg.usage_analytics_retention_days.to_string());
                         config.set(Some(cfg));
                         keys.set(key_items);
                         account_groups.set(account_group_items);
@@ -2936,6 +2955,7 @@ pub fn admin_llm_gateway_page() -> Html {
         let duckdb_usage_memory_limit_mib_input = duckdb_usage_memory_limit_mib_input.clone();
         let duckdb_usage_checkpoint_threshold_mib_input =
             duckdb_usage_checkpoint_threshold_mib_input.clone();
+        let usage_analytics_retention_days_input = usage_analytics_retention_days_input.clone();
         let saving_runtime_config = saving_runtime_config.clone();
         let load_error = load_error.clone();
         let reload = reload.clone();
@@ -2974,6 +2994,9 @@ pub fn admin_llm_gateway_page() -> Html {
                 (*duckdb_usage_checkpoint_threshold_mib_input)
                     .trim()
                     .parse::<u64>();
+            let usage_analytics_retention_days = (*usage_analytics_retention_days_input)
+                .trim()
+                .parse::<u64>();
             let saving_runtime_config = saving_runtime_config.clone();
             let load_error = load_error.clone();
             let reload = reload.clone();
@@ -3071,6 +3094,10 @@ pub fn admin_llm_gateway_page() -> Html {
                         .set(Some("DuckDB checkpoint threshold 必须是正整数 MiB".to_string()));
                     return;
                 };
+                let Ok(usage_analytics_retention_days) = usage_analytics_retention_days else {
+                    load_error.set(Some("Usage analytics retention 必须是正整数天数".to_string()));
+                    return;
+                };
                 let runtime_config = LlmGatewayRuntimeConfig {
                     auth_cache_ttl_seconds: ttl,
                     max_request_body_bytes,
@@ -3091,6 +3118,7 @@ pub fn admin_llm_gateway_page() -> Html {
                     usage_event_flush_max_buffer_bytes,
                     duckdb_usage_memory_limit_mib,
                     duckdb_usage_checkpoint_threshold_mib,
+                    usage_analytics_retention_days,
                     usage_journal_enabled: config
                         .as_ref()
                         .map(|current| current.usage_journal_enabled)
@@ -5240,7 +5268,10 @@ pub fn admin_llm_gateway_page() -> Html {
         .filter(|k| !*keys_show_active_only || k.status.as_str() != "disabled")
         .collect();
     sort_keys(&mut keys_filtered_refs, *keys_sort_mode);
-    let keys_total_pages = keys_filtered_refs.len().max(1).div_ceil(KEY_PAGE_SIZE.max(1));
+    let keys_total_pages = keys_filtered_refs
+        .len()
+        .max(1)
+        .div_ceil(KEY_PAGE_SIZE.max(1));
     let keys_current_page = (*keys_page).clamp(1, keys_total_pages);
     let keys_page_entries: Vec<&AdminLlmGatewayKeyView> = keys_filtered_refs
         .iter()
@@ -5304,7 +5335,10 @@ pub fn admin_llm_gateway_page() -> Html {
         .filter(|acc| !*account_show_active_only || acc.status.as_str() != "disabled")
         .collect();
     sort_accounts(&mut account_filtered, *account_sort_mode);
-    let account_total_pages = account_filtered.len().max(1).div_ceil(ACCOUNT_PAGE_SIZE.max(1));
+    let account_total_pages = account_filtered
+        .len()
+        .max(1)
+        .div_ceil(ACCOUNT_PAGE_SIZE.max(1));
     let account_current_page = (*account_page).clamp(1, account_total_pages);
     let account_page_entries: Vec<&AccountSummaryView> = account_filtered
         .iter()
@@ -5360,7 +5394,12 @@ pub fn admin_llm_gateway_page() -> Html {
             proxy_query_lower.is_empty()
                 || pc.name.to_lowercase().contains(&proxy_query_lower)
                 || pc.proxy_url.to_lowercase().contains(&proxy_query_lower)
-                || pc.proxy_username.as_deref().unwrap_or("").to_lowercase().contains(&proxy_query_lower)
+                || pc
+                    .proxy_username
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains(&proxy_query_lower)
                 || pc.id.to_lowercase().contains(&proxy_query_lower)
         })
         .filter(|pc| !*proxy_config_show_active_only || pc.status.as_str() != "disabled")
@@ -6207,6 +6246,24 @@ pub fn admin_llm_gateway_page() -> Html {
                                     }}
                                 />
                             </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "usage_analytics_retention_days" }</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max="365"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*usage_analytics_retention_days_input).clone()}
+                                    oninput={{
+                                        let usage_analytics_retention_days_input = usage_analytics_retention_days_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                usage_analytics_retention_days_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
                             <details class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--bg)]", "px-3", "py-2", "text-xs", "text-[var(--muted)]", "md:col-span-2", "xl:col-span-3")}>
                                 <summary class={classes!("cursor-pointer", "font-semibold", "select-none")}>{ "配置说明" }</summary>
                                 <div class={classes!("mt-2")}>
@@ -6265,12 +6322,13 @@ pub fn admin_llm_gateway_page() -> Html {
                                 </p>
                                 <p class={classes!("m-0")}>
                                     { format!(
-                                        "当前 usage flush：{} 条 / {} 秒 / {} bytes；DuckDB：{} MiB / {} MiB",
+                                        "当前 usage flush：{} 条 / {} 秒 / {} bytes；DuckDB：{} MiB / {} MiB；保留最近 {} 天",
                                         cfg.usage_event_flush_batch_size,
                                         cfg.usage_event_flush_interval_seconds,
                                         format_number_u64(cfg.usage_event_flush_max_buffer_bytes),
                                         cfg.duckdb_usage_memory_limit_mib,
-                                        cfg.duckdb_usage_checkpoint_threshold_mib
+                                        cfg.duckdb_usage_checkpoint_threshold_mib,
+                                        cfg.usage_analytics_retention_days
                                     ) }
                                 </p>
                             </div>
@@ -7915,7 +7973,12 @@ pub fn admin_llm_gateway_page() -> Html {
                 if *active_tab == TAB_USAGE {
                 <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Usage Events" }</h2>
+                        <div>
+                            <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Usage Events" }</h2>
+                            <p class={classes!("m-0", "mt-1", "text-xs", "text-[var(--muted)]")}>
+                                { format!("仅展示最近 {} 天的 usage events", *usage_retention_days) }
+                            </p>
+                        </div>
                         <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
                             <span class={classes!("rounded-full", "border", "border-[var(--border)]", "px-3", "py-1", "text-xs", "font-semibold", "text-[var(--muted)]")}>
                                 { format!("RPM {}", *usage_current_rpm) }

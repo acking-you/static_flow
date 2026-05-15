@@ -50,6 +50,8 @@ pub const DEFAULT_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
 pub const DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB: u64 = 1024;
 /// Default DuckDB usage writer WAL checkpoint threshold in MiB.
 pub const DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB: u64 = 16;
+/// Default retained usage analytics horizon in days.
+pub const DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS: u64 = 7;
 /// Default usage-journal write toggle.
 pub const DEFAULT_USAGE_JOURNAL_ENABLED: bool = true;
 /// Default compressed journal file rollover size.
@@ -159,6 +161,8 @@ pub struct AdminRuntimeConfig {
     pub duckdb_usage_memory_limit_mib: u64,
     /// DuckDB usage writer WAL checkpoint threshold in MiB.
     pub duckdb_usage_checkpoint_threshold_mib: u64,
+    /// Number of recent days retained in DuckDB usage analytics.
+    pub usage_analytics_retention_days: u64,
     /// Whether API workers write usage events to local journal files.
     pub usage_journal_enabled: bool,
     /// Maximum compressed journal file bytes before sealing.
@@ -228,6 +232,7 @@ impl Default for AdminRuntimeConfig {
             usage_event_flush_max_buffer_bytes: DEFAULT_USAGE_EVENT_FLUSH_MAX_BUFFER_BYTES,
             duckdb_usage_memory_limit_mib: DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
             duckdb_usage_checkpoint_threshold_mib: DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB,
+            usage_analytics_retention_days: DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS,
             usage_journal_enabled: DEFAULT_USAGE_JOURNAL_ENABLED,
             usage_journal_max_file_bytes: DEFAULT_USAGE_JOURNAL_MAX_FILE_BYTES,
             usage_journal_max_file_age_ms: DEFAULT_USAGE_JOURNAL_MAX_FILE_AGE_MS,
@@ -313,6 +318,9 @@ pub struct UpdateAdminRuntimeConfig {
     /// DuckDB usage writer WAL checkpoint threshold in MiB.
     #[serde(default)]
     pub duckdb_usage_checkpoint_threshold_mib: Option<u64>,
+    /// Number of recent days retained in DuckDB usage analytics.
+    #[serde(default)]
+    pub usage_analytics_retention_days: Option<u64>,
     /// Usage-journal write toggle.
     #[serde(default)]
     pub usage_journal_enabled: Option<bool>,

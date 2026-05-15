@@ -194,6 +194,8 @@ pub struct RuntimeConfigRecord {
     pub duckdb_usage_memory_limit_mib: i64,
     /// DuckDB usage writer WAL checkpoint threshold in MiB.
     pub duckdb_usage_checkpoint_threshold_mib: i64,
+    /// Number of recent days retained in DuckDB usage analytics.
+    pub usage_analytics_retention_days: i64,
     /// Whether API workers write usage events to local journal files.
     pub usage_journal_enabled: bool,
     /// Maximum compressed journal file bytes before sealing.
@@ -2940,6 +2942,7 @@ impl SqliteControlStore {
                     usage_event_flush_max_buffer_bytes,
                     duckdb_usage_memory_limit_mib,
                     duckdb_usage_checkpoint_threshold_mib,
+                    usage_analytics_retention_days,
                     usage_journal_enabled,
                     usage_journal_max_file_bytes,
                     usage_journal_max_file_age_ms,
@@ -2968,7 +2971,8 @@ impl SqliteControlStore {
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
                     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24,
                     ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35,
-                    ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46
+                    ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46,
+                    ?47
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     auth_cache_ttl_seconds = excluded.auth_cache_ttl_seconds,
@@ -3003,6 +3007,8 @@ impl SqliteControlStore {
                         excluded.duckdb_usage_memory_limit_mib,
                     duckdb_usage_checkpoint_threshold_mib =
                         excluded.duckdb_usage_checkpoint_threshold_mib,
+                    usage_analytics_retention_days =
+                        excluded.usage_analytics_retention_days,
                     usage_journal_enabled = excluded.usage_journal_enabled,
                     usage_journal_max_file_bytes = excluded.usage_journal_max_file_bytes,
                     usage_journal_max_file_age_ms = excluded.usage_journal_max_file_age_ms,
@@ -3062,6 +3068,7 @@ impl SqliteControlStore {
                     record.usage_event_flush_max_buffer_bytes,
                     record.duckdb_usage_memory_limit_mib,
                     record.duckdb_usage_checkpoint_threshold_mib,
+                    record.usage_analytics_retention_days,
                     record.usage_journal_enabled as i64,
                     record.usage_journal_max_file_bytes,
                     record.usage_journal_max_file_age_ms,
@@ -3115,6 +3122,7 @@ impl SqliteControlStore {
                     usage_event_flush_max_buffer_bytes,
                     duckdb_usage_memory_limit_mib,
                     duckdb_usage_checkpoint_threshold_mib,
+                    usage_analytics_retention_days,
                     usage_journal_enabled,
                     usage_journal_max_file_bytes,
                     usage_journal_max_file_age_ms,
@@ -5095,30 +5103,31 @@ fn decode_runtime_config(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeCon
         usage_event_flush_max_buffer_bytes: row.get(19)?,
         duckdb_usage_memory_limit_mib: row.get(20)?,
         duckdb_usage_checkpoint_threshold_mib: row.get(21)?,
-        usage_journal_enabled: row.get::<_, i64>(22)? != 0,
-        usage_journal_max_file_bytes: row.get(23)?,
-        usage_journal_max_file_age_ms: row.get(24)?,
-        usage_journal_max_files: row.get(25)?,
-        usage_journal_block_target_uncompressed_bytes: row.get(26)?,
-        usage_journal_block_max_events: row.get(27)?,
-        usage_journal_fsync_interval_ms: row.get(28)?,
-        usage_journal_zstd_level: row.get(29)?,
-        usage_journal_consumer_lease_ms: row.get(30)?,
-        usage_journal_delete_bad_files: row.get::<_, i64>(31)? != 0,
-        usage_query_bind_addr: row.get(32)?,
-        usage_query_base_url: row.get(33)?,
-        usage_event_maintenance_enabled: row.get::<_, i64>(34)? != 0,
-        usage_event_maintenance_interval_seconds: row.get(35)?,
-        usage_event_detail_retention_days: row.get(36)?,
-        kiro_cache_kmodels_json: row.get(37)?,
-        kiro_billable_model_multipliers_json: row.get(38)?,
-        kiro_cache_policy_json: row.get(39)?,
-        kiro_prefix_cache_mode: row.get(40)?,
-        kiro_prefix_cache_max_tokens: row.get(41)?,
-        kiro_prefix_cache_entry_ttl_seconds: row.get(42)?,
-        kiro_conversation_anchor_max_entries: row.get(43)?,
-        kiro_conversation_anchor_ttl_seconds: row.get(44)?,
-        updated_at_ms: row.get(45)?,
+        usage_analytics_retention_days: row.get(22)?,
+        usage_journal_enabled: row.get::<_, i64>(23)? != 0,
+        usage_journal_max_file_bytes: row.get(24)?,
+        usage_journal_max_file_age_ms: row.get(25)?,
+        usage_journal_max_files: row.get(26)?,
+        usage_journal_block_target_uncompressed_bytes: row.get(27)?,
+        usage_journal_block_max_events: row.get(28)?,
+        usage_journal_fsync_interval_ms: row.get(29)?,
+        usage_journal_zstd_level: row.get(30)?,
+        usage_journal_consumer_lease_ms: row.get(31)?,
+        usage_journal_delete_bad_files: row.get::<_, i64>(32)? != 0,
+        usage_query_bind_addr: row.get(33)?,
+        usage_query_base_url: row.get(34)?,
+        usage_event_maintenance_enabled: row.get::<_, i64>(35)? != 0,
+        usage_event_maintenance_interval_seconds: row.get(36)?,
+        usage_event_detail_retention_days: row.get(37)?,
+        kiro_cache_kmodels_json: row.get(38)?,
+        kiro_billable_model_multipliers_json: row.get(39)?,
+        kiro_cache_policy_json: row.get(40)?,
+        kiro_prefix_cache_mode: row.get(41)?,
+        kiro_prefix_cache_max_tokens: row.get(42)?,
+        kiro_prefix_cache_entry_ttl_seconds: row.get(43)?,
+        kiro_conversation_anchor_max_entries: row.get(44)?,
+        kiro_conversation_anchor_ttl_seconds: row.get(45)?,
+        updated_at_ms: row.get(46)?,
     })
 }
 
@@ -5157,6 +5166,8 @@ impl Default for RuntimeConfigRecord {
             duckdb_usage_memory_limit_mib: core_store::DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB as i64,
             duckdb_usage_checkpoint_threshold_mib:
                 core_store::DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB as i64,
+            usage_analytics_retention_days: core_store::DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS
+                as i64,
             usage_journal_enabled: core_store::DEFAULT_USAGE_JOURNAL_ENABLED,
             usage_journal_max_file_bytes: core_store::DEFAULT_USAGE_JOURNAL_MAX_FILE_BYTES as i64,
             usage_journal_max_file_age_ms: core_store::DEFAULT_USAGE_JOURNAL_MAX_FILE_AGE_MS as i64,
@@ -5227,6 +5238,7 @@ impl RuntimeConfigRecord {
             duckdb_usage_memory_limit_mib: self.duckdb_usage_memory_limit_mib as u64,
             duckdb_usage_checkpoint_threshold_mib: self.duckdb_usage_checkpoint_threshold_mib
                 as u64,
+            usage_analytics_retention_days: self.usage_analytics_retention_days as u64,
             usage_journal_enabled: self.usage_journal_enabled,
             usage_journal_max_file_bytes: self.usage_journal_max_file_bytes as u64,
             usage_journal_max_file_age_ms: self.usage_journal_max_file_age_ms as u64,
@@ -5281,6 +5293,7 @@ impl RuntimeConfigRecord {
         self.duckdb_usage_memory_limit_mib = config.duckdb_usage_memory_limit_mib as i64;
         self.duckdb_usage_checkpoint_threshold_mib =
             config.duckdb_usage_checkpoint_threshold_mib as i64;
+        self.usage_analytics_retention_days = config.usage_analytics_retention_days as i64;
         self.usage_journal_enabled = config.usage_journal_enabled;
         self.usage_journal_max_file_bytes = config.usage_journal_max_file_bytes as i64;
         self.usage_journal_max_file_age_ms = config.usage_journal_max_file_age_ms as i64;
@@ -5336,6 +5349,7 @@ impl RuntimeConfigRecord {
             usage_event_flush_max_buffer_bytes: 1_048_576,
             duckdb_usage_memory_limit_mib: 1024,
             duckdb_usage_checkpoint_threshold_mib: 16,
+            usage_analytics_retention_days: 7,
             usage_journal_enabled: true,
             usage_journal_max_file_bytes: 64 * 1024 * 1024,
             usage_journal_max_file_age_ms: 300_000,
@@ -7027,6 +7041,7 @@ mod tests {
         config.usage_journal_zstd_level = 5;
         config.usage_journal_consumer_lease_ms = 600_000;
         config.usage_journal_delete_bad_files = true;
+        config.usage_analytics_retention_days = 14;
         config.usage_query_bind_addr = "127.0.0.1:19091".to_string();
         config.usage_query_base_url = "http://127.0.0.1:19091".to_string();
         config.updated_at_ms = 100;
@@ -7053,6 +7068,7 @@ mod tests {
         assert_eq!(value.usage_journal_zstd_level, 5);
         assert_eq!(value.usage_journal_consumer_lease_ms, 600_000);
         assert!(value.usage_journal_delete_bad_files);
+        assert_eq!(value.usage_analytics_retention_days, 14);
         assert_eq!(value.usage_query_bind_addr, "127.0.0.1:19091");
         assert_eq!(value.usage_query_base_url, "http://127.0.0.1:19091");
         assert_eq!(value.updated_at_ms, 200);

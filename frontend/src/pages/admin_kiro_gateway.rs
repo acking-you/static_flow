@@ -2830,6 +2830,7 @@ pub fn admin_kiro_gateway_page() -> Html {
     let account_groups_search = use_state(String::new);
     let kiro_models = use_state(Vec::<KiroModelView>::new);
     let usage_events = use_state(Vec::<AdminLlmGatewayUsageEventView>::new);
+    let usage_retention_days = use_state(|| 7_u64);
     let usage_loading = use_state(|| false);
     let usage_error = use_state(|| None::<String>);
     let selected_usage_event = use_state(|| None::<AdminLlmGatewayUsageEventDetailView>);
@@ -2946,10 +2947,12 @@ pub fn admin_kiro_gateway_page() -> Html {
 
     let reload_usage = {
         let usage_events = usage_events.clone();
+        let usage_retention_days = usage_retention_days.clone();
         let usage_loading = usage_loading.clone();
         let usage_error = usage_error.clone();
         Callback::from(move |_| {
             let usage_events = usage_events.clone();
+            let usage_retention_days = usage_retention_days.clone();
             let usage_loading = usage_loading.clone();
             let usage_error = usage_error.clone();
             usage_loading.set(true);
@@ -2965,7 +2968,10 @@ pub fn admin_kiro_gateway_page() -> Html {
                 })
                 .await
                 {
-                    Ok(usage_resp) => usage_events.set(usage_resp.events),
+                    Ok(usage_resp) => {
+                        usage_retention_days.set(usage_resp.retention_days);
+                        usage_events.set(usage_resp.events);
+                    },
                     Err(err) => usage_error.set(Some(err)),
                 }
                 usage_loading.set(false);
@@ -4603,7 +4609,12 @@ pub fn admin_kiro_gateway_page() -> Html {
             if *active_tab == TAB_USAGE {
             <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
                 <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                    <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Recent Usage" }</h2>
+                    <div>
+                        <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Recent Usage" }</h2>
+                        <p class={classes!("m-0", "mt-1", "text-xs", "text-[var(--muted)]")}>
+                            { format!("仅展示最近 {} 天的 usage events", *usage_retention_days) }
+                        </p>
+                    </div>
                     <Link<Route> to={Route::AdminLlmGateway} classes={classes!("btn-terminal")}>
                         { "查看完整记录" }
                     </Link<Route>>

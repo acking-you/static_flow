@@ -1,6 +1,6 @@
 //! Reusable usage query JSON contract for API and worker routes.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use axum::{
     extract::{Path, Query, State},
@@ -11,6 +11,7 @@ use axum::{
 use llm_access_core::{
     store::{
         UsageAnalyticsStore, UsageChartPoint, UsageEventPage, UsageEventQuery, UsageEventSource,
+        DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS,
     },
     usage::UsageEvent,
 };
@@ -49,8 +50,14 @@ pub(crate) struct AdminUsageEventsResponse {
     pub(crate) has_more: bool,
     pub(crate) current_rpm: u32,
     pub(crate) current_in_flight: u32,
+    #[serde(default = "default_usage_analytics_retention_days")]
+    pub(crate) retention_days: u64,
     pub(crate) events: Vec<AdminUsageEventView>,
     pub(crate) generated_at: i64,
+}
+
+fn default_usage_analytics_retention_days() -> u64 {
+    DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS
 }
 
 /// Summary usage event.
@@ -138,6 +145,7 @@ pub(crate) struct UsageChartPointView {
 #[derive(Clone)]
 pub(crate) struct UsageQueryState {
     pub(crate) usage_analytics_store: Arc<dyn UsageAnalyticsStore>,
+    pub(crate) retention_days: Arc<RwLock<u64>>,
 }
 
 /// List all LLM usage events.
@@ -217,7 +225,7 @@ async fn list_usage_events(
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
     };
     match state.usage_analytics_store.list_usage_events(query).await {
-        Ok(page) => Json(response_from_page(page)).into_response(),
+        Ok(page) => Json(response_from_page(page, usage_retention_days(&state))).into_response(),
         Err(err) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to list usage events: {err:#}"),
@@ -247,7 +255,7 @@ async fn get_usage_event(
     }
 }
 
-fn response_from_page(page: UsageEventPage) -> AdminUsageEventsResponse {
+fn response_from_page(page: UsageEventPage, retention_days: u64) -> AdminUsageEventsResponse {
     AdminUsageEventsResponse {
         total: page.total,
         offset: page.offset,
@@ -255,9 +263,19 @@ fn response_from_page(page: UsageEventPage) -> AdminUsageEventsResponse {
         has_more: page.has_more,
         current_rpm: 0,
         current_in_flight: 0,
+        retention_days,
         events: page.events.iter().map(AdminUsageEventView::from).collect(),
         generated_at: now_ms(),
     }
+}
+
+fn usage_retention_days(state: &UsageQueryState) -> u64 {
+    state
+        .retention_days
+        .read()
+        .map(|value| *value)
+        .unwrap_or(llm_access_core::store::DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS)
+        .max(1)
 }
 
 fn detail_from_event(event: &UsageEvent) -> AdminUsageEventDetailView {
@@ -418,9 +436,9 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use llm_access_core::store::UsageEventSource;
+    use llm_access_core::store::{UsageEventPage, UsageEventSource};
 
-    use super::{normalize_usage_query, ListUsageEventsRequest};
+    use super::{normalize_usage_query, response_from_page, ListUsageEventsRequest};
 
     #[test]
     fn normalize_usage_query_accepts_explicit_archive_source() {
@@ -452,5 +470,41 @@ mod tests {
         .expect_err("unknown usage source should fail");
 
         assert!(err.contains("source must be one of"));
+    }
+
+    #[test]
+    fn usage_events_response_declares_retention_days() {
+        let response = response_from_page(
+            UsageEventPage {
+                total: 0,
+                offset: 0,
+                limit: 20,
+                has_more: false,
+                events: Vec::new(),
+            },
+            7,
+        );
+
+        assert_eq!(response.retention_days, 7);
+    }
+
+    #[test]
+    fn usage_events_response_defaults_missing_retention_days() {
+        let response: super::AdminUsageEventsResponse = serde_json::from_value(serde_json::json!({
+            "total": 0,
+            "offset": 0,
+            "limit": 20,
+            "has_more": false,
+            "current_rpm": 0,
+            "current_in_flight": 0,
+            "events": [],
+            "generated_at": 1_700_000_000_000_i64
+        }))
+        .expect("usage response without retention_days");
+
+        assert_eq!(
+            response.retention_days,
+            llm_access_core::store::DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS
+        );
     }
 }

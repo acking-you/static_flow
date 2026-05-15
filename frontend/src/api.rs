@@ -27,6 +27,10 @@ fn default_duckdb_usage_checkpoint_threshold_mib() -> u64 {
     16
 }
 
+fn default_usage_analytics_retention_days() -> u64 {
+    7
+}
+
 fn default_codex_weight_free() -> u64 {
     1
 }
@@ -6136,6 +6140,8 @@ pub struct AdminLlmGatewayUsageEventsResponse {
     pub has_more: bool,
     pub current_rpm: u32,
     pub current_in_flight: u32,
+    #[serde(default = "default_usage_analytics_retention_days")]
+    pub retention_days: u64,
     pub events: Vec<AdminLlmGatewayUsageEventView>,
     pub generated_at: i64,
 }
@@ -6585,6 +6591,8 @@ pub struct LlmGatewayRuntimeConfig {
     pub duckdb_usage_memory_limit_mib: u64,
     #[serde(default = "default_duckdb_usage_checkpoint_threshold_mib")]
     pub duckdb_usage_checkpoint_threshold_mib: u64,
+    #[serde(default = "default_usage_analytics_retention_days")]
+    pub usage_analytics_retention_days: u64,
     #[serde(default = "default_true")]
     pub usage_journal_enabled: bool,
     #[serde(default = "default_usage_journal_max_file_bytes")]
@@ -7412,6 +7420,7 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             duckdb_usage_memory_limit_mib: default_duckdb_usage_memory_limit_mib(),
             duckdb_usage_checkpoint_threshold_mib:
                 default_duckdb_usage_checkpoint_threshold_mib(),
+            usage_analytics_retention_days: default_usage_analytics_retention_days(),
             usage_journal_enabled: true,
             usage_journal_max_file_bytes: default_usage_journal_max_file_bytes(),
             usage_journal_max_file_age_ms: default_usage_journal_max_file_age_ms(),
@@ -8734,6 +8743,7 @@ pub async fn fetch_admin_llm_gateway_usage_events(
             has_more: false,
             current_rpm: 0,
             current_in_flight: 0,
+            retention_days: default_usage_analytics_retention_days(),
             events: vec![],
             generated_at: 0,
         })
@@ -10167,6 +10177,7 @@ pub async fn fetch_admin_kiro_usage_events(
             has_more: false,
             current_rpm: 0,
             current_in_flight: 0,
+            retention_days: default_usage_analytics_retention_days(),
             events: vec![],
             generated_at: 0,
         })
@@ -10691,6 +10702,7 @@ mod tests {
                 "usage_event_maintenance_enabled": true,
                 "usage_event_maintenance_interval_seconds": 3600,
                 "usage_event_detail_retention_days": 7,
+                "usage_analytics_retention_days": 14,
                 "kiro_cache_kmodels_json": "{}",
                 "kiro_billable_model_multipliers_json": "{\"haiku\":1.0,\"opus\":1.0,\"sonnet\":1.0}",
                 "kiro_cache_policy_json": "{}",
@@ -10719,6 +10731,27 @@ mod tests {
         assert!(!config.usage_journal_delete_bad_files);
         assert_eq!(config.usage_query_bind_addr, "127.0.0.1:19081");
         assert_eq!(config.usage_query_base_url, "http://127.0.0.1:19081");
+        assert_eq!(config.usage_analytics_retention_days, 14);
+    }
+
+    #[test]
+    fn admin_usage_events_response_deserializes_retention_days() {
+        let response: AdminLlmGatewayUsageEventsResponse = serde_json::from_str(
+            r#"{
+                "total": 0,
+                "offset": 0,
+                "limit": 20,
+                "has_more": false,
+                "current_rpm": 0,
+                "current_in_flight": 0,
+                "retention_days": 7,
+                "events": [],
+                "generated_at": 1700000000000
+            }"#,
+        )
+        .expect("usage response should parse retention days");
+
+        assert_eq!(response.retention_days, 7);
     }
 
     #[test]
