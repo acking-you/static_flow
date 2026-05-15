@@ -39,7 +39,7 @@ static-flow/
 ├── llm-access-codex/    # Codex/OpenAI-compatible gateway
 ├── llm-access-kiro/     # Kiro/Anthropic-compatible gateway
 ├── llm-access-migrations/ # Schema migrations for llm-access stores
-├── llm-access-store/    # Storage layer (SQLite control + DuckDB analytics)
+├── llm-access-store/    # Storage layer (Postgres/SQLite control + DuckDB analytics)
 ├── skills/              # Codex/Claude agent skill definitions
 ├── scripts/             # Shell scripts — launchers, worker runners, e2e tests
 ├── docs/                # Technical docs, deep-dives, ops runbook
@@ -116,23 +116,25 @@ Current production is split between a cloud LLM tier and a local content tier:
 
 The cloud `llm-access` service itself is split in two processes:
 
-- `llm-access.service`: provider/admin API, SQLite control plane, account
+- `llm-access.service`: provider/admin API, Neon control plane, account
   refreshers, and usage journal production
 - `llm-access-usage-worker.service`: journal consumption, tiered DuckDB usage
   analytics, and usage query routes
 
 Current usage analytics storage shape:
 
-- SQLite control: `/mnt/llm-access/control/llm-access.sqlite3`
+- shared Neon control config: `/mnt/llm-access/config/neon.env`
+- retained rollback SQLite snapshot: `/mnt/llm-access/control/llm-access.sqlite3`
 - hot journal: `/var/lib/staticflow/llm-access/usage-journal`
 - active mutable DuckDB: `/var/lib/staticflow/llm-access/analytics-active`
-- archived immutable DuckDB segments + catalog: `/mnt/llm-access/analytics`
-- heavy per-event detail payloads: compressed JSON objects in direct R2 object
-  storage, configured by `LLM_ACCESS_USAGE_DETAILS_OBJECT_STORE_URL`
+- archived immutable DuckDB segments + catalog:
+  `/mnt/llm-access-usage/analytics`
+- heavy per-event detail payloads: packed files under
+  `/mnt/llm-access-usage/details/packs/...`
 
 This means production usage detail payloads are no longer stored in the hot
-DuckDB files. The worker writes summary facts to DuckDB and writes heavy detail
-blobs straight to object storage.
+DuckDB files. The worker writes summary facts to DuckDB and stores heavy detail
+packs through the dedicated JuiceFS usage mount instead of direct R2 uploads.
 
 ## CLI Reference
 

@@ -61,7 +61,8 @@ this directory describe that cloud-side service shape.
 Storage model:
 
 - state root: `/mnt/llm-access`
-- SQLite control DB: `/mnt/llm-access/control/llm-access.sqlite3`
+- shared Neon control config: `/mnt/llm-access/config/neon.env`
+- retained rollback SQLite snapshot: `/mnt/llm-access/control/llm-access.sqlite3`
 - active mutable DuckDB dir: `/var/lib/staticflow/llm-access/analytics-active`
 - GeoIP MMDB cache: `/var/lib/staticflow/llm-access/geoip/GeoLite2-City.mmdb`
 - archived DuckDB segments: `/mnt/llm-access-usage/analytics/segments`
@@ -74,12 +75,16 @@ Storage model:
 
 The production JuiceFS volume is backed by Cloudflare R2 object storage and
 external Valkey metadata. Credentials belong in ignored private env files, not
-in these templates. `llm-access.service` is the single writer for SQLite
-rollups/auth state and hot local usage journal files; `llm-access-usage-worker`
-is the single writer for tiered DuckDB analytics and packed usage details.
-Journal files and active DuckDB segments stay on VM block storage; sealed
-DuckDB segments, the segment catalog, and packed detail blobs live on the
-catalog are archived under JuiceFS.
+in these templates. These units assume the live control plane is in Neon
+Postgres, sourced from `/mnt/llm-access/config/neon.env`; the retained SQLite
+file under `/mnt/llm-access/control/llm-access.sqlite3` is only a rollback
+snapshot. `llm-access.service` owns provider/admin traffic and hot local usage
+journal production; `llm-access-usage-worker.service` consumes the journal and
+writes tiered DuckDB analytics plus packed usage details. Both units source the
+shared Neon env from `bash -lc` wrappers rather than a systemd
+`EnvironmentFile=` on JuiceFS. Journal files and active DuckDB segments stay on
+VM block storage; sealed DuckDB segments, the segment catalog, and packed
+detail blobs live on the dedicated JuiceFS usage mount.
 The GeoIP MMDB is a rebuildable local cache and should stay on the VM block
 disk, not under `/mnt/llm-access`.
 

@@ -13,7 +13,7 @@ public client
   -> GCP Caddy :443
      ├── LLM paths
      │   -> cloud llm-access 127.0.0.1:19080
-     │      -> SQLite control DB on /mnt/llm-access/control
+     │      -> Neon control plane via /mnt/llm-access/config/neon.env
      │      -> usage journal on /var/lib/staticflow/llm-access/usage-journal
      │      -> active DuckDB on /var/lib/staticflow/llm-access/analytics-active
      │      -> archived DuckDB segments/catalog on /mnt/llm-access-usage
@@ -131,15 +131,15 @@ sudo journalctl -u caddy -n 120 --no-pager -l
 
 ```text
 /mnt/llm-access
-  /control/llm-access.sqlite3
+  /config/neon.env
+  /control/llm-access.sqlite3   # rollback snapshot only
   /auths/codex
   /auths/kiro
   /support/llm_access_support
-  /analytics/segments
-  /analytics/catalog
 
 /var/lib/staticflow/llm-access/usage-journal
 /var/lib/staticflow/llm-access/analytics-active
+/mnt/llm-access-usage
   usage-active-*.duckdb
 ```
 

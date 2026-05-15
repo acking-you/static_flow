@@ -112,15 +112,21 @@ private env files, not in tracked docs.
 
 ## Cloud llm-access Deployment Shape
 
-- `llm-access` must be a single-writer service for its SQLite, DuckDB, and auth
-  JSON files. Do not run local and cloud `llm-access` processes that both write
-  the same JuiceFS-mounted state tree.
-- The production deployment now uses two JuiceFS mount points:
+- `llm-access` must keep a single active writer for its auth JSON files, local
+  journal files, and mutable DuckDB state. Do not run local and cloud
+  `llm-access` processes that both write the same JuiceFS-mounted state tree or
+  the same VM-local usage state.
+- Production `llm-access` now uses Neon Postgres as the live control plane.
+  The shared connection file lives at `/mnt/llm-access/config/neon.env`. The
+  older `/mnt/llm-access/control/llm-access.sqlite3` file is retained only as a
+  rollback snapshot and must not be treated as the live source of truth.
+- The production deployment uses two JuiceFS mount points:
   - control/state mount: `/mnt/llm-access`
   - usage analytics mount: `/mnt/llm-access-usage`
 - llm-access should use:
   - API state root: `/mnt/llm-access`
-  - SQLite control DB: `/mnt/llm-access/control/llm-access.sqlite3`
+  - shared Neon config: `/mnt/llm-access/config/neon.env`
+  - rollback SQLite snapshot: `/mnt/llm-access/control/llm-access.sqlite3`
   - hot local usage journal dir: `/var/lib/staticflow/llm-access/usage-journal`
   - local active DuckDB dir: `/var/lib/staticflow/llm-access/analytics-active`
   - archived immutable DuckDB segments:
@@ -131,30 +137,36 @@ private env files, not in tracked docs.
   - email credentials: `/mnt/llm-access/config/email_accounts.json`
   - API bind address: `127.0.0.1:19080`
   - usage worker bind address: `127.0.0.1:19081`
+- `usage-journal` is VM-local only. The active path is
+  `/var/lib/staticflow/llm-access/usage-journal`. Do not recreate
+  `/mnt/llm-access/usage-journal`; if that directory appears again, treat it as
+  stale dead data and remove it.
 - Gmail notification credentials must live on JuiceFS, not VM-local `/etc`.
   `llm-access.service` should set
   `EMAIL_ACCOUNTS_FILE=/mnt/llm-access/config/email_accounts.json`; keep the
   file mode `0600` and do not log credential contents.
-- Service ownership after the usage split:
-  - `llm-access.service`: provider traffic, SQLite control/rollups, account
+- Service ownership after the Neon cutover:
+  - `llm-access.service`: provider traffic, Neon control reads/writes, account
     status refreshers, and compact local usage journal production.
-  - `llm-access-usage-worker.service`: journal consumption, tiered DuckDB
-    summary writes, local packed usage-detail persistence, worker progress
-    state, and legacy admin usage list/detail query routes on the worker port.
-- Live GCP `llm-access.service` currently runs as the non-root `ts_user`
-  service user. The checked-in template still uses a dedicated `llm-access`
-  user for fresh deployments; either is acceptable if file ownership, FUSE
-  permissions, and readiness checks are consistent.
-- Current GCP systemd units verified on 2026-05-13:
+  - `llm-access-usage-worker.service`: runtime-config reads from Neon, journal
+    consumption, tiered DuckDB summary writes, packed usage-detail writes,
+    worker progress state, and legacy admin/public usage query routes on the
+    worker port.
+- Live GCP `llm-access.service` and `llm-access-usage-worker.service` currently
+  run as the non-root `ts_user` service user. The critical requirement is not
+  the username; it is that the same service user can read the shared JuiceFS
+  config, the local journal directory, and both FUSE mounts consistently.
+- Current GCP systemd units verified on 2026-05-16:
   - `juicefs-llm-access.service`: mounts `/mnt/llm-access`
   - `juicefs-llm-access-usage.service`: mounts `/mnt/llm-access-usage`
-  - `llm-access.service`: serves `127.0.0.1:19080`
-    and proxies legacy admin usage routes to the worker query port
+  - `llm-access.service`: serves `127.0.0.1:19080`, sources
+    `/mnt/llm-access/config/neon.env`, and starts with
+    `--postgres-control-database-url-env LLM_ACCESS_CONTROL_DATABASE_URL`
+  - `llm-access-usage-worker.service`: serves `127.0.0.1:19081`, sources the
+    same Neon env, consumes the local journal root, and writes usage artifacts
+    under `/mnt/llm-access-usage`
   - `pb-mapper-server-cli@llm-access.service`: registers cloud
     `127.0.0.1:19080` as pb-mapper key `llm-access`
-- The usage-journal split adds `llm-access-usage-worker.service`, serving
-  `127.0.0.1:19081`, consuming sealed journal files, and serving DuckDB-backed
-  usage queries.
 - Current GCP llm-access logs:
   - systemd journal: `sudo journalctl -u llm-access.service -f`
   - usage worker journal:
@@ -164,14 +176,13 @@ private env files, not in tracked docs.
   - runtime access logs:
     `/var/log/staticflow-runtime/llm-access/access/current.*.log`
   - JuiceFS mount logs:
-    `sudo journalctl -u juicefs-llm-access.service -f`; the configured
-    `/var/log/juicefs/llm-access.log` may not receive every active-run line
-    because the mount process is systemd-supervised.
+    `sudo journalctl -u juicefs-llm-access.service -f`
+    and `sudo journalctl -u juicefs-llm-access-usage.service -f`
   Runtime logs rotate hourly and retain the latest 4 files per stream.
-- Current GCP JuiceFS local cache uses `/var/cache/juicefs/llm-access`. Keep
-  the cache on the VM local ext4 disk, not inside `/mnt/llm-access`. The
-  systemd mount template sets `cache-size=40960` (MiB) so hot reads do not
-  constantly round-trip to R2.
+- Current GCP JuiceFS local cache uses:
+  - control mount cache: `/var/cache/juicefs/llm-access`
+  - usage mount cache: `/var/cache/juicefs/llm-access-usage`
+  Keep both caches on VM-local ext4 storage, not inside the FUSE mount.
 
 ## GCP Memory Guard (2c8g VM)
 
@@ -200,18 +211,21 @@ extra swap as an emergency buffer, not as normal working memory.
   mutable all-history DuckDB file.
 - Heavy per-event detail payloads are not part of the hot DuckDB write path
   anymore. The worker writes summary facts into tiered DuckDB, but writes
-  detail payloads as compressed JSON objects directly to R2. This keeps
-  checkpoint/rollover memory bounded by summary analytics instead of full
-  request bodies.
+  detail payloads as packed files under `/mnt/llm-access-usage/details`. This
+  keeps checkpoint/rollover memory bounded by summary analytics instead of full
+  request bodies, without maintaining a second direct-R2 upload path in the
+  application.
 - The API process no longer writes usage events directly into DuckDB. It first
-  commits SQLite rollups, then appends compact diagnostic usage events to
-  `/var/lib/staticflow/llm-access/usage-journal`. The separate usage worker consumes sealed
-  journal files in batches, imports them into tiered DuckDB, records worker
-  progress in `consumer-state.sqlite3`, and deletes consumed journal files.
+  commits control-plane rollups through the live control repository, then
+  appends compact diagnostic usage events to
+  `/var/lib/staticflow/llm-access/usage-journal`. The separate usage worker
+  consumes sealed journal files in batches, imports them into tiered DuckDB,
+  records worker progress in `consumer-state.sqlite3`, and deletes consumed
+  journal files.
 - Journal file rollover is controlled by both size and age. Retention is
-  intentionally lossy for old unconsumed diagnostics: SQLite rollups remain the
-  source of truth for quota/account accounting, while journal events are for
-  detailed troubleshooting.
+  intentionally lossy for old unconsumed diagnostics: control-plane rollups in
+  the live repository remain the source of truth for quota/account accounting,
+  while journal events are for detailed troubleshooting.
 - Legacy usage query paths remain compatible. The public/API service keeps the
   old `/admin/llm-gateway/usage*` and `/admin/kiro-gateway/usage*` routes for
   auth and compatibility, but proxies those queries to
@@ -219,7 +233,7 @@ extra swap as an emergency buffer, not as normal working memory.
 - The completed migration model is:
   1. Production `llm-access` state lives under `/mnt/llm-access` and the local
      VM active DuckDB directory described above.
-  2. Only cloud `llm-access.service` writes SQLite rollups and local journal
+  2. Only cloud `llm-access.service` writes live control rows and local journal
      files; only `llm-access-usage-worker.service` writes tiered DuckDB.
   3. Cloud Caddy owns the public LLM route split and sends LLM paths directly
      to `127.0.0.1:19080`.
@@ -259,68 +273,53 @@ extra swap as an emergency buffer, not as normal working memory.
 
 ## Current Runtime Verification Snapshot
 
-- Verified on GCP at `2026-05-13T20:22:32Z`.
+- Verified on GCP at `2026-05-16T22:13:00Z`.
 - Effective live API unit:
   - service user: `ts_user`
   - bind: `127.0.0.1:19080`
-  - current `ExecStart`: journal-only API process with
-    `--usage-journal-dir ${LLM_ACCESS_USAGE_JOURNAL_DIR}`
-  - effective `LLM_ACCESS_USAGE_JOURNAL_DIR`:
-    `/var/lib/staticflow/llm-access/usage-journal`
+  - current `ExecStart`: API process with
+    `--postgres-control-database-url-env LLM_ACCESS_CONTROL_DATABASE_URL`
+    and `--usage-journal-dir /var/lib/staticflow/llm-access/usage-journal`
+  - `/proc/<api-pid>/environ` contains
+    `LLM_ACCESS_CONTROL_DATABASE_URL=<redacted>`
 - Effective live usage-worker unit:
   - service user: `ts_user`
   - bind: `127.0.0.1:19081`
-  - current `ExecStart`: worker process with local journal root,
-    local active DuckDB dir, dedicated JuiceFS usage archive/catalog dirs, and
-    JuiceFS-packed usage details
+  - current `ExecStart`: worker process with the same Postgres control env,
+    local journal root, local active DuckDB dir, dedicated JuiceFS usage
+    archive/catalog dirs, and JuiceFS-packed usage details
   - cgroup guard observed live:
     `MemoryHigh=2200M`, `MemoryMax=3072M`, `MemorySwapMax=1024M`
 - Live health checks that should all pass:
   ```bash
   curl -fsS http://127.0.0.1:19080/healthz
+  curl -fsS https://ackingliu.top/api/llm-gateway/status
   curl -fsS http://127.0.0.1:19081/admin/llm-access/usage-worker/status
-  curl -fsS -H 'Host: localhost' http://127.0.0.1:19080/admin/llm-access/usage-journal/status
-  systemctl show llm-access.service -p ActiveState -p SubState -p ExecStart -p Environment --no-pager
-  systemctl show llm-access-usage-worker.service -p ActiveState -p SubState -p ExecStart -p Environment --no-pager
+  findmnt -T /mnt/llm-access
+  findmnt -T /mnt/llm-access-usage
+  systemctl cat llm-access.service llm-access-usage-worker.service
+  ps -o pid,args= -C llm-access -C llm-access-usage-worker
+  tr '\0' '\n' </proc/$(systemctl show -p MainPID --value llm-access.service)/environ | grep '^LLM_ACCESS_CONTROL_DATABASE_URL='
+  tr '\0' '\n' </proc/$(systemctl show -p MainPID --value llm-access-usage-worker.service)/environ | grep '^LLM_ACCESS_CONTROL_DATABASE_URL='
   ```
-- Healthy interpretation of the combined journal status:
-  - `journal_root` must be `/var/lib/staticflow/llm-access/usage-journal`
-  - `usage_query_base_url` must be `http://127.0.0.1:19081`
-  - `sealed_file_count == 0` with `worker.state == idle` means the producer is
-    only appending to the current open journal file and there is nothing waiting
-    to be consumed. This is healthy, not a stuck worker.
-  - `active_file_sequence` and `active_file_bytes` should move over time while
-    traffic exists.
-- Current live snapshot after the worker-only usage mount cutover should show:
-  - API `/healthz`: `{"status":"ok","service":"llm-access"}`
-  - worker status advancing in `state=importing`, `last_error=null`
-  - worker environment includes
-    `LLM_ACCESS_STATE_ROOT=/mnt/llm-access-usage`
-    and `LLM_ACCESS_SQLITE_CONTROL=/mnt/llm-access/control/llm-access.sqlite3`
+- Healthy interpretation:
+  - API args must include `--postgres-control-database-url-env`.
+  - worker args must include both `--postgres-control-database-url-env` and
+    `--usage-journal-dir /var/lib/staticflow/llm-access/usage-journal`.
+  - `worker.state == idle` with `last_error == null` and a local journal root
+    means the worker is healthy even if there are no sealed files pending.
+  - `llm_access_owner` should appear in Neon `pg_stat_activity` when the API
+    and worker are live.
 
-## Known Residuals After Worker Usage-Mount Cutover
+## Known Residuals After Neon Control Cutover
 
-- Historical files still exist under `/mnt/llm-access/usage-journal`. Current
-  live units no longer point there, so treat that tree as stale forensic data,
-  not the active producer/consumer root.
-- The live GCP API unit still has an older drop-in
-  `/etc/systemd/system/llm-access.service.d/zz-usage-journal-split.conf` that
-  sets `LLM_ACCESS_USAGE_JOURNAL_DIR=/mnt/llm-access/usage-journal`. The
-  effective local-root override currently comes from a later-sorting drop-in
-  `/etc/systemd/system/llm-access.service.d/zzz-usage-journal-local.conf`.
-  If that later drop-in is removed or renamed earlier alphabetically, the API
-  process will silently fall back to the JuiceFS journal root again.
-- The worker unit currently uses
-  `/etc/systemd/system/llm-access-usage-worker.service.d/zzz-usage-journal-local.conf`
-  for the same local journal override.
-- Old usage analytics data under `/mnt/llm-access/analytics` is now stale by
-  design. The worker no longer uses that tree for archived segments, catalog,
-  or packed details.
-- The live SQLite runtime config on 2026-05-07 used
-  `duckdb_usage_memory_limit_mib=2048` and
-  `duckdb_usage_checkpoint_threshold_mib=16`. Lowering the DuckDB memory limit
-  back to `1024` reproduced checkpoint OOM inside DuckDB before the systemd
-  `MemoryMax=3072M` cgroup guard was reached.
+- `/mnt/llm-access/control/llm-access.sqlite3` is retained only as a rollback
+  snapshot. It is no longer a live truth source.
+- `/mnt/llm-access/usage-journal` was removed on 2026-05-16. If it reappears,
+  treat it as stale wrong-path data and delete it after confirming no process
+  has it open.
+- `/mnt/llm-access/analytics` is legacy. Current worker archive/catalog/detail
+  writes belong under `/mnt/llm-access-usage`, not the old control mount.
 
 ## Cloud Release and Post-Release Verification
 
@@ -340,25 +339,92 @@ extra swap as an emergency buffer, not as normal working memory.
 - Required post-release checks:
   ```bash
   curl -fsS http://127.0.0.1:19080/healthz
+  curl -fsS https://ackingliu.top/api/llm-gateway/status
   curl -fsS http://127.0.0.1:19081/admin/llm-access/usage-worker/status
-  curl -fsS -H 'Host: localhost' http://127.0.0.1:19080/admin/llm-access/usage-journal/status
   findmnt -T /mnt/llm-access
   findmnt -T /mnt/llm-access-usage
-  systemctl show llm-access.service -p ExecStart -p Environment --no-pager
-  systemctl show llm-access-usage-worker.service -p ExecStart -p Environment --no-pager
+  systemctl cat llm-access.service llm-access-usage-worker.service
+  ps -o pid,args= -C llm-access -C llm-access-usage-worker
+  tr '\0' '\n' </proc/$(systemctl show -p MainPID --value llm-access.service)/environ | grep '^LLM_ACCESS_CONTROL_DATABASE_URL='
+  tr '\0' '\n' </proc/$(systemctl show -p MainPID --value llm-access-usage-worker.service)/environ | grep '^LLM_ACCESS_CONTROL_DATABASE_URL='
   sudo journalctl -u llm-access.service -n 80 --no-pager -l
   sudo journalctl -u llm-access-usage-worker.service -n 80 --no-pager -l
   ```
-- If the combined journal status reports the old mount path or the worker
-  returns permission errors for `.../usage-journal/sealed`, check the live
-  drop-in ordering and directory ownership first:
-  - `/etc/systemd/system/llm-access.service.d/zzz-usage-journal-local.conf`
-  - `/etc/systemd/system/llm-access-usage-worker.service.d/zzz-usage-journal-local.conf`
-  - owner/group of `/var/lib/staticflow/llm-access/usage-journal`
+- If API args still show `--sqlite-control`, or the Neon env is missing from
+  `/proc/<pid>/environ`, inspect stale drop-ins and activation drift first:
+  - `/etc/systemd/system/llm-access.service.d/readiness.conf`
+  - `/etc/systemd/system/llm-access.service.d/tiered-duckdb.conf`
+  - `/etc/systemd/system/llm-access.service.d/zz-usage-journal-split.conf`
+- If the worker returns permission errors for `.../usage-journal/sealed`, check
+  owner/group of `/var/lib/staticflow/llm-access/usage-journal` and confirm the
+  local path still exists on ext4 rather than JuiceFS.
 - If the worker starts but usage queries return empty unexpectedly, verify the
   worker is mounted on `/mnt/llm-access-usage`, and confirm its effective
   `LLM_ACCESS_STATE_ROOT`, `LLM_ACCESS_DUCKDB_ARCHIVE_DIR`,
   `LLM_ACCESS_DUCKDB_CATALOG_DIR`, and `LLM_ACCESS_USAGE_DETAILS_DIR`.
+
+## Historical Incident Lesson: Usage Mount Restart Can Break API SQLite Handles
+
+- During the early 2026-05-16 worker-only usage-storage rollout, before the
+  Neon control cutover, a broken `juicefs-llm-access-usage.service` revision
+  effectively controlled the main `/mnt/llm-access` mount instead of the
+  dedicated `/mnt/llm-access-usage` mount. Restarting that unit transiently
+  disrupted the control/state JuiceFS mount used by `llm-access.service`.
+- The outage symptom was subtle: `llm-access.service` stayed `active/running`,
+  `GET /healthz` and `GET /version` still worked, but endpoints that touched
+  the SQLite control store such as `/api/llm-gateway/access` and
+  `/api/llm-gateway/status` hung or timed out.
+- The old usage analytics tree deletion under `/mnt/llm-access/analytics` was
+  not the cause. The real failure mode was stale open SQLite file descriptors
+  after the control mount bounced. On the affected process, `lsof -p <pid>`
+  showed `/mnt/llm-access/control/llm-access.sqlite3` and WAL files as
+  `Transport endpoint is not connected`.
+- Fast triage sequence:
+  ```bash
+  findmnt -T /mnt/llm-access
+  findmnt -T /mnt/llm-access-usage
+  systemctl status juicefs-llm-access.service juicefs-llm-access-usage.service --no-pager
+  curl -fsS http://127.0.0.1:19080/healthz
+  curl -m 10 -fsS http://127.0.0.1:19080/api/llm-gateway/status
+  sudo lsof -p "$(systemctl show -p MainPID --value llm-access.service)" | grep llm-access.sqlite3
+  ```
+- Recovery rule: if the mount has already recovered but `lsof` still shows
+  stale SQLite descriptors, restart `llm-access.service`. Do not waste time
+  debugging the API binary first; it needs to reopen SQLite on the restored
+  FUSE mount.
+- This exact stale-SQLite-fd symptom applied before the Neon cutover, but the
+  mount-isolation prevention rules remain valid.
+
+## Incident Lesson: Shared Neon Env Must Be Sourced Inside the Service Shell
+
+- The shared control config now lives at `/mnt/llm-access/config/neon.env` on
+  JuiceFS.
+- Do not point a systemd `EnvironmentFile=` directly at that JuiceFS path and
+  assume it behaves like a local ext4 file. With `default_permissions`,
+  PID1/root-side file access and mount namespace behavior can differ from the
+  `ts_user` service process that actually runs the binaries.
+- Use `/usr/bin/bash -lc 'set -a; . /mnt/llm-access/config/neon.env; exec ...'`
+  in both `ExecStartPre` and `ExecStart` so the same service user reads the
+  same mounted file in the same namespace as the binary.
+- Post-release verification must inspect both process args and
+  `/proc/<pid>/environ`. A green `/healthz` alone does not prove the service is
+  actually using Neon.
+
+## Incident Lesson: Stale Drop-Ins Can Silently Keep API on SQLite
+
+- Older `/etc/systemd/system/llm-access.service.d/*.conf` files can override a
+  newly installed base unit `ExecStart` or `ExecStartPre`, even after a fresh
+  release bundle is activated.
+- The concrete stale files observed during the 2026-05-16 Neon cutover were:
+  - `/etc/systemd/system/llm-access.service.d/readiness.conf`
+  - `/etc/systemd/system/llm-access.service.d/tiered-duckdb.conf`
+  - `/etc/systemd/system/llm-access.service.d/zz-usage-journal-split.conf`
+- Activation must remove those stale drop-ins, run `systemctl daemon-reload`,
+  and then verify `systemctl cat llm-access.service` plus
+  `ps -o pid,args= -C llm-access`.
+- A passing `/healthz` is not enough. The API can look healthy while still
+  running the wrong storage backend if an old drop-in preserved the old
+  `ExecStart`.
 
 ## Emergency Recovery for Sudden Public Outage
 

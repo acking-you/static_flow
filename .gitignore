@@ -84,6 +84,7 @@ tmp/
 .local/
 backend/.local/
 /.local/llm-access-cloud-release.env
+.neon
 .worktrees/
 conf/pingora/staticflow-gateway.yaml
 conf/gpt2api-rs.json

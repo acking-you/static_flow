@@ -76,11 +76,13 @@ public client
          -> local StaticFlow backend slot
 ```
 
-`llm-access` 使用 SQLite 做控制面，使用 tiered DuckDB 做 usage analytics：
-active mutable segment 在 GCP VM 本地块存储
-`/var/lib/staticflow/llm-access/analytics-active`，归档 segment/catalog/details
-在独立的 JuiceFS usage mount `/mnt/llm-access-usage`。usage 重明细现在保持
-pack 形式，直接落到
+`llm-access` 当前使用 Neon 做 live 控制面，共享连接配置放在
+`/mnt/llm-access/config/neon.env`；旧的
+`/mnt/llm-access/control/llm-access.sqlite3` 只保留作回退快照。usage
+analytics 继续使用 tiered DuckDB：active mutable segment 在 GCP VM 本地块
+存储 `/var/lib/staticflow/llm-access/analytics-active`，归档
+segment/catalog/details 在独立的 JuiceFS usage mount
+`/mnt/llm-access-usage`。usage 重明细现在保持 pack 形式，直接落到
 `/mnt/llm-access-usage/details/packs/<provider>/<yyyy>/<mm>/<dd>/...`，不再由
 worker 直写 R2。
 
@@ -426,7 +428,8 @@ Kiro 的 access token 管理是文件持久化的。默认目录是 `~/.static-f
 
 | 存储 | 作用 |
 |---|---|
-| `/mnt/llm-access/control/llm-access.sqlite3` | keys、runtime config、account groups、proxy config/bindings、public request queues |
+| `/mnt/llm-access/config/neon.env` | 共享 Neon 控制面连接配置；live keys、runtime config、account groups、proxy config/bindings、public request queues 都在 Neon 中 |
+| `/mnt/llm-access/control/llm-access.sqlite3` | 保留的回退 SQLite 快照，不再是 live source of truth |
 | `/mnt/llm-access/auths/{codex,kiro}` | upstream account snapshots/auth JSON |
 | `/var/lib/staticflow/llm-access/usage-journal` | compact local usage journal produced by API and consumed by the usage worker |
 | `/var/lib/staticflow/llm-access/analytics-active` | current mutable DuckDB usage segment |

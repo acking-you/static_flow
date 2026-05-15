@@ -10,6 +10,10 @@
 > catalog 和基于 catalog 的查询加速。
 > Codex/Kiro 协议转换、账号刷新、代理解析、前端视觉交互不在本文展开。
 >
+> **控制面现状**: 截至 `2026-05-16`，live control plane 已切到 Neon；
+> `/mnt/llm-access/control/llm-access.sqlite3` 只保留作回退快照。本文的
+> journal / DuckDB / usage query 机制不变。
+>
 > **职责边界**: `llm-access` API 进程只承担请求服务、usage event 生产、
 > 控制面必要 quota/rollup 更新和 worker API 转发。usage 明细查询、chart
 > 聚合、archive 扫描和分页计算由 `llm-access-usage-worker` 负责。
@@ -89,7 +93,7 @@ API producer
 ```mermaid
 flowchart TD
     Client["Client / Browser"] --> Api["llm-access API :19080"]
-    Api --> Control["SQLite control DB<br/>keys / runtime config / quota rollups"]
+    Api --> Control["Neon control plane<br/>keys / runtime config / quota rollups"]
     Api --> Journal["Usage journal<br/>active / sealed / consuming / bad"]
     Api --> Forward["Usage API forwarder<br/>fetch_usage_worker_json"]
 
@@ -123,12 +127,8 @@ API 公开 usage 页面请求的实际路径是：
 
 ```text
 state root: /mnt/llm-access
-├── control/llm-access.sqlite3
-└── analytics/
-    ├── segments/
-    │   └── usage-<sealed_ms>-<seq>.duckdb
-    └── catalog/
-        └── usage-segments.sqlite3
+├── config/neon.env
+└── control/llm-access.sqlite3   # rollback snapshot only
 
 local VM disk:
 ├── /var/lib/staticflow/llm-access/usage-journal/
@@ -918,7 +918,7 @@ usage-active-*.duckdb 主文件大小稳定
 - 检查 rollover threshold。
 - 检查 worker status 的消费进度。
 
-### 11.6 Worker 启动后立即报对象存储认证错误
+### 11.6 Worker 启动后明细目录异常或旧路径回退
 
 症状：
 
