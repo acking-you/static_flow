@@ -57,8 +57,8 @@ scp "${SSH_OPTS[@]}" \
   "$RENDER_DIR/llm-access-usage-worker.service" \
   "$GCP_DEST:$REMOTE_RELEASE_DIR/llm-access-usage-worker.service.release"
 scp "${SSH_OPTS[@]}" \
-  "$RENDER_DIR/mnt-llm\\x2daccess\\x2dusage.mount" \
-  "$GCP_DEST:$REMOTE_RELEASE_DIR/mnt-llm\\x2daccess\\x2dusage.mount.release"
+  "$RENDER_DIR/juicefs-llm-access-usage.service" \
+  "$GCP_DEST:$REMOTE_RELEASE_DIR/juicefs-llm-access-usage.service.release"
 
 ssh "${SSH_OPTS[@]}" "$GCP_DEST" \
-  "LLM_ACCESS_ACTIVATE_TARGET=worker LLM_ACCESS_STAGED_WORKER_SERVICE_UNIT=$REMOTE_RELEASE_DIR/llm-access-usage-worker.service.release LLM_ACCESS_STAGED_USAGE_MOUNT_UNIT=$REMOTE_RELEASE_DIR/mnt-llm\\\\x2daccess\\\\x2dusage.mount.release $REMOTE_RELEASE_DIR/$REMOTE_SCRIPT_NAME"
+  "LLM_ACCESS_ACTIVATE_TARGET=worker LLM_ACCESS_STAGED_WORKER_SERVICE_UNIT=$REMOTE_RELEASE_DIR/llm-access-usage-worker.service.release LLM_ACCESS_STAGED_USAGE_MOUNT_SERVICE_UNIT=$REMOTE_RELEASE_DIR/juicefs-llm-access-usage.service.release $REMOTE_RELEASE_DIR/$REMOTE_SCRIPT_NAME"

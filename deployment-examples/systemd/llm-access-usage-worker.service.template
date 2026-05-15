@@ -1,8 +1,8 @@
 [Unit]
 Description=StaticFlow LLM Access Usage Worker
-After=network-online.target mnt-llm\x2daccess.mount mnt-llm\x2daccess\x2dusage.mount
+After=network-online.target juicefs-llm-access.service juicefs-llm-access-usage.service
 Wants=network-online.target
-RequiresMountsFor=/mnt/llm-access /mnt/llm-access-usage
+Requires=juicefs-llm-access.service juicefs-llm-access-usage.service
 
 [Service]
 Type=simple

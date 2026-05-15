@@ -147,7 +147,7 @@ private env files, not in tracked docs.
   permissions, and readiness checks are consistent.
 - Current GCP systemd units verified on 2026-05-13:
   - `juicefs-llm-access.service`: mounts `/mnt/llm-access`
-  - `mnt-llm\x2daccess\x2dusage.mount`: mounts `/mnt/llm-access-usage`
+  - `juicefs-llm-access-usage.service`: mounts `/mnt/llm-access-usage`
   - `llm-access.service`: serves `127.0.0.1:19080`
     and proxies legacy admin usage routes to the worker query port
   - `pb-mapper-server-cli@llm-access.service`: registers cloud

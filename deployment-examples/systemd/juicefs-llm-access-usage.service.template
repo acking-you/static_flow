@@ -1,0 +1,31 @@
+[Unit]
+Description=JuiceFS mount for StaticFlow llm-access usage analytics
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ts_user
+Group=ts_user
+EnvironmentFile=/home/ts_user/.config/staticflow/llm-access-juicefs.env
+Environment=JUICEFS_MOUNT_POINT=/mnt/llm-access-usage
+Environment=JUICEFS_CACHE_DIR=/var/cache/juicefs/llm-access-usage
+Environment=JUICEFS_CACHE_SIZE_MIB=40960
+Environment=JUICEFS_LOG_FILE=/var/log/juicefs/llm-access-usage.log
+ExecStartPre=/usr/bin/test -d ${JUICEFS_MOUNT_POINT}
+ExecStart=/home/ts_user/.local/bin/juicefs mount --cache-dir ${JUICEFS_CACHE_DIR} --cache-size ${JUICEFS_CACHE_SIZE_MIB} --log ${JUICEFS_LOG_FILE} --no-syslog --no-usage-report ${JUICEFS_META_URL} ${JUICEFS_MOUNT_POINT}
+ExecStop=/usr/bin/fusermount3 -uz ${JUICEFS_MOUNT_POINT}
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+TimeoutStartSec=180
+ExecStartPost=/usr/local/bin/staticflow-wait-llm-access-state mount-only
+MemoryAccounting=yes
+MemoryHigh=1800M
+MemoryMax=2560M
+MemorySwapMax=0
+TasksMax=256
+OOMPolicy=kill
+
+[Install]
+WantedBy=multi-user.target
