@@ -47,7 +47,11 @@ CREATE TABLE IF NOT EXISTS usage_events (
     ip_region VARCHAR,
     request_headers_json VARCHAR NOT NULL DEFAULT '{}',
     last_message_content VARCHAR,
-    detail_object_payload_present BOOLEAN NOT NULL DEFAULT false
+    detail_object_payload_present BOOLEAN NOT NULL DEFAULT false,
+    detail_object_path VARCHAR,
+    detail_object_offset BIGINT,
+    detail_object_length BIGINT,
+    detail_object_sha256 VARCHAR
 );
 ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS request_method VARCHAR DEFAULT 'POST';
 ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS request_url VARCHAR DEFAULT '';
@@ -63,6 +67,10 @@ ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS routing_diagnostics_json VARCH
 ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS request_headers_json VARCHAR DEFAULT '{}';
 ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS last_message_content VARCHAR;
 ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS detail_object_payload_present BOOLEAN DEFAULT false;
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS detail_object_path VARCHAR;
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS detail_object_offset BIGINT;
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS detail_object_length BIGINT;
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS detail_object_sha256 VARCHAR;
 
 CREATE TABLE IF NOT EXISTS usage_event_details (
     event_id VARCHAR PRIMARY KEY,

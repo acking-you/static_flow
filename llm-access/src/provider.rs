@@ -292,6 +292,17 @@ fn capture_upstream_request_body_json(meta: &mut ProviderUsageMetadata, body: &[
     }
 }
 
+fn capture_codex_dispatch_request_json(
+    meta: &mut ProviderUsageMetadata,
+    client_body: &Bytes,
+    prepared: &PreparedGatewayRequest,
+) {
+    if meta.client_request_body_json.is_none() {
+        meta.client_request_body_json = Some(client_body.clone());
+    }
+    meta.upstream_request_body_json = Some(prepared.request_body.clone());
+}
+
 fn captured_body_json(body: &Option<Bytes>) -> Option<String> {
     body.as_ref()
         .map(|bytes| String::from_utf8_lossy(bytes.as_ref()).into_owned())
@@ -1087,6 +1098,7 @@ async fn dispatch_codex_proxy(
                 continue;
             },
         };
+        capture_codex_dispatch_request_json(&mut usage_meta, &body, &prepared);
         let upstream = add_codex_upstream_headers(
             client.request(method.clone(), upstream_url.clone()),
             &request_headers,
@@ -1121,6 +1133,7 @@ async fn dispatch_codex_proxy(
                         account_id: ctx.account_id,
                         is_fedramp_account: ctx.is_fedramp_account,
                     };
+                    capture_codex_dispatch_request_json(&mut usage_meta, &body, &prepared);
                     let retry = add_codex_upstream_headers(
                         client.request(method.clone(), upstream_url.clone()),
                         &request_headers,
@@ -1251,6 +1264,7 @@ async fn dispatch_codex_proxy(
         };
         if is_codex_invalid_encrypted_content_response(status, &bytes) {
             if let Some(retry_prepared) = retry_codex_without_encrypted_reasoning(&prepared) {
+                capture_codex_dispatch_request_json(&mut usage_meta, &body, &retry_prepared);
                 let retry = add_codex_upstream_headers(
                     client.request(method.clone(), upstream_url.clone()),
                     &request_headers,
@@ -5077,6 +5091,7 @@ struct KiroWebsearchUsageRecord<'a> {
 async fn record_kiro_websearch_usage(record: KiroWebsearchUsageRecord<'_>) -> anyhow::Result<()> {
     let multipliers =
         parse_kiro_billable_model_multipliers_json(&record.route.billable_model_multipliers_json)?;
+    let capture_request_details = record.capture_request_details || !record.status.is_success();
     let event = UsageEvent {
         event_id: format!("llm-usage-{}", uuid::Uuid::new_v4()),
         created_at_ms: now_millis(),
@@ -5111,16 +5126,13 @@ async fn record_kiro_websearch_usage(record: KiroWebsearchUsageRecord<'_>) -> an
         ip_region: record.meta.ip_region.clone(),
         request_headers_json: record.meta.request_headers_json.clone(),
         last_message_content: record.meta.last_message_content.clone(),
-        client_request_body_json: record
-            .capture_request_details
+        client_request_body_json: capture_request_details
             .then(|| captured_body_json(&record.meta.client_request_body_json))
             .flatten(),
-        upstream_request_body_json: record
-            .capture_request_details
+        upstream_request_body_json: capture_request_details
             .then(|| captured_body_json(&record.meta.upstream_request_body_json))
             .flatten(),
-        full_request_json: record
-            .capture_request_details
+        full_request_json: capture_request_details
             .then(|| {
                 captured_body_json(&record.meta.full_request_json)
                     .or_else(|| captured_body_json(&record.meta.client_request_body_json))
@@ -10005,6 +10017,9 @@ mod tests {
         assert_eq!(events[0].status_code, 502);
         assert_eq!(events[0].endpoint, "/v1/messages");
         assert_eq!(events[0].account_name.as_deref(), Some("codex-a"));
+        assert!(events[0].client_request_body_json.is_some());
+        assert!(events[0].upstream_request_body_json.is_some());
+        assert!(events[0].full_request_json.is_some());
     }
 
     #[tokio::test]
@@ -11635,6 +11650,75 @@ mod tests {
         assert_eq!(events[0].client_request_body_json, None);
         assert_eq!(events[0].upstream_request_body_json, None);
         assert_eq!(events[0].full_request_json, None);
+    }
+
+    #[tokio::test]
+    async fn kiro_websearch_usage_captures_heavy_payload_on_error_by_default() {
+        let store = RecordingControlStore::default();
+        let key = AuthenticatedKey {
+            key_id: "kiro-key".to_string(),
+            key_name: "Kiro key".to_string(),
+            provider_type: "kiro".to_string(),
+            protocol_family: "anthropic".to_string(),
+            status: "active".to_string(),
+            quota_billable_limit: 1_000,
+            billable_tokens_used: 0,
+        };
+        let meta = super::ProviderUsageMetadata {
+            started_at: Instant::now(),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
+            request_body_bytes: Some(128),
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            stream_completed_cleanly: None,
+            downstream_disconnect: None,
+            final_event_type: None,
+            bytes_streamed: None,
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: Some("search query".to_string()),
+            client_request_body_json: Some(captured_json_bytes(r#"{"client":true}"#)),
+            upstream_request_body_json: Some(captured_json_bytes(r#"{"mcp":true}"#)),
+            full_request_json: Some(captured_json_bytes(r#"{"full":true}"#)),
+        };
+
+        let route = static_kiro_route();
+        super::record_kiro_websearch_usage(super::KiroWebsearchUsageRecord {
+            control_store: &store,
+            key: &key,
+            route: &route,
+            model: "claude-sonnet-4-6",
+            status: StatusCode::BAD_GATEWAY,
+            usage: super::KiroUsageSummary {
+                input_uncached_tokens: 10,
+                input_cached_tokens: 0,
+                output_tokens: 3,
+                credit_usage: None,
+                credit_usage_missing: true,
+            },
+            meta: &meta,
+            capture_request_details: false,
+        })
+        .await
+        .expect("record websearch error usage");
+
+        let events = store.usage_events.lock().expect("usage events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].endpoint, "/mcp");
+        assert_eq!(events[0].status_code, 502);
+        assert_eq!(events[0].client_request_body_json.as_deref(), Some(r#"{"client":true}"#));
+        assert_eq!(events[0].upstream_request_body_json.as_deref(), Some(r#"{"mcp":true}"#));
+        assert_eq!(events[0].full_request_json.as_deref(), Some(r#"{"full":true}"#));
     }
 
     #[tokio::test]

@@ -1084,6 +1084,57 @@ fn get_dynamic_tools_array(obj: &Map<String, Value>) -> Option<&Vec<Value>> {
         .and_then(Value::as_array)
 }
 
+fn is_openai_chat_function_tool(tool_obj: &Map<String, Value>) -> bool {
+    let tool_type = tool_obj
+        .get("type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    tool_type == "function"
+        || (tool_type.is_empty()
+            && (tool_obj.get("function").is_some() || tool_obj.get("name").is_some()))
+}
+
+fn openai_chat_tool_field<'a>(
+    tool_obj: &'a Map<String, Value>,
+    function: Option<&'a Map<String, Value>>,
+    key: &str,
+) -> Option<&'a Value> {
+    tool_obj
+        .get(key)
+        .or_else(|| function.and_then(|function| function.get(key)))
+}
+
+fn openai_chat_tool_name_value<'a>(
+    tool_obj: &'a Map<String, Value>,
+    function: Option<&'a Map<String, Value>>,
+) -> Option<&'a Value> {
+    openai_chat_tool_field(tool_obj, function, "name")
+}
+
+fn map_openai_chat_function_tool(
+    tool_obj: &Map<String, Value>,
+    tool_name_map: &BTreeMap<String, String>,
+) -> Option<Value> {
+    let function = tool_obj.get("function").and_then(Value::as_object);
+    let name = coerce_non_empty_scalar_to_string(openai_chat_tool_name_value(tool_obj, function))
+        .map(|name| shorten_openai_tool_name_with_map(&name, tool_name_map))?;
+    let mut mapped = Map::new();
+    mapped.insert("type".to_string(), Value::String("function".to_string()));
+    mapped.insert("name".to_string(), Value::String(name));
+    if let Some(description) = openai_chat_tool_field(tool_obj, function, "description") {
+        mapped.insert("description".to_string(), description.clone());
+    }
+    if let Some(parameters) = openai_chat_tool_field(tool_obj, function, "parameters") {
+        mapped
+            .insert("parameters".to_string(), normalize_tool_parameters_schema(parameters.clone()));
+    }
+    if let Some(strict) = openai_chat_tool_field(tool_obj, function, "strict") {
+        mapped.insert("strict".to_string(), strict.clone());
+    }
+    Some(Value::Object(mapped))
+}
+
 /// Collect every function/tool name referenced anywhere in the request.
 fn collect_openai_tool_names(obj: &Map<String, Value>) -> Vec<String> {
     let mut names = Vec::new();
@@ -1093,17 +1144,11 @@ fn collect_openai_tool_names(obj: &Map<String, Value>) -> Vec<String> {
             let Some(tool_obj) = tool.as_object() else {
                 continue;
             };
-            let tool_type = tool_obj
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if !tool_type.is_empty() && tool_type != "function" {
+            if !is_openai_chat_function_tool(tool_obj) {
                 continue;
             }
-            let name = tool_obj
-                .get("function")
-                .and_then(|function| function.get("name"))
-                .or_else(|| tool_obj.get("name"))
+            let function = tool_obj.get("function").and_then(Value::as_object);
+            let name = openai_chat_tool_name_value(tool_obj, function)
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty());
@@ -1134,14 +1179,13 @@ fn collect_openai_tool_names(obj: &Map<String, Value>) -> Vec<String> {
             let tool_type = tool_choice
                 .get("type")
                 .and_then(Value::as_str)
+                .map(str::trim)
                 .unwrap_or_default();
             if tool_type != "function" {
                 return None;
             }
-            tool_choice
-                .get("function")
-                .and_then(|function| function.get("name"))
-                .or_else(|| tool_choice.get("name"))
+            let function = tool_choice.get("function").and_then(Value::as_object);
+            openai_chat_tool_name_value(tool_choice, function)
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -1721,38 +1765,13 @@ fn adapt_openai_chat_completions_request(
             let Some(tool_obj) = tool.as_object() else {
                 continue;
             };
-            let tool_type = tool_obj
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if tool_type != "function" {
+            if !is_openai_chat_function_tool(tool_obj) {
                 mapped_tools.push(tool.clone());
                 continue;
             }
-            let Some(function) = tool_obj.get("function").and_then(Value::as_object) else {
-                continue;
-            };
-            let Some(name) = coerce_non_empty_scalar_to_string(function.get("name"))
-                .map(|name| shorten_openai_tool_name_with_map(&name, &tool_name_map))
-            else {
-                continue;
-            };
-            let mut mapped = Map::new();
-            mapped.insert("type".to_string(), Value::String("function".to_string()));
-            mapped.insert("name".to_string(), Value::String(name));
-            if let Some(description) = function.get("description") {
-                mapped.insert("description".to_string(), description.clone());
+            if let Some(mapped) = map_openai_chat_function_tool(tool_obj, &tool_name_map) {
+                mapped_tools.push(mapped);
             }
-            if let Some(parameters) = function.get("parameters") {
-                mapped.insert(
-                    "parameters".to_string(),
-                    normalize_tool_parameters_schema(parameters.clone()),
-                );
-            }
-            if let Some(strict) = function.get("strict") {
-                mapped.insert("strict".to_string(), strict.clone());
-            }
-            mapped_tools.push(Value::Object(mapped));
         }
         if !mapped_tools.is_empty() {
             out.insert("tools".to_string(), Value::Array(mapped_tools));
@@ -1810,14 +1829,14 @@ fn adapt_openai_chat_completions_request(
             let tool_type = tool_choice_obj
                 .get("type")
                 .and_then(Value::as_str)
+                .map(str::trim)
                 .unwrap_or_default();
             if tool_type == "function" {
-                if let Some(name) = coerce_non_empty_scalar_to_string(
-                    tool_choice_obj
-                        .get("function")
-                        .and_then(|function| function.get("name"))
-                        .or_else(|| tool_choice_obj.get("name")),
-                ) {
+                let function = tool_choice_obj.get("function").and_then(Value::as_object);
+                if let Some(name) = coerce_non_empty_scalar_to_string(openai_chat_tool_name_value(
+                    tool_choice_obj,
+                    function,
+                )) {
                     out.insert(
                         "tool_choice".to_string(),
                         json!({
@@ -2800,6 +2819,45 @@ mod tests {
         let upstream: serde_json::Value =
             serde_json::from_slice(&prepared.request_body).expect("upstream body json");
         assert_eq!(upstream["tools"][0]["name"], json!("123"));
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_accepts_chat_function_tool_with_top_level_name() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "messages":[{"role":"user","content":"hello"}],
+                "tools":[{
+                    "type":"function",
+                    "name":"lookup",
+                    "description":"Look up data.",
+                    "parameters":{"type":"object","properties":{"q":{"type":"string"}}}
+                }],
+                "tool_choice":{"type":"function","name":"lookup"}
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/chat/completions",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("chat request with responses-style function tool should normalize");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+        assert_eq!(upstream["tools"][0]["type"], json!("function"));
+        assert_eq!(upstream["tools"][0]["name"], json!("lookup"));
+        assert_eq!(
+            upstream["tools"][0]["parameters"],
+            json!({"type":"object","properties":{"q":{"type":"string"}}})
+        );
+        assert_eq!(upstream["tool_choice"], json!({"type":"function","name":"lookup"}));
     }
 
     #[tokio::test]
