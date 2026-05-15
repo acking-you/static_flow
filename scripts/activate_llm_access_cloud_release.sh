@@ -252,6 +252,25 @@ if [[ "$reload_required" == "1" ]]; then
   sudo systemctl daemon-reload
 fi
 
+if [[ "$ACTIVATE_TARGET" == "api" || "$ACTIVATE_TARGET" == "both" ]]; then
+  for stale_dropin in \
+    /etc/systemd/system/llm-access.service.d/readiness.conf \
+    /etc/systemd/system/llm-access.service.d/tiered-duckdb.conf \
+    /etc/systemd/system/llm-access.service.d/zz-usage-journal-split.conf
+  do
+    if sudo test -e "$stale_dropin"; then
+      log "removing stale llm-access drop-in $stale_dropin"
+      sudo rm -f "$stale_dropin"
+      reload_required=1
+    fi
+  done
+fi
+
+if [[ "$reload_required" == "1" ]]; then
+  log "reloading systemd units after drop-in cleanup"
+  sudo systemctl daemon-reload
+fi
+
 if [[ "$ACTIVATE_TARGET" == "worker" || "$ACTIVATE_TARGET" == "both" ]]; then
   if sudo test -e /etc/systemd/system/mnt-llm\\x2daccess\\x2dusage.mount; then
     log "disabling stale mount unit mnt-llm\\x2daccess\\x2dusage.mount"
