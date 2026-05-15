@@ -1534,6 +1534,50 @@ mod tests {
         compare_match(&mut radix, &mut plain, &second, now + Duration::from_secs(47), ttl);
     }
 
+    #[test]
+    fn radix_prefix_tree_matches_plain_trie_budget_eviction_semantics() {
+        let ttl = Duration::from_secs(300);
+        let now = Instant::now();
+        let shared_first = pages_from_keys(&[1, 2, 3]);
+        let shared_second = pages_from_keys(&[1, 2, 9]);
+        let independent = pages_from_keys(&[5, 6]);
+        let newest = pages_from_keys(&[7, 8, 9]);
+        let max_tokens = 50;
+        let mut radix = PrefixTree::default();
+        let mut plain = PlainPrefixTree::default();
+
+        compare_insert_with_limit(&mut radix, &mut plain, &shared_first, now, ttl, max_tokens);
+        compare_insert_with_limit(
+            &mut radix,
+            &mut plain,
+            &shared_second,
+            now + Duration::from_secs(1),
+            ttl,
+            max_tokens,
+        );
+        compare_insert_with_limit(
+            &mut radix,
+            &mut plain,
+            &independent,
+            now + Duration::from_secs(2),
+            ttl,
+            max_tokens,
+        );
+        compare_match(&mut radix, &mut plain, &shared_second, now + Duration::from_secs(3), ttl);
+        compare_insert_with_limit(
+            &mut radix,
+            &mut plain,
+            &newest,
+            now + Duration::from_secs(4),
+            ttl,
+            max_tokens,
+        );
+
+        compare_match(&mut radix, &mut plain, &shared_first, now + Duration::from_secs(5), ttl);
+        compare_match(&mut radix, &mut plain, &shared_second, now + Duration::from_secs(6), ttl);
+        compare_match(&mut radix, &mut plain, &newest, now + Duration::from_secs(7), ttl);
+    }
+
     fn numbered_pages(count: usize, start: u128) -> Vec<CanonicalTokenPage> {
         (0..count)
             .map(|index| CanonicalTokenPage {
@@ -1563,8 +1607,19 @@ mod tests {
         now: Instant,
         ttl: Duration,
     ) {
-        radix.insert(pages, now, ttl, u64::MAX);
-        plain.insert(pages, now, ttl);
+        compare_insert_with_limit(radix, plain, pages, now, ttl, u64::MAX);
+    }
+
+    fn compare_insert_with_limit(
+        radix: &mut PrefixTree,
+        plain: &mut PlainPrefixTree,
+        pages: &[CanonicalTokenPage],
+        now: Instant,
+        ttl: Duration,
+        max_tokens: u64,
+    ) {
+        radix.insert(pages, now, ttl, max_tokens);
+        plain.insert(pages, now, ttl, max_tokens);
         assert_eq!(radix.resident_tokens, plain.resident_tokens);
     }
 
@@ -1616,7 +1671,13 @@ mod tests {
             matched
         }
 
-        fn insert(&mut self, pages: &[CanonicalTokenPage], now: Instant, ttl: Duration) {
+        fn insert(
+            &mut self,
+            pages: &[CanonicalTokenPage],
+            now: Instant,
+            ttl: Duration,
+            max_tokens: u64,
+        ) {
             self.prune_expired(now, ttl);
             let mut current = &mut self.root;
             for page in pages {
@@ -1632,6 +1693,16 @@ mod tests {
                 });
                 child.last_touched_at = Some(now);
                 current = child;
+            }
+            while self.resident_tokens > max_tokens {
+                let Some(path) = plain_coldest_leaf_path(&self.root) else {
+                    break;
+                };
+                let removed = plain_remove_leaf_path(&mut self.root, &path);
+                if removed == 0 {
+                    break;
+                }
+                self.resident_tokens = self.resident_tokens.saturating_sub(removed);
             }
         }
 
@@ -1667,6 +1738,61 @@ mod tests {
             }
         }
         removed_tokens
+    }
+
+    fn plain_coldest_leaf_path(node: &PlainPrefixNode) -> Option<Vec<u128>> {
+        fn walk(
+            node: &PlainPrefixNode,
+            path: &mut Vec<u128>,
+            best: &mut Option<(Instant, Vec<u128>)>,
+        ) {
+            if node.children.is_empty() {
+                if let Some(last_touched_at) = node.last_touched_at {
+                    match best {
+                        Some((current_oldest, _)) if last_touched_at >= *current_oldest => {},
+                        _ => *best = Some((last_touched_at, path.clone())),
+                    }
+                }
+                return;
+            }
+            for (key, child) in &node.children {
+                path.push(*key);
+                walk(child, path, best);
+                path.pop();
+            }
+        }
+
+        let mut best = None;
+        walk(node, &mut Vec::new(), &mut best);
+        best.map(|(_, path)| path)
+    }
+
+    fn plain_remove_leaf_path(node: &mut PlainPrefixNode, path: &[u128]) -> u64 {
+        fn remove_at(node: &mut PlainPrefixNode, path: &[u128]) -> u64 {
+            let Some((key, remaining)) = path.split_first() else {
+                return 0;
+            };
+            if remaining.is_empty() {
+                return node
+                    .children
+                    .remove(key)
+                    .map(|child| plain_subtree_token_count(&child))
+                    .unwrap_or(0);
+            }
+            let Some(child) = node.children.get_mut(key) else {
+                return 0;
+            };
+            let mut removed = remove_at(child, remaining);
+            if child.children.is_empty() {
+                let token_count = child.token_count;
+                if node.children.remove(key).is_some() {
+                    removed = removed.saturating_add(token_count);
+                }
+            }
+            removed
+        }
+
+        remove_at(node, path)
     }
 
     fn plain_subtree_token_count(node: &PlainPrefixNode) -> u64 {
