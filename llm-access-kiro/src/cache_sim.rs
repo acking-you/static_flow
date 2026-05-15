@@ -1099,6 +1099,8 @@ struct CanonicalToolDefinitionSegment {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use serde_json::json;
 
     use super::*;
@@ -1504,6 +1506,34 @@ mod tests {
         assert_eq!(expired_branch.matched_pages, 2);
     }
 
+    #[test]
+    fn radix_prefix_tree_matches_plain_trie_hit_semantics() {
+        let ttl = Duration::from_secs(30);
+        let now = Instant::now();
+        let first = pages_from_keys(&[1, 2, 3, 4]);
+        let second = pages_from_keys(&[1, 2, 9, 10]);
+        let divergent = pages_from_keys(&[1, 2, 3, 99]);
+        let short_prefix = pages_from_keys(&[1, 2]);
+        let missing = pages_from_keys(&[7, 8]);
+        let mut radix = PrefixTree::default();
+        let mut plain = PlainPrefixTree::default();
+
+        compare_insert(&mut radix, &mut plain, &first, now, ttl);
+        compare_match(&mut radix, &mut plain, &first, now + Duration::from_secs(1), ttl);
+        compare_insert(&mut radix, &mut plain, &second, now + Duration::from_secs(2), ttl);
+        compare_match(&mut radix, &mut plain, &divergent, now + Duration::from_secs(10), ttl);
+        compare_match(&mut radix, &mut plain, &second, now + Duration::from_secs(11), ttl);
+        compare_match(&mut radix, &mut plain, &short_prefix, now + Duration::from_secs(12), ttl);
+        compare_match(&mut radix, &mut plain, &missing, now + Duration::from_secs(13), ttl);
+
+        let prune_at = now + Duration::from_secs(45);
+        radix.prune_expired(prune_at, ttl);
+        plain.prune_expired(prune_at, ttl);
+        assert_eq!(radix.resident_tokens, plain.resident_tokens);
+        compare_match(&mut radix, &mut plain, &divergent, now + Duration::from_secs(46), ttl);
+        compare_match(&mut radix, &mut plain, &second, now + Duration::from_secs(47), ttl);
+    }
+
     fn numbered_pages(count: usize, start: u128) -> Vec<CanonicalTokenPage> {
         (0..count)
             .map(|index| CanonicalTokenPage {
@@ -1524,6 +1554,127 @@ mod tests {
 
     fn pages_token_count(pages: &[CanonicalTokenPage]) -> u64 {
         pages.iter().map(|page| u64::from(page.token_count)).sum()
+    }
+
+    fn compare_insert(
+        radix: &mut PrefixTree,
+        plain: &mut PlainPrefixTree,
+        pages: &[CanonicalTokenPage],
+        now: Instant,
+        ttl: Duration,
+    ) {
+        radix.insert(pages, now, ttl, u64::MAX);
+        plain.insert(pages, now, ttl);
+        assert_eq!(radix.resident_tokens, plain.resident_tokens);
+    }
+
+    fn compare_match(
+        radix: &mut PrefixTree,
+        plain: &mut PlainPrefixTree,
+        pages: &[CanonicalTokenPage],
+        now: Instant,
+        ttl: Duration,
+    ) {
+        let radix_match = radix.match_prefix(pages, now, ttl);
+        let plain_match = plain.match_prefix(pages, now, ttl);
+        assert_eq!(radix_match, plain_match);
+        assert_eq!(radix.resident_tokens, plain.resident_tokens);
+    }
+
+    #[derive(Default)]
+    struct PlainPrefixTree {
+        root: PlainPrefixNode,
+        resident_tokens: u64,
+    }
+
+    #[derive(Default)]
+    struct PlainPrefixNode {
+        token_count: u64,
+        last_touched_at: Option<Instant>,
+        children: BTreeMap<u128, PlainPrefixNode>,
+    }
+
+    impl PlainPrefixTree {
+        fn match_prefix(
+            &mut self,
+            pages: &[CanonicalTokenPage],
+            now: Instant,
+            ttl: Duration,
+        ) -> PrefixCacheMatch {
+            self.prune_expired(now, ttl);
+            let mut current = &mut self.root;
+            let mut matched = PrefixCacheMatch::default();
+            for page in pages {
+                let Some(child) = current.children.get_mut(&page.key) else {
+                    break;
+                };
+                child.last_touched_at = Some(now);
+                matched.matched_pages = matched.matched_pages.saturating_add(1);
+                matched.matched_tokens = matched.matched_tokens.saturating_add(child.token_count);
+                current = child;
+            }
+            matched
+        }
+
+        fn insert(&mut self, pages: &[CanonicalTokenPage], now: Instant, ttl: Duration) {
+            self.prune_expired(now, ttl);
+            let mut current = &mut self.root;
+            for page in pages {
+                let child = current.children.entry(page.key).or_insert_with(|| {
+                    self.resident_tokens = self
+                        .resident_tokens
+                        .saturating_add(u64::from(page.token_count));
+                    PlainPrefixNode {
+                        token_count: u64::from(page.token_count),
+                        last_touched_at: Some(now),
+                        children: BTreeMap::new(),
+                    }
+                });
+                child.last_touched_at = Some(now);
+                current = child;
+            }
+        }
+
+        fn prune_expired(&mut self, now: Instant, ttl: Duration) {
+            let removed = prune_expired_plain_children(&mut self.root, now, ttl);
+            self.resident_tokens = self.resident_tokens.saturating_sub(removed);
+        }
+    }
+
+    fn prune_expired_plain_children(
+        node: &mut PlainPrefixNode,
+        now: Instant,
+        ttl: Duration,
+    ) -> u64 {
+        let mut removed_tokens = 0u64;
+        for child in node.children.values_mut() {
+            removed_tokens =
+                removed_tokens.saturating_add(prune_expired_plain_children(child, now, ttl));
+        }
+        let expired_keys = node
+            .children
+            .iter()
+            .filter(|(_, child)| {
+                child
+                    .last_touched_at
+                    .is_some_and(|last_touched_at| now.duration_since(last_touched_at) > ttl)
+            })
+            .map(|(key, _)| *key)
+            .collect::<Vec<_>>();
+        for key in expired_keys {
+            if let Some(child) = node.children.remove(&key) {
+                removed_tokens = removed_tokens.saturating_add(plain_subtree_token_count(&child));
+            }
+        }
+        removed_tokens
+    }
+
+    fn plain_subtree_token_count(node: &PlainPrefixNode) -> u64 {
+        let mut total = node.token_count;
+        for child in node.children.values() {
+            total = total.saturating_add(plain_subtree_token_count(child));
+        }
+        total
     }
 
     #[test]
