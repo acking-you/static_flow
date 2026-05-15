@@ -197,7 +197,8 @@ if [[ -e "$STAGED_NEON_ENV" ]]; then
   install -d -m 0755 "$(dirname "$NEON_ENV_PATH")"
   if test -e "$NEON_ENV_PATH"; then
     log "backing up shared Neon config to $BACKUP_DIR/neon.env.preinstall"
-    sudo cp -a "$NEON_ENV_PATH" "$BACKUP_DIR/neon.env.preinstall"
+    cat "$NEON_ENV_PATH" | sudo tee "$BACKUP_DIR/neon.env.preinstall" >/dev/null
+    sudo chmod 0600 "$BACKUP_DIR/neon.env.preinstall"
   fi
   log "installing staged Neon config to $NEON_ENV_PATH"
   install -m 0600 "$STAGED_NEON_ENV" "$NEON_ENV_PATH"
@@ -329,7 +330,7 @@ rollback_cmd=""
 if [[ "$ACTIVATE_TARGET" == "both" ]]; then
   rollback_cmd="sudo cp -a \"$backup_path\" \"$INSTALL_PATH\" && sudo cp -a \"$worker_backup_path\" \"$WORKER_INSTALL_PATH\""
   if [[ -e "$neon_env_backup_path" ]]; then
-    rollback_cmd="sudo cp -a \"$neon_env_backup_path\" \"$NEON_ENV_PATH\" && $rollback_cmd"
+    rollback_cmd="sudo cat \"$neon_env_backup_path\" | tee \"$NEON_ENV_PATH\" >/dev/null && chmod 0600 \"$NEON_ENV_PATH\" && $rollback_cmd"
   fi
   if [[ -n "$STAGED_SERVICE_UNIT" ]]; then
     rollback_cmd+=" && sudo cp -a \"$service_unit_backup_path\" \"$SERVICE_UNIT_INSTALL_PATH\""
@@ -348,7 +349,7 @@ if [[ "$ACTIVATE_TARGET" == "both" ]]; then
 elif [[ "$ACTIVATE_TARGET" == "api" ]]; then
   rollback_cmd="sudo cp -a \"$backup_path\" \"$INSTALL_PATH\""
   if [[ -e "$neon_env_backup_path" ]]; then
-    rollback_cmd="sudo cp -a \"$neon_env_backup_path\" \"$NEON_ENV_PATH\" && $rollback_cmd"
+    rollback_cmd="sudo cat \"$neon_env_backup_path\" | tee \"$NEON_ENV_PATH\" >/dev/null && chmod 0600 \"$NEON_ENV_PATH\" && $rollback_cmd"
   fi
   if [[ -n "$STAGED_SERVICE_UNIT" ]]; then
     rollback_cmd+=" && sudo cp -a \"$service_unit_backup_path\" \"$SERVICE_UNIT_INSTALL_PATH\""
@@ -357,7 +358,7 @@ elif [[ "$ACTIVATE_TARGET" == "api" ]]; then
 else
   rollback_cmd="sudo cp -a \"$worker_backup_path\" \"$WORKER_INSTALL_PATH\""
   if [[ -e "$neon_env_backup_path" ]]; then
-    rollback_cmd="sudo cp -a \"$neon_env_backup_path\" \"$NEON_ENV_PATH\" && $rollback_cmd"
+    rollback_cmd="sudo cat \"$neon_env_backup_path\" | tee \"$NEON_ENV_PATH\" >/dev/null && chmod 0600 \"$NEON_ENV_PATH\" && $rollback_cmd"
   fi
   if [[ -n "$STAGED_WORKER_SERVICE_UNIT" ]]; then
     rollback_cmd+=" && sudo cp -a \"$worker_service_unit_backup_path\" \"$WORKER_SERVICE_UNIT_INSTALL_PATH\""
