@@ -259,7 +259,9 @@ if [[ "$ACTIVATE_TARGET" == "worker" || "$ACTIVATE_TARGET" == "both" ]]; then
     sudo rm -f /etc/systemd/system/mnt-llm\\x2daccess\\x2dusage.mount
     sudo systemctl daemon-reload
   fi
-  sudo install -d -o ts_user -g ts_user -m 0755 /mnt/llm-access-usage
+  if ! findmnt -T /mnt/llm-access-usage >/dev/null; then
+    sudo install -d -o ts_user -g ts_user -m 0755 /mnt/llm-access-usage
+  fi
   sudo install -d -o ts_user -g ts_user -m 0755 /var/cache/juicefs/llm-access-usage
   ensure_mount_service "$USAGE_MOUNT_SERVICE" /mnt/llm-access-usage
 fi
