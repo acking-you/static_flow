@@ -10,14 +10,13 @@ User=ts_user
 Group=ts_user
 Environment=GEOIP_DB_PATH=/var/lib/staticflow/llm-access/geoip/GeoLite2-City.mmdb
 EnvironmentFile=/etc/llm-access/llm-access.env
-EnvironmentFile=-/mnt/llm-access/config/neon.env
 Environment=STATICFLOW_LOG_DIR=/var/log/staticflow-runtime
 Environment=STATICFLOW_LOG_SERVICE=llm-access
 Environment=STATICFLOW_LOG_STDOUT=0
 Environment=LLM_ACCESS_USAGE_JOURNAL_DIR=/var/lib/staticflow/llm-access/usage-journal
 WorkingDirectory=/mnt/llm-access
-ExecStartPre=/usr/local/bin/staticflow-wait-llm-access-state api
-ExecStart=/usr/local/bin/llm-access serve --bind ${LLM_ACCESS_BIND_ADDR} --state-root ${LLM_ACCESS_STATE_ROOT} --postgres-control-database-url-env LLM_ACCESS_CONTROL_DATABASE_URL --usage-journal-dir ${LLM_ACCESS_USAGE_JOURNAL_DIR}
+ExecStartPre=/usr/bin/bash -lc 'set -a; . /mnt/llm-access/config/neon.env; exec /usr/local/bin/staticflow-wait-llm-access-state api'
+ExecStart=/usr/bin/bash -lc 'set -a; . /mnt/llm-access/config/neon.env; exec /usr/local/bin/llm-access serve --bind "$LLM_ACCESS_BIND_ADDR" --state-root "$LLM_ACCESS_STATE_ROOT" --postgres-control-database-url-env LLM_ACCESS_CONTROL_DATABASE_URL --usage-journal-dir "$LLM_ACCESS_USAGE_JOURNAL_DIR"'
 Restart=always
 RestartSec=3
 NoNewPrivileges=true
