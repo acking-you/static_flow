@@ -59,8 +59,9 @@ ensure_mount_service() {
   local service="$1"
   local mount_path="$2"
 
-  log "ensuring mount service $service is active"
-  sudo systemctl enable --now "$service"
+  log "restarting mount service $service"
+  sudo systemctl enable "$service"
+  sudo systemctl restart "$service"
   if ! findmnt -T "$mount_path" >/dev/null; then
     sudo systemctl status "$service" --no-pager -l || true
     sudo journalctl -u "$service" -n "$JOURNAL_LINES" --no-pager -l || true
@@ -254,6 +255,7 @@ if [[ "$ACTIVATE_TARGET" == "worker" || "$ACTIVATE_TARGET" == "both" ]]; then
     sudo rm -f /etc/systemd/system/mnt-llm\\x2daccess\\x2dusage.mount
     sudo systemctl daemon-reload
   fi
+  sudo install -d -o ts_user -g ts_user -m 0755 /mnt/llm-access-usage
   ensure_mount_service "$USAGE_MOUNT_SERVICE" /mnt/llm-access-usage
 fi
 
