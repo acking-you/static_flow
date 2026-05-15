@@ -104,6 +104,13 @@ pub fn bootstrap_api_storage(config: &StorageConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Initialize only the storage paths required by the standalone usage worker.
+pub fn bootstrap_usage_worker_storage(config: &StorageConfig) -> anyhow::Result<()> {
+    runtime::validate_usage_worker_state_root(config)?;
+    llm_access_store::initialize_sqlite_target_path(&config.sqlite_control)?;
+    Ok(())
+}
+
 /// Initialize llm-access storage paths, including analytics storage.
 pub fn bootstrap_storage(config: &StorageConfig) -> anyhow::Result<()> {
     bootstrap_api_storage(config)?;
@@ -1371,6 +1378,42 @@ mod tests {
         assert_eq!(json["producer_current_file"]["sequence"], 0);
 
         std::fs::remove_dir_all(&root).expect("cleanup state root");
+    }
+
+    #[test]
+    fn bootstrap_usage_worker_storage_skips_api_auth_and_log_directories() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-worker-bootstrap-{}-{unique}", std::process::id()));
+        let control_root = std::env::temp_dir()
+            .join(format!("llm-access-worker-bootstrap-control-{}-{unique}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&control_root);
+        std::fs::create_dir_all(&root).expect("create state root");
+
+        let config = crate::config::StorageConfig {
+            state_root: root.clone(),
+            sqlite_control: control_root.join("control/llm-access.sqlite3"),
+            duckdb: root.join("analytics/usage.duckdb"),
+            usage_journal_dir: root.join("usage-journal"),
+            duckdb_tiered: None,
+            kiro_auths_dir: root.join("auths/kiro"),
+            codex_auths_dir: root.join("auths/codex"),
+            logs_dir: root.join("logs"),
+        };
+
+        crate::bootstrap_usage_worker_storage(&config).expect("bootstrap usage worker storage");
+
+        assert!(config.usage_journal_dir.is_dir());
+        assert!(!config.kiro_auths_dir.exists());
+        assert!(!config.codex_auths_dir.exists());
+        assert!(!config.logs_dir.exists());
+
+        std::fs::remove_dir_all(&root).expect("cleanup state root");
+        std::fs::remove_dir_all(&control_root).expect("cleanup control root");
     }
 
     #[tokio::test]

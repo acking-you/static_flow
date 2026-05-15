@@ -45,7 +45,7 @@ fn run() -> anyhow::Result<()> {
         },
         CliCommand::Serve(config) => (config.bind_addr, config.storage),
     };
-    llm_access::bootstrap_api_storage(&storage)?;
+    llm_access::bootstrap_usage_worker_storage(&storage)?;
     let control = SqliteControlRepository::open_path(&storage.sqlite_control)?;
     let runtime = tokio::runtime::Runtime::new()?;
     let runtime_config = runtime.block_on(control.get_admin_runtime_config())?;

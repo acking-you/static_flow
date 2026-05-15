@@ -1,20 +1,18 @@
 [Unit]
 Description=JuiceFS mount for StaticFlow llm-access usage analytics
-After=network-online.target
+After=network-online.target juicefs-llm-access.service
 Wants=network-online.target
+Requires=juicefs-llm-access.service
 
 [Service]
 Type=simple
 User=ts_user
 Group=ts_user
 EnvironmentFile=/home/ts_user/.config/staticflow/llm-access-juicefs.env
-Environment=JUICEFS_MOUNT_POINT=/mnt/llm-access-usage
-Environment=JUICEFS_CACHE_DIR=/var/cache/juicefs/llm-access-usage
-Environment=JUICEFS_CACHE_SIZE_MIB=40960
-Environment=JUICEFS_LOG_FILE=/var/log/juicefs/llm-access-usage.log
-ExecStartPre=/usr/bin/test -d ${JUICEFS_MOUNT_POINT}
-ExecStart=/home/ts_user/.local/bin/juicefs mount --cache-dir ${JUICEFS_CACHE_DIR} --cache-size ${JUICEFS_CACHE_SIZE_MIB} --log ${JUICEFS_LOG_FILE} --no-syslog --no-usage-report ${JUICEFS_META_URL} ${JUICEFS_MOUNT_POINT}
-ExecStop=/usr/bin/fusermount3 -uz ${JUICEFS_MOUNT_POINT}
+ExecStartPre=/usr/bin/test -d /mnt/llm-access-usage
+ExecStartPre=/usr/bin/mkdir -p /mnt/llm-access/llm-access-usage
+ExecStart=/home/ts_user/.local/bin/juicefs mount --cache-dir /var/cache/juicefs/llm-access-usage --cache-size 40960 --log /var/log/juicefs/llm-access-usage.log --no-syslog --no-usage-report --writeback --subdir /llm-access-usage ${JUICEFS_META_URL} /mnt/llm-access-usage
+ExecStop=/usr/bin/fusermount3 -uz /mnt/llm-access-usage
 Restart=always
 RestartSec=3
 TimeoutStopSec=30

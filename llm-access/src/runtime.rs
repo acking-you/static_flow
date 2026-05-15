@@ -1201,6 +1201,20 @@ pub fn validate_state_root(config: &StorageConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Validate the minimal worker state used by the usage journal consumer.
+pub fn validate_usage_worker_state_root(config: &StorageConfig) -> anyhow::Result<()> {
+    let metadata = std::fs::metadata(&config.state_root).with_context(|| {
+        format!("state root `{}` is not accessible", config.state_root.display())
+    })?;
+    if !metadata.is_dir() {
+        return Err(anyhow!("state root `{}` is not a directory", config.state_root.display()));
+    }
+    std::fs::create_dir_all(&config.usage_journal_dir).with_context(|| {
+        format!("failed to create usage journal dir `{}`", config.usage_journal_dir.display())
+    })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
