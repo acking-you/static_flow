@@ -27,6 +27,7 @@ use crate::wire::{
 };
 
 const PREFIX_CACHE_PAGE_SIZE: usize = 64;
+const PREFIX_CHILD_SORT_THRESHOLD: usize = 16;
 #[derive(Debug, Clone, PartialEq, Eq)]
 // A canonical unit is the smallest semantic fragment we retain before packing
 // it into fixed-size cache pages. We keep the stable string key for anchor/hash
@@ -292,6 +293,7 @@ struct PrefixTree {
 #[derive(Debug, Default)]
 struct PrefixNode {
     children: Vec<PrefixEdge>,
+    children_sorted: bool,
 }
 
 impl Drop for PrefixNode {
@@ -320,6 +322,10 @@ impl PrefixEdge {
             last_touched_at: now,
             child: PrefixNode::default(),
         }
+    }
+
+    fn first_page_key(&self) -> u128 {
+        self.pages[0].key
     }
 }
 
@@ -539,7 +545,7 @@ fn insert_prefix_path(node: &mut PrefixNode, pages: &[CanonicalTokenPage], now: 
         let Some(edge_index) = find_child_edge_index(current, pages[offset].key) else {
             let edge = PrefixEdge::new(&pages[offset..], now);
             added_tokens = added_tokens.saturating_add(edge.token_count);
-            current.children.push(edge);
+            push_child_edge(current, edge);
             return added_tokens;
         };
 
@@ -548,7 +554,7 @@ fn insert_prefix_path(node: &mut PrefixNode, pages: &[CanonicalTokenPage], now: 
         if common == 0 {
             let edge = PrefixEdge::new(&pages[offset..], now);
             added_tokens = added_tokens.saturating_add(edge.token_count);
-            current.children.push(edge);
+            push_child_edge(current, edge);
             return added_tokens;
         }
         if common < edge.pages.len() {
@@ -721,12 +727,29 @@ fn remove_leaf_path(node: &mut PrefixNode, path: &[usize]) -> u64 {
     }
 }
 
-fn find_child_edge_index(node: &PrefixNode, first_page_key: u128) -> Option<usize> {
-    node.children.iter().position(|edge| {
-        edge.pages
-            .first()
-            .is_some_and(|page| page.key == first_page_key)
-    })
+fn push_child_edge(node: &mut PrefixNode, edge: PrefixEdge) {
+    node.children.push(edge);
+    node.children_sorted = false;
+}
+
+fn find_child_edge_index(node: &mut PrefixNode, first_page_key: u128) -> Option<usize> {
+    if node.children.len() < PREFIX_CHILD_SORT_THRESHOLD {
+        return find_child_edge_index_linear(node, first_page_key);
+    }
+    if !node.children_sorted {
+        node.children
+            .sort_unstable_by_key(|edge| edge.first_page_key());
+        node.children_sorted = true;
+    }
+    node.children
+        .binary_search_by_key(&first_page_key, |edge| edge.first_page_key())
+        .ok()
+}
+
+fn find_child_edge_index_linear(node: &PrefixNode, first_page_key: u128) -> Option<usize> {
+    node.children
+        .iter()
+        .position(|edge| edge.first_page_key() == first_page_key)
 }
 
 fn common_prefix_len(left: &[CanonicalTokenPage], right: &[CanonicalTokenPage]) -> usize {
@@ -758,6 +781,7 @@ fn split_edge_at(edge: &mut PrefixEdge, split_at: usize, prefix_last_touched_at:
             last_touched_at: old_last_touched_at,
             child: old_child,
         }],
+        children_sorted: false,
     };
 }
 
@@ -1578,6 +1602,28 @@ mod tests {
         compare_match(&mut radix, &mut plain, &newest, now + Duration::from_secs(7), ttl);
     }
 
+    #[test]
+    fn prefix_tree_sorts_high_fanout_node_lazily_without_changing_hits() {
+        let ttl = Duration::from_secs(300);
+        let now = Instant::now();
+        let mut radix = PrefixTree::default();
+        let mut plain = PlainPrefixTree::default();
+
+        for key in (0..32).rev() {
+            compare_insert(&mut radix, &mut plain, &pages_from_keys(&[key]), now, ttl);
+        }
+
+        assert_ne!(root_first_page_keys(&radix), (0..32).collect::<Vec<_>>());
+        compare_match(
+            &mut radix,
+            &mut plain,
+            &pages_from_keys(&[17]),
+            now + Duration::from_secs(1),
+            ttl,
+        );
+        assert_eq!(root_first_page_keys(&radix), (0..32).collect::<Vec<_>>());
+    }
+
     fn numbered_pages(count: usize, start: u128) -> Vec<CanonicalTokenPage> {
         (0..count)
             .map(|index| CanonicalTokenPage {
@@ -1634,6 +1680,14 @@ mod tests {
         let plain_match = plain.match_prefix(pages, now, ttl);
         assert_eq!(radix_match, plain_match);
         assert_eq!(radix.resident_tokens, plain.resident_tokens);
+    }
+
+    fn root_first_page_keys(tree: &PrefixTree) -> Vec<u128> {
+        tree.root
+            .children
+            .iter()
+            .map(|edge| edge.pages[0].key)
+            .collect()
     }
 
     #[derive(Default)]
