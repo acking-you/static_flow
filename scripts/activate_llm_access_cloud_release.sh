@@ -5,11 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RELEASE_DIR="${LLM_ACCESS_RELEASE_DIR:-$SCRIPT_DIR}"
 SERVICE="${LLM_ACCESS_SERVICE:-llm-access.service}"
 WORKER_SERVICE="${LLM_ACCESS_USAGE_WORKER_SERVICE:-llm-access-usage-worker.service}"
+USAGE_MOUNT_UNIT="${LLM_ACCESS_USAGE_MOUNT_UNIT:-mnt-llm\\x2daccess\\x2dusage.mount}"
 ACTIVATE_TARGET="${LLM_ACCESS_ACTIVATE_TARGET:-both}"
 INSTALL_PATH="${LLM_ACCESS_INSTALL_PATH:-/usr/local/bin/llm-access}"
 WORKER_INSTALL_PATH="${LLM_ACCESS_USAGE_WORKER_INSTALL_PATH:-/usr/local/bin/llm-access-usage-worker}"
 SERVICE_UNIT_INSTALL_PATH="${LLM_ACCESS_SERVICE_UNIT_INSTALL_PATH:-/etc/systemd/system/llm-access.service}"
 WORKER_SERVICE_UNIT_INSTALL_PATH="${LLM_ACCESS_USAGE_WORKER_SERVICE_UNIT_INSTALL_PATH:-/etc/systemd/system/llm-access-usage-worker.service}"
+USAGE_MOUNT_UNIT_INSTALL_PATH="${LLM_ACCESS_USAGE_MOUNT_UNIT_INSTALL_PATH:-/etc/systemd/system/mnt-llm\\x2daccess\\x2dusage.mount}"
 BACKUP_DIR="${LLM_ACCESS_BACKUP_DIR:-/usr/local/bin/staticflow-backups}"
 HEALTH_URL="${LLM_ACCESS_HEALTH_URL:-http://127.0.0.1:19080/healthz}"
 WORKER_HEALTH_URL="${LLM_ACCESS_USAGE_WORKER_HEALTH_URL:-http://127.0.0.1:19081/admin/llm-access/usage-worker/status}"
@@ -20,6 +22,7 @@ STAGED_WORKER_BIN="${2:-$RELEASE_DIR/llm-access-usage-worker.latest}"
 MANIFEST="${LLM_ACCESS_RELEASE_MANIFEST:-$RELEASE_DIR/release.latest.env}"
 STAGED_SERVICE_UNIT="${LLM_ACCESS_STAGED_SERVICE_UNIT:-}"
 STAGED_WORKER_SERVICE_UNIT="${LLM_ACCESS_STAGED_WORKER_SERVICE_UNIT:-}"
+STAGED_USAGE_MOUNT_UNIT="${LLM_ACCESS_STAGED_USAGE_MOUNT_UNIT:-}"
 
 log() {
   printf '[llm-access-activate] %s\n' "$*"
@@ -50,6 +53,19 @@ wait_for_health() {
     sleep 1
   done
   return 1
+}
+
+ensure_mount() {
+  local unit="$1"
+  local mount_path="$2"
+
+  log "ensuring mount unit $unit is active"
+  sudo systemctl enable --now "$unit"
+  if ! findmnt -T "$mount_path" >/dev/null; then
+    sudo systemctl status "$unit" --no-pager -l || true
+    sudo journalctl -u "$unit" -n "$JOURNAL_LINES" --no-pager -l || true
+    fail "$mount_path is not mounted after enabling $unit"
+  fi
 }
 
 install_binary() {
@@ -170,6 +186,13 @@ fi
 
 systemctl is-active juicefs-llm-access.service >/dev/null || fail "juicefs-llm-access.service is not active"
 findmnt -T /mnt/llm-access >/dev/null || fail "/mnt/llm-access is not mounted"
+if [[ "$ACTIVATE_TARGET" == "worker" || "$ACTIVATE_TARGET" == "both" ]]; then
+  if findmnt -T /mnt/llm-access-usage >/dev/null; then
+    log "/mnt/llm-access-usage is mounted before activation"
+  else
+    log "/mnt/llm-access-usage is not mounted before activation; continuing with install"
+  fi
+fi
 
 if [[ "$ACTIVATE_TARGET" == "api" || "$ACTIVATE_TARGET" == "both" ]] && systemctl is-active "$SERVICE" >/dev/null; then
   log "$SERVICE is active before activation"
@@ -190,6 +213,7 @@ backup_path="$BACKUP_DIR/llm-access.$timestamp"
 worker_backup_path="$BACKUP_DIR/llm-access-usage-worker.$timestamp"
 service_unit_backup_path="$BACKUP_DIR/llm-access.service.$timestamp"
 worker_service_unit_backup_path="$BACKUP_DIR/llm-access-usage-worker.service.$timestamp"
+usage_mount_unit_backup_path="$BACKUP_DIR/mnt-llm\\x2daccess\\x2dusage.mount.$timestamp"
 
 sudo install -d -m 0755 "$BACKUP_DIR"
 reload_required=0
@@ -212,11 +236,19 @@ if [[ "$ACTIVATE_TARGET" == "worker" || "$ACTIVATE_TARGET" == "both" ]]; then
     install_service_unit "$STAGED_WORKER_SERVICE_UNIT" "$WORKER_SERVICE_UNIT_INSTALL_PATH" "$worker_service_unit_backup_path"
     reload_required=1
   fi
+  if [[ -n "$STAGED_USAGE_MOUNT_UNIT" ]]; then
+    install_service_unit "$STAGED_USAGE_MOUNT_UNIT" "$USAGE_MOUNT_UNIT_INSTALL_PATH" "$usage_mount_unit_backup_path"
+    reload_required=1
+  fi
 fi
 
 if [[ "$reload_required" == "1" ]]; then
   log "reloading systemd units"
   sudo systemctl daemon-reload
+fi
+
+if [[ "$ACTIVATE_TARGET" == "worker" || "$ACTIVATE_TARGET" == "both" ]]; then
+  ensure_mount "$USAGE_MOUNT_UNIT" /mnt/llm-access-usage
 fi
 
 if [[ "$ACTIVATE_TARGET" == "worker" || "$ACTIVATE_TARGET" == "both" ]]; then
@@ -250,7 +282,14 @@ if [[ "$ACTIVATE_TARGET" == "both" ]]; then
   if [[ -n "$STAGED_WORKER_SERVICE_UNIT" ]]; then
     rollback_cmd+=" && sudo cp -a \"$worker_service_unit_backup_path\" \"$WORKER_SERVICE_UNIT_INSTALL_PATH\""
   fi
-  rollback_cmd+=" && sudo systemctl daemon-reload && sudo systemctl restart \"$WORKER_SERVICE\" \"$SERVICE\""
+  if [[ -n "$STAGED_USAGE_MOUNT_UNIT" ]]; then
+    rollback_cmd+=" && sudo cp -a \"$usage_mount_unit_backup_path\" \"$USAGE_MOUNT_UNIT_INSTALL_PATH\""
+  fi
+  rollback_cmd+=" && sudo systemctl daemon-reload"
+  if [[ -n "$STAGED_USAGE_MOUNT_UNIT" ]]; then
+    rollback_cmd+=" && sudo systemctl enable --now \"$USAGE_MOUNT_UNIT\""
+  fi
+  rollback_cmd+=" && sudo systemctl restart \"$WORKER_SERVICE\" \"$SERVICE\""
 elif [[ "$ACTIVATE_TARGET" == "api" ]]; then
   rollback_cmd="sudo cp -a \"$backup_path\" \"$INSTALL_PATH\""
   if [[ -n "$STAGED_SERVICE_UNIT" ]]; then
@@ -262,7 +301,14 @@ else
   if [[ -n "$STAGED_WORKER_SERVICE_UNIT" ]]; then
     rollback_cmd+=" && sudo cp -a \"$worker_service_unit_backup_path\" \"$WORKER_SERVICE_UNIT_INSTALL_PATH\""
   fi
-  rollback_cmd+=" && sudo systemctl daemon-reload && sudo systemctl restart \"$WORKER_SERVICE\""
+  if [[ -n "$STAGED_USAGE_MOUNT_UNIT" ]]; then
+    rollback_cmd+=" && sudo cp -a \"$usage_mount_unit_backup_path\" \"$USAGE_MOUNT_UNIT_INSTALL_PATH\""
+  fi
+  rollback_cmd+=" && sudo systemctl daemon-reload"
+  if [[ -n "$STAGED_USAGE_MOUNT_UNIT" ]]; then
+    rollback_cmd+=" && sudo systemctl enable --now \"$USAGE_MOUNT_UNIT\""
+  fi
+  rollback_cmd+=" && sudo systemctl restart \"$WORKER_SERVICE\""
 fi
 
 cat <<EOF

@@ -68,7 +68,7 @@ fn run() -> anyhow::Result<()> {
                 archive_dir: tiered.archive_dir,
                 catalog_dir: tiered.catalog_dir,
                 rollover_bytes: tiered.rollover_bytes,
-                details_object_store_url: tiered.details_object_store_url,
+                details_dir: tiered.details_dir,
             },
             Arc::clone(&connection_config),
         )?
@@ -128,7 +128,7 @@ async fn run_forever_with_runtime_config(
     };
 
     const RUNTIME_CONFIG_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
-    const USAGE_ANALYTICS_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+    const USAGE_ANALYTICS_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
     let control = SqliteControlRepository::open_path(sqlite_control_path)?;
     let mut last_config_refresh = None::<Instant>;

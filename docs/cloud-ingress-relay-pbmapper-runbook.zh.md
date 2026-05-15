@@ -16,8 +16,8 @@ public client
      │      -> SQLite control DB on /mnt/llm-access/control
      │      -> usage journal on /var/lib/staticflow/llm-access/usage-journal
      │      -> active DuckDB on /var/lib/staticflow/llm-access/analytics-active
-     │      -> archived DuckDB segments/catalog on JuiceFS/R2
-     │      -> heavy usage details as compressed JSON in direct R2 object storage
+     │      -> archived DuckDB segments/catalog on /mnt/llm-access-usage
+     │      -> heavy usage details as compressed packs on /mnt/llm-access-usage/details
      └── non-LLM paths
          -> cloud pb-mapper-client-cli 127.0.0.1:39080
          -> configured cloud pb-mapper relay
@@ -150,16 +150,13 @@ sudo journalctl -u caddy -n 120 --no-pager -l
 当前 usage analytics 已经拆成两层：
 
 - summary fact 继续写入 tiered DuckDB
-- 单条事件的重明细 payload 直接写入 R2 中的压缩 JSON 对象，由
-  `LLM_ACCESS_USAGE_DETAILS_OBJECT_STORE_URL` 指向
+- 单条事件的重明细 payload 继续保持 pack 形式，但写入独立的 JuiceFS usage
+  mount `/mnt/llm-access-usage/details`
 
-因此 worker 除了依赖 JuiceFS mount，还依赖直接 R2 凭证。线上
-`/etc/llm-access/llm-access.env` 至少必须包含：
+因此 worker 现在依赖两个 mount：
 
-- `LLM_ACCESS_USAGE_DETAILS_OBJECT_STORE_URL`
-- `R2_ENDPOINT`
-- `R2_ACCESS_KEY_ID`
-- `R2_SECRET_ACCESS_KEY`
+- `/mnt/llm-access`
+- `/mnt/llm-access-usage`
 
 当前资源保护基线：
 

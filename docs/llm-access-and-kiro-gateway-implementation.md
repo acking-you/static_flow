@@ -78,16 +78,11 @@ public client
 
 `llm-access` 使用 SQLite 做控制面，使用 tiered DuckDB 做 usage analytics：
 active mutable segment 在 GCP VM 本地块存储
-`/var/lib/staticflow/llm-access/analytics-active`，归档 segment/catalog 在
-JuiceFS mount `/mnt/llm-access/analytics`。JuiceFS 的对象存储后端是
-Cloudflare R2，元数据后端是 Valkey。
-
-从 2026-05-13 起，usage 重明细 payload 已经进一步拆出：worker 只把 summary
-事实写入 tiered DuckDB，把 `request_headers_json`、`last_message_content`、
-`client_request_body_json`、`upstream_request_body_json`、
-`full_request_json` 这类大字段按 event 直接写到 R2 中的压缩 JSON 对象。
-对象前缀由 `LLM_ACCESS_USAGE_DETAILS_OBJECT_STORE_URL` 配置，worker 需要同时
-拿到 `R2_ENDPOINT`、`R2_ACCESS_KEY_ID` 和 `R2_SECRET_ACCESS_KEY`。
+`/var/lib/staticflow/llm-access/analytics-active`，归档 segment/catalog/details
+在独立的 JuiceFS usage mount `/mnt/llm-access-usage`。usage 重明细现在保持
+pack 形式，直接落到
+`/mnt/llm-access-usage/details/packs/<provider>/<yyyy>/<mm>/<dd>/...`，不再由
+worker 直写 R2。
 
 本地 StaticFlow backend 可以用 `STATICFLOW_LLM_ACCESS_MODE=external` 把
 LLM route family 代理到外部 `llm-access`，默认本地目标是
@@ -435,9 +430,9 @@ Kiro 的 access token 管理是文件持久化的。默认目录是 `~/.static-f
 | `/mnt/llm-access/auths/{codex,kiro}` | upstream account snapshots/auth JSON |
 | `/var/lib/staticflow/llm-access/usage-journal` | compact local usage journal produced by API and consumed by the usage worker |
 | `/var/lib/staticflow/llm-access/analytics-active` | current mutable DuckDB usage segment |
-| `/mnt/llm-access/analytics/segments` | immutable archived DuckDB usage segments |
-| `/mnt/llm-access/analytics/catalog` | low-frequency DuckDB segment catalog |
-| `LLM_ACCESS_USAGE_DETAILS_OBJECT_STORE_URL` target prefix | compressed per-event usage detail blobs in direct R2 object storage |
+| `/mnt/llm-access-usage/analytics/segments` | immutable archived DuckDB usage segments |
+| `/mnt/llm-access-usage/analytics/catalog` | low-frequency DuckDB segment catalog |
+| `/mnt/llm-access-usage/details/packs/...` | compressed per-event packed usage detail payloads |
 
 因此，生产排障时不要把 local LanceDB `llm_gateway_usage_events` 当成当前
 LLM usage 的完整事实源。它最多是历史/迁移来源或本地兼容路径的线索。

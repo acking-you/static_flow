@@ -4,7 +4,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     ops::Range,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
@@ -16,8 +16,6 @@ use std::{
 use anyhow::{anyhow, Context};
 #[cfg(feature = "duckdb-runtime")]
 use async_trait::async_trait;
-#[cfg(feature = "duckdb-runtime")]
-use bytes::Bytes;
 #[cfg(feature = "duckdb-runtime")]
 use duckdb::OptionalExt;
 #[cfg(feature = "duckdb-runtime")]
@@ -31,13 +29,6 @@ use llm_access_core::{
         DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
     },
     usage::{UsageEvent, UsageStreamDetails, UsageTiming},
-};
-#[cfg(feature = "duckdb-runtime")]
-use object_store::{
-    aws::{AmazonS3Builder, AmazonS3ConfigKey},
-    local::LocalFileSystem,
-    path::Path as ObjectPath,
-    Attribute, AttributeValue, Attributes, ObjectStore, PutOptions,
 };
 #[cfg(feature = "duckdb-runtime")]
 use rusqlite::OptionalExtension;
@@ -737,7 +728,7 @@ impl UsageEventDetailRow {
         }
     }
 
-    fn has_object_store_payloads(&self) -> bool {
+    fn has_external_payloads(&self) -> bool {
         has_external_detail_payloads(
             self.client_request_body_json.as_deref(),
             self.upstream_request_body_json.as_deref(),
@@ -787,7 +778,6 @@ impl UsageEventDetailBlob {
 #[derive(Debug)]
 struct UsageEventDetailPackWrite {
     relative_path: String,
-    object_path: ObjectPath,
     bytes: Vec<u8>,
 }
 
@@ -801,90 +791,28 @@ struct UsageEventDetailObjectRef {
 
 #[cfg(feature = "duckdb-runtime")]
 #[derive(Debug, Clone)]
-enum UsageEventDetailObjectStoreKind {
-    Local,
-    S3Compatible,
+struct UsageEventDetailStore {
+    root_dir: PathBuf,
 }
 
 #[cfg(feature = "duckdb-runtime")]
-#[derive(Debug, Clone)]
-struct UsageEventDetailObjectStore {
-    store: Arc<dyn ObjectStore>,
-    base_prefix: ObjectPath,
-    kind: UsageEventDetailObjectStoreKind,
-}
-
-#[cfg(feature = "duckdb-runtime")]
-impl UsageEventDetailObjectStore {
-    fn from_url(url: &str) -> anyhow::Result<Option<Self>> {
-        let trimmed = url.trim();
-        if trimmed.is_empty() {
+impl UsageEventDetailStore {
+    fn from_dir(path: &Path) -> anyhow::Result<Option<Self>> {
+        if path.as_os_str().is_empty() {
             return Ok(None);
         }
-        let parsed = url::Url::parse(trimmed)
-            .with_context(|| format!("invalid usage details object store url `{trimmed}`"))?;
-        match parsed.scheme() {
-            "file" => {
-                let path = parsed.to_file_path().map_err(|_| {
-                    anyhow!("usage details file url `{trimmed}` is not a valid file path")
-                })?;
-                fs::create_dir_all(&path).with_context(|| {
-                    format!("failed to create usage details directory `{}`", path.display())
-                })?;
-                let store = LocalFileSystem::new_with_prefix(&path).with_context(|| {
-                    format!(
-                        "failed to open local usage details object store from `{}`",
-                        path.display()
-                    )
-                })?;
-                Ok(Some(Self {
-                    store: Arc::new(store),
-                    base_prefix: ObjectPath::default(),
-                    kind: UsageEventDetailObjectStoreKind::Local,
-                }))
-            },
-            "s3" | "s3a" | "https" => {
-                let mut builder = AmazonS3Builder::new().with_url(trimmed);
-                let env_overrides = [
-                    ("aws_access_key_id", std::env::var("R2_ACCESS_KEY_ID").ok()),
-                    ("aws_secret_access_key", std::env::var("R2_SECRET_ACCESS_KEY").ok()),
-                    ("aws_endpoint", std::env::var("R2_ENDPOINT").ok()),
-                    (
-                        "aws_default_region",
-                        std::env::var("AWS_DEFAULT_REGION")
-                            .ok()
-                            .or_else(|| Some("us-east-1".to_string())),
-                    ),
-                ];
-                for (key, value) in env_overrides {
-                    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
-                        builder = builder.with_config(
-                            key.parse::<AmazonS3ConfigKey>()
-                                .expect("known object_store aws config key"),
-                            value,
-                        );
-                    }
-                }
-                let base_prefix = parsed
-                    .path()
-                    .trim_start_matches('/')
-                    .trim_end_matches('/')
-                    .to_string();
-                let store = builder.build().with_context(|| {
-                    format!(
-                        "failed to open usage details s3-compatible object store from `{trimmed}`"
-                    )
-                })?;
-                Ok(Some(Self {
-                    store: Arc::new(store),
-                    base_prefix: ObjectPath::from(base_prefix),
-                    kind: UsageEventDetailObjectStoreKind::S3Compatible,
-                }))
-            },
-            other => Err(anyhow!(
-                "unsupported usage details object store scheme `{other}` in `{trimmed}`"
-            )),
+        if !path.is_absolute() {
+            return Err(anyhow!(
+                "usage details dir `{}` must be an absolute local filesystem path",
+                path.display()
+            ));
         }
+        fs::create_dir_all(path).with_context(|| {
+            format!("failed to create usage details directory `{}`", path.display())
+        })?;
+        Ok(Some(Self {
+            root_dir: path.to_path_buf(),
+        }))
     }
 
     fn pack_relative_path_for_rows(&self, rows: &[UsageEventRow], pack_bytes: &[u8]) -> String {
@@ -903,14 +831,6 @@ impl UsageEventDetailObjectStore {
         )
     }
 
-    fn object_path_from_relative(&self, relative: &str) -> ObjectPath {
-        if self.base_prefix.as_ref().is_empty() {
-            ObjectPath::from(relative)
-        } else {
-            ObjectPath::from_iter([self.base_prefix.as_ref(), relative])
-        }
-    }
-
     fn prepare_pack(
         &self,
         rows: &mut [UsageEventRow],
@@ -923,7 +843,7 @@ impl UsageEventDetailObjectStore {
                 continue;
             }
             let detail = UsageEventDetailRow::from_usage_event_row(row);
-            if !detail.has_object_store_payloads() {
+            if !detail.has_external_payloads() {
                 continue;
             }
             let blob = UsageEventDetailBlob::from_detail_row(&detail);
@@ -955,29 +875,24 @@ impl UsageEventDetailObjectStore {
             rows[index].detail_object_sha256 = Some(sha256);
         }
         Ok(Some(UsageEventDetailPackWrite {
-            object_path: self.object_path_from_relative(&relative_path),
             relative_path,
             bytes: pack_bytes,
         }))
     }
 
     async fn put_pack(&self, pack: UsageEventDetailPackWrite) -> anyhow::Result<()> {
-        let attrs = match self.kind {
-            UsageEventDetailObjectStoreKind::Local => Attributes::new(),
-            UsageEventDetailObjectStoreKind::S3Compatible => Attributes::from_iter([(
-                Attribute::ContentType,
-                AttributeValue::from("application/octet-stream"),
-            )]),
-        };
-        self.store
-            .put_opts(&pack.object_path, Bytes::from(pack.bytes).into(), PutOptions {
-                attributes: attrs,
-                ..PutOptions::default()
-            })
-            .await
-            .with_context(|| {
-                format!("failed to upload usage detail pack `{}`", pack.relative_path)
+        let pack_path = self.root_dir.join(&pack.relative_path);
+        if let Some(parent) = pack_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "failed to create usage detail pack parent directory `{}`",
+                    parent.display()
+                )
             })?;
+        }
+        fs::write(&pack_path, pack.bytes).with_context(|| {
+            format!("failed to write usage detail pack `{}`", pack_path.display())
+        })?;
         Ok(())
     }
 
@@ -986,29 +901,40 @@ impl UsageEventDetailObjectStore {
         event_id: &str,
         detail_ref: &UsageEventDetailObjectRef,
     ) -> anyhow::Result<Option<UsageEventDetailRow>> {
-        let location = self.object_path_from_relative(&detail_ref.relative_path);
-        let bytes = match self
-            .store
-            .get_range(&location, detail_ref.byte_range.clone())
-            .await
-        {
-            Ok(bytes) => bytes,
-            Err(object_store::Error::NotFound {
-                ..
-            }) => return Ok(None),
+        let pack_path = self.root_dir.join(&detail_ref.relative_path);
+        let mut file = match fs::File::open(&pack_path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(err) => {
-                return Err(err)
-                    .with_context(|| format!("failed to fetch usage detail pack `{location}`"))
+                return Err(err).with_context(|| {
+                    format!("failed to open usage detail pack `{}`", pack_path.display())
+                })
             },
         };
+        let range_len = detail_ref
+            .byte_range
+            .end
+            .checked_sub(detail_ref.byte_range.start)
+            .ok_or_else(|| anyhow!("usage detail pack byte range is invalid"))?;
+        let mut bytes =
+            vec![0_u8; usize::try_from(range_len).context("detail byte range too large")?];
+        file.seek(SeekFrom::Start(detail_ref.byte_range.start))
+            .with_context(|| {
+                format!("failed to seek usage detail pack `{}`", pack_path.display())
+            })?;
+        file.read_exact(&mut bytes).with_context(|| {
+            format!("failed to read usage detail pack `{}`", pack_path.display())
+        })?;
         let actual_sha = sha256_hex(&bytes);
         if actual_sha != detail_ref.sha256 {
             return Err(anyhow!(
-                "usage detail pack member hash mismatch for event `{event_id}` in `{location}`"
+                "usage detail pack member hash mismatch for event `{event_id}` in `{}`",
+                pack_path.display()
             ));
         }
-        let blob: UsageEventDetailBlob = gunzip_json_bytes(&bytes)
-            .with_context(|| format!("failed to decode usage detail pack member `{location}`"))?;
+        let blob: UsageEventDetailBlob = gunzip_json_bytes(&bytes).with_context(|| {
+            format!("failed to decode usage detail pack member `{}`", pack_path.display())
+        })?;
         Ok(Some(blob.into_detail_row(event_id.to_string())))
     }
 }
@@ -1074,7 +1000,7 @@ impl DuckDbUsageWriter {
 #[derive(Debug)]
 struct HotUsageWriter {
     summary: DuckDbUsageWriter,
-    detail_object_store: Option<Arc<UsageEventDetailObjectStore>>,
+    detail_store: Option<Arc<UsageEventDetailStore>>,
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1082,7 +1008,7 @@ impl HotUsageWriter {
     fn open(
         duckdb_path: &Path,
         connection_config: DuckDbUsageConnectionConfig,
-        detail_object_store: Option<Arc<UsageEventDetailObjectStore>>,
+        detail_store: Option<Arc<UsageEventDetailStore>>,
     ) -> anyhow::Result<Self> {
         let summary =
             DuckDbUsageWriter::new(DuckDbUsageRepository::open_conn_with_connection_config(
@@ -1091,17 +1017,17 @@ impl HotUsageWriter {
             )?)?;
         Ok(Self {
             summary,
-            detail_object_store,
+            detail_store,
         })
     }
 
     async fn insert_usage_events(&mut self, rows: &[UsageEventRow]) -> anyhow::Result<()> {
-        if let Some(detail_object_store) = &self.detail_object_store {
+        if let Some(detail_store) = &self.detail_store {
             let mut rows = rows.to_vec();
-            let pack = detail_object_store.prepare_pack(&mut rows)?;
+            let pack = detail_store.prepare_pack(&mut rows)?;
             self.summary.insert_usage_event_summaries(&rows)?;
             if let Some(pack) = pack {
-                detail_object_store.put_pack(pack).await?;
+                detail_store.put_pack(pack).await?;
             }
             return Ok(());
         }
@@ -1122,10 +1048,10 @@ impl PersistentUsageWriter {
     fn open(
         path: &Path,
         connection_config: DuckDbUsageConnectionConfig,
-        detail_object_store: Option<Arc<UsageEventDetailObjectStore>>,
+        detail_store: Option<Arc<UsageEventDetailStore>>,
     ) -> anyhow::Result<Self> {
         Ok(Self {
-            writer: HotUsageWriter::open(path, connection_config, detail_object_store)?,
+            writer: HotUsageWriter::open(path, connection_config, detail_store)?,
             connection_config,
         })
     }
@@ -1254,6 +1180,11 @@ pub struct UsageAnalyticsPruneReport {
     pub deleted_files: usize,
     /// DuckDB files removed because no catalog row referenced them.
     pub deleted_orphan_files: usize,
+    /// Detail pack files removed from expired day buckets.
+    pub deleted_detail_files: usize,
+    /// Detail directories removed from expired day buckets or empty archive
+    /// buckets.
+    pub deleted_detail_dirs: usize,
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1318,8 +1249,8 @@ pub struct TieredDuckDbUsageConfig {
     pub catalog_dir: PathBuf,
     /// Rollover threshold in bytes for the active DuckDB file.
     pub rollover_bytes: u64,
-    /// Optional external object-store base URL for detail payloads.
-    pub details_object_store_url: Option<String>,
+    /// Optional local root directory for packed detail payloads.
+    pub details_dir: Option<PathBuf>,
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1329,7 +1260,7 @@ struct TieredDuckDbUsageState {
     next_sequence: u64,
     active_has_rows: bool,
     active_writer: Option<PersistentUsageWriter>,
-    detail_object_store: Option<Arc<UsageEventDetailObjectStore>>,
+    detail_store: Option<Arc<UsageEventDetailStore>>,
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1479,10 +1410,10 @@ impl DuckDbUsageRepository {
         initialize_tiered_catalog(&config)?;
         clear_stale_compacting_files(&config)?;
         spawn_existing_pending_sealers(config.clone(), Arc::clone(&connection_config))?;
-        let detail_object_store = config
-            .details_object_store_url
+        let detail_store = config
+            .details_dir
             .as_deref()
-            .map(UsageEventDetailObjectStore::from_url)
+            .map(UsageEventDetailStore::from_dir)
             .transpose()?
             .flatten()
             .map(Arc::new);
@@ -1501,7 +1432,7 @@ impl DuckDbUsageRepository {
                     next_sequence,
                     active_has_rows,
                     active_writer: None,
-                    detail_object_store,
+                    detail_store,
                 })),
                 connection_config,
             }),
@@ -1643,15 +1574,109 @@ fn compacting_segment_path(config: &TieredDuckDbUsageConfig, segment_id: &str) -
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn archive_segment_path(config: &TieredDuckDbUsageConfig, segment_id: &str) -> PathBuf {
-    config.archive_dir.join(format!("{segment_id}.duckdb"))
+fn archive_segment_file_name(segment_id: &str) -> String {
+    format!("{segment_id}.duckdb")
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn uploading_archive_segment_path(config: &TieredDuckDbUsageConfig, segment_id: &str) -> PathBuf {
+fn archive_segment_bucket_dir(timestamp_ms: i64) -> PathBuf {
+    let (year, month, day) = utc_date_parts(timestamp_ms);
+    PathBuf::from(format!("{year:04}/{month:02}/{day:02}"))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn archive_segment_path_for_timestamp(
+    config: &TieredDuckDbUsageConfig,
+    segment_id: &str,
+    timestamp_ms: i64,
+) -> PathBuf {
     config
         .archive_dir
-        .join(format!("{segment_id}.uploading.duckdb"))
+        .join(archive_segment_bucket_dir(timestamp_ms))
+        .join(archive_segment_file_name(segment_id))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn uploading_archive_segment_path_from_archive_path(archive_path: &Path) -> PathBuf {
+    let file_name = archive_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let uploading_name = file_name
+        .strip_suffix(".duckdb")
+        .map(|name| format!("{name}.uploading.duckdb"))
+        .unwrap_or_else(|| format!("{file_name}.uploading"));
+    archive_path.with_file_name(uploading_name)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn catalog_archive_path_for_segment(
+    config: &TieredDuckDbUsageConfig,
+    segment_id: &str,
+) -> anyhow::Result<Option<PathBuf>> {
+    let catalog = open_tiered_catalog_connection(config, "segment archive lookup")?;
+    catalog
+        .query_row(
+            "SELECT archive_path FROM usage_segments WHERE segment_id = ?1 LIMIT 1",
+            rusqlite::params![segment_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .context("query tiered usage catalog archive path")
+        .map(|path| path.map(PathBuf::from))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn find_archived_segment_path_recursive(
+    root: &Path,
+    expected_name: &str,
+) -> anyhow::Result<Option<PathBuf>> {
+    if !root.exists() {
+        return Ok(None);
+    }
+    for entry in fs::read_dir(root)
+        .with_context(|| format!("failed to read archive directory `{}`", root.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_archived_segment_path_recursive(&path, expected_name)? {
+                return Ok(Some(found));
+            }
+            continue;
+        }
+        if path.is_file()
+            && path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value == expected_name)
+        {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn existing_archived_segment_paths(
+    config: &TieredDuckDbUsageConfig,
+    pending_path: &Path,
+    segment_id: &str,
+) -> anyhow::Result<Option<ArchivedSegmentPaths>> {
+    let archive_duckdb = if let Some(path) = catalog_archive_path_for_segment(config, segment_id)? {
+        Some(path)
+    } else {
+        find_archived_segment_path_recursive(
+            &config.archive_dir,
+            &archive_segment_file_name(segment_id),
+        )?
+    };
+    Ok(archive_duckdb.map(|archive_duckdb| ArchivedSegmentPaths {
+        pending_duckdb: pending_path.to_path_buf(),
+        compact_duckdb: compacting_segment_path(config, segment_id),
+        uploading_duckdb: uploading_archive_segment_path_from_archive_path(&archive_duckdb),
+        archive_duckdb,
+    }))
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1661,6 +1686,51 @@ fn remove_file_if_exists(path: &Path) -> anyhow::Result<()> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err).with_context(|| format!("failed to remove file `{}`", path.display())),
     }
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn prune_empty_directories_up_to(root: &Path, start: &Path) -> anyhow::Result<usize> {
+    let mut removed = 0usize;
+    let mut current = Some(start);
+    while let Some(dir) = current {
+        if dir == root {
+            break;
+        }
+        match fs::remove_dir(dir) {
+            Ok(()) => {
+                removed = removed.saturating_add(1);
+                current = dir.parent();
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                current = dir.parent();
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => break,
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("failed to remove directory `{}`", dir.display()))
+            },
+        }
+    }
+    Ok(removed)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn collect_files_recursive(root: &Path, files: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root)
+        .with_context(|| format!("failed to read directory `{}`", root.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files_recursive(&path, files)?;
+        } else if path.is_file() {
+            files.push(path);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1992,9 +2062,22 @@ async fn publish_pending_segment_async(
     fs::create_dir_all(&config.archive_dir).with_context(|| {
         format!("failed to create archive directory `{}`", config.archive_dir.display())
     })?;
-    let uploading_path = uploading_archive_segment_path(config, segment_id);
-    let archive_path = archive_segment_path(config, segment_id);
-    let compact_path = compacting_segment_path(config, segment_id);
+    if let Some(paths) = existing_archived_segment_paths(config, pending_path, segment_id)? {
+        if paths.archive_duckdb.exists() {
+            return finalize_archived_segment(config, &paths, segment_id);
+        }
+    }
+    let compact_path =
+        compact_pending_segment_to_local_file(config, pending_path, segment_id, connection_config)?;
+    let stats = validate_compacted_segment_matches_source(pending_path, &compact_path)?;
+    let bucket_timestamp_ms = stats.end_ms.or(stats.start_ms).unwrap_or_else(now_ms);
+    let archive_path = archive_segment_path_for_timestamp(config, segment_id, bucket_timestamp_ms);
+    let uploading_path = uploading_archive_segment_path_from_archive_path(&archive_path);
+    if let Some(parent) = archive_path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!("failed to create archived segment bucket directory `{}`", parent.display())
+        })?;
+    }
     let paths = ArchivedSegmentPaths {
         pending_duckdb: pending_path.to_path_buf(),
         compact_duckdb: compact_path.clone(),
@@ -2004,9 +2087,6 @@ async fn publish_pending_segment_async(
     if archive_path.exists() {
         return finalize_archived_segment(config, &paths, segment_id);
     }
-    let compact_path =
-        compact_pending_segment_to_local_file(config, pending_path, segment_id, connection_config)?;
-    let stats = validate_compacted_segment_matches_source(pending_path, &compact_path)?;
     publish_pending_segment_details_if_configured(config, pending_path).await?;
     remove_file_if_exists(&uploading_path)?;
     fs::copy(&compact_path, &uploading_path).with_context(|| {
@@ -2468,7 +2548,7 @@ async fn append_usage_events_to_tiered(
             state.active_writer = Some(PersistentUsageWriter::open(
                 &state.active_path,
                 connection_config_snapshot,
-                state.detail_object_store.clone(),
+                state.detail_store.clone(),
             )?);
         }
         state
@@ -2546,12 +2626,19 @@ async fn prune_tiered_usage_analytics(
     for segment in &expired_segments {
         deleted_files =
             deleted_files.saturating_add(remove_duckdb_segment_files(&segment.archive_path)?);
+        if let Some(parent) = segment.archive_path.parent() {
+            let _ = prune_empty_directories_up_to(&config.archive_dir, parent);
+        }
     }
     let deleted_orphan_files = prune_orphan_archived_duckdb_files(config)?;
+    let (deleted_detail_files, deleted_detail_dirs) =
+        prune_expired_detail_day_buckets(config, cutoff_ms)?;
     Ok(UsageAnalyticsPruneReport {
         deleted_segments: expired_segments.len(),
         deleted_files,
         deleted_orphan_files,
+        deleted_detail_files,
+        deleted_detail_dirs,
     })
 }
 
@@ -2671,24 +2758,22 @@ fn remove_duckdb_segment_files(path: &Path) -> anyhow::Result<usize> {
 fn prune_orphan_archived_duckdb_files(config: &TieredDuckDbUsageConfig) -> anyhow::Result<usize> {
     let referenced = catalog_archived_duckdb_paths(config)?;
     let mut deleted = 0usize;
-    for entry in fs::read_dir(&config.archive_dir).with_context(|| {
-        format!("failed to read archive duckdb directory `{}`", config.archive_dir.display())
-    })? {
-        let entry = entry?;
-        let path = entry.path();
+    let mut candidates = Vec::new();
+    collect_files_recursive(&config.archive_dir, &mut candidates)?;
+    for path in candidates {
         let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
-        if !path.is_file()
-            || !file_name.ends_with(".duckdb")
-            || file_name.ends_with(".uploading.duckdb")
-        {
+        if !file_name.ends_with(".duckdb") || file_name.ends_with(".uploading.duckdb") {
             continue;
         }
         if referenced.contains(&path) {
             continue;
         }
         deleted = deleted.saturating_add(remove_duckdb_segment_files(&path)?);
+        if let Some(parent) = path.parent() {
+            let _ = prune_empty_directories_up_to(&config.archive_dir, parent);
+        }
     }
     Ok(deleted)
 }
@@ -2706,6 +2791,104 @@ fn catalog_archived_duckdb_paths(
         .context("query archived paths")?;
     rows.collect::<Result<HashSet<_>, _>>()
         .context("collect archived paths")
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn prune_expired_detail_day_buckets(
+    config: &TieredDuckDbUsageConfig,
+    cutoff_ms: i64,
+) -> anyhow::Result<(usize, usize)> {
+    let Some(details_root) = config.details_dir.as_ref() else {
+        return Ok((0, 0));
+    };
+    let packs_root = details_root.join("packs");
+    if !packs_root.exists() {
+        return Ok((0, 0));
+    }
+    let cutoff_date = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(cutoff_ms)
+        .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).expect("epoch"))
+        .date_naive();
+    let mut deleted_files = 0usize;
+    let mut deleted_dirs = 0usize;
+    for provider_entry in fs::read_dir(&packs_root).with_context(|| {
+        format!("failed to read usage detail packs directory `{}`", packs_root.display())
+    })? {
+        let provider_entry = provider_entry?;
+        let provider_path = provider_entry.path();
+        if !provider_path.is_dir() {
+            continue;
+        }
+        for year_entry in fs::read_dir(&provider_path).with_context(|| {
+            format!("failed to read usage detail year directory `{}`", provider_path.display())
+        })? {
+            let year_entry = year_entry?;
+            let year_path = year_entry.path();
+            let Some(year) = year_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .and_then(|value| value.parse::<i32>().ok())
+            else {
+                continue;
+            };
+            if !year_path.is_dir() {
+                continue;
+            }
+            for month_entry in fs::read_dir(&year_path).with_context(|| {
+                format!("failed to read usage detail month directory `{}`", year_path.display())
+            })? {
+                let month_entry = month_entry?;
+                let month_path = month_entry.path();
+                let Some(month) = month_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .and_then(|value| value.parse::<u32>().ok())
+                else {
+                    continue;
+                };
+                if !month_path.is_dir() {
+                    continue;
+                }
+                for day_entry in fs::read_dir(&month_path).with_context(|| {
+                    format!("failed to read usage detail day directory `{}`", month_path.display())
+                })? {
+                    let day_entry = day_entry?;
+                    let day_path = day_entry.path();
+                    let Some(day) = day_path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .and_then(|value| value.parse::<u32>().ok())
+                    else {
+                        continue;
+                    };
+                    if !day_path.is_dir() {
+                        continue;
+                    }
+                    let Some(bucket_date) = chrono::NaiveDate::from_ymd_opt(year, month, day)
+                    else {
+                        continue;
+                    };
+                    if bucket_date >= cutoff_date {
+                        continue;
+                    }
+                    let mut files = Vec::new();
+                    collect_files_recursive(&day_path, &mut files)?;
+                    deleted_files = deleted_files.saturating_add(files.len());
+                    fs::remove_dir_all(&day_path).with_context(|| {
+                        format!(
+                            "failed to remove expired usage detail day directory `{}`",
+                            day_path.display()
+                        )
+                    })?;
+                    deleted_dirs = deleted_dirs.saturating_add(1);
+                    deleted_dirs = deleted_dirs.saturating_add(prune_empty_directories_up_to(
+                        &packs_root,
+                        day_path.parent().unwrap_or(&packs_root),
+                    )?);
+                }
+            }
+        }
+    }
+    Ok((deleted_files, deleted_dirs))
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -3375,17 +3558,17 @@ async fn get_usage_event_from_tiered(
     state: &Mutex<TieredDuckDbUsageState>,
     event_id: &str,
 ) -> anyhow::Result<Option<UsageEvent>> {
-    let (detail_object_store, active_path) = {
+    let (detail_store, active_path) = {
         let state = state
             .lock()
             .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
-        (state.detail_object_store.clone(), state.active_path.clone())
+        (state.detail_store.clone(), state.active_path.clone())
     };
     if let Some((mut event, detail_ref)) =
         get_usage_event_from_active_paths(&active_path, event_id)?
     {
         if let Some(detail_ref) = detail_ref {
-            if let Some(detail_store) = detail_object_store.as_ref() {
+            if let Some(detail_store) = detail_store.as_ref() {
                 if let Some(detail) = detail_store.get_row_for_ref(event_id, &detail_ref).await? {
                     merge_usage_event_detail_payloads(&mut event, &detail);
                 }
@@ -3402,7 +3585,7 @@ async fn get_usage_event_from_tiered(
             None => return Ok(None),
         };
     if let Some(detail_ref) = detail_ref {
-        if let Some(detail_store) = detail_object_store.as_ref() {
+        if let Some(detail_store) = detail_store.as_ref() {
             if let Some(detail) = detail_store.get_row_for_ref(event_id, &detail_ref).await? {
                 merge_usage_event_detail_payloads(&mut event, &detail);
             }
@@ -3797,19 +3980,18 @@ mod tests {
     }
 
     #[cfg(feature = "duckdb-runtime")]
-    fn details_store_url(root: &std::path::Path) -> String {
-        let path = root.join("usage-details");
-        let url = url::Url::from_directory_path(&path)
-            .expect("usage details directory url")
-            .to_string();
-        url.trim_end_matches('/').to_string()
+    fn details_store_dir(root: &std::path::Path) -> std::path::PathBuf {
+        root.join("usage-details")
     }
 
     #[cfg(feature = "duckdb-runtime")]
-    fn details_store_object_path(root: &std::path::Path, event: &UsageEvent) -> std::path::PathBuf {
+    fn legacy_details_store_object_path(
+        root: &std::path::Path,
+        event: &UsageEvent,
+    ) -> std::path::PathBuf {
         let ts = chrono::DateTime::from_timestamp_millis(event.created_at_ms)
             .expect("valid usage event timestamp");
-        root.join("usage-details")
+        details_store_dir(root)
             .join(event.provider_type.as_storage_str())
             .join(ts.format("%Y").to_string())
             .join(ts.format("%m").to_string())
@@ -3818,7 +4000,19 @@ mod tests {
     }
 
     #[cfg(feature = "duckdb-runtime")]
+    fn archived_segment_path_for_timestamp(
+        config: &super::TieredDuckDbUsageConfig,
+        segment_id: &str,
+        timestamp_ms: i64,
+    ) -> std::path::PathBuf {
+        super::archive_segment_path_for_timestamp(config, segment_id, timestamp_ms)
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
     fn create_legacy_usage_archive_without_stream_columns(path: &std::path::Path) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create legacy archive parent directory");
+        }
         let conn = duckdb::Connection::open(path).expect("open legacy archive");
         conn.execute_batch(
             r#"
@@ -4105,6 +4299,66 @@ mod tests {
     }
 
     #[cfg(feature = "duckdb-runtime")]
+    #[test]
+    fn tiered_usage_detail_store_rejects_non_file_backends() {
+        let err = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
+            active_dir: std::env::temp_dir().join("llm-access-active-reject-remote"),
+            archive_dir: std::env::temp_dir().join("llm-access-archive-reject-remote"),
+            catalog_dir: std::env::temp_dir().join("llm-access-catalog-reject-remote"),
+            rollover_bytes: u64::MAX,
+            details_dir: Some(std::path::PathBuf::from("s3://should-not-work")),
+        })
+        .expect_err("non-local details dir must fail");
+
+        assert!(err.to_string().contains("local filesystem path"));
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[test]
+    fn tiered_usage_detail_prune_removes_only_expired_day_buckets() {
+        let root = std::env::temp_dir().join(format!(
+            "llm-access-duckdb-test-{}-detail-retention-buckets",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create detail retention test directory");
+        let config = super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            catalog_dir: root.join("catalog"),
+            rollover_bytes: u64::MAX,
+            details_dir: Some(details_store_dir(&root)),
+        };
+        let now_ms = 1_700_864_000_000;
+        let day_ms = 86_400_000;
+        let expired_day = details_store_dir(&root)
+            .join("packs/kiro")
+            .join(super::archive_segment_bucket_dir(now_ms - 8 * day_ms));
+        let retained_day = details_store_dir(&root)
+            .join("packs/kiro")
+            .join(super::archive_segment_bucket_dir(now_ms - 2 * day_ms));
+        std::fs::create_dir_all(&expired_day).expect("create expired detail day");
+        std::fs::create_dir_all(&retained_day).expect("create retained detail day");
+        std::fs::write(expired_day.join("expired.detailpack-v1"), b"expired")
+            .expect("write expired detail pack");
+        std::fs::write(retained_day.join("retained.detailpack-v1"), b"retained")
+            .expect("write retained detail pack");
+
+        let (deleted_files, deleted_dirs) = super::prune_expired_detail_day_buckets(
+            &config,
+            super::usage_analytics_retention_cutoff_ms(now_ms, 7),
+        )
+        .expect("prune detail day buckets");
+
+        assert_eq!(deleted_files, 1);
+        assert!(deleted_dirs >= 1);
+        assert!(!expired_day.exists());
+        assert!(retained_day.exists());
+
+        std::fs::remove_dir_all(&root).expect("cleanup detail retention test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
     #[tokio::test]
     async fn duckdb_repository_persists_usage_event_batches() {
         let root = std::env::temp_dir()
@@ -4204,7 +4458,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
-            details_object_store_url: Some(details_store_url(&root)),
+            details_dir: Some(details_store_dir(&root)),
         })
         .expect("open tiered duckdb usage db");
         let mut event = test_usage_event();
@@ -4245,7 +4499,7 @@ mod tests {
         assert_eq!(fact_row.1, event.routing_diagnostics_json);
         assert_eq!(fact_row.2, event.last_message_content);
         assert!(!fact_row.3);
-        assert!(!details_store_object_path(&root, &event).exists());
+        assert!(!legacy_details_store_object_path(&root, &event).exists());
 
         let detail = repo
             .get_usage_event(&event.event_id)
@@ -4273,7 +4527,7 @@ mod tests {
             .expect("read heavy detail pack path")
             .expect("heavy event detail pack path");
         assert!(root.join("usage-details").join(detail_pack_path).exists());
-        assert!(!details_store_object_path(&root, &heavy).exists());
+        assert!(!legacy_details_store_object_path(&root, &heavy).exists());
 
         let heavy_detail = repo
             .get_usage_event(&heavy.event_id)
@@ -4298,7 +4552,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
-            details_object_store_url: Some(details_store_url(&root)),
+            details_dir: Some(details_store_dir(&root)),
         })
         .expect("open tiered duckdb usage db");
 
@@ -4364,8 +4618,8 @@ mod tests {
             .join("usage-details")
             .join(first_ref.0.as_deref().expect("detail pack path"));
         assert!(pack_path.exists(), "detail pack should exist at {}", pack_path.display());
-        assert!(!details_store_object_path(&root, &first).exists());
-        assert!(!details_store_object_path(&root, &second).exists());
+        assert!(!legacy_details_store_object_path(&root, &first).exists());
+        assert!(!legacy_details_store_object_path(&root, &second).exists());
 
         let first_detail = repo
             .get_usage_event(&first.event_id)
@@ -4395,7 +4649,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
-            details_object_store_url: Some(details_store_url(&root)),
+            details_dir: Some(details_store_dir(&root)),
         })
         .expect("open tiered duckdb usage db");
         let mut event = test_usage_event();
@@ -4635,7 +4889,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
-            details_object_store_url: Some(details_store_url(&root)),
+            details_dir: Some(details_store_dir(&root)),
         })
         .expect("open tiered duckdb usage db");
         let mut first = test_usage_event();
@@ -4698,7 +4952,7 @@ mod tests {
             .expect("get archived tiered usage event")
             .expect("archived tiered event exists");
         assert_usage_event_light_detail_round_trips(&archived_detail, &first);
-        assert!(!details_store_object_path(&root, &first).exists());
+        assert!(!legacy_details_store_object_path(&root, &first).exists());
 
         std::fs::remove_dir_all(&root).expect("cleanup tiered duckdb test directory");
     }
@@ -4715,13 +4969,15 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
-            details_object_store_url: Some(details_store_url(&root)),
+            details_dir: Some(details_store_dir(&root)),
         };
         std::fs::create_dir_all(&config.active_dir).expect("create active dir");
         super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
-        let archive_path = config
-            .archive_dir
-            .join("usage-legacy-archive-000001.duckdb");
+        let archive_path = archived_segment_path_for_timestamp(
+            &config,
+            "usage-legacy-archive-000001",
+            1_700_000_000_000,
+        );
         create_legacy_usage_archive_without_stream_columns(&archive_path);
         let stats = super::collect_segment_stats(&archive_path).expect("collect legacy stats");
         let size_bytes = std::fs::metadata(&archive_path)
@@ -4773,7 +5029,7 @@ mod tests {
 
     #[cfg(feature = "duckdb-runtime")]
     #[tokio::test]
-    async fn duckdb_tiered_repository_reads_legacy_embedded_detail_rows_without_object_store() {
+    async fn duckdb_tiered_repository_reads_legacy_embedded_detail_rows_without_detail_packs() {
         let root = std::env::temp_dir()
             .join(format!("llm-access-duckdb-test-{}-legacy-embedded-detail", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -4783,11 +5039,15 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
-            details_object_store_url: None,
+            details_dir: None,
         };
         std::fs::create_dir_all(&config.active_dir).expect("create active dir");
         super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
-        let archive_path = config.archive_dir.join("usage-legacy-detail-000001.duckdb");
+        let archive_path = archived_segment_path_for_timestamp(
+            &config,
+            "usage-legacy-detail-000001",
+            1_700_000_000_000,
+        );
         create_legacy_usage_archive_without_stream_columns(&archive_path);
         let stats = super::collect_segment_stats(&archive_path).expect("collect legacy stats");
         let size_bytes = std::fs::metadata(&archive_path)
@@ -4839,7 +5099,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
-            details_object_store_url: None,
+            details_dir: None,
         };
         std::fs::create_dir_all(&config.active_dir).expect("create active dir");
         super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
@@ -4922,7 +5182,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
-            details_object_store_url: None,
+            details_dir: None,
         })
         .expect("open tiered duckdb usage db");
 
@@ -4981,7 +5241,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
-            details_object_store_url: None,
+            details_dir: None,
         })
         .expect("open tiered duckdb usage db");
         let now_ms = 1_700_864_000_000;
@@ -5035,7 +5295,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
-            details_object_store_url: None,
+            details_dir: None,
         })
         .expect("open tiered duckdb usage db");
         let now_ms = 1_700_864_000_000;
@@ -5084,7 +5344,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
-            details_object_store_url: None,
+            details_dir: None,
         };
         let repo = super::DuckDbUsageRepository::open_tiered(config.clone())
             .expect("open tiered duckdb usage db");
@@ -5109,11 +5369,7 @@ mod tests {
             .expect("append should pre-rollover existing active segment");
 
         wait_for_archived_duckdb_file_count(&root.join("archive"), 2).await;
-        let archived = std::fs::read_dir(root.join("archive"))
-            .expect("read archive directory")
-            .filter_map(Result::ok)
-            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("duckdb"))
-            .count();
+        let archived = duckdb_file_count(&root.join("archive"));
         assert_eq!(
             archived, 2,
             "pre-rollover should archive the existing active separately from the new append"
@@ -5153,7 +5409,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
-            details_object_store_url: None,
+            details_dir: None,
         })
         .expect("open tiered duckdb usage db");
 
@@ -5223,7 +5479,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
-            details_object_store_url: None,
+            details_dir: None,
         })
         .expect("open tiered duckdb usage db");
 
@@ -5287,7 +5543,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
-            details_object_store_url: None,
+            details_dir: None,
         };
         super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
 
@@ -5324,7 +5580,11 @@ mod tests {
         .await
         .expect("publish compacted segment");
 
-        let archive_path = config.archive_dir.join("usage-compact-test-000001.duckdb");
+        let archive_path = archived_segment_path_for_timestamp(
+            &config,
+            "usage-compact-test-000001",
+            1_700_000_000_000,
+        );
         assert!(archive_path.exists(), "archived compact segment should exist");
         assert!(
             !pending_path.exists(),
@@ -5335,10 +5595,7 @@ mod tests {
             "local compact temp file should be removed after publication"
         );
         assert!(
-            !config
-                .archive_dir
-                .join("usage-compact-test-000001.uploading.duckdb")
-                .exists(),
+            !super::uploading_archive_segment_path_from_archive_path(&archive_path).exists(),
             "uploading archive temp file should not remain after publication"
         );
         let stale_compact_path =
@@ -5393,7 +5650,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
-            details_object_store_url: None,
+            details_dir: None,
         };
         super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
 
@@ -5447,9 +5704,11 @@ mod tests {
         .await
         .expect("publish compacted segment with reordered usage_events");
 
-        let archive_path = config
-            .archive_dir
-            .join("usage-reordered-test-000001.duckdb");
+        let archive_path = archived_segment_path_for_timestamp(
+            &config,
+            "usage-reordered-test-000001",
+            1_700_000_000_000,
+        );
         let archived = super::DuckDbUsageRepository::open_read_only_conn(&archive_path)
             .expect("open archived reordered segment");
         let row = archived
@@ -5479,7 +5738,7 @@ mod tests {
             archive_dir: root.join("archive"),
             catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
-            details_object_store_url: Some(details_store_url(&root)),
+            details_dir: Some(details_store_dir(&root)),
         };
         super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
 
@@ -5495,9 +5754,11 @@ mod tests {
         .await
         .expect("publish compacted legacy pending segment");
 
-        let archive_path = config
-            .archive_dir
-            .join("usage-legacy-pending-000001.duckdb");
+        let archive_path = archived_segment_path_for_timestamp(
+            &config,
+            "usage-legacy-pending-000001",
+            1_700_000_000_000,
+        );
         let archived = super::DuckDbUsageRepository::open_read_only_conn(&archive_path)
             .expect("open archived legacy pending segment");
         let fact_row = archived
@@ -5555,11 +5816,12 @@ mod tests {
 
     #[cfg(feature = "duckdb-runtime")]
     fn duckdb_file_count(dir: &std::path::Path) -> usize {
-        std::fs::read_dir(dir)
-            .ok()
+        let mut files = Vec::new();
+        super::collect_files_recursive(dir, &mut files)
+            .expect("collect recursive duckdb files for test count");
+        files
             .into_iter()
-            .flat_map(|entries| entries.filter_map(Result::ok))
-            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("duckdb"))
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("duckdb"))
             .count()
     }
 

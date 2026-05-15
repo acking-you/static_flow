@@ -2,10 +2,11 @@
 
 > **Code Version**: 本文基于 `2026-05-13` 之后的 `llm-access` usage worker
 > 实现撰写，覆盖 archive schema 兼容、catalog 预过滤优化，以及
-> “summary 进 DuckDB、heavy details 进 direct R2 object store” 的当前形态。
+> “summary 进 tiered DuckDB、heavy details 进 JuiceFS usage mount detail packs”
+> 的当前形态。
 >
 > **讨论范围**: 本文只讨论 `llm-access` usage event 的生产、journal、
-> worker 消费、DuckDB summary segment 下沉、R2 detail blob 存储、SQLite
+> worker 消费、DuckDB summary segment 下沉、detail pack 存储、SQLite
 > catalog 和基于 catalog 的查询加速。
 > Codex/Kiro 协议转换、账号刷新、代理解析、前端视觉交互不在本文展开。
 >
@@ -34,7 +35,7 @@ API producer
   -> usage worker
   -> active DuckDB summary segment
   -> archived DuckDB summary segments
-  -> direct R2 detail blobs
+  -> JuiceFS detail packs
   -> SQLite segment catalog
 ```
 
@@ -42,8 +43,9 @@ API producer
 
 - 保持 API 热路径只生产 usage event，不直接做历史 usage 查询。
 - 让当前写入只命中本地 active DuckDB segment。
-- 把已经封存的 summary segment 变成 immutable archive，适合放在 JuiceFS/R2。
-- 把单条事件的重明细 payload 从 hot DuckDB 里剥离，直接写到对象存储，避免
+- 把已经封存的 summary segment 变成 immutable archive，适合放在 JuiceFS。
+- 把单条事件的重明细 payload 从 hot DuckDB 里剥离，直接写到 usage mount 的
+  pack 文件，避免
   checkpoint/rollover 为完整请求体付内存成本。
 - 用轻量 SQLite catalog 描述 archive 元数据，避免查询时盲目打开所有 archive。
 - 对旧 archive schema 保持可读，避免新增列后历史查询失败。
@@ -59,7 +61,7 @@ API producer
 
 | 术语 | 含义 | 存储介质 |
 |---|---|---|
-| Usage Event | 一次网关请求的完整事实，包括 summary 字段和可选重明细 payload | journal block、DuckDB `usage_events`、R2 detail blob |
+| Usage Event | 一次网关请求的完整事实，包括 summary 字段和可选重明细 payload | journal block、DuckDB `usage_events`、detail pack |
 | Usage Journal | API producer 写出的本地追加日志，worker 从 sealed 文件消费 | 文件目录 |
 | Active Segment | 当前可写 DuckDB 文件，worker 把 journal event 导入这里 | DuckDB |
 | Pending Segment | active rollover 后等待下沉的 DuckDB 文件 | DuckDB 文件 |
@@ -74,7 +76,7 @@ API producer
 
 - summary facts 的 source of truth 是 DuckDB，不是 SQLite catalog。
 - request headers、message preview、request body 这类重明细的 source of truth
-  是 direct R2 detail blob，不是 DuckDB，也不是 SQLite catalog。
+  是 usage mount detail pack，不是 DuckDB，也不是 SQLite catalog。
 - `usage_segment_key_rollups` 只保存聚合摘要，不保存请求正文、响应正文或 headers。
 - archive segment 一旦发布就是 immutable；后续 catalog 可以重建或覆盖发布，但 archive 文件本身不在查询时修改。
 - `source=hot` 只读 active segment，`source=archive` 只读 archived segments，`source=all` 同时读两者。
@@ -93,8 +95,8 @@ flowchart TD
 
     Worker["llm-access-usage-worker :19081"] --> Journal
     Worker --> Active["Active DuckDB summary segment<br/>local VM disk"]
-    Worker --> Archive["Archived DuckDB summary segments<br/>JuiceFS / R2"]
-    Worker --> Details["Compressed detail blobs<br/>direct R2 object store"]
+    Worker --> Archive["Archived DuckDB summary segments<br/>JuiceFS usage mount"]
+    Worker --> Details["Compressed detail packs<br/>JuiceFS usage mount"]
     Worker --> Catalog["SQLite catalog<br/>usage-segments.sqlite3"]
 
     Forward --> Worker
@@ -139,14 +141,18 @@ local VM disk:
     ├── pending/
     └── compacting/
 
-direct object store:
-└── ${LLM_ACCESS_USAGE_DETAILS_OBJECT_STORE_URL}/
-    └── <provider>/<yyyy>/<mm>/<dd>/<event_id>.json.gz
+dedicated JuiceFS usage mount:
+└── /mnt/llm-access-usage/
+    ├── analytics/
+    │   ├── segments/<yyyy>/<mm>/<dd>/<segment>.duckdb
+    │   └── catalog/usage-segments.sqlite3
+    └── details/
+        └── packs/<provider>/<yyyy>/<mm>/<dd>/<event>.detailpack-v1
 ```
 
-生产配置里 active segment 放在 VM 本地盘，archive 和 catalog 放在
-`/mnt/llm-access/analytics`。这样写入热路径优先使用本地块存储，历史数据
-可以随 JuiceFS/R2 做容量扩展。
+生产配置里 active segment 放在 VM 本地盘，archive/catalog/details 放在独立
+的 usage JuiceFS mount `/mnt/llm-access-usage`。这样写入热路径优先使用本地
+块存储，历史 usage 明细与归档由 JuiceFS 自己的读写缓存承接。
 
 ### 3.3 数据形态变化
 
@@ -347,8 +353,8 @@ usage_segment_events
 ```
 
 如果某个 pending segment 仍然是旧形态、真实 payload 还嵌在 DuckDB 里，发布
-阶段会把这些 legacy payload 回填到当前 direct R2 detail blob 路径；空占位摘要
-不会覆盖已写好的对象。
+阶段会把这些 legacy payload 回填到当前 usage mount detail pack 路径；空占位摘要
+不会覆盖已写好的 pack 成员。
 
 如果某个 segment 已经有旧 catalog 行，发布前会先删除该 segment 的旧
 event locator 和 key rollup，再插入新结果。这样 catalog 发布是可重试的。
@@ -916,32 +922,13 @@ usage-active-*.duckdb 主文件大小稳定
 
 症状：
 
-```text
-last_error: failed to upload usage detail object ...
-169.254.169.254/latest/api/token
-```
+`usage detail` 现在不再直写 R2。若 worker 明细缺失，优先检查：
 
-判断路径：
-
-```text
-worker process is active
-  |
-  +-- usage worker status last_error != null
-        |
-        v
-      object_store credential chain fell back to instance metadata
-```
-
-下一步：
-
-- 检查 `/etc/llm-access/llm-access.env` 是否同时包含：
-  - `LLM_ACCESS_USAGE_DETAILS_OBJECT_STORE_URL`
-  - `R2_ENDPOINT`
-  - `R2_ACCESS_KEY_ID`
-  - `R2_SECRET_ACCESS_KEY`
-- 检查 `systemctl show llm-access-usage-worker.service -p Environment --no-pager`
-  的实际环境是否带上这些变量。
-- 修好 env 后只重启 `llm-access-usage-worker.service`，不需要动 API。
+- `/mnt/llm-access-usage` 是否已挂载
+- `systemctl show llm-access-usage-worker.service -p Environment --no-pager`
+  中的 `LLM_ACCESS_STATE_ROOT`、`LLM_ACCESS_DUCKDB_ARCHIVE_DIR`、
+  `LLM_ACCESS_DUCKDB_CATALOG_DIR`、`LLM_ACCESS_USAGE_DETAILS_DIR`
+- worker 是否仍在读旧目录 `/mnt/llm-access/analytics`
 
 ## 12. 验证与测试策略
 
@@ -1009,7 +996,7 @@ old archive schema path does not raise Binder Error
 | catalog path | `tiered_catalog_path` |
 | catalog schema | `initialize_tiered_catalog` |
 | journal import into active | `append_usage_events_to_tiered` |
-| detail blob upload/download | `UsageEventDetailObjectStore` |
+| detail pack read/write | `UsageEventDetailStore` |
 | active rollover | `rollover_active_segment` |
 | pending publish | `publish_pending_segment_async` |
 | segment stats | `collect_segment_stats` |

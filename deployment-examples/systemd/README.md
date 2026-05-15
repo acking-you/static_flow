@@ -64,18 +64,21 @@ Storage model:
 - SQLite control DB: `/mnt/llm-access/control/llm-access.sqlite3`
 - active mutable DuckDB dir: `/var/lib/staticflow/llm-access/analytics-active`
 - GeoIP MMDB cache: `/var/lib/staticflow/llm-access/geoip/GeoLite2-City.mmdb`
-- archived DuckDB segments: `/mnt/llm-access/analytics/segments`
-- DuckDB segment catalog: `/mnt/llm-access/analytics/catalog`
+- archived DuckDB segments: `/mnt/llm-access-usage/analytics/segments`
+- DuckDB segment catalog: `/mnt/llm-access-usage/analytics/catalog`
+- packed usage details: `/mnt/llm-access-usage/details/packs/...`
 - hot usage journal: `/var/lib/staticflow/llm-access/usage-journal`
 - usage query worker bind: `127.0.0.1:19081`
-- JuiceFS cache dir: `/var/cache/juicefs/llm-access`
+- control JuiceFS cache dir: `/var/cache/juicefs/llm-access`
+- usage JuiceFS cache dir: `/var/cache/juicefs/llm-access-usage`
 
 The production JuiceFS volume is backed by Cloudflare R2 object storage and
 external Valkey metadata. Credentials belong in ignored private env files, not
 in these templates. `llm-access.service` is the single writer for SQLite
 rollups/auth state and hot local usage journal files; `llm-access-usage-worker`
-is the single writer for tiered DuckDB analytics. Journal files and active
-DuckDB segments stay on VM block storage; sealed DuckDB segments and the
+is the single writer for tiered DuckDB analytics and packed usage details.
+Journal files and active DuckDB segments stay on VM block storage; sealed
+DuckDB segments, the segment catalog, and packed detail blobs live on the
 catalog are archived under JuiceFS.
 The GeoIP MMDB is a rebuildable local cache and should stay on the VM block
 disk, not under `/mnt/llm-access`.

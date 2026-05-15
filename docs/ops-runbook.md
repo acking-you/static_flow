@@ -115,17 +115,19 @@ private env files, not in tracked docs.
 - `llm-access` must be a single-writer service for its SQLite, DuckDB, and auth
   JSON files. Do not run local and cloud `llm-access` processes that both write
   the same JuiceFS-mounted state tree.
-- The production JuiceFS mount point is `/mnt/llm-access`; llm-access should
-  use:
-  - state root: `/mnt/llm-access`
+- The production deployment now uses two JuiceFS mount points:
+  - control/state mount: `/mnt/llm-access`
+  - usage analytics mount: `/mnt/llm-access-usage`
+- llm-access should use:
+  - API state root: `/mnt/llm-access`
   - SQLite control DB: `/mnt/llm-access/control/llm-access.sqlite3`
   - hot local usage journal dir: `/var/lib/staticflow/llm-access/usage-journal`
   - local active DuckDB dir: `/var/lib/staticflow/llm-access/analytics-active`
   - archived immutable DuckDB segments:
-    `/mnt/llm-access/analytics/segments`
-  - DuckDB segment catalog: `/mnt/llm-access/analytics/catalog`
-  - heavy usage detail object prefix: direct R2 object storage configured by
-    `LLM_ACCESS_USAGE_DETAILS_OBJECT_STORE_URL`
+    `/mnt/llm-access-usage/analytics/segments`
+  - DuckDB segment catalog: `/mnt/llm-access-usage/analytics/catalog`
+  - packed per-event heavy usage details:
+    `/mnt/llm-access-usage/details/packs/<provider>/<yyyy>/<mm>/<dd>/...`
   - email credentials: `/mnt/llm-access/config/email_accounts.json`
   - API bind address: `127.0.0.1:19080`
   - usage worker bind address: `127.0.0.1:19081`
@@ -137,22 +139,15 @@ private env files, not in tracked docs.
   - `llm-access.service`: provider traffic, SQLite control/rollups, account
     status refreshers, and compact local usage journal production.
   - `llm-access-usage-worker.service`: journal consumption, tiered DuckDB
-    summary writes, direct usage-detail object uploads, worker progress state,
-    and legacy admin usage list/detail query routes on the worker port.
-- The live worker environment must include direct object-store credentials for
-  usage details. At minimum:
-  - `LLM_ACCESS_USAGE_DETAILS_OBJECT_STORE_URL`
-  - `R2_ENDPOINT`
-  - `R2_ACCESS_KEY_ID`
-  - `R2_SECRET_ACCESS_KEY`
-  If these are missing, the worker will fall back to metadata credentials and
-  detail uploads will fail even though the service still starts.
+    summary writes, local packed usage-detail persistence, worker progress
+    state, and legacy admin usage list/detail query routes on the worker port.
 - Live GCP `llm-access.service` currently runs as the non-root `ts_user`
   service user. The checked-in template still uses a dedicated `llm-access`
   user for fresh deployments; either is acceptable if file ownership, FUSE
   permissions, and readiness checks are consistent.
 - Current GCP systemd units verified on 2026-05-13:
   - `juicefs-llm-access.service`: mounts `/mnt/llm-access`
+  - `mnt-llm\x2daccess\x2dusage.mount`: mounts `/mnt/llm-access-usage`
   - `llm-access.service`: serves `127.0.0.1:19080`
     and proxies legacy admin usage routes to the worker query port
   - `pb-mapper-server-cli@llm-access.service`: registers cloud
@@ -276,8 +271,8 @@ extra swap as an emergency buffer, not as normal working memory.
   - service user: `ts_user`
   - bind: `127.0.0.1:19081`
   - current `ExecStart`: worker process with local journal root,
-    local active DuckDB dir, JuiceFS archive/catalog dirs, and direct R2 usage
-    detail object uploads
+    local active DuckDB dir, dedicated JuiceFS usage archive/catalog dirs, and
+    JuiceFS-packed usage details
   - cgroup guard observed live:
     `MemoryHigh=2200M`, `MemoryMax=3072M`, `MemorySwapMax=1024M`
 - Live health checks that should all pass:
@@ -296,13 +291,14 @@ extra swap as an emergency buffer, not as normal working memory.
     to be consumed. This is healthy, not a stuck worker.
   - `active_file_sequence` and `active_file_bytes` should move over time while
     traffic exists.
-- Current live snapshot on 2026-05-13 after the direct-R2 detail cutover showed:
+- Current live snapshot after the worker-only usage mount cutover should show:
   - API `/healthz`: `{"status":"ok","service":"llm-access"}`
   - worker status advancing in `state=importing`, `last_error=null`
-  - worker environment includes `LLM_ACCESS_USAGE_DETAILS_OBJECT_STORE_URL`,
-    `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY`
+  - worker environment includes
+    `LLM_ACCESS_STATE_ROOT=/mnt/llm-access-usage`
+    and `LLM_ACCESS_SQLITE_CONTROL=/mnt/llm-access/control/llm-access.sqlite3`
 
-## Known Residuals After Journal-Root Cutover
+## Known Residuals After Worker Usage-Mount Cutover
 
 - Historical files still exist under `/mnt/llm-access/usage-journal`. Current
   live units no longer point there, so treat that tree as stale forensic data,
@@ -317,12 +313,9 @@ extra swap as an emergency buffer, not as normal working memory.
 - The worker unit currently uses
   `/etc/systemd/system/llm-access-usage-worker.service.d/zzz-usage-journal-local.conf`
   for the same local journal override.
-- One historical pending segment currently remains under
-  `/var/lib/staticflow/llm-access/analytics-active/pending/` and has logged:
-  `Conversion Error: Could not convert string 'unknown' to INT64 when casting from source column client_ip`.
-  This is a historical archive-compaction residue. It did not break current API
-  health or the new journal path on 2026-05-07, but it means the archive lane
-  is not fully clean.
+- Old usage analytics data under `/mnt/llm-access/analytics` is now stale by
+  design. The worker no longer uses that tree for archived segments, catalog,
+  or packed details.
 - The live SQLite runtime config on 2026-05-07 used
   `duckdb_usage_memory_limit_mib=2048` and
   `duckdb_usage_checkpoint_threshold_mib=16`. Lowering the DuckDB memory limit
@@ -349,6 +342,8 @@ extra swap as an emergency buffer, not as normal working memory.
   curl -fsS http://127.0.0.1:19080/healthz
   curl -fsS http://127.0.0.1:19081/admin/llm-access/usage-worker/status
   curl -fsS -H 'Host: localhost' http://127.0.0.1:19080/admin/llm-access/usage-journal/status
+  findmnt -T /mnt/llm-access
+  findmnt -T /mnt/llm-access-usage
   systemctl show llm-access.service -p ExecStart -p Environment --no-pager
   systemctl show llm-access-usage-worker.service -p ExecStart -p Environment --no-pager
   sudo journalctl -u llm-access.service -n 80 --no-pager -l
@@ -360,11 +355,10 @@ extra swap as an emergency buffer, not as normal working memory.
   - `/etc/systemd/system/llm-access.service.d/zzz-usage-journal-local.conf`
   - `/etc/systemd/system/llm-access-usage-worker.service.d/zzz-usage-journal-local.conf`
   - owner/group of `/var/lib/staticflow/llm-access/usage-journal`
-- If the worker starts but `last_error` shows `169.254.169.254/latest/api/token`
-  or other metadata-provider credential failures, check the live
-  `/etc/llm-access/llm-access.env` first. That means the worker has
-  `LLM_ACCESS_USAGE_DETAILS_OBJECT_STORE_URL` but is missing direct R2
-  credentials, so `object_store` fell back to instance metadata auth.
+- If the worker starts but usage queries return empty unexpectedly, verify the
+  worker is mounted on `/mnt/llm-access-usage`, and confirm its effective
+  `LLM_ACCESS_STATE_ROOT`, `LLM_ACCESS_DUCKDB_ARCHIVE_DIR`,
+  `LLM_ACCESS_DUCKDB_CATALOG_DIR`, and `LLM_ACCESS_USAGE_DETAILS_DIR`.
 
 ## Emergency Recovery for Sudden Public Outage
 

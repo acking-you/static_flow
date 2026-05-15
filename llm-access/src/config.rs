@@ -42,8 +42,8 @@ pub struct TieredDuckDbStorageConfig {
     pub catalog_dir: PathBuf,
     /// Rollover threshold in bytes.
     pub rollover_bytes: u64,
-    /// Optional direct object-store base URL for per-event detail payloads.
-    pub details_object_store_url: Option<String>,
+    /// Optional local detail-pack directory for per-event detail payloads.
+    pub details_dir: Option<PathBuf>,
 }
 
 /// HTTP service configuration.
@@ -128,7 +128,7 @@ where
     let mut duckdb_archive_dir = None;
     let mut duckdb_catalog_dir = None;
     let mut duckdb_rollover_bytes = None;
-    let mut usage_details_object_store_url = None;
+    let mut usage_details_dir = None;
     let mut usage_journal_dir = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -180,11 +180,11 @@ where
                         .context("failed to parse --duckdb-rollover-bytes")?,
                 );
             },
-            "--usage-details-object-store-url" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow!("--usage-details-object-store-url requires a URL"))?;
-                usage_details_object_store_url = Some(value.to_string_lossy().trim().to_string());
+            "--usage-details-dir" => {
+                usage_details_dir = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| anyhow!("--usage-details-dir requires a path"))?,
+                ));
             },
             "--usage-journal-dir" => {
                 usage_journal_dir = Some(PathBuf::from(
@@ -204,13 +204,18 @@ where
         duckdb_archive_dir,
         duckdb_catalog_dir,
         duckdb_rollover_bytes,
-        usage_details_object_store_url,
+        usage_details_dir,
     )?;
-    ensure_under_root(&state_root, &sqlite_control)?;
+    if duckdb_tiered.is_none() {
+        ensure_under_root(&state_root, &sqlite_control)?;
+    }
     ensure_under_root(&state_root, &duckdb)?;
     if let Some(tiered) = &duckdb_tiered {
         ensure_under_root(&state_root, &tiered.archive_dir)?;
         ensure_under_root(&state_root, &tiered.catalog_dir)?;
+        if let Some(details_dir) = &tiered.details_dir {
+            ensure_under_root(&state_root, details_dir)?;
+        }
     }
     Ok(StorageConfig {
         kiro_auths_dir: state_root.join("auths/kiro"),
@@ -229,13 +234,13 @@ fn parse_tiered_duckdb_config(
     archive_dir: Option<PathBuf>,
     catalog_dir: Option<PathBuf>,
     rollover_bytes: Option<u64>,
-    details_object_store_url: Option<String>,
+    details_dir: Option<PathBuf>,
 ) -> anyhow::Result<Option<TieredDuckDbStorageConfig>> {
     let any = active_dir.is_some()
         || archive_dir.is_some()
         || catalog_dir.is_some()
         || rollover_bytes.is_some()
-        || details_object_store_url.is_some();
+        || details_dir.is_some();
     if !any {
         return Ok(None);
     }
@@ -249,9 +254,7 @@ fn parse_tiered_duckdb_config(
         rollover_bytes: rollover_bytes
             .unwrap_or(DEFAULT_TIERED_DUCKDB_ROLLOVER_BYTES)
             .max(1),
-        details_object_store_url: details_object_store_url
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
+        details_dir,
     }))
 }
 
@@ -269,7 +272,7 @@ fn usage_error() -> anyhow::Error {
          <path>\nusage: llm-access serve [--bind <addr>] --state-root <path> --sqlite-control \
          <path> [--duckdb <path>] [--usage-journal-dir <path>] [--duckdb-active-dir <path> \
          --duckdb-archive-dir <path> --duckdb-catalog-dir <path> --duckdb-rollover-bytes <bytes> \
-         --usage-details-object-store-url <url>]"
+         --usage-details-dir <path>]"
     )
 }
 
@@ -345,6 +348,7 @@ mod tests {
         assert_eq!(tiered.archive_dir, PathBuf::from("/mnt/llm-access/analytics/segments"));
         assert_eq!(tiered.catalog_dir, PathBuf::from("/mnt/llm-access/analytics/catalog"));
         assert_eq!(tiered.rollover_bytes, 536_870_912);
+        assert_eq!(tiered.details_dir, None);
     }
 
     #[test]
@@ -370,6 +374,41 @@ mod tests {
         };
         let tiered = config.storage.duckdb_tiered.expect("tiered config");
         assert_eq!(tiered.rollover_bytes, 64 * 1024 * 1024);
+        assert_eq!(tiered.details_dir, None);
+    }
+
+    #[test]
+    fn parses_tiered_worker_config_with_external_sqlite_control() {
+        let command = super::CliCommand::parse([
+            "llm-access",
+            "serve",
+            "--state-root",
+            "/mnt/llm-access-usage",
+            "--sqlite-control",
+            "/mnt/llm-access/control/llm-access.sqlite3",
+            "--duckdb-active-dir",
+            "/var/lib/staticflow/llm-access/analytics-active",
+            "--duckdb-archive-dir",
+            "/mnt/llm-access-usage/analytics/segments",
+            "--duckdb-catalog-dir",
+            "/mnt/llm-access-usage/analytics/catalog",
+            "--usage-details-dir",
+            "/mnt/llm-access-usage/details",
+        ])
+        .expect("parse worker tiered serve command");
+
+        let super::CliCommand::Serve(config) = command else {
+            panic!("expected serve command");
+        };
+        assert_eq!(config.storage.state_root, PathBuf::from("/mnt/llm-access-usage"));
+        assert_eq!(
+            config.storage.sqlite_control,
+            PathBuf::from("/mnt/llm-access/control/llm-access.sqlite3")
+        );
+        let tiered = config.storage.duckdb_tiered.expect("tiered config");
+        assert_eq!(tiered.archive_dir, PathBuf::from("/mnt/llm-access-usage/analytics/segments"));
+        assert_eq!(tiered.catalog_dir, PathBuf::from("/mnt/llm-access-usage/analytics/catalog"));
+        assert_eq!(tiered.details_dir, Some(PathBuf::from("/mnt/llm-access-usage/details")));
     }
 
     #[test]

@@ -19,17 +19,14 @@ duckdb-runtime = ["dep:duckdb"]
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-bytes = { workspace = true }
 chrono = { workspace = true }
 duckdb = { version = "1.10502.0", optional = true }
 flate2 = "1.1"
 llm-access-core = { path = "../llm-access-core" }
 llm-access-kiro = { path = "../llm-access-kiro" }
 llm-access-migrations = { path = "../llm-access-migrations" }
-object_store = { version = "0.12.4", features = ["aws", "fs"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true }
-url = "2.5"

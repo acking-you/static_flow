@@ -151,11 +151,15 @@ impl UsageWorker {
         if report.deleted_segments > 0
             || report.deleted_files > 0
             || report.deleted_orphan_files > 0
+            || report.deleted_detail_files > 0
+            || report.deleted_detail_dirs > 0
         {
             tracing::info!(
                 deleted_segments = report.deleted_segments,
                 deleted_files = report.deleted_files,
                 deleted_orphan_files = report.deleted_orphan_files,
+                deleted_detail_files = report.deleted_detail_files,
+                deleted_detail_dirs = report.deleted_detail_dirs,
                 retention_days = self.usage_analytics_retention_days(),
                 "pruned llm access usage analytics"
             );
@@ -659,7 +663,7 @@ mod tests {
                     archive_dir: temp_dir.path().join("duckdb-archive"),
                     catalog_dir: temp_dir.path().join("duckdb-catalog"),
                     rollover_bytes: 1024 * 1024 * 1024,
-                    details_object_store_url: None,
+                    details_dir: None,
                 })
                 .expect("open duckdb"),
             );
