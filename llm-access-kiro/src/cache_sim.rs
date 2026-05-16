@@ -132,6 +132,51 @@ impl PromptProjection {
     pub fn current_turn_history_segments(&self) -> &[String] {
         &self.current_turn_history_segments
     }
+
+    pub fn into_runtime_projection(self) -> RuntimePromptProjection {
+        let mut resume_anchor_hasher = Sha256::new();
+        update_hash_segments(
+            &mut resume_anchor_hasher,
+            self.history_anchor_segments
+                .iter()
+                .chain(self.current_turn_history_segments.iter()),
+        );
+        RuntimePromptProjection {
+            lookup_anchor_hash: self.lookup_anchor_hash,
+            stable_prefix_pages: self.stable_prefix_pages,
+            projected_input_token_count: self.projected_input_token_count,
+            resume_anchor_hasher,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct RuntimePromptProjection {
+    lookup_anchor_hash: String,
+    stable_prefix_pages: Vec<CanonicalTokenPage>,
+    projected_input_token_count: u64,
+    resume_anchor_hasher: Sha256,
+}
+
+impl RuntimePromptProjection {
+    pub fn lookup_anchor_hash(&self) -> &str {
+        &self.lookup_anchor_hash
+    }
+
+    pub fn stable_prefix_pages(&self) -> &[CanonicalTokenPage] {
+        &self.stable_prefix_pages
+    }
+
+    pub fn projected_input_token_count(&self) -> u64 {
+        self.projected_input_token_count
+    }
+
+    pub fn build_resume_anchor_hash(&self, assistant_message: &AssistantMessage) -> String {
+        let mut hasher = self.resume_anchor_hasher.clone();
+        let assistant_segments = canonicalize_assistant_message(assistant_message);
+        update_hash_segments(&mut hasher, assistant_segments.iter());
+        format!("{:x}", hasher.finalize())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -230,6 +275,21 @@ impl KiroCacheSimulator {
         )
     }
 
+    pub fn recover_conversation_id_from_runtime_projection(
+        &self,
+        projection: &RuntimePromptProjection,
+        config: KiroCacheSimulationConfig,
+        now: Instant,
+    ) -> Option<String> {
+        let mut index = self.anchor_index.lock();
+        index.get(
+            projection.lookup_anchor_hash(),
+            now,
+            config.conversation_anchor_ttl,
+            config.conversation_anchor_max_entries,
+        )
+    }
+
     pub fn record_success(
         &self,
         projection: &PromptProjection,
@@ -243,6 +303,35 @@ impl KiroCacheSimulator {
             let mut tree = self.prefix_tree.lock();
             tree.insert(
                 &projection.stable_prefix_pages,
+                now,
+                config.prefix_cache_entry_ttl,
+                config.prefix_cache_max_tokens,
+            );
+        }
+        let resume_anchor_hash = projection.build_resume_anchor_hash(assistant_message);
+        let mut index = self.anchor_index.lock();
+        index.insert(
+            resume_anchor_hash,
+            conversation_id.to_string(),
+            now,
+            config.conversation_anchor_ttl,
+            config.conversation_anchor_max_entries,
+        );
+    }
+
+    pub fn record_success_from_runtime_projection(
+        &self,
+        projection: &RuntimePromptProjection,
+        assistant_message: &AssistantMessage,
+        conversation_id: &str,
+        record_prefix_tree: bool,
+        config: KiroCacheSimulationConfig,
+        now: Instant,
+    ) {
+        if record_prefix_tree && matches!(config.mode, KiroCacheSimulationMode::PrefixTree) {
+            let mut tree = self.prefix_tree.lock();
+            tree.insert(
+                projection.stable_prefix_pages(),
                 now,
                 config.prefix_cache_entry_ttl,
                 config.prefix_cache_max_tokens,
@@ -1057,12 +1146,16 @@ fn canonicalize_json(value: &Value) -> Value {
 
 fn hash_segments(segments: &[String]) -> String {
     let mut hasher = Sha256::new();
+    update_hash_segments(&mut hasher, segments.iter());
+    format!("{:x}", hasher.finalize())
+}
+
+fn update_hash_segments<'a>(hasher: &mut Sha256, segments: impl IntoIterator<Item = &'a String>) {
     for segment in segments {
         let len = segment.len() as u64;
         hasher.update(len.to_le_bytes());
         hasher.update(segment.as_bytes());
     }
-    format!("{:x}", hasher.finalize())
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -1288,6 +1381,35 @@ mod tests {
             projection_a.stable_prefix_segment_keys,
             projection_b.stable_prefix_segment_keys
         );
+    }
+
+    #[test]
+    fn runtime_prompt_projection_preserves_matching_and_resume_hashes() {
+        let state = ConversationState::new("conv-runtime")
+            .with_history(vec![history_user("existing history"), history_assistant("done")])
+            .with_current_message(CurrentMessage::new(
+                UserInputMessage::new("continue", "ignored-model").with_context(
+                    UserInputMessageContext::new().with_tools(vec![tool(
+                        "search_files",
+                        "Search files",
+                        json!({"type":"object","properties":{"query":{"type":"string"}}}),
+                    )]),
+                ),
+            ));
+        let projection = PromptProjection::from_conversation_state(&state);
+        let assistant = AssistantMessage::new("assistant reply")
+            .with_tool_uses(vec![ToolUseEntry::new("tool-1", "search_files")]);
+        let expected_resume_anchor = projection.build_resume_anchor_hash(&assistant);
+        let expected_lookup_anchor = projection.lookup_anchor_hash.clone();
+        let expected_pages = projection.stable_prefix_pages.clone();
+        let expected_projected_tokens = projection.projected_input_token_count;
+
+        let runtime_projection = projection.into_runtime_projection();
+
+        assert_eq!(runtime_projection.lookup_anchor_hash(), expected_lookup_anchor);
+        assert_eq!(runtime_projection.stable_prefix_pages(), expected_pages);
+        assert_eq!(runtime_projection.projected_input_token_count(), expected_projected_tokens);
+        assert_eq!(runtime_projection.build_resume_anchor_hash(&assistant), expected_resume_anchor);
     }
 
     #[test]

@@ -71,7 +71,7 @@ use llm_access_kiro::{
     },
     cache_sim::{
         KiroCacheRuntimeStats, KiroCacheSimulationConfig, KiroCacheSimulationMode,
-        KiroCacheSimulator, PromptProjection,
+        KiroCacheSimulator, RuntimePromptProjection,
     },
     parser::decoder::EventStreamDecoder,
     scheduler::{KiroRequestLease, KiroRequestScheduler},
@@ -3097,11 +3097,13 @@ async fn dispatch_kiro_proxy(
                 },
             };
         if matches!(conversion.session_tracking.source, SessionIdSource::GeneratedFallback(_)) {
-            if let Some(recovered) = kiro_cache_simulator.recover_conversation_id(
-                &cache_ctx.projection,
-                cache_ctx.simulation_config,
-                Instant::now(),
-            ) {
+            if let Some(recovered) = kiro_cache_simulator
+                .recover_conversation_id_from_runtime_projection(
+                    &cache_ctx.projection,
+                    cache_ctx.simulation_config,
+                    Instant::now(),
+                )
+            {
                 conversation_state.conversation_id = recovered.clone();
                 cache_ctx.conversation_id = recovered;
             }
@@ -3979,7 +3981,7 @@ fn account_names_for_kiro_routing_identity(
 struct KiroCacheContext {
     policy: KiroCachePolicy,
     simulation_config: KiroCacheSimulationConfig,
-    projection: PromptProjection,
+    projection: RuntimePromptProjection,
     prefix_cache_match: llm_access_kiro::cache_sim::PrefixCacheMatch,
     conversation_id: String,
     cache_kmodels: BTreeMap<String, f64>,
@@ -4307,7 +4309,7 @@ fn stream_kiro_upstream_response(
             }
         }
         let assistant_message = guard.stream_ctx.final_assistant_message();
-        kiro_cache_simulator.record_success(
+        kiro_cache_simulator.record_success_from_runtime_projection(
             &guard.cache_ctx.projection,
             &assistant_message,
             &guard.cache_ctx.conversation_id,
@@ -4393,14 +4395,15 @@ async fn non_stream_kiro_response(
         }));
     }
     let stop_reason = stream_ctx.state_manager.get_stop_reason();
-    ctx.kiro_cache_simulator.record_success(
-        &ctx.cache_ctx.projection,
-        &assistant_message,
-        &ctx.cache_ctx.conversation_id,
-        ctx.route.cache_estimation_enabled,
-        ctx.cache_ctx.simulation_config,
-        Instant::now(),
-    );
+    ctx.kiro_cache_simulator
+        .record_success_from_runtime_projection(
+            &ctx.cache_ctx.projection,
+            &assistant_message,
+            &ctx.cache_ctx.conversation_id,
+            ctx.route.cache_estimation_enabled,
+            ctx.cache_ctx.simulation_config,
+            Instant::now(),
+        );
     if let Err(err) = record_kiro_usage(KiroUsageRecord {
         control_store: ctx.control_store.as_ref(),
         key: &ctx.key,
@@ -4909,7 +4912,8 @@ fn build_kiro_cache_context(
         conversation_anchor_max_entries: route.conversation_anchor_max_entries as usize,
         conversation_anchor_ttl: Duration::from_secs(route.conversation_anchor_ttl_seconds),
     };
-    let projection = PromptProjection::from_conversation_state(conversation_state);
+    let projection =
+        llm_access_kiro::cache_sim::PromptProjection::from_conversation_state(conversation_state);
     let prefix_cache_match = if route.cache_estimation_enabled
         && simulation_config.mode == KiroCacheSimulationMode::PrefixTree
     {
@@ -4920,7 +4924,7 @@ fn build_kiro_cache_context(
     Ok(KiroCacheContext {
         policy,
         simulation_config,
-        projection,
+        projection: projection.into_runtime_projection(),
         prefix_cache_match,
         conversation_id: conversation_state.conversation_id.clone(),
         cache_kmodels: parse_kiro_cache_kmodels_json(&route.cache_kmodels_json)?,
@@ -5088,7 +5092,7 @@ fn estimate_prefix_cached_tokens(
     cache_ctx: &KiroCacheContext,
 ) -> i32 {
     let authoritative_input_u64 = authoritative_input_tokens.max(0) as u64;
-    let projected_total = cache_ctx.projection.projected_input_token_count.max(1);
+    let projected_total = cache_ctx.projection.projected_input_token_count().max(1);
     let matched = cache_ctx
         .prefix_cache_match
         .matched_tokens
