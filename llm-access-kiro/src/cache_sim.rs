@@ -15,7 +15,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use charabia::Tokenize;
 use lru::LruCache;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -1267,16 +1266,34 @@ fn build_token_page(atoms: &[u64]) -> CanonicalTokenPage {
 
 fn tokenize_text_atoms(text: &str) -> Vec<u64> {
     let mut atoms = Vec::new();
-    for token in text.tokenize() {
-        // Use the original token surface instead of the normalized lemma so
-        // prefix hits never over-merge distinct prompts that only share a
-        // language-level normalization.
-        let surface = &text[token.byte_start..token.byte_end];
-        if surface.is_empty() {
+    let mut ascii_word_start = None::<usize>;
+    let mut ascii_word_end = 0usize;
+
+    for (index, ch) in text.char_indices() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            if ascii_word_start.is_none() {
+                ascii_word_start = Some(index);
+            }
+            ascii_word_end = index + ch.len_utf8();
             continue;
         }
-        atoms.push(hash_token_atom(surface));
+
+        if let Some(start) = ascii_word_start.take() {
+            atoms.push(hash_token_atom(&text[start..ascii_word_end]));
+        }
+
+        if ch.is_whitespace() {
+            continue;
+        }
+
+        let end = index + ch.len_utf8();
+        atoms.push(hash_token_atom(&text[index..end]));
     }
+
+    if let Some(start) = ascii_word_start {
+        atoms.push(hash_token_atom(&text[start..ascii_word_end]));
+    }
+
     if atoms.is_empty() && !text.is_empty() {
         atoms.push(hash_token_atom(text));
     }
