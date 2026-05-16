@@ -461,6 +461,7 @@ async fn provider_entry_handler(
 /// Run the HTTP server until interrupted.
 pub async fn serve(config: ServeConfig) -> anyhow::Result<()> {
     let service_runtime = runtime::LlmAccessRuntime::from_storage_config(&config.storage).await?;
+    allocator::collect_process_allocator();
     if background_status_refresh_enabled() {
         codex_status::spawn_codex_status_refresher(&service_runtime);
         kiro_status::spawn_kiro_status_refresher(&service_runtime);
@@ -474,13 +475,13 @@ pub async fn serve(config: ServeConfig) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(config.bind_addr)
         .await
         .with_context(|| format!("failed to bind {}", config.bind_addr))?;
-    let result = axum::serve(
-        listener,
-        router(service_runtime).into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await
-    .context("llm-access server failed");
+    spawn_allocator_collector();
+    let app = router(service_runtime).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    allocator::collect_process_allocator();
+    let result = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .context("llm-access server failed");
     shutdown_runtime.shutdown_usage_events().await;
     result
 }
@@ -498,6 +499,16 @@ fn background_status_refresh_enabled_from_raw(raw: Option<&str>) -> bool {
         return true;
     };
     !matches!(raw.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off")
+}
+
+fn spawn_allocator_collector() {
+    tokio::spawn(async {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            allocator::collect_process_allocator();
+        }
+    });
 }
 
 async fn shutdown_signal() {
