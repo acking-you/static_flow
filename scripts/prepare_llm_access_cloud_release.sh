@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE_SCRIPT="$ROOT_DIR/scripts/activate_llm_access_cloud_release.sh"
+RENDER_SCRIPT="$ROOT_DIR/scripts/render_llm_access_cloud_bundle.sh"
 CONFIG_FILE="${LLM_ACCESS_CLOUD_RELEASE_CONFIG:-$ROOT_DIR/.local/llm-access-cloud-release.env}"
 LOCAL_NEON_ENV_FILE="${LLM_ACCESS_LOCAL_NEON_ENV_FILE:-$ROOT_DIR/.local/llm-access-neon.env}"
 
@@ -71,6 +72,7 @@ GCP_SSH_KEY="$(expand_path "$GCP_SSH_KEY")"
 LOCAL_NEON_ENV_FILE="$(expand_path "$LOCAL_NEON_ENV_FILE")"
 
 [[ -x "$REMOTE_SCRIPT" ]] || fail "remote activation script is not executable: $REMOTE_SCRIPT"
+[[ -x "$RENDER_SCRIPT" ]] || fail "render script is not executable: $RENDER_SCRIPT"
 [[ -r "$GCP_SSH_KEY" ]] || fail "SSH key is not readable: $GCP_SSH_KEY"
 [[ -r "$LOCAL_NEON_ENV_FILE" ]] || fail "local Neon config is not readable: $LOCAL_NEON_ENV_FILE"
 grep -q '^LLM_ACCESS_CONTROL_DATABASE_URL=' "$LOCAL_NEON_ENV_FILE" \
@@ -111,11 +113,19 @@ STAGED_WORKER_BIN="$OUT_DIR/llm-access-usage-worker.$RELEASE_ID"
 STAGED_NEON_ENV="$OUT_DIR/llm-access-neon.env.$RELEASE_ID"
 MANIFEST="$OUT_DIR/release.$RELEASE_ID.env"
 SHA_FILE="$OUT_DIR/SHA256SUMS.$RELEASE_ID"
+RENDER_DIR="$OUT_DIR/rendered"
+STAGED_SERVICE_UNIT="$OUT_DIR/llm-access.service.release"
+STAGED_WORKER_SERVICE_UNIT="$OUT_DIR/llm-access-usage-worker.service.release"
+STAGED_USAGE_MOUNT_SERVICE_UNIT="$OUT_DIR/juicefs-llm-access-usage.service.release"
 
 mkdir -p "$OUT_DIR"
+"$RENDER_SCRIPT" "$RENDER_DIR"
 cp "$API_BIN" "$STAGED_BIN"
 cp "$WORKER_BIN" "$STAGED_WORKER_BIN"
 cp "$LOCAL_NEON_ENV_FILE" "$STAGED_NEON_ENV"
+cp "$RENDER_DIR/llm-access.service" "$STAGED_SERVICE_UNIT"
+cp "$RENDER_DIR/llm-access-usage-worker.service" "$STAGED_WORKER_SERVICE_UNIT"
+cp "$RENDER_DIR/juicefs-llm-access-usage.service" "$STAGED_USAGE_MOUNT_SERVICE_UNIT"
 chmod 0755 "$STAGED_BIN" "$STAGED_WORKER_BIN"
 chmod 0600 "$STAGED_NEON_ENV"
 API_BIN_SHA="$(sha256sum "$STAGED_BIN" | awk '{print $1}')"
@@ -159,6 +169,9 @@ scp "${SSH_OPTS[@]}" \
   "$STAGED_NEON_ENV" \
   "$MANIFEST" \
   "$SHA_FILE" \
+  "$STAGED_SERVICE_UNIT" \
+  "$STAGED_WORKER_SERVICE_UNIT" \
+  "$STAGED_USAGE_MOUNT_SERVICE_UNIT" \
   "$REMOTE_SCRIPT" \
   "$GCP_DEST:$REMOTE_RELEASE_DIR/"
 

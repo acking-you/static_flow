@@ -29,7 +29,7 @@ Environment=LLM_ACCESS_PROVIDER_CLIENT_POOL_MAX_IDLE_PER_HOST=1
 Environment=LLM_ACCESS_USAGE_JOURNAL_DIR=/var/lib/staticflow/llm-access/usage-journal
 WorkingDirectory=/mnt/llm-access
 ExecStartPre=/usr/bin/bash -lc 'set -a; . /mnt/llm-access/config/neon.env; exec /usr/local/bin/staticflow-wait-llm-access-state api'
-ExecStart=/usr/bin/bash -lc 'set -a; . /mnt/llm-access/config/neon.env; exec /usr/local/bin/llm-access serve --bind "$LLM_ACCESS_BIND_ADDR" --state-root "$LLM_ACCESS_STATE_ROOT" --postgres-control-database-url-env LLM_ACCESS_CONTROL_DATABASE_URL --usage-journal-dir "$LLM_ACCESS_USAGE_JOURNAL_DIR"'
+ExecStart=/usr/bin/bash -lc 'set -a; . /mnt/llm-access/config/neon.env; exec /usr/local/bin/llm-access serve --bind "$LLM_ACCESS_BIND_ADDR" --state-root "$LLM_ACCESS_STATE_ROOT" --postgres-control-database-url-env LLM_ACCESS_CONTROL_DATABASE_URL --usage-journal-dir "$LLM_ACCESS_USAGE_JOURNAL_DIR" --request-cache-url-env LLM_ACCESS_REQUEST_CACHE_URL --request-cache-key-prefix llma'
 Restart=always
 RestartSec=3
 NoNewPrivileges=true

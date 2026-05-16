@@ -23,6 +23,7 @@ grep -F 'CARGO_TARGET_DIR' "$LOCAL_SCRIPT" >/dev/null
 grep -F 'cargo test -p llm-usage-journal -p llm-access-core -p llm-access-store -p llm-access' "$LOCAL_SCRIPT" >/dev/null
 grep -F 'cargo clippy -p llm-usage-journal -p llm-access-core -p llm-access-store -p llm-access' "$LOCAL_SCRIPT" >/dev/null
 grep -F 'cargo build -p llm-access --release' "$LOCAL_SCRIPT" >/dev/null
+grep -F 'render_llm_access_cloud_bundle.sh' "$LOCAL_SCRIPT" >/dev/null
 grep -F 'scp ' "$LOCAL_SCRIPT" >/dev/null
 grep -F 'llm-access.latest' "$LOCAL_SCRIPT" >/dev/null
 grep -F '.local/llm-access-cloud-release.env' "$LOCAL_SCRIPT" >/dev/null

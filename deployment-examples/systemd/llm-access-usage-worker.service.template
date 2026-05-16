@@ -28,7 +28,7 @@ Environment=LLM_ACCESS_DUCKDB_ACTIVE_DIR=/var/lib/staticflow/llm-access/analytic
 # so DuckDB rewrite work stays on local block storage instead of JuiceFS.
 WorkingDirectory=/mnt/llm-access-usage
 ExecStartPre=/usr/bin/bash -lc 'set -a; . /mnt/llm-access/config/neon.env; exec /usr/local/bin/staticflow-wait-llm-access-state analytics'
-ExecStart=/usr/bin/bash -lc 'set -a; . /mnt/llm-access/config/neon.env; exec /usr/local/bin/llm-access-usage-worker serve --bind 127.0.0.1:19081 --state-root /mnt/llm-access-usage --postgres-control-database-url-env LLM_ACCESS_CONTROL_DATABASE_URL --usage-journal-dir /var/lib/staticflow/llm-access/usage-journal --duckdb-active-dir /var/lib/staticflow/llm-access/analytics-active --duckdb-archive-dir /mnt/llm-access-usage/analytics/segments --duckdb-catalog-dir /mnt/llm-access-usage/analytics/catalog --duckdb-rollover-bytes 67108864 --usage-details-dir /mnt/llm-access-usage/details'
+ExecStart=/usr/bin/bash -lc 'set -a; . /mnt/llm-access/config/neon.env; exec /usr/local/bin/llm-access-usage-worker serve --bind 127.0.0.1:19081 --state-root /mnt/llm-access-usage --postgres-control-database-url-env LLM_ACCESS_CONTROL_DATABASE_URL --usage-journal-dir /var/lib/staticflow/llm-access/usage-journal --duckdb-active-dir /var/lib/staticflow/llm-access/analytics-active --duckdb-archive-dir /mnt/llm-access-usage/analytics/segments --duckdb-catalog-dir /mnt/llm-access-usage/analytics/catalog --duckdb-rollover-bytes 67108864 --usage-details-dir /mnt/llm-access-usage/details --request-cache-url-env LLM_ACCESS_REQUEST_CACHE_URL --request-cache-key-prefix llma'
 Restart=always
 RestartSec=3
 NoNewPrivileges=true
