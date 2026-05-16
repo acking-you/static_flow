@@ -716,6 +716,23 @@ impl AdminKiroAccountStore for SqliteControlRepository {
         .context("sqlite control repository kiro account page task failed")?
     }
 
+    async fn list_admin_kiro_accounts_filtered_page(
+        &self,
+        prefix: Option<&str>,
+        page: AdminPageRequest,
+    ) -> anyhow::Result<AdminKiroAccountsPage> {
+        let prefix = prefix.map(str::to_string);
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || {
+            let store = inner
+                .lock()
+                .map_err(|_| anyhow!("sqlite control store mutex poisoned"))?;
+            store.list_admin_kiro_accounts_filtered_page(prefix.as_deref(), page.limit, page.offset)
+        })
+        .await
+        .context("sqlite control repository filtered kiro account page task failed")?
+    }
+
     async fn list_kiro_status_refresh_targets(
         &self,
     ) -> anyhow::Result<Vec<KiroStatusRefreshTarget>> {

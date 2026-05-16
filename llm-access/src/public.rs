@@ -10,8 +10,8 @@ use axum::{
     Json,
 };
 use llm_access_core::store::{
-    ProviderCodexRoute, PublicAccessKey, PublicAccountContribution, PublicSponsor,
-    PublicUsageLookupKey,
+    CodexPublicAccountStatus, CodexRateLimitStatus, ProviderCodexRoute, PublicAccessKey,
+    PublicAccountContribution, PublicSponsor, PublicUsageLookupKey,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -368,33 +368,39 @@ pub(crate) async fn get_llm_gateway_model_catalog(
 async fn select_public_codex_catalog_route(
     state: &HttpState,
 ) -> anyhow::Result<Option<ProviderCodexRoute>> {
-    let mut accounts = state
-        .admin_codex_account_store
-        .list_admin_codex_accounts()
-        .await?
-        .into_iter()
-        .filter(|account| account.status == "active")
-        .filter_map(|account| {
-            let (primary, primary_invalid) =
-                sanitize_remaining_percent(account.primary_remaining_percent);
-            let (secondary, secondary_invalid) =
-                sanitize_remaining_percent(account.secondary_remaining_percent);
-            if primary <= 0.0 || secondary <= 0.0 {
-                return None;
-            }
-            Some((account.name, primary, secondary, primary_invalid || secondary_invalid))
-        })
-        .collect::<Vec<_>>();
-    accounts.sort_by(|left, right| {
-        public_codex_account_cmp(left, right).then_with(|| left.0.cmp(&right.0))
-    });
-    let Some(account_name) = accounts.into_iter().next().map(|account| account.0) else {
+    let status = state.public_status_store.codex_rate_limit_status().await?;
+    let Some(account_name) = preferred_public_codex_account_name(&status) else {
         return Ok(None);
     };
     state
         .admin_codex_account_store
         .resolve_admin_codex_account_route(&account_name)
         .await
+}
+
+fn preferred_public_codex_account_name(status: &CodexRateLimitStatus) -> Option<String> {
+    let mut accounts = status
+        .accounts
+        .iter()
+        .filter(|account| account.status == "active")
+        .filter_map(public_codex_account_candidate)
+        .collect::<Vec<_>>();
+    accounts.sort_by(|left, right| {
+        public_codex_account_cmp(left, right).then_with(|| left.0.cmp(&right.0))
+    });
+    accounts.into_iter().next().map(|account| account.0)
+}
+
+fn public_codex_account_candidate(
+    account: &CodexPublicAccountStatus,
+) -> Option<(String, f64, f64, bool)> {
+    let (primary, primary_invalid) = sanitize_remaining_percent(account.primary_remaining_percent);
+    let (secondary, secondary_invalid) =
+        sanitize_remaining_percent(account.secondary_remaining_percent);
+    if primary <= 0.0 || secondary <= 0.0 {
+        return None;
+    }
+    Some((account.name.clone(), primary, secondary, primary_invalid || secondary_invalid))
 }
 
 fn sanitize_remaining_percent(value: Option<f64>) -> (f64, bool) {
@@ -821,4 +827,67 @@ fn now_ms() -> i64 {
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
     millis.min(i64::MAX as u128) as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use llm_access_core::store::KEY_STATUS_ACTIVE;
+
+    use super::*;
+
+    fn sample_public_account(
+        name: &str,
+        primary_remaining_percent: Option<f64>,
+        secondary_remaining_percent: Option<f64>,
+        usage_error_message: Option<&str>,
+    ) -> CodexPublicAccountStatus {
+        CodexPublicAccountStatus {
+            name: name.to_string(),
+            status: KEY_STATUS_ACTIVE.to_string(),
+            plan_type: Some("Pro".to_string()),
+            primary_remaining_percent,
+            secondary_remaining_percent,
+            last_usage_checked_at: Some(100),
+            last_usage_success_at: Some(100),
+            usage_error_message: usage_error_message.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn preferred_public_codex_account_name_uses_cached_status_snapshot() {
+        let status = CodexRateLimitStatus {
+            status: "ready".to_string(),
+            refresh_interval_seconds: 300,
+            last_checked_at: Some(100),
+            last_success_at: Some(100),
+            source_url: "https://chatgpt.com/backend-api/wham/usage".to_string(),
+            error_message: None,
+            accounts: vec![
+                sample_public_account("beta", Some(85.0), Some(91.0), Some("bad refresh value")),
+                sample_public_account("alpha", Some(93.0), Some(94.0), None),
+                sample_public_account("gamma", Some(0.0), Some(80.0), None),
+            ],
+            buckets: Vec::new(),
+        };
+
+        let selected = preferred_public_codex_account_name(&status);
+
+        assert_eq!(selected.as_deref(), Some("alpha"));
+    }
+
+    #[test]
+    fn preferred_public_codex_account_name_skips_exhausted_accounts() {
+        let status = CodexRateLimitStatus {
+            status: "ready".to_string(),
+            refresh_interval_seconds: 300,
+            last_checked_at: Some(100),
+            last_success_at: Some(100),
+            source_url: "https://chatgpt.com/backend-api/wham/usage".to_string(),
+            error_message: None,
+            accounts: vec![sample_public_account("alpha", Some(0.0), Some(100.0), None)],
+            buckets: Vec::new(),
+        };
+
+        assert_eq!(preferred_public_codex_account_name(&status), None);
+    }
 }

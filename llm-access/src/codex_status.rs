@@ -3,6 +3,7 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::Context;
+use futures_util::{stream, StreamExt};
 use llm_access_core::store::{
     is_terminal_codex_auth_error, AdminCodexAccount, AdminCodexAccountStore, AdminConfigStore,
     AdminRuntimeConfig, CodexCredits, CodexPublicAccountStatus, CodexRateLimitBucket,
@@ -13,6 +14,8 @@ use rand::Rng;
 use serde::Deserialize;
 
 use crate::{codex_refresh, provider, runtime::LlmAccessRuntime};
+
+const CODEX_STATUS_REFRESH_CONCURRENCY: usize = 4;
 
 #[derive(Debug, Clone, Deserialize)]
 struct UsageStatusPayload {
@@ -181,12 +184,15 @@ async fn refresh_codex_status(
         .get_admin_runtime_config()
         .await
         .context("load Codex status refresh config")?;
-    let accounts = account_store
-        .list_codex_status_refresh_targets()
-        .await
-        .context("list Codex status refresh targets")?;
     let source_url = compute_usage_url(&provider::codex_upstream_base_url());
     let existing = status_store.codex_rate_limit_status().await.ok();
+    let accounts = prioritize_codex_refresh_targets(
+        account_store
+            .list_codex_status_refresh_targets()
+            .await
+            .context("list Codex status refresh targets")?,
+        existing.as_ref(),
+    );
     let mut refreshed = seed_full_refresh_statuses(&accounts, existing);
     status_store
         .save_codex_rate_limit_status(build_background_refresh_snapshot(
@@ -199,38 +205,57 @@ async fn refresh_codex_status(
         ))
         .await
         .context("persist initial Codex public status snapshot")?;
-    for (index, account) in accounts.iter().enumerate() {
-        if index > 0 {
-            let jitter = next_codex_account_jitter(&config);
-            if !jitter.is_zero() {
-                tokio::time::sleep(jitter).await;
-            }
-        }
+    let refreshes = stream::iter(
+        accounts
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, account)| {
+                let account_store = Arc::clone(account_store);
+                let route_store = Arc::clone(route_store);
+                let config = config.clone();
+                async move {
+                    if index > 0 {
+                        let jitter = next_codex_account_jitter(&config);
+                        if !jitter.is_zero() {
+                            tokio::time::sleep(jitter).await;
+                        }
+                    }
+                    let next = refresh_account_status(
+                        &account,
+                        account_store.as_ref(),
+                        route_store.as_ref(),
+                        &config,
+                        false,
+                    )
+                    .await;
+                    (index, account.name.clone(), next)
+                }
+            }),
+    )
+    .buffered(CODEX_STATUS_REFRESH_CONCURRENCY);
+    tokio::pin!(refreshes);
+    while let Some((index, account_name, next)) = refreshes.next().await {
         if let Ok(latest) = status_store.codex_rate_limit_status().await {
             refreshed =
                 rebase_unprocessed_refresh_statuses(&accounts, refreshed, Some(latest), index);
         }
         let previous = refreshed[index].clone();
-        let next = refresh_account_status(
-            account,
-            account_store.as_ref(),
-            route_store.as_ref(),
-            &config,
-            false,
-        )
-        .await;
         refreshed[index] = merge_background_refresh_result(previous, next);
-        let latest_accounts = account_store
-            .list_codex_status_refresh_targets()
-            .await
-            .context("reload Codex status refresh targets during status refresh")?;
         let latest_snapshot = status_store.codex_rate_limit_status().await.ok();
+        let latest_accounts = prioritize_codex_refresh_targets(
+            account_store
+                .list_codex_status_refresh_targets()
+                .await
+                .context("reload Codex status refresh targets during status refresh")?,
+            latest_snapshot.as_ref(),
+        );
         status_store
             .save_codex_rate_limit_status(build_background_refresh_snapshot(
                 &latest_accounts,
                 &refreshed,
                 latest_snapshot,
-                Some(&account.name),
+                Some(&account_name),
                 &source_url,
                 config.codex_status_refresh_max_interval_seconds,
             ))
@@ -240,6 +265,46 @@ async fn refresh_codex_status(
     }
     crate::allocator::collect_process_allocator();
     Ok(())
+}
+
+fn prioritize_codex_refresh_targets(
+    mut accounts: Vec<CodexStatusRefreshTarget>,
+    existing: Option<&CodexRateLimitStatus>,
+) -> Vec<CodexStatusRefreshTarget> {
+    let status_by_name = existing
+        .map(|status| {
+            status
+                .accounts
+                .iter()
+                .cloned()
+                .map(|account| (account.name.clone(), account))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    accounts.retain(|account| account.status == KEY_STATUS_ACTIVE);
+    accounts.sort_by(|left, right| {
+        let left_status = status_by_name.get(&left.name);
+        let right_status = status_by_name.get(&right.name);
+        let left_success = left_status.and_then(|account| account.last_usage_success_at);
+        let right_success = right_status.and_then(|account| account.last_usage_success_at);
+        let left_checked = left_status.and_then(|account| account.last_usage_checked_at);
+        let right_checked = right_status.and_then(|account| account.last_usage_checked_at);
+        left_success
+            .is_some()
+            .cmp(&right_success.is_some())
+            .then_with(|| {
+                left_success
+                    .unwrap_or(i64::MIN)
+                    .cmp(&right_success.unwrap_or(i64::MIN))
+            })
+            .then_with(|| {
+                left_checked
+                    .unwrap_or(i64::MIN)
+                    .cmp(&right_checked.unwrap_or(i64::MIN))
+            })
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    accounts
 }
 
 pub(crate) async fn refresh_single_codex_account_status(
@@ -271,24 +336,25 @@ pub(crate) async fn refresh_single_codex_account_usage_only(
         .get_admin_runtime_config()
         .await
         .context("load Codex status refresh config")?;
-    let accounts = account_store
-        .list_admin_codex_accounts()
+    let refresh_targets = account_store
+        .list_codex_status_refresh_targets()
         .await
-        .context("list Codex accounts for status refresh")?;
-    let account = accounts
-        .iter()
-        .find(|account| account.name == account_name)
+        .context("list Codex status refresh targets")?;
+    let account = account_store
+        .get_admin_codex_account(account_name)
+        .await
+        .context("load Codex account for status refresh")?
         .ok_or_else(|| anyhow::anyhow!("Codex account `{account_name}` not found"))?;
     let source_url = compute_usage_url(&provider::codex_upstream_base_url());
     let refreshed = refresh_account_status_with_current_access_token_only(
-        account,
+        &account,
         account_store.as_ref(),
         route_store.as_ref(),
         &config,
     )
     .await;
     let snapshot = merge_account_status_refresh(
-        &accounts,
+        &refresh_targets,
         status_store.codex_rate_limit_status().await.ok(),
         account_name,
         refreshed.clone(),
@@ -347,17 +413,18 @@ async fn refresh_single_codex_account_status_with_mode(
         .get_admin_runtime_config()
         .await
         .context("load Codex status refresh config")?;
-    let accounts = account_store
-        .list_admin_codex_accounts()
+    let refresh_targets = account_store
+        .list_codex_status_refresh_targets()
         .await
-        .context("list Codex accounts for status refresh")?;
-    let account = accounts
-        .iter()
-        .find(|account| account.name == account_name)
+        .context("list Codex status refresh targets")?;
+    let account = account_store
+        .get_admin_codex_account(account_name)
+        .await
+        .context("load Codex account for status refresh")?
         .ok_or_else(|| anyhow::anyhow!("Codex account `{account_name}` not found"))?;
     let source_url = compute_usage_url(&provider::codex_upstream_base_url());
     let refreshed = refresh_account_status(
-        account,
+        &account,
         account_store.as_ref(),
         route_store.as_ref(),
         &config,
@@ -365,7 +432,7 @@ async fn refresh_single_codex_account_status_with_mode(
     )
     .await;
     let snapshot = merge_account_status_refresh(
-        &accounts,
+        &refresh_targets,
         status_store.codex_rate_limit_status().await.ok(),
         account_name,
         refreshed.clone(),
@@ -676,8 +743,8 @@ fn merge_background_refresh_result(
     }
 }
 
-fn merge_account_status_refresh(
-    accounts: &[AdminCodexAccount],
+fn merge_account_status_refresh<A: CodexStatusAccount>(
+    accounts: &[A],
     existing: Option<CodexRateLimitStatus>,
     refreshed_name: &str,
     refreshed: AccountStatusRefresh,
@@ -712,15 +779,15 @@ fn merge_account_status_refresh(
         .unwrap_or_default();
     let mut merged = Vec::with_capacity(accounts.len());
     for account in accounts {
-        if account.name == refreshed_name {
+        if account.name() == refreshed_name {
             merged.push(refreshed.clone());
             continue;
         }
-        let Some(public_account) = existing_accounts.remove(&account.name) else {
+        let Some(public_account) = existing_accounts.remove(account.name()) else {
             merged.push(initial_account_status(account));
             continue;
         };
-        let buckets = existing_buckets.remove(&account.name).unwrap_or_default();
+        let buckets = existing_buckets.remove(account.name()).unwrap_or_default();
         if !buckets.is_empty() {
             merged.push(AccountStatusRefresh::Ready {
                 account: public_account,
@@ -1278,6 +1345,13 @@ mod tests {
         }
     }
 
+    fn sample_refresh_target(name: &str) -> CodexStatusRefreshTarget {
+        CodexStatusRefreshTarget {
+            name: name.to_string(),
+            status: KEY_STATUS_ACTIVE.to_string(),
+        }
+    }
+
     fn sample_bucket(account_name: &str, primary: f64, secondary: f64) -> CodexRateLimitBucket {
         CodexRateLimitBucket {
             limit_id: "codex".to_string(),
@@ -1404,6 +1478,54 @@ mod tests {
             .buckets
             .iter()
             .any(|bucket| bucket.account_name.as_deref() == Some("beta")));
+    }
+
+    #[test]
+    fn manual_account_refresh_can_merge_against_lightweight_refresh_targets() {
+        let targets = vec![sample_refresh_target("alpha"), sample_refresh_target("beta")];
+        let alpha_bucket = sample_bucket("alpha", 70.0, 80.0);
+        let beta_bucket = sample_bucket("beta", 62.0, 39.0);
+        let existing = CodexRateLimitStatus {
+            status: "ready".to_string(),
+            refresh_interval_seconds: 300,
+            last_checked_at: Some(900),
+            last_success_at: Some(900),
+            source_url: "https://chatgpt.com/backend-api/wham/usage".to_string(),
+            error_message: None,
+            accounts: vec![CodexPublicAccountStatus {
+                name: "alpha".to_string(),
+                status: KEY_STATUS_ACTIVE.to_string(),
+                plan_type: Some("Pro".to_string()),
+                primary_remaining_percent: Some(70.0),
+                secondary_remaining_percent: Some(80.0),
+                last_usage_checked_at: Some(900),
+                last_usage_success_at: Some(900),
+                usage_error_message: None,
+            }],
+            buckets: vec![alpha_bucket],
+        };
+        let refreshed = AccountStatusRefresh::Ready {
+            account: account_ready_status(
+                &sample_admin_account("beta"),
+                1200,
+                std::slice::from_ref(&beta_bucket),
+            ),
+            buckets: vec![beta_bucket],
+        };
+
+        let snapshot = merge_account_status_refresh(
+            &targets,
+            Some(existing),
+            "beta",
+            refreshed,
+            "https://chatgpt.com/backend-api/wham/usage",
+            300,
+        );
+
+        assert_eq!(snapshot.accounts.len(), 2);
+        assert_eq!(snapshot.accounts[0].name, "alpha");
+        assert_eq!(snapshot.accounts[1].name, "beta");
+        assert_eq!(snapshot.buckets.len(), 2);
     }
 
     #[test]
@@ -1733,5 +1855,66 @@ mod tests {
             },
             _ => panic!("expected terminal auth error to mark account unavailable"),
         }
+    }
+
+    #[test]
+    fn prioritize_codex_refresh_targets_keeps_only_active_and_oldest_first() {
+        let existing = CodexRateLimitStatus {
+            status: "ready".to_string(),
+            refresh_interval_seconds: 300,
+            last_checked_at: Some(1500),
+            last_success_at: Some(1500),
+            source_url: "https://chatgpt.com/backend-api/wham/usage".to_string(),
+            error_message: None,
+            accounts: vec![
+                CodexPublicAccountStatus {
+                    name: "fresh".to_string(),
+                    status: KEY_STATUS_ACTIVE.to_string(),
+                    plan_type: Some("Plus".to_string()),
+                    primary_remaining_percent: Some(90.0),
+                    secondary_remaining_percent: Some(80.0),
+                    last_usage_checked_at: Some(1400),
+                    last_usage_success_at: Some(1400),
+                    usage_error_message: None,
+                },
+                CodexPublicAccountStatus {
+                    name: "stale".to_string(),
+                    status: KEY_STATUS_ACTIVE.to_string(),
+                    plan_type: Some("Plus".to_string()),
+                    primary_remaining_percent: Some(30.0),
+                    secondary_remaining_percent: Some(20.0),
+                    last_usage_checked_at: Some(600),
+                    last_usage_success_at: Some(600),
+                    usage_error_message: None,
+                },
+            ],
+            buckets: vec![],
+        };
+        let accounts = vec![
+            CodexStatusRefreshTarget {
+                name: "disabled".to_string(),
+                status: "disabled".to_string(),
+            },
+            CodexStatusRefreshTarget {
+                name: "fresh".to_string(),
+                status: KEY_STATUS_ACTIVE.to_string(),
+            },
+            CodexStatusRefreshTarget {
+                name: "never".to_string(),
+                status: KEY_STATUS_ACTIVE.to_string(),
+            },
+            CodexStatusRefreshTarget {
+                name: "stale".to_string(),
+                status: KEY_STATUS_ACTIVE.to_string(),
+            },
+        ];
+
+        let prioritized = prioritize_codex_refresh_targets(accounts, Some(&existing));
+        let names = prioritized
+            .iter()
+            .map(|account| account.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["never", "stale", "fresh"]);
     }
 }

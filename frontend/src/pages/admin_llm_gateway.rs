@@ -21,33 +21,37 @@ use crate::{
         delete_admin_llm_gateway_account_group, delete_admin_llm_gateway_key,
         delete_admin_llm_gateway_proxy_config, delete_admin_llm_gateway_sponsor_request,
         fetch_admin_llm_gateway_account_contribution_requests,
-        fetch_admin_llm_gateway_account_groups, fetch_admin_llm_gateway_account_import_job,
-        fetch_admin_llm_gateway_account_import_jobs, fetch_admin_llm_gateway_accounts,
-        fetch_admin_llm_gateway_config, fetch_admin_llm_gateway_keys,
-        fetch_admin_llm_gateway_proxy_bindings, fetch_admin_llm_gateway_proxy_configs,
-        fetch_admin_llm_gateway_sponsor_requests, fetch_admin_llm_gateway_token_requests,
-        fetch_admin_llm_gateway_usage_event_detail, fetch_admin_llm_gateway_usage_events,
-        fetch_admin_usage_journal_preview, fetch_admin_usage_journal_status,
-        import_admin_legacy_kiro_proxy_configs, import_admin_llm_gateway_account,
-        patch_admin_llm_gateway_account, patch_admin_llm_gateway_account_group,
-        patch_admin_llm_gateway_key, patch_admin_llm_gateway_proxy_config,
-        probe_admin_llm_gateway_account_models, refresh_admin_llm_gateway_account_auth,
-        refresh_admin_llm_gateway_account_usage, update_admin_llm_gateway_config,
-        update_admin_llm_gateway_proxy_binding, AccountSummaryView, AdminAccountGroupView,
+        fetch_admin_llm_gateway_account_group_options, fetch_admin_llm_gateway_account_groups_page,
+        fetch_admin_llm_gateway_account_import_job, fetch_admin_llm_gateway_account_import_jobs,
+        fetch_admin_llm_gateway_accounts, fetch_admin_llm_gateway_accounts_page,
+        fetch_admin_llm_gateway_accounts_page_with_query, fetch_admin_llm_gateway_config,
+        fetch_admin_llm_gateway_keys, fetch_admin_llm_gateway_keys_page,
+        fetch_admin_llm_gateway_keys_page_with_query, fetch_admin_llm_gateway_proxy_bindings,
+        fetch_admin_llm_gateway_proxy_configs, fetch_admin_llm_gateway_sponsor_requests,
+        fetch_admin_llm_gateway_token_requests, fetch_admin_llm_gateway_usage_event_detail,
+        fetch_admin_llm_gateway_usage_events, fetch_admin_usage_journal_preview,
+        fetch_admin_usage_journal_status, import_admin_legacy_kiro_proxy_configs,
+        import_admin_llm_gateway_account, patch_admin_llm_gateway_account,
+        patch_admin_llm_gateway_account_group, patch_admin_llm_gateway_key,
+        patch_admin_llm_gateway_proxy_config, probe_admin_llm_gateway_account_models,
+        refresh_admin_llm_gateway_account_auth, refresh_admin_llm_gateway_account_usage,
+        update_admin_llm_gateway_config, update_admin_llm_gateway_proxy_binding,
+        AccountSummaryView, AdminAccountGroupOptionView, AdminAccountGroupView,
         AdminAccountsSummaryView, AdminLlmGatewayAccountContributionRequestView,
-        AdminLlmGatewayAccountContributionRequestsQuery, AdminLlmGatewayKeyView,
-        AdminLlmGatewayKeysSummaryView, AdminLlmGatewaySponsorRequestView,
-        AdminLlmGatewaySponsorRequestsQuery, AdminLlmGatewayTokenRequestView,
-        AdminLlmGatewayTokenRequestsQuery, AdminLlmGatewayUsageEventDetailView,
-        AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery,
-        AdminUpstreamProxyBindingView, AdminUpstreamProxyCheckResponse,
-        AdminUpstreamProxyCheckTargetView, AdminUpstreamProxyConfigView, AdminUsageJournalFileView,
-        AdminUsageJournalPreviewResponse, AdminUsageJournalStatusView,
-        CodexAccountImportJobDetailView, CodexAccountImportJobSummaryView,
-        CreateAdminAccountGroupInput, CreateAdminUpstreamProxyConfigInput, LlmGatewayRuntimeConfig,
-        PatchAdminAccountGroupInput, PatchAdminLlmGatewayAccountInput,
-        PatchAdminLlmGatewayKeyRequest, PatchAdminUpstreamProxyConfigInput,
-        ProcessMemoryRuntimeStats, DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION,
+        AdminLlmGatewayAccountContributionRequestsQuery, AdminLlmGatewayAccountPageQuery,
+        AdminLlmGatewayKeyPageQuery, AdminLlmGatewayKeyView, AdminLlmGatewayKeysSummaryView,
+        AdminLlmGatewaySponsorRequestView, AdminLlmGatewaySponsorRequestsQuery,
+        AdminLlmGatewayTokenRequestView, AdminLlmGatewayTokenRequestsQuery,
+        AdminLlmGatewayUsageEventDetailView, AdminLlmGatewayUsageEventView,
+        AdminLlmGatewayUsageEventsQuery, AdminUpstreamProxyBindingView,
+        AdminUpstreamProxyCheckResponse, AdminUpstreamProxyCheckTargetView,
+        AdminUpstreamProxyConfigView, AdminUsageJournalFileView, AdminUsageJournalPreviewResponse,
+        AdminUsageJournalStatusView, CodexAccountImportJobDetailView,
+        CodexAccountImportJobSummaryView, CreateAdminAccountGroupInput,
+        CreateAdminUpstreamProxyConfigInput, LlmGatewayRuntimeConfig, PatchAdminAccountGroupInput,
+        PatchAdminLlmGatewayAccountInput, PatchAdminLlmGatewayKeyRequest,
+        PatchAdminUpstreamProxyConfigInput, ProcessMemoryRuntimeStats,
+        DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION,
     },
     components::{pagination::Pagination, search_box::SearchBox, tab_bar::render_tab_bar},
     pages::llm_access_shared::{
@@ -61,6 +65,7 @@ const USAGE_PAGE_SIZE: usize = 20;
 const USAGE_MAX_OFFSET: usize = 200;
 const USAGE_MAX_PAGES: usize = (USAGE_MAX_OFFSET / USAGE_PAGE_SIZE) + 1;
 const JOURNAL_PREVIEW_PAGE_SIZE: usize = 20;
+const DEFAULT_ADMIN_GROUP_PAGE_SIZE: usize = 24;
 const USAGE_TIME_RANGE_ALL: &str = "all";
 const USAGE_TIME_RANGE_1H: &str = "1h";
 const USAGE_TIME_RANGE_24H: &str = "24h";
@@ -93,6 +98,22 @@ const TAB_SETTINGS: &str = "settings";
 
 fn should_load_usage_journal(active_tab: &str) -> bool {
     active_tab == TAB_JOURNAL
+}
+
+fn should_load_llm_gateway_keys_inventory(active_tab: &str) -> bool {
+    matches!(active_tab, TAB_KEYS | TAB_USAGE)
+}
+
+fn should_load_llm_gateway_group_options(active_tab: &str) -> bool {
+    active_tab == TAB_KEYS
+}
+
+fn should_load_llm_gateway_import_jobs(active_tab: &str) -> bool {
+    active_tab == TAB_ACCOUNTS
+}
+
+fn admin_group_total_pages(total: usize, page_size: usize) -> usize {
+    total.max(1).div_ceil(page_size.max(1))
 }
 
 /// Render a horizontal tab bar with an optional numeric badge on one tab.
@@ -271,94 +292,6 @@ enum KeySortMode {
     QuotaDesc,
     UsageAsc,
     UsageDesc,
-}
-
-fn sort_keys(entries: &mut Vec<&AdminLlmGatewayKeyView>, mode: KeySortMode) {
-    match mode {
-        KeySortMode::None => {},
-        KeySortMode::QuotaAsc => entries.sort_by_key(|k| k.remaining_billable),
-        KeySortMode::QuotaDesc => entries.sort_by_key(|k| std::cmp::Reverse(k.remaining_billable)),
-        KeySortMode::UsageAsc => entries.sort_by(|a, b| {
-            a.usage_credit_total
-                .partial_cmp(&b.usage_credit_total)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }),
-        KeySortMode::UsageDesc => entries.sort_by(|a, b| {
-            b.usage_credit_total
-                .partial_cmp(&a.usage_credit_total)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }),
-    }
-}
-
-fn account_matches_filter(acc: &AccountSummaryView, query: &str) -> bool {
-    if query.is_empty() {
-        return true;
-    }
-    let q = query.to_lowercase();
-    acc.name.to_lowercase().contains(&q)
-        || acc.status.to_lowercase().contains(&q)
-        || acc
-            .plan_type
-            .as_deref()
-            .unwrap_or("")
-            .to_lowercase()
-            .contains(&q)
-        || acc
-            .account_id
-            .as_deref()
-            .unwrap_or("")
-            .to_lowercase()
-            .contains(&q)
-        || acc.route_weight_tier.to_lowercase().contains(&q)
-}
-
-fn account_is_unhealthy(acc: &AccountSummaryView) -> bool {
-    acc.status == "disabled"
-        || acc.auth_refresh_error_message.is_some()
-        || acc.usage_error_message.is_some()
-}
-
-fn account_primary_pct(acc: &AccountSummaryView) -> f64 {
-    acc.primary_remaining_percent.unwrap_or(100.0)
-}
-
-fn account_secondary_pct(acc: &AccountSummaryView) -> f64 {
-    acc.secondary_remaining_percent.unwrap_or(100.0)
-}
-
-fn sort_accounts(entries: &mut [&AccountSummaryView], mode: AccountSortMode) {
-    match mode {
-        AccountSortMode::None => {},
-        AccountSortMode::PrimaryAsc => {
-            entries.sort_by(|a, b| {
-                account_primary_pct(a)
-                    .partial_cmp(&account_primary_pct(b))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        },
-        AccountSortMode::PrimaryDesc => {
-            entries.sort_by(|a, b| {
-                account_primary_pct(b)
-                    .partial_cmp(&account_primary_pct(a))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        },
-        AccountSortMode::SecondaryAsc => {
-            entries.sort_by(|a, b| {
-                account_secondary_pct(a)
-                    .partial_cmp(&account_secondary_pct(b))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        },
-        AccountSortMode::SecondaryDesc => {
-            entries.sort_by(|a, b| {
-                account_secondary_pct(b)
-                    .partial_cmp(&account_secondary_pct(a))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        },
-    }
 }
 
 fn format_latency_ms(latency_ms: i32) -> String {
@@ -818,7 +751,7 @@ fn sanitize_auto_account_names(names: &[String], accounts: &[AccountSummaryView]
 
 fn sanitize_account_group_id(
     value: Option<&str>,
-    groups: &[AdminAccountGroupView],
+    groups: &[AdminAccountGroupOptionView],
     _allow_empty: bool,
 ) -> String {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -831,7 +764,7 @@ fn sanitize_account_group_id(
     }
 }
 
-fn group_name_for_id(groups: &[AdminAccountGroupView], group_id: &str) -> String {
+fn group_name_for_id(groups: &[AdminAccountGroupOptionView], group_id: &str) -> String {
     groups
         .iter()
         .find(|group| group.id == group_id)
@@ -1050,8 +983,7 @@ struct KeyEditorCardProps {
     on_copy: Callback<(String, String)>,
     on_flash: Callback<(String, bool)>,
     refreshing: bool,
-    accounts: Vec<AccountSummaryView>,
-    account_groups: Vec<AdminAccountGroupView>,
+    account_groups: Vec<AdminAccountGroupOptionView>,
 }
 
 #[function_component(KeyEditorCard)]
@@ -1328,7 +1260,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
     let fixed_route_groups = props
         .account_groups
         .iter()
-        .filter(|group| group.account_names.len() == 1)
+        .filter(|group| group.account_count == 1)
         .cloned()
         .collect::<Vec<_>>();
     let current_route_summary = if *route_strategy == "fixed" {
@@ -1548,7 +1480,16 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                         >
                             <option value="" selected={(*account_group_id).is_empty()}>{ "-- 选择组 --" }</option>
                             { for fixed_route_groups.iter().map(|group| html! {
-                                <option value={group.id.clone()} selected={*account_group_id == group.id}>{ format!("{} ({})", group.name, group.account_names.join(", ")) }</option>
+                                <option value={group.id.clone()} selected={*account_group_id == group.id}>
+                                    { format!(
+                                        "{} ({})",
+                                        group.name,
+                                        group
+                                            .single_account_name
+                                            .clone()
+                                            .unwrap_or_else(|| format!("{} 个账号", group.account_count))
+                                    ) }
+                                </option>
                             }) }
                         </select>
                     </label>
@@ -1569,7 +1510,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                         >
                             <option value="" selected={(*account_group_id).is_empty()}>{ "全账号池" }</option>
                             { for props.account_groups.iter().map(|group| html! {
-                                <option value={group.id.clone()} selected={*account_group_id == group.id}>{ format!("{} ({} 个账号)", group.name, group.account_names.len()) }</option>
+                                <option value={group.id.clone()} selected={*account_group_id == group.id}>{ format!("{} ({} 个账号)", group.name, group.account_count) }</option>
                             }) }
                         </select>
                     </label>
@@ -2213,7 +2154,13 @@ pub fn admin_llm_gateway_page() -> Html {
     let keys_sort_mode = use_state(|| KeySortMode::None);
     let keys_show_active_only = use_state(|| false);
     let keys_page = use_state(|| 1_usize);
-    let account_groups = use_state(Vec::<AdminAccountGroupView>::new);
+    let keys_total = use_state(|| 0_usize);
+    let keys_page_limit = use_state(|| KEY_PAGE_SIZE);
+    let account_group_options = use_state(Vec::<AdminAccountGroupOptionView>::new);
+    let account_groups_page_items = use_state(Vec::<AdminAccountGroupView>::new);
+    let account_groups_total = use_state(|| 0_usize);
+    let account_groups_page = use_state(|| 1_usize);
+    let account_groups_page_limit = use_state(|| DEFAULT_ADMIN_GROUP_PAGE_SIZE);
     let account_groups_search = use_state(String::new);
     let usage_events = use_state(Vec::<AdminLlmGatewayUsageEventView>::new);
     let usage_total = use_state(|| 0_usize);
@@ -2369,6 +2316,8 @@ pub fn admin_llm_gateway_page() -> Html {
     let account_show_unhealthy = use_state(|| false);
     let account_show_active_only = use_state(|| false);
     let account_page = use_state(|| 1_usize);
+    let accounts_total = use_state(|| 0_usize);
+    let account_page_limit = use_state(|| ACCOUNT_PAGE_SIZE);
     let active_tab = use_state(|| TAB_OVERVIEW.to_string());
     let on_tab_click = {
         let active_tab = active_tab.clone();
@@ -2604,9 +2553,15 @@ pub fn admin_llm_gateway_page() -> Html {
         let config = config.clone();
         let keys = keys.clone();
         let keys_summary = keys_summary.clone();
+        let keys_total = keys_total.clone();
+        let keys_page_limit = keys_page_limit.clone();
+        let account_group_options = account_group_options.clone();
         let proxy_configs = proxy_configs.clone();
         let proxy_bindings = proxy_bindings.clone();
-        let account_groups = account_groups.clone();
+        let account_groups_page_items = account_groups_page_items.clone();
+        let account_groups_total = account_groups_total.clone();
+        let account_groups_page = account_groups_page.clone();
+        let account_groups_page_limit = account_groups_page_limit.clone();
         let loading = loading.clone();
         let load_error = load_error.clone();
         let ttl_input = ttl_input.clone();
@@ -2636,19 +2591,37 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_key_filter = usage_key_filter.clone();
         let accounts = accounts.clone();
         let accounts_summary = accounts_summary.clone();
+        let accounts_total = accounts_total.clone();
+        let account_page_limit = account_page_limit.clone();
+        let active_tab = active_tab.clone();
         let recent_import_jobs = recent_import_jobs.clone();
         let account_proxy_inputs = account_proxy_inputs.clone();
         let account_route_weight_tier_inputs = account_route_weight_tier_inputs.clone();
         let account_request_max_inputs = account_request_max_inputs.clone();
         let account_request_min_inputs = account_request_min_inputs.clone();
+        let keys_search = keys_search.clone();
+        let keys_sort_mode = keys_sort_mode.clone();
+        let keys_show_active_only = keys_show_active_only.clone();
+        let keys_page = keys_page.clone();
+        let account_active_query = account_active_query.clone();
+        let account_sort_mode = account_sort_mode.clone();
+        let account_show_unhealthy = account_show_unhealthy.clone();
+        let account_show_active_only = account_show_active_only.clone();
+        let account_page = account_page.clone();
         let reload_usage = reload_usage.clone();
         Callback::from(move |_| {
             let config = config.clone();
             let keys = keys.clone();
             let keys_summary = keys_summary.clone();
+            let keys_total = keys_total.clone();
+            let keys_page_limit = keys_page_limit.clone();
+            let account_group_options = account_group_options.clone();
             let proxy_configs = proxy_configs.clone();
             let proxy_bindings = proxy_bindings.clone();
-            let account_groups = account_groups.clone();
+            let account_groups_page_items = account_groups_page_items.clone();
+            let account_groups_total = account_groups_total.clone();
+            let account_groups_page = account_groups_page.clone();
+            let account_groups_page_limit = account_groups_page_limit.clone();
             let loading = loading.clone();
             let load_error = load_error.clone();
             let ttl_input = ttl_input.clone();
@@ -2678,63 +2651,161 @@ pub fn admin_llm_gateway_page() -> Html {
             let usage_key_filter = usage_key_filter.clone();
             let accounts = accounts.clone();
             let accounts_summary = accounts_summary.clone();
+            let accounts_total = accounts_total.clone();
+            let account_page_limit = account_page_limit.clone();
+            let active_tab = active_tab.clone();
             let recent_import_jobs = recent_import_jobs.clone();
             let account_proxy_inputs = account_proxy_inputs.clone();
             let account_route_weight_tier_inputs = account_route_weight_tier_inputs.clone();
             let account_request_max_inputs = account_request_max_inputs.clone();
             let account_request_min_inputs = account_request_min_inputs.clone();
+            let keys_search = keys_search.clone();
+            let keys_sort_mode = keys_sort_mode.clone();
+            let keys_show_active_only = keys_show_active_only.clone();
+            let keys_page = keys_page.clone();
+            let account_active_query = account_active_query.clone();
+            let account_sort_mode = account_sort_mode.clone();
+            let account_show_unhealthy = account_show_unhealthy.clone();
+            let account_show_active_only = account_show_active_only.clone();
+            let account_page = account_page.clone();
             let reload_usage = reload_usage.clone();
             loading.set(true);
             wasm_bindgen_futures::spawn_local(async move {
+                let active_tab_value = (*active_tab).clone();
                 let current_key_filter = (*usage_key_filter).clone();
                 let current_page = (*usage_page).max(1);
+                let current_group_page = (*account_groups_page).max(1);
+                let current_keys_page = (*keys_page).max(1);
+                let current_account_page = (*account_page).max(1);
+                let key_query = AdminLlmGatewayKeyPageQuery {
+                    q: Some((*keys_search).clone()),
+                    active_only: *keys_show_active_only,
+                    sort: Some(
+                        match *keys_sort_mode {
+                            KeySortMode::QuotaAsc => "quota_asc",
+                            KeySortMode::QuotaDesc => "quota_desc",
+                            KeySortMode::UsageAsc => "usage_asc",
+                            KeySortMode::UsageDesc => "usage_desc",
+                            KeySortMode::None => "",
+                        }
+                        .to_string(),
+                    ),
+                };
+                let account_query = AdminLlmGatewayAccountPageQuery {
+                    q: Some((*account_active_query).clone()),
+                    active_only: *account_show_active_only,
+                    unhealthy_only: *account_show_unhealthy,
+                    sort: Some(
+                        match *account_sort_mode {
+                            AccountSortMode::PrimaryAsc => "primary_asc",
+                            AccountSortMode::PrimaryDesc => "primary_desc",
+                            AccountSortMode::SecondaryAsc => "secondary_asc",
+                            AccountSortMode::SecondaryDesc => "secondary_desc",
+                            AccountSortMode::None => "",
+                        }
+                        .to_string(),
+                    ),
+                };
                 let result = async {
                     let (
                         cfg_result,
-                        keys_result,
-                        account_groups_result,
+                        key_summary_result,
+                        account_summary_result,
                         proxy_configs_result,
                         proxy_bindings_result,
-                        accounts_result,
-                        import_jobs_result,
                     ) = futures::join!(
                         fetch_admin_llm_gateway_config(),
-                        fetch_admin_llm_gateway_keys(),
-                        fetch_admin_llm_gateway_account_groups(),
+                        fetch_admin_llm_gateway_keys_page(1, 0),
+                        fetch_admin_llm_gateway_accounts_page(1, 0),
                         fetch_admin_llm_gateway_proxy_configs(),
                         fetch_admin_llm_gateway_proxy_bindings(),
-                        fetch_admin_llm_gateway_accounts(),
-                        fetch_admin_llm_gateway_account_import_jobs(Some(
-                            ADMIN_CODEX_IMPORT_JOB_LIST_LIMIT,
-                        )),
                     );
                     let cfg = cfg_result?;
-                    let keys_resp = keys_result?;
-                    let account_groups_resp = account_groups_result?;
+                    let key_summary_resp = key_summary_result?;
+                    let account_summary_resp = account_summary_result?;
                     let proxy_configs_resp = proxy_configs_result?;
                     let proxy_bindings_resp = proxy_bindings_result?;
-                    let accounts_resp = accounts_result?;
-                    let import_jobs = import_jobs_result?;
-                    let effective_key_filter = if current_key_filter.is_empty()
-                        || keys_resp
-                            .keys
-                            .iter()
-                            .any(|item| item.id == current_key_filter)
-                    {
-                        current_key_filter
+                    let keys_resp = if should_load_llm_gateway_keys_inventory(&active_tab_value) {
+                        if active_tab_value == TAB_KEYS {
+                            let limit = KEY_PAGE_SIZE.max(1);
+                            let offset = current_keys_page.saturating_sub(1) * limit;
+                            Some(
+                                fetch_admin_llm_gateway_keys_page_with_query(
+                                    limit, offset, &key_query,
+                                )
+                                .await?,
+                            )
+                        } else {
+                            Some(fetch_admin_llm_gateway_keys().await?)
+                        }
                     } else {
-                        String::new()
+                        None
+                    };
+                    let account_group_options_resp =
+                        if should_load_llm_gateway_group_options(&active_tab_value) {
+                            Some(fetch_admin_llm_gateway_account_group_options().await?)
+                        } else {
+                            None
+                        };
+                    let account_groups_page_resp = if active_tab_value == TAB_GROUPS {
+                        let limit = *account_groups_page_limit;
+                        let offset = current_group_page.saturating_sub(1) * limit.max(1);
+                        Some(fetch_admin_llm_gateway_account_groups_page(limit, offset).await?)
+                    } else {
+                        None
+                    };
+                    let accounts_resp = if active_tab_value == TAB_ACCOUNTS {
+                        let limit = ACCOUNT_PAGE_SIZE.max(1);
+                        let offset = current_account_page.saturating_sub(1) * limit;
+                        Some(
+                            fetch_admin_llm_gateway_accounts_page_with_query(
+                                limit,
+                                offset,
+                                &account_query,
+                            )
+                            .await?,
+                        )
+                    } else if active_tab_value == TAB_GROUPS {
+                        Some(fetch_admin_llm_gateway_accounts().await?)
+                    } else {
+                        None
+                    };
+                    let import_jobs = if should_load_llm_gateway_import_jobs(&active_tab_value) {
+                        Some(
+                            fetch_admin_llm_gateway_account_import_jobs(Some(
+                                ADMIN_CODEX_IMPORT_JOB_LIST_LIMIT,
+                            ))
+                            .await?,
+                        )
+                    } else {
+                        None
+                    };
+                    let effective_key_filter = if let Some(keys_resp) = keys_resp.as_ref() {
+                        if current_key_filter.is_empty()
+                            || keys_resp
+                                .keys
+                                .iter()
+                                .any(|item| item.id == current_key_filter)
+                        {
+                            current_key_filter
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        current_key_filter
                     };
                     Ok::<_, String>((
                         cfg,
-                        keys_resp.keys,
-                        keys_resp.summary,
-                        account_groups_resp.groups,
+                        key_summary_resp,
+                        account_summary_resp,
                         proxy_configs_resp.proxy_configs,
                         proxy_bindings_resp.bindings,
-                        effective_key_filter,
+                        keys_resp,
+                        account_group_options_resp,
+                        account_groups_page_resp,
                         accounts_resp,
                         import_jobs,
+                        effective_key_filter,
                     ))
                 }
                 .await;
@@ -2742,14 +2813,16 @@ pub fn admin_llm_gateway_page() -> Html {
                 match result {
                     Ok((
                         cfg,
-                        key_items,
-                        key_summary,
-                        account_group_items,
+                        key_summary_resp,
+                        account_summary_resp,
                         proxy_config_items,
                         proxy_binding_items,
-                        effective_key_filter,
+                        keys_resp,
+                        account_group_options_resp,
+                        account_groups_page_resp,
                         accounts_resp,
                         import_jobs,
+                        effective_key_filter,
                     )) => {
                         let usage_filter_for_reload = effective_key_filter.clone();
                         ttl_input.set(cfg.auth_cache_ttl_seconds.to_string());
@@ -2786,9 +2859,8 @@ pub fn admin_llm_gateway_page() -> Html {
                         usage_analytics_retention_days_input
                             .set(cfg.usage_analytics_retention_days.to_string());
                         config.set(Some(cfg));
-                        keys.set(key_items);
-                        keys_summary.set(key_summary);
-                        account_groups.set(account_group_items);
+                        keys_summary.set(key_summary_resp.summary);
+                        accounts_summary.set(account_summary_resp.summary);
                         let codex_bound = proxy_binding_items
                             .iter()
                             .find(|item| item.provider_type == "codex")
@@ -2803,68 +2875,97 @@ pub fn admin_llm_gateway_page() -> Html {
                         proxy_bindings.set(proxy_binding_items);
                         codex_proxy_binding_input.set(codex_bound);
                         kiro_proxy_binding_input.set(kiro_bound);
-                        usage_key_filter.set(effective_key_filter);
-                        let next_proxy_inputs = accounts_resp
-                            .accounts
-                            .iter()
-                            .map(|account| {
-                                (account.name.clone(), account_proxy_select_value(account))
-                            })
-                            .collect::<BTreeMap<_, _>>();
-                        let next_route_weight_tier_inputs = accounts_resp
-                            .accounts
-                            .iter()
-                            .map(|account| {
-                                (
-                                    account.name.clone(),
-                                    if account.route_weight_tier.trim().is_empty() {
-                                        "auto".to_string()
-                                    } else {
-                                        account.route_weight_tier.clone()
-                                    },
-                                )
-                            })
-                            .collect::<BTreeMap<_, _>>();
-                        let next_request_max_inputs = accounts_resp
-                            .accounts
-                            .iter()
-                            .map(|account| {
-                                (
-                                    account.name.clone(),
-                                    account
-                                        .request_max_concurrency
-                                        .map(|value| value.to_string())
-                                        .unwrap_or_default(),
-                                )
-                            })
-                            .collect::<BTreeMap<_, _>>();
-                        let next_request_min_inputs = accounts_resp
-                            .accounts
-                            .iter()
-                            .map(|account| {
-                                (
-                                    account.name.clone(),
-                                    account
-                                        .request_min_start_interval_ms
-                                        .map(|value| value.to_string())
-                                        .unwrap_or_default(),
-                                )
-                            })
-                            .collect::<BTreeMap<_, _>>();
-                        accounts_summary.set(accounts_resp.summary);
-                        accounts.set(accounts_resp.accounts);
-                        recent_import_jobs.set(import_jobs);
-                        account_proxy_inputs.set(next_proxy_inputs);
-                        account_route_weight_tier_inputs.set(next_route_weight_tier_inputs);
-                        account_request_max_inputs.set(next_request_max_inputs);
-                        account_request_min_inputs.set(next_request_min_inputs);
+                        if let Some(keys_resp) = keys_resp {
+                            keys_total.set(keys_resp.total);
+                            keys_page_limit.set(keys_resp.limit.max(1));
+                            keys.set(keys_resp.keys);
+                            usage_key_filter.set(effective_key_filter);
+                        }
+                        if let Some(account_group_options_resp) = account_group_options_resp {
+                            account_group_options.set(account_group_options_resp);
+                        }
+                        if let Some(account_groups_page_resp) = account_groups_page_resp {
+                            let effective_limit = account_groups_page_resp.limit.max(1);
+                            let total_pages = admin_group_total_pages(
+                                account_groups_page_resp.total,
+                                effective_limit,
+                            );
+                            account_groups_total.set(account_groups_page_resp.total);
+                            account_groups_page_limit.set(effective_limit);
+                            if current_group_page > total_pages {
+                                account_groups_page.set(total_pages);
+                            } else {
+                                account_groups_page_items.set(account_groups_page_resp.groups);
+                            }
+                        }
+                        if let Some(accounts_resp) = accounts_resp {
+                            let next_proxy_inputs = accounts_resp
+                                .accounts
+                                .iter()
+                                .map(|account| {
+                                    (account.name.clone(), account_proxy_select_value(account))
+                                })
+                                .collect::<BTreeMap<_, _>>();
+                            let next_route_weight_tier_inputs = accounts_resp
+                                .accounts
+                                .iter()
+                                .map(|account| {
+                                    (
+                                        account.name.clone(),
+                                        if account.route_weight_tier.trim().is_empty() {
+                                            "auto".to_string()
+                                        } else {
+                                            account.route_weight_tier.clone()
+                                        },
+                                    )
+                                })
+                                .collect::<BTreeMap<_, _>>();
+                            let next_request_max_inputs = accounts_resp
+                                .accounts
+                                .iter()
+                                .map(|account| {
+                                    (
+                                        account.name.clone(),
+                                        account
+                                            .request_max_concurrency
+                                            .map(|value| value.to_string())
+                                            .unwrap_or_default(),
+                                    )
+                                })
+                                .collect::<BTreeMap<_, _>>();
+                            let next_request_min_inputs = accounts_resp
+                                .accounts
+                                .iter()
+                                .map(|account| {
+                                    (
+                                        account.name.clone(),
+                                        account
+                                            .request_min_start_interval_ms
+                                            .map(|value| value.to_string())
+                                            .unwrap_or_default(),
+                                    )
+                                })
+                                .collect::<BTreeMap<_, _>>();
+                            accounts_total.set(accounts_resp.total);
+                            account_page_limit.set(accounts_resp.limit.max(1));
+                            accounts.set(accounts_resp.accounts);
+                            account_proxy_inputs.set(next_proxy_inputs);
+                            account_route_weight_tier_inputs.set(next_route_weight_tier_inputs);
+                            account_request_max_inputs.set(next_request_max_inputs);
+                            account_request_min_inputs.set(next_request_min_inputs);
+                        }
+                        if let Some(import_jobs) = import_jobs {
+                            recent_import_jobs.set(import_jobs);
+                        }
                         load_error.set(None);
-                        reload_usage.emit((
-                            Some(current_page),
-                            Some(usage_filter_for_reload),
-                            None,
-                            None,
-                        ));
+                        if *active_tab == TAB_USAGE {
+                            reload_usage.emit((
+                                Some(current_page),
+                                Some(usage_filter_for_reload),
+                                None,
+                                None,
+                            ));
+                        }
                     },
                     Err(err) => load_error.set(Some(err)),
                 }
@@ -2875,11 +2976,61 @@ pub fn admin_llm_gateway_page() -> Html {
 
     {
         let reload = reload.clone();
+        let active_tab = active_tab.clone();
+        use_effect_with(((*active_tab).clone(),), move |_| {
+            reload.emit(());
+            || ()
+        });
+    }
+
+    {
+        let reload = reload.clone();
+        let active_tab = active_tab.clone();
+        let keys_page = keys_page.clone();
+        let keys_search = keys_search.clone();
+        let keys_sort_mode = keys_sort_mode.clone();
+        let keys_show_active_only = keys_show_active_only.clone();
+        use_effect_with(
+            (*keys_page, (*keys_search).clone(), *keys_sort_mode, *keys_show_active_only),
+            move |_| {
+                if *active_tab == TAB_KEYS {
+                    reload.emit(());
+                }
+                || ()
+            },
+        );
+    }
+
+    {
+        let reload = reload.clone();
+        let active_tab = active_tab.clone();
+        let account_page = account_page.clone();
+        let account_active_query = account_active_query.clone();
+        let account_sort_mode = account_sort_mode.clone();
+        let account_show_unhealthy = account_show_unhealthy.clone();
+        let account_show_active_only = account_show_active_only.clone();
+        use_effect_with(
+            (
+                *account_page,
+                (*account_active_query).clone(),
+                *account_sort_mode,
+                *account_show_unhealthy,
+                *account_show_active_only,
+            ),
+            move |_| {
+                if *active_tab == TAB_ACCOUNTS {
+                    reload.emit(());
+                }
+                || ()
+            },
+        );
+    }
+
+    {
         let reload_token_requests = reload_token_requests.clone();
         let reload_account_contribution_requests = reload_account_contribution_requests.clone();
         let reload_sponsor_requests = reload_sponsor_requests.clone();
         use_effect_with((), move |_| {
-            reload.emit(());
             reload_token_requests.emit((Some(1), Some(String::new())));
             reload_account_contribution_requests.emit((Some(1), Some(String::new())));
             reload_sponsor_requests.emit((Some(1), Some(String::new())));
@@ -3541,28 +3692,17 @@ pub fn admin_llm_gateway_page() -> Html {
     // A per-card refresh avoids reloading unrelated state while re-reading the
     // latest counters for a single key.
     let on_refresh_key = {
-        let keys = keys.clone();
-        let load_error = load_error.clone();
+        let reload = reload.clone();
         let flash = flash.clone();
         let refreshing_key_id = refreshing_key_id.clone();
         Callback::from(move |(key_id, key_name): (String, String)| {
             refreshing_key_id.set(Some(key_id.clone()));
-            let keys = keys.clone();
-            let load_error = load_error.clone();
+            let reload = reload.clone();
             let flash = flash.clone();
             let refreshing_key_id = refreshing_key_id.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                match fetch_admin_llm_gateway_keys().await {
-                    Ok(resp) => {
-                        keys.set(resp.keys);
-                        load_error.set(None);
-                        flash.emit((format!("已刷新 key `{}`", key_name), false));
-                    },
-                    Err(err) => {
-                        load_error.set(Some(err.clone()));
-                        flash.emit((format!("刷新 key `{}` 失败\n{err}", key_name), true));
-                    },
-                }
+                reload.emit(());
+                flash.emit((format!("已触发 key `{}` 刷新", key_name), false));
                 refreshing_key_id.set(None);
             });
         })
@@ -4670,10 +4810,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let public_visible_count = key_summary.public_visible_count;
     let active_key_count = key_summary.active_count;
     let total_quota = key_summary.quota_billable_limit_sum;
-    let total_used = key_summary
-        .usage_input_uncached_tokens_sum
-        .saturating_add(key_summary.usage_input_cached_tokens_sum)
-        .saturating_add(key_summary.usage_output_tokens_sum);
+    let total_used = key_summary.usage_billable_tokens_sum;
     let credit_keys_present =
         key_summary.usage_credit_total > 0.0 || key_summary.usage_credit_missing_events > 0;
     let total_credit_used = key_summary.usage_credit_total;
@@ -5259,32 +5396,9 @@ pub fn admin_llm_gateway_page() -> Html {
     // Matches are case-insensitive. `use_memo` avoids re-filtering on unrelated
     // parent re-renders. These are pre-computed at component top-level because
     // the html! macro does not permit `let` bindings inside conditional branches.
-    let keys_query_lower = (*keys_search).trim().to_lowercase();
-    let filtered_keys: Vec<AdminLlmGatewayKeyView> = {
-        let q = keys_query_lower.clone();
-        use_memo(((*keys).clone(), q.clone()), move |(items, q)| {
-            filter_gateway_keys_for_query(items, q)
-        })
-        .as_ref()
-        .clone()
-    };
-    // ── Keys tab: filter / sort / paginate ──
-    let mut keys_filtered_refs: Vec<&AdminLlmGatewayKeyView> = filtered_keys
-        .iter()
-        .filter(|k| !*keys_show_active_only || k.status.as_str() != "disabled")
-        .collect();
-    sort_keys(&mut keys_filtered_refs, *keys_sort_mode);
-    let keys_total_pages = keys_filtered_refs
-        .len()
-        .max(1)
-        .div_ceil(KEY_PAGE_SIZE.max(1));
+    let keys_total_pages = admin_group_total_pages(*keys_total, *keys_page_limit);
     let keys_current_page = (*keys_page).clamp(1, keys_total_pages);
-    let keys_page_entries: Vec<&AdminLlmGatewayKeyView> = keys_filtered_refs
-        .iter()
-        .skip((keys_current_page - 1) * KEY_PAGE_SIZE)
-        .take(KEY_PAGE_SIZE)
-        .copied()
-        .collect();
+    let keys_page_entries: Vec<&AdminLlmGatewayKeyView> = keys.iter().collect();
     let on_keys_page_change = {
         let keys_page = keys_page.clone();
         Callback::from(move |p: usize| keys_page.set(p))
@@ -5301,7 +5415,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let account_groups_query_lower = (*account_groups_search).trim().to_lowercase();
     let filtered_account_groups: Vec<AdminAccountGroupView> = {
         let q = account_groups_query_lower.clone();
-        use_memo(((*account_groups).clone(), q.clone()), move |(items, q)| {
+        use_memo(((*account_groups_page_items).clone(), q.clone()), move |(items, q)| {
             if q.is_empty() {
                 items.clone()
             } else {
@@ -5323,6 +5437,37 @@ pub fn admin_llm_gateway_page() -> Html {
         .as_ref()
         .clone()
     };
+    let account_groups_total_pages =
+        admin_group_total_pages(*account_groups_total, *account_groups_page_limit);
+    let account_groups_current_page = (*account_groups_page).clamp(1, account_groups_total_pages);
+    let on_account_groups_page_change = {
+        let account_groups_page = account_groups_page.clone();
+        let account_groups_page_items = account_groups_page_items.clone();
+        let account_groups_total = account_groups_total.clone();
+        let account_groups_page_limit = account_groups_page_limit.clone();
+        let load_error = load_error.clone();
+        Callback::from(move |page: usize| {
+            let page = page.max(1);
+            account_groups_page.set(page);
+            let account_groups_page_items = account_groups_page_items.clone();
+            let account_groups_total = account_groups_total.clone();
+            let account_groups_page_limit = account_groups_page_limit.clone();
+            let load_error = load_error.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let limit = (*account_groups_page_limit).max(1);
+                let offset = page.saturating_sub(1) * limit;
+                match fetch_admin_llm_gateway_account_groups_page(limit, offset).await {
+                    Ok(resp) => {
+                        account_groups_total.set(resp.total);
+                        account_groups_page_limit.set(resp.limit.max(1));
+                        account_groups_page_items.set(resp.groups);
+                        load_error.set(None);
+                    },
+                    Err(err) => load_error.set(Some(err)),
+                }
+            });
+        })
+    };
     let on_keys_search_change = {
         let keys_search = keys_search.clone();
         Callback::from(move |v: String| keys_search.set(v))
@@ -5332,26 +5477,9 @@ pub fn admin_llm_gateway_page() -> Html {
         Callback::from(move |v: String| account_groups_search.set(v))
     };
 
-    // ── Account tab: filter / sort / paginate ──
-    let account_query_lower = (*account_active_query).trim().to_lowercase();
-    let mut account_filtered: Vec<&AccountSummaryView> = accounts
-        .iter()
-        .filter(|acc| account_matches_filter(acc, &account_query_lower))
-        .filter(|acc| !*account_show_unhealthy || account_is_unhealthy(acc))
-        .filter(|acc| !*account_show_active_only || acc.status.as_str() != "disabled")
-        .collect();
-    sort_accounts(&mut account_filtered, *account_sort_mode);
-    let account_total_pages = account_filtered
-        .len()
-        .max(1)
-        .div_ceil(ACCOUNT_PAGE_SIZE.max(1));
+    let account_total_pages = admin_group_total_pages(*accounts_total, *account_page_limit);
     let account_current_page = (*account_page).clamp(1, account_total_pages);
-    let account_page_entries: Vec<&AccountSummaryView> = account_filtered
-        .iter()
-        .skip((account_current_page - 1) * ACCOUNT_PAGE_SIZE)
-        .take(ACCOUNT_PAGE_SIZE)
-        .copied()
-        .collect();
+    let account_page_entries: Vec<&AccountSummaryView> = accounts.iter().collect();
     let on_account_page_change = {
         let account_page = account_page.clone();
         Callback::from(move |p: usize| account_page.set(p))
@@ -6828,7 +6956,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         </button>
                     </div>
                     <div class={classes!("mt-2", "flex", "items-center", "justify-between", "text-xs", "text-[var(--muted)]")}>
-                        <span>{ format!("共 {} 个 Key (已加载匹配 {})", key_summary.total, keys_filtered_refs.len()) }</span>
+                        <span>{ format!("总数 {} · 当前筛选 {} · 本页 {}", key_summary.total, *keys_total, keys.len()) }</span>
                         if keys_total_pages > 1 {
                             <span class={classes!("font-mono")}>{ format!("{}/{}", keys_current_page, keys_total_pages) }</span>
                         }
@@ -6852,8 +6980,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                     on_copy={on_copy.clone()}
                                     on_flash={flash.clone()}
                                     refreshing={(*refreshing_key_id).as_deref() == Some(key_item.id.as_str())}
-                                    accounts={(*accounts).clone()}
-                                    account_groups={(*account_groups).clone()}
+                                    account_groups={(*account_group_options).clone()}
                                 />
                             }) }
                         }
@@ -6898,7 +7025,7 @@ pub fn admin_llm_gateway_page() -> Html {
                     </div>
                     if !account_groups_query_lower.is_empty() {
                         <p class={classes!("mt-2", "text-xs", "text-[var(--muted)]", "font-mono")}>
-                            { format!("匹配 {}/{}", filtered_account_groups.len(), account_groups.len()) }
+                            { format!("当前页匹配 {}/{} · 总数 {}", filtered_account_groups.len(), account_groups_page_items.len(), *account_groups_total) }
                         </p>
                     }
 
@@ -7010,7 +7137,7 @@ pub fn admin_llm_gateway_page() -> Html {
                     </div>
 
                     <div class={classes!("mt-5", "grid", "gap-4", "2xl:grid-cols-2")}>
-                        if account_groups.is_empty() && !*loading {
+                        if account_groups_page_items.is_empty() && !*loading {
                             <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
                                 { "当前还没有账号组。" }
                             </div>
@@ -7029,6 +7156,16 @@ pub fn admin_llm_gateway_page() -> Html {
                                 />
                             }) }
                         }
+                    </div>
+                    <div class={classes!("mt-4")}>
+                        <div class={classes!("mb-2", "text-xs", "text-[var(--muted)]", "font-mono")}>
+                            { format!("总数 {} · 第 {}/{} 页 · 每页 {}", *account_groups_total, account_groups_current_page, account_groups_total_pages, *account_groups_page_limit) }
+                        </div>
+                        <Pagination
+                            current_page={account_groups_current_page}
+                            total_pages={account_groups_total_pages}
+                            on_page_change={on_account_groups_page_change.clone()}
+                        />
                     </div>
                 </section>
                 } // end TAB_GROUPS
@@ -7583,7 +7720,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
                         // Summary line
                         <div class={classes!("flex", "items-center", "justify-between", "text-xs", "text-[var(--muted)]")}>
-                            <span>{ format!("共 {} 个账号 (已加载匹配 {})", account_summary.total, account_filtered.len()) }</span>
+                            <span>{ format!("总数 {} · 当前筛选 {} · 本页 {}", account_summary.total, *accounts_total, accounts.len()) }</span>
                             if account_total_pages > 1 {
                                 <span>{ format!("第 {} / {} 页", account_current_page, account_total_pages) }</span>
                             }
@@ -8993,6 +9130,20 @@ mod tests {
         assert!(!should_load_usage_journal(TAB_OVERVIEW));
         assert!(!should_load_usage_journal(TAB_USAGE));
         assert!(!should_load_usage_journal(TAB_SETTINGS));
+    }
+
+    #[test]
+    fn llm_inventory_load_helpers_follow_active_tab() {
+        assert!(should_load_llm_gateway_keys_inventory(TAB_KEYS));
+        assert!(should_load_llm_gateway_keys_inventory(TAB_USAGE));
+        assert!(!should_load_llm_gateway_keys_inventory(TAB_OVERVIEW));
+
+        assert!(should_load_llm_gateway_group_options(TAB_KEYS));
+        assert!(!should_load_llm_gateway_group_options(TAB_GROUPS));
+        assert!(!should_load_llm_gateway_group_options(TAB_ACCOUNTS));
+
+        assert!(should_load_llm_gateway_import_jobs(TAB_ACCOUNTS));
+        assert!(!should_load_llm_gateway_import_jobs(TAB_OVERVIEW));
     }
 
     #[test]

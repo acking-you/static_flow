@@ -6023,6 +6023,18 @@ pub struct AdminLlmGatewayKeyView {
     pub effective_kiro_billable_model_multipliers_json: String,
     #[serde(default = "default_true")]
     pub uses_global_kiro_billable_model_multipliers: bool,
+    #[serde(default)]
+    pub kiro_candidate_credit_summary: Option<AdminKiroKeyCandidateCreditSummaryView>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminKiroKeyCandidateCreditSummaryView {
+    pub candidate_count: usize,
+    pub loaded_balance_count: usize,
+    pub missing_balance_count: usize,
+    pub total_limit: f64,
+    pub total_remaining: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
@@ -6115,7 +6127,43 @@ pub struct AdminAccountGroupView {
 #[serde(default)]
 pub struct AdminAccountGroupsResponse {
     pub groups: Vec<AdminAccountGroupView>,
+    pub total: usize,
+    pub limit: usize,
+    pub offset: usize,
+    pub has_more: bool,
     pub generated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct AdminAccountGroupOptionView {
+    pub id: String,
+    pub provider_type: String,
+    pub name: String,
+    pub account_count: usize,
+    pub single_account_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+#[serde(default)]
+struct AdminAccountGroupOptionsResponse {
+    pub options: Vec<AdminAccountGroupOptionView>,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdminLlmGatewayKeyPageQuery {
+    pub q: Option<String>,
+    pub active_only: bool,
+    pub sort: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdminLlmGatewayAccountPageQuery {
+    pub q: Option<String>,
+    pub active_only: bool,
+    pub unhealthy_only: bool,
+    pub sort: Option<String>,
 }
 
 /// Summary usage event used by admin paging and filtering views.
@@ -7930,24 +7978,73 @@ pub async fn fetch_admin_llm_gateway_keys() -> Result<AdminLlmGatewayKeysRespons
     }
 }
 
-#[cfg(not(feature = "mock"))]
-async fn fetch_admin_llm_gateway_keys_page(
+pub async fn fetch_admin_llm_gateway_keys_page(
     limit: usize,
     offset: usize,
 ) -> Result<AdminLlmGatewayKeysResponse, String> {
-    let url = format!("{}/admin/llm-gateway/keys?limit={limit}&offset={offset}", admin_base());
-    let response = api_get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Network error: {:?}", e))?;
-    if !response.ok() {
-        let text = response.text().await.unwrap_or_default();
-        return Err(format!("Failed: {text}"));
+    fetch_admin_llm_gateway_keys_page_with_query(
+        limit,
+        offset,
+        &AdminLlmGatewayKeyPageQuery::default(),
+    )
+    .await
+}
+
+pub async fn fetch_admin_llm_gateway_keys_page_with_query(
+    limit: usize,
+    offset: usize,
+    query: &AdminLlmGatewayKeyPageQuery,
+) -> Result<AdminLlmGatewayKeysResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminLlmGatewayKeysResponse {
+            keys: vec![],
+            summary: AdminLlmGatewayKeysSummaryView::default(),
+            auth_cache_ttl_seconds: 60,
+            total: 0,
+            limit,
+            offset,
+            has_more: false,
+            generated_at: 0,
+        })
     }
-    response
-        .json()
-        .await
-        .map_err(|e| format!("Parse error: {:?}", e))
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut params = vec![format!("limit={limit}"), format!("offset={offset}")];
+        if let Some(q) = query
+            .q
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("q={}", urlencoding::encode(q)));
+        }
+        if query.active_only {
+            params.push("active_only=true".to_string());
+        }
+        if let Some(sort) = query
+            .sort
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("sort={}", urlencoding::encode(sort)));
+        }
+        let url = format!("{}/admin/llm-gateway/keys?{}", admin_base(), params.join("&"));
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -7962,16 +8059,28 @@ pub struct PatchAdminAccountGroupInput<'a> {
     pub account_names: Option<&'a [String]>,
 }
 
-pub async fn fetch_admin_llm_gateway_account_groups() -> Result<AdminAccountGroupsResponse, String>
-{
+pub async fn fetch_admin_llm_gateway_account_groups_page(
+    limit: usize,
+    offset: usize,
+) -> Result<AdminAccountGroupsResponse, String> {
     #[cfg(feature = "mock")]
     {
-        Ok(AdminAccountGroupsResponse::default())
+        Ok(AdminAccountGroupsResponse {
+            groups: vec![],
+            total: 0,
+            limit,
+            offset,
+            has_more: false,
+            generated_at: 0,
+        })
     }
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-gateway/account-groups", admin_base());
+        let url = format!(
+            "{}/admin/llm-gateway/account-groups?limit={limit}&offset={offset}",
+            admin_base()
+        );
         let response = api_get(&url)
             .send()
             .await
@@ -7983,6 +8092,32 @@ pub async fn fetch_admin_llm_gateway_account_groups() -> Result<AdminAccountGrou
         response
             .json()
             .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_llm_gateway_account_group_options(
+) -> Result<Vec<AdminAccountGroupOptionView>, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(Vec::new())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/account-group-options", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json::<AdminAccountGroupOptionsResponse>()
+            .await
+            .map(|resp| resp.options)
             .map_err(|e| format!("Parse error: {:?}", e))
     }
 }
@@ -9054,24 +9189,75 @@ pub async fn fetch_admin_llm_gateway_accounts() -> Result<AccountListResponse, S
     }
 }
 
-#[cfg(not(feature = "mock"))]
-async fn fetch_admin_llm_gateway_accounts_page(
+pub async fn fetch_admin_llm_gateway_accounts_page(
     limit: usize,
     offset: usize,
 ) -> Result<AccountListResponse, String> {
-    let url = format!("{}/admin/llm-gateway/accounts?limit={limit}&offset={offset}", admin_base());
-    let response = api_get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Network error: {:?}", e))?;
-    if !response.ok() {
-        let text = response.text().await.unwrap_or_default();
-        return Err(format!("Failed: {text}"));
+    fetch_admin_llm_gateway_accounts_page_with_query(
+        limit,
+        offset,
+        &AdminLlmGatewayAccountPageQuery::default(),
+    )
+    .await
+}
+
+pub async fn fetch_admin_llm_gateway_accounts_page_with_query(
+    limit: usize,
+    offset: usize,
+    query: &AdminLlmGatewayAccountPageQuery,
+) -> Result<AccountListResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AccountListResponse {
+            accounts: vec![],
+            summary: AdminAccountsSummaryView::default(),
+            total: 0,
+            limit,
+            offset,
+            has_more: false,
+            generated_at: 0,
+        })
     }
-    response
-        .json()
-        .await
-        .map_err(|e| format!("Parse error: {:?}", e))
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut params = vec![format!("limit={limit}"), format!("offset={offset}")];
+        if let Some(q) = query
+            .q
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("q={}", urlencoding::encode(q)));
+        }
+        if query.active_only {
+            params.push("active_only=true".to_string());
+        }
+        if query.unhealthy_only {
+            params.push("unhealthy_only=true".to_string());
+        }
+        if let Some(sort) = query
+            .sort
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("sort={}", urlencoding::encode(sort)));
+        }
+        let url = format!("{}/admin/llm-gateway/accounts?{}", admin_base(), params.join("&"));
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
 }
 
 pub async fn create_admin_llm_gateway_account_import_job(
@@ -9857,7 +10043,10 @@ pub async fn fetch_kiro_models() -> Result<KiroModelsResponse, String> {
     }
 }
 
-pub async fn fetch_admin_kiro_keys() -> Result<AdminLlmGatewayKeysResponse, String> {
+pub async fn fetch_admin_kiro_keys_page(
+    limit: usize,
+    offset: usize,
+) -> Result<AdminLlmGatewayKeysResponse, String> {
     #[cfg(feature = "mock")]
     {
         Ok(AdminLlmGatewayKeysResponse {
@@ -9865,8 +10054,8 @@ pub async fn fetch_admin_kiro_keys() -> Result<AdminLlmGatewayKeysResponse, Stri
             summary: AdminLlmGatewayKeysSummaryView::default(),
             auth_cache_ttl_seconds: 60,
             total: 0,
-            limit: 0,
-            offset: 0,
+            limit,
+            offset,
             has_more: false,
             generated_at: 0,
         })
@@ -9875,65 +10064,49 @@ pub async fn fetch_admin_kiro_keys() -> Result<AdminLlmGatewayKeysResponse, Stri
     #[cfg(not(feature = "mock"))]
     {
         let cache_buster = Date::now() as u64;
-        let mut offset = 0;
-        let mut result =
-            fetch_admin_kiro_keys_page(ADMIN_GATEWAY_INVENTORY_PAGE_LIMIT, offset, cache_buster)
-                .await?;
-        while result.has_more {
-            offset = result.keys.len();
-            let next = fetch_admin_kiro_keys_page(
-                ADMIN_GATEWAY_INVENTORY_PAGE_LIMIT,
-                offset,
-                cache_buster,
-            )
-            .await?;
-            let returned = next.keys.len();
-            result = merge_admin_llm_gateway_key_pages(result, next);
-            if returned == 0 {
-                break;
-            }
+        let url = format!(
+            "{}/admin/kiro-gateway/keys?limit={limit}&offset={offset}&_ts={cache_buster}",
+            admin_base()
+        );
+        let response = api_get(&url)
+            .header("Cache-Control", "no-cache, no-store, max-age=0")
+            .header("Pragma", "no-cache")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
         }
-        result.has_more = false;
-        result.limit = result.keys.len();
-        Ok(result)
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
     }
 }
 
-#[cfg(not(feature = "mock"))]
-async fn fetch_admin_kiro_keys_page(
+pub async fn fetch_admin_kiro_account_groups_page(
     limit: usize,
     offset: usize,
-    cache_buster: u64,
-) -> Result<AdminLlmGatewayKeysResponse, String> {
-    let url = format!(
-        "{}/admin/kiro-gateway/keys?limit={limit}&offset={offset}&_ts={cache_buster}",
-        admin_base()
-    );
-    let response = api_get(&url)
-        .header("Cache-Control", "no-cache, no-store, max-age=0")
-        .header("Pragma", "no-cache")
-        .send()
-        .await
-        .map_err(|e| format!("Network error: {:?}", e))?;
-    if !response.ok() {
-        let text = response.text().await.unwrap_or_default();
-        return Err(format!("Failed: {text}"));
-    }
-    response
-        .json()
-        .await
-        .map_err(|e| format!("Parse error: {:?}", e))
-}
-
-pub async fn fetch_admin_kiro_account_groups() -> Result<AdminAccountGroupsResponse, String> {
+) -> Result<AdminAccountGroupsResponse, String> {
     #[cfg(feature = "mock")]
     {
-        Ok(AdminAccountGroupsResponse::default())
+        Ok(AdminAccountGroupsResponse {
+            groups: vec![],
+            total: 0,
+            limit,
+            offset,
+            has_more: false,
+            generated_at: 0,
+        })
     }
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/kiro-gateway/account-groups", admin_base());
+        let url = format!(
+            "{}/admin/kiro-gateway/account-groups?limit={limit}&offset={offset}",
+            admin_base()
+        );
         let response = api_get(&url)
             .send()
             .await
@@ -9945,6 +10118,32 @@ pub async fn fetch_admin_kiro_account_groups() -> Result<AdminAccountGroupsRespo
         response
             .json()
             .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_kiro_account_group_options(
+) -> Result<Vec<AdminAccountGroupOptionView>, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(Vec::new())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/kiro-gateway/account-group-options", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json::<AdminAccountGroupOptionsResponse>()
+            .await
+            .map(|resp| resp.options)
             .map_err(|e| format!("Parse error: {:?}", e))
     }
 }
@@ -10441,24 +10640,40 @@ pub async fn fetch_admin_kiro_accounts() -> Result<AdminKiroAccountsResponse, St
     }
 }
 
-#[cfg(not(feature = "mock"))]
-async fn fetch_admin_kiro_accounts_page(
+pub async fn fetch_admin_kiro_accounts_page(
     limit: usize,
     offset: usize,
 ) -> Result<AdminKiroAccountsResponse, String> {
-    let url = format!("{}/admin/kiro-gateway/accounts?limit={limit}&offset={offset}", admin_base());
-    let response = api_get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Network error: {:?}", e))?;
-    if !response.ok() {
-        let text = response.text().await.unwrap_or_default();
-        return Err(format!("Failed: {text}"));
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminKiroAccountsResponse {
+            accounts: vec![],
+            summary: AdminAccountsSummaryView::default(),
+            total: 0,
+            limit,
+            offset,
+            has_more: false,
+            generated_at: 0,
+        })
     }
-    response
-        .json()
-        .await
-        .map_err(|e| format!("Parse error: {:?}", e))
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url =
+            format!("{}/admin/kiro-gateway/accounts?limit={limit}&offset={offset}", admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
 }
 
 pub async fn fetch_admin_kiro_account_statuses(

@@ -13,13 +13,16 @@ use crate::{
     api::{
         create_admin_kiro_account_group, create_admin_kiro_key, create_admin_kiro_manual_account,
         delete_admin_kiro_account, delete_admin_kiro_account_group, delete_admin_kiro_key,
-        fetch_admin_kiro_account_groups, fetch_admin_kiro_accounts, fetch_admin_kiro_cache_stats,
-        fetch_admin_kiro_keys, fetch_admin_kiro_usage_event_detail, fetch_admin_kiro_usage_events,
-        fetch_admin_llm_gateway_config, fetch_admin_llm_gateway_proxy_bindings,
-        fetch_admin_llm_gateway_proxy_configs, fetch_kiro_models, import_admin_kiro_account,
-        patch_admin_kiro_account, patch_admin_kiro_account_group, patch_admin_kiro_key,
-        refresh_admin_kiro_account_balance, update_admin_llm_gateway_config, AdminAccountGroupView,
-        AdminAccountsSummaryView, AdminKiroCacheStatsResponse, AdminLlmGatewayKeyView,
+        fetch_admin_kiro_account_group_options, fetch_admin_kiro_account_groups_page,
+        fetch_admin_kiro_accounts, fetch_admin_kiro_accounts_page, fetch_admin_kiro_cache_stats,
+        fetch_admin_kiro_keys_page, fetch_admin_kiro_usage_event_detail,
+        fetch_admin_kiro_usage_events, fetch_admin_llm_gateway_config,
+        fetch_admin_llm_gateway_proxy_bindings, fetch_admin_llm_gateway_proxy_configs,
+        fetch_kiro_models, import_admin_kiro_account, patch_admin_kiro_account,
+        patch_admin_kiro_account_group, patch_admin_kiro_key, refresh_admin_kiro_account_balance,
+        update_admin_llm_gateway_config, AdminAccountGroupOptionView, AdminAccountGroupView,
+        AdminAccountsSummaryView, AdminKiroCacheStatsResponse,
+        AdminKiroKeyCandidateCreditSummaryView, AdminLlmGatewayKeyView,
         AdminLlmGatewayKeysSummaryView, AdminLlmGatewayUsageEventDetailView,
         AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery,
         AdminUpstreamProxyBindingView, AdminUpstreamProxyConfigView, CreateAdminAccountGroupInput,
@@ -27,7 +30,7 @@ use crate::{
         LlmGatewayRuntimeConfig, PatchAdminAccountGroupInput, PatchAdminLlmGatewayKeyRequest,
         PatchKiroAccountInput,
     },
-    components::{search_box::SearchBox, tab_bar::render_tab_bar},
+    components::{pagination::Pagination, search_box::SearchBox, tab_bar::render_tab_bar},
     pages::llm_access_shared::{
         confirm_destructive, format_float2, format_kiro_disabled_reason, format_ms,
         format_number_i64, format_number_u64, format_reset_hint, kiro_credit_ratio,
@@ -41,6 +44,8 @@ const TAB_ACCOUNTS: &str = "accounts";
 const TAB_KEYS: &str = "keys";
 const TAB_GROUPS: &str = "groups";
 const TAB_USAGE: &str = "usage";
+const DEFAULT_KIRO_KEY_PAGE_SIZE: usize = 24;
+const DEFAULT_KIRO_GROUP_PAGE_SIZE: usize = 24;
 
 fn kiro_account_status_route() -> Route {
     Route::AdminKiroAccountStatus
@@ -56,6 +61,34 @@ fn should_load_kiro_usage_preview(active_tab: &str) -> bool {
 
 fn should_load_kiro_inventory(active_tab: &str) -> bool {
     matches!(active_tab, TAB_ACCOUNTS | TAB_KEYS | TAB_GROUPS)
+}
+
+fn should_load_kiro_account_inventory(active_tab: &str) -> bool {
+    matches!(active_tab, TAB_ACCOUNTS | TAB_GROUPS)
+}
+
+fn should_load_kiro_key_inventory(active_tab: &str) -> bool {
+    active_tab == TAB_KEYS
+}
+
+fn should_load_kiro_group_inventory(active_tab: &str) -> bool {
+    active_tab == TAB_GROUPS
+}
+
+fn should_load_kiro_group_options(active_tab: &str) -> bool {
+    active_tab == TAB_KEYS
+}
+
+fn should_load_kiro_models_inventory(active_tab: &str) -> bool {
+    active_tab == TAB_KEYS
+}
+
+fn admin_kiro_key_total_pages(total: usize, page_size: usize) -> usize {
+    total.max(1).div_ceil(page_size.max(1))
+}
+
+fn admin_kiro_group_total_pages(total: usize, page_size: usize) -> usize {
+    total.max(1).div_ceil(page_size.max(1))
 }
 
 /// Shared Tailwind classes for the dark "Kiro" pill badge.
@@ -624,7 +657,7 @@ fn kiro_account_proxy_select_value(account: &KiroAccountView) -> String {
 
 fn sanitize_kiro_account_group_id(
     value: Option<&str>,
-    groups: &[AdminAccountGroupView],
+    groups: &[AdminAccountGroupOptionView],
     _allow_empty: bool,
 ) -> String {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -637,7 +670,7 @@ fn sanitize_kiro_account_group_id(
     }
 }
 
-fn kiro_group_name_for_id(groups: &[AdminAccountGroupView], group_id: &str) -> String {
+fn kiro_group_name_for_id(groups: &[AdminAccountGroupOptionView], group_id: &str) -> String {
     groups
         .iter()
         .find(|group| group.id == group_id)
@@ -648,7 +681,7 @@ fn kiro_group_name_for_id(groups: &[AdminAccountGroupView], group_id: &str) -> S
 fn kiro_key_route_summary(
     route_strategy: &str,
     account_group_id: &str,
-    account_groups: &[AdminAccountGroupView],
+    account_groups: &[AdminAccountGroupOptionView],
 ) -> String {
     if route_strategy == "fixed" {
         if account_group_id.is_empty() {
@@ -666,66 +699,9 @@ fn kiro_key_route_summary(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
-struct KiroKeyCandidateCreditSummary {
-    candidate_count: usize,
-    loaded_balance_count: usize,
-    missing_balance_count: usize,
-    total_limit: f64,
-    total_remaining: f64,
-}
-
-fn kiro_key_candidate_credit_summary(
-    route_strategy: &str,
-    account_group_id: &str,
-    accounts: &[KiroAccountView],
-    account_groups: &[AdminAccountGroupView],
-) -> KiroKeyCandidateCreditSummary {
-    let selected_accounts = if route_strategy == "fixed" {
-        if let Some(group) = account_groups
-            .iter()
-            .find(|group| group.id == account_group_id)
-        {
-            let allowed_names = group.account_names.iter().collect::<HashSet<_>>();
-            accounts
-                .iter()
-                .filter(|account| allowed_names.contains(&account.name))
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        }
-    } else if account_group_id.is_empty() {
-        accounts.iter().collect::<Vec<_>>()
-    } else if let Some(group) = account_groups
-        .iter()
-        .find(|group| group.id == account_group_id)
-    {
-        let allowed_names = group.account_names.iter().collect::<HashSet<_>>();
-        accounts
-            .iter()
-            .filter(|account| allowed_names.contains(&account.name))
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-
-    let mut summary = KiroKeyCandidateCreditSummary {
-        candidate_count: selected_accounts.len(),
-        ..KiroKeyCandidateCreditSummary::default()
-    };
-    for account in selected_accounts {
-        if let Some(balance) = account.balance.as_ref() {
-            summary.loaded_balance_count += 1;
-            summary.total_limit += balance.usage_limit.max(0.0);
-            summary.total_remaining += balance.remaining.max(0.0);
-        } else {
-            summary.missing_balance_count += 1;
-        }
-    }
-    summary
-}
-
-fn format_kiro_key_candidate_credit_summary(summary: &KiroKeyCandidateCreditSummary) -> String {
+fn format_kiro_key_candidate_credit_summary(
+    summary: &AdminKiroKeyCandidateCreditSummaryView,
+) -> String {
     if summary.candidate_count == 0 {
         return "候选账号额度: 当前没有命中任何账号。".to_string();
     }
@@ -1476,8 +1452,7 @@ struct KiroKeyEditorCardProps {
     persisted_global_policy_form: KiroCachePolicyForm,
     persisted_global_billable_multiplier_json: String,
     available_models: Vec<KiroModelView>,
-    accounts: Vec<KiroAccountView>,
-    account_groups: Vec<AdminAccountGroupView>,
+    account_groups: Vec<AdminAccountGroupOptionView>,
     on_reload: Callback<()>,
     on_copy: Callback<(String, String)>,
     on_flash: Callback<(String, bool)>,
@@ -1941,7 +1916,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
     let fixed_route_groups = props
         .account_groups
         .iter()
-        .filter(|group| group.account_names.len() == 1)
+        .filter(|group| group.account_count == 1)
         .cloned()
         .collect::<Vec<_>>();
     let route_summary = kiro_key_route_summary(
@@ -1949,14 +1924,12 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         (*account_group_id).as_str(),
         props.account_groups.as_slice(),
     );
-    let candidate_credit_summary = kiro_key_candidate_credit_summary(
-        (*route_strategy).as_str(),
-        (*account_group_id).as_str(),
-        props.accounts.as_slice(),
-        props.account_groups.as_slice(),
+    let candidate_credit_summary_text = format_kiro_key_candidate_credit_summary(
+        &props
+            .key_item
+            .kiro_candidate_credit_summary
+            .unwrap_or_default(),
     );
-    let candidate_credit_summary_text =
-        format_kiro_key_candidate_credit_summary(&candidate_credit_summary);
     let global_policy_summary = format_kiro_cache_policy_summary(
         &props.persisted_global_policy_form,
         &props.persisted_global_policy_form,
@@ -2419,7 +2392,16 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                                     >
                                         <option value="" selected={(*account_group_id).is_empty()}>{ "-- 选择组 --" }</option>
                                         { for fixed_route_groups.iter().map(|group| html! {
-                                            <option value={group.id.clone()} selected={*account_group_id == group.id}>{ format!("{} ({})", group.name, group.account_names.join(", ")) }</option>
+                                            <option value={group.id.clone()} selected={*account_group_id == group.id}>
+                                                { format!(
+                                                    "{} ({})",
+                                                    group.name,
+                                                    group
+                                                        .single_account_name
+                                                        .clone()
+                                                        .unwrap_or_else(|| format!("{} 个账号", group.account_count))
+                                                ) }
+                                            </option>
                                         }) }
                                     </select>
                                 </label>
@@ -2440,7 +2422,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                                     >
                                         <option value="" selected={(*account_group_id).is_empty()}>{ "全账号池" }</option>
                                         { for props.account_groups.iter().map(|group| html! {
-                                            <option value={group.id.clone()} selected={*account_group_id == group.id}>{ format!("{} ({} 个账号)", group.name, group.account_names.len()) }</option>
+                                            <option value={group.id.clone()} selected={*account_group_id == group.id}>{ format!("{} ({} 个账号)", group.name, group.account_count) }</option>
                                         }) }
                                     </select>
                                 </label>
@@ -2828,8 +2810,16 @@ pub fn admin_kiro_gateway_page() -> Html {
     let keys = use_state(Vec::<AdminLlmGatewayKeyView>::new);
     let accounts_summary = use_state(AdminAccountsSummaryView::default);
     let keys_summary = use_state(AdminLlmGatewayKeysSummaryView::default);
+    let keys_page = use_state(|| 1usize);
+    let keys_total = use_state(|| 0usize);
+    let keys_page_limit = use_state(|| DEFAULT_KIRO_KEY_PAGE_SIZE);
     let keys_search = use_state(String::new);
+    let account_group_options = use_state(Vec::<AdminAccountGroupOptionView>::new);
     let account_groups = use_state(Vec::<AdminAccountGroupView>::new);
+    let account_groups_page_items = use_state(Vec::<AdminAccountGroupView>::new);
+    let account_groups_total = use_state(|| 0usize);
+    let account_groups_page = use_state(|| 1usize);
+    let account_groups_page_limit = use_state(|| DEFAULT_KIRO_GROUP_PAGE_SIZE);
     let account_groups_search = use_state(String::new);
     let kiro_models = use_state(Vec::<KiroModelView>::new);
     let usage_events = use_state(Vec::<AdminLlmGatewayUsageEventView>::new);
@@ -2858,7 +2848,7 @@ pub fn admin_kiro_gateway_page() -> Html {
     let error = use_state(|| None::<String>);
     let inventory_loading = use_state(|| false);
     let inventory_error = use_state(|| None::<String>);
-    let inventory_loaded_for_refresh = use_state(|| None::<u32>);
+    let inventory_loaded_for_refresh = use_state(|| None::<(String, u32, usize)>);
     let flash = use_state(|| None::<String>);
     let toast = use_state(|| None::<(String, bool)>);
     let toast_timeout = use_mut_ref(|| None::<Timeout>);
@@ -2986,6 +2976,8 @@ pub fn admin_kiro_gateway_page() -> Html {
         let proxy_configs = proxy_configs.clone();
         let proxy_bindings = proxy_bindings.clone();
         let runtime_config = runtime_config.clone();
+        let accounts_summary = accounts_summary.clone();
+        let keys_summary = keys_summary.clone();
         let kiro_cache_stats = kiro_cache_stats.clone();
         let kiro_cache_stats_error = kiro_cache_stats_error.clone();
         let kiro_cache_policy_form = kiro_cache_policy_form.clone();
@@ -3005,6 +2997,8 @@ pub fn admin_kiro_gateway_page() -> Html {
             let proxy_configs = proxy_configs.clone();
             let proxy_bindings = proxy_bindings.clone();
             let runtime_config = runtime_config.clone();
+            let accounts_summary = accounts_summary.clone();
+            let keys_summary = keys_summary.clone();
             let kiro_cache_stats = kiro_cache_stats.clone();
             let kiro_cache_stats_error = kiro_cache_stats_error.clone();
             let kiro_cache_policy_form = kiro_cache_policy_form.clone();
@@ -3025,17 +3019,33 @@ pub fn admin_kiro_gateway_page() -> Html {
                 error.set(None);
                 let (
                     config_result,
+                    accounts_summary_result,
+                    keys_summary_result,
                     proxy_configs_result,
                     proxy_bindings_result,
                     cache_stats_result,
                 ) = futures::join!(
                     fetch_admin_llm_gateway_config(),
+                    fetch_admin_kiro_accounts_page(1, 0),
+                    fetch_admin_kiro_keys_page(1, 0),
                     fetch_admin_llm_gateway_proxy_configs(),
                     fetch_admin_llm_gateway_proxy_bindings(),
                     fetch_admin_kiro_cache_stats(),
                 );
-                match (config_result, proxy_configs_result, proxy_bindings_result) {
-                    (Ok(config_resp), Ok(proxy_configs_resp), Ok(proxy_bindings_resp)) => {
+                match (
+                    config_result,
+                    accounts_summary_result,
+                    keys_summary_result,
+                    proxy_configs_result,
+                    proxy_bindings_result,
+                ) {
+                    (
+                        Ok(config_resp),
+                        Ok(accounts_summary_resp),
+                        Ok(keys_summary_resp),
+                        Ok(proxy_configs_resp),
+                        Ok(proxy_bindings_resp),
+                    ) => {
                         let policy_form = match parse_kiro_cache_policy_form_json(
                             &config_resp.kiro_cache_policy_json,
                         ) {
@@ -3075,6 +3085,8 @@ pub fn admin_kiro_gateway_page() -> Html {
                         kiro_conversation_anchor_ttl_seconds
                             .set(config_resp.kiro_conversation_anchor_ttl_seconds.to_string());
                         runtime_config.set(Some(config_resp));
+                        accounts_summary.set(accounts_summary_resp.summary);
+                        keys_summary.set(keys_summary_resp.summary);
                         proxy_configs.set(proxy_configs_resp.proxy_configs);
                         proxy_bindings.set(proxy_bindings_resp.bindings);
                         match cache_stats_result {
@@ -3088,7 +3100,11 @@ pub fn admin_kiro_gateway_page() -> Html {
                             },
                         }
                     },
-                    (Err(err), _, _) | (_, Err(err), _) | (_, _, Err(err)) => {
+                    (Err(err), _, _, _, _)
+                    | (_, Err(err), _, _, _)
+                    | (_, _, Err(err), _, _)
+                    | (_, _, _, Err(err), _)
+                    | (_, _, _, _, Err(err)) => {
                         error.set(Some(err));
                     },
                 }
@@ -3103,7 +3119,12 @@ pub fn admin_kiro_gateway_page() -> Html {
         let keys = keys.clone();
         let accounts_summary = accounts_summary.clone();
         let keys_summary = keys_summary.clone();
+        let keys_page = keys_page.clone();
+        let keys_total = keys_total.clone();
+        let keys_page_limit = keys_page_limit.clone();
+        let account_group_options = account_group_options.clone();
         let account_groups = account_groups.clone();
+        let account_groups_page_limit = account_groups_page_limit.clone();
         let kiro_models = kiro_models.clone();
         let active_tab = active_tab.clone();
         let refresh_tick = refresh_tick.clone();
@@ -3111,51 +3132,172 @@ pub fn admin_kiro_gateway_page() -> Html {
         let inventory_error = inventory_error.clone();
         let inventory_loaded_for_refresh = inventory_loaded_for_refresh.clone();
         use_effect_with(
-            ((*active_tab).clone(), *refresh_tick),
-            move |(active_tab, refresh_tick)| {
+            ((*active_tab).clone(), *refresh_tick, *keys_page),
+            move |(active_tab, refresh_tick, keys_page_value)| {
+                let requested_page =
+                    if active_tab == TAB_KEYS { (*keys_page_value).max(1) } else { 1 };
                 let should_fetch = should_load_kiro_inventory(active_tab)
-                    && (*inventory_loaded_for_refresh).is_none_or(|loaded| loaded != *refresh_tick);
+                    && (*inventory_loaded_for_refresh).as_ref()
+                        != Some(&(active_tab.clone(), *refresh_tick, requested_page));
                 if should_fetch {
                     let accounts = accounts.clone();
                     let keys = keys.clone();
                     let accounts_summary = accounts_summary.clone();
                     let keys_summary = keys_summary.clone();
+                    let keys_page = keys_page.clone();
+                    let keys_total = keys_total.clone();
+                    let keys_page_limit = keys_page_limit.clone();
+                    let account_group_options = account_group_options.clone();
                     let account_groups = account_groups.clone();
+                    let account_groups_page_limit = account_groups_page_limit.clone();
                     let kiro_models = kiro_models.clone();
                     let inventory_loading = inventory_loading.clone();
                     let inventory_error = inventory_error.clone();
                     let inventory_loaded_for_refresh = inventory_loaded_for_refresh.clone();
+                    let active_tab_value = active_tab.clone();
                     let refresh_tick_value = *refresh_tick;
+                    let requested_page_value = requested_page;
                     wasm_bindgen_futures::spawn_local(async move {
                         inventory_loading.set(true);
                         inventory_error.set(None);
-                        let (accounts_result, keys_result, account_groups_result, models_result) = futures::join!(
-                            fetch_admin_kiro_accounts(),
-                            fetch_admin_kiro_keys(),
-                            fetch_admin_kiro_account_groups(),
-                            fetch_kiro_models(),
-                        );
-                        match (accounts_result, keys_result, account_groups_result, models_result) {
-                            (
-                                Ok(accounts_resp),
-                                Ok(keys_resp),
-                                Ok(account_groups_resp),
-                                Ok(models_resp),
-                            ) => {
-                                accounts_summary.set(accounts_resp.summary);
-                                keys_summary.set(keys_resp.summary);
-                                accounts.set(accounts_resp.accounts);
-                                keys.set(keys_resp.keys);
-                                account_groups.set(account_groups_resp.groups);
-                                kiro_models.set(models_resp.data);
-                                inventory_loaded_for_refresh.set(Some(refresh_tick_value));
+                        let result = async {
+                            let accounts_resp =
+                                if should_load_kiro_account_inventory(&active_tab_value) {
+                                    Some(fetch_admin_kiro_accounts().await?)
+                                } else {
+                                    None
+                                };
+                            let keys_resp = if should_load_kiro_key_inventory(&active_tab_value) {
+                                let limit = *keys_page_limit;
+                                let offset = requested_page_value
+                                    .saturating_sub(1)
+                                    .saturating_mul(limit.max(1));
+                                Some(fetch_admin_kiro_keys_page(limit, offset).await?)
+                            } else {
+                                None
+                            };
+                            let account_group_options_resp =
+                                if should_load_kiro_group_options(&active_tab_value) {
+                                    Some(fetch_admin_kiro_account_group_options().await?)
+                                } else {
+                                    None
+                                };
+                            let account_groups_resp =
+                                if should_load_kiro_group_inventory(&active_tab_value) {
+                                    let limit = (*account_groups_page_limit).max(1);
+                                    Some(fetch_admin_kiro_account_groups_page(limit, 0).await?)
+                                } else {
+                                    None
+                                };
+                            let models_resp =
+                                if should_load_kiro_models_inventory(&active_tab_value) {
+                                    Some(fetch_kiro_models().await?)
+                                } else {
+                                    None
+                                };
+                            Ok::<_, String>((
+                                accounts_resp,
+                                keys_resp,
+                                account_group_options_resp,
+                                account_groups_resp,
+                                models_resp,
+                            ))
+                        }
+                        .await;
+                        match result {
+                            Ok((
+                                accounts_resp,
+                                keys_resp,
+                                account_group_options_resp,
+                                account_groups_resp,
+                                models_resp,
+                            )) => {
+                                if let Some(accounts_resp) = accounts_resp {
+                                    accounts_summary.set(accounts_resp.summary);
+                                    accounts.set(accounts_resp.accounts);
+                                }
+                                if let Some(keys_resp) = keys_resp {
+                                    let effective_limit = keys_resp.limit.max(1);
+                                    let total_pages = admin_kiro_key_total_pages(
+                                        keys_resp.total,
+                                        effective_limit,
+                                    );
+                                    keys_summary.set(keys_resp.summary);
+                                    keys_total.set(keys_resp.total);
+                                    keys_page_limit.set(effective_limit);
+                                    if requested_page_value > total_pages {
+                                        keys_page.set(total_pages);
+                                    } else {
+                                        keys.set(keys_resp.keys);
+                                    }
+                                }
+                                if let Some(account_group_options_resp) = account_group_options_resp
+                                {
+                                    account_group_options.set(account_group_options_resp);
+                                }
+                                if let Some(account_groups_resp) = account_groups_resp {
+                                    account_groups.set(account_groups_resp.groups);
+                                }
+                                if let Some(models_resp) = models_resp {
+                                    kiro_models.set(models_resp.data);
+                                }
+                                inventory_loaded_for_refresh.set(Some((
+                                    active_tab_value,
+                                    refresh_tick_value,
+                                    requested_page_value,
+                                )));
                             },
-                            (Err(err), _, _, _)
-                            | (_, Err(err), _, _)
-                            | (_, _, Err(err), _)
-                            | (_, _, _, Err(err)) => {
+                            Err(err) => {
                                 inventory_error.set(Some(err));
                             },
+                        }
+                        inventory_loading.set(false);
+                    });
+                }
+                || ()
+            },
+        );
+    }
+
+    {
+        let account_groups_page_items = account_groups_page_items.clone();
+        let account_groups_total = account_groups_total.clone();
+        let account_groups_page = account_groups_page.clone();
+        let account_groups_page_limit = account_groups_page_limit.clone();
+        let active_tab = active_tab.clone();
+        let refresh_tick = refresh_tick.clone();
+        let inventory_loading = inventory_loading.clone();
+        let inventory_error = inventory_error.clone();
+        use_effect_with(
+            ((*active_tab).clone(), *refresh_tick, *account_groups_page),
+            move |(active_tab, _, account_groups_page_value)| {
+                if active_tab == TAB_GROUPS {
+                    let account_groups_page_items = account_groups_page_items.clone();
+                    let account_groups_total = account_groups_total.clone();
+                    let account_groups_page = account_groups_page.clone();
+                    let account_groups_page_limit = account_groups_page_limit.clone();
+                    let inventory_loading = inventory_loading.clone();
+                    let inventory_error = inventory_error.clone();
+                    let requested_page = (*account_groups_page_value).max(1);
+                    wasm_bindgen_futures::spawn_local(async move {
+                        inventory_loading.set(true);
+                        let limit = (*account_groups_page_limit).max(1);
+                        let offset = requested_page.saturating_sub(1).saturating_mul(limit);
+                        match fetch_admin_kiro_account_groups_page(limit, offset).await {
+                            Ok(resp) => {
+                                let effective_limit = resp.limit.max(1);
+                                let total_pages =
+                                    admin_kiro_group_total_pages(resp.total, effective_limit);
+                                account_groups_total.set(resp.total);
+                                account_groups_page_limit.set(effective_limit);
+                                if requested_page > total_pages {
+                                    account_groups_page.set(total_pages);
+                                } else {
+                                    account_groups_page_items.set(resp.groups);
+                                }
+                                inventory_error.set(None);
+                            },
+                            Err(err) => inventory_error.set(Some(err)),
                         }
                         inventory_loading.set(false);
                     });
@@ -3709,7 +3851,7 @@ pub fn admin_kiro_gateway_page() -> Html {
     let account_groups_query_lower = (*account_groups_search).trim().to_lowercase();
     let filtered_account_groups: Vec<AdminAccountGroupView> = {
         let q = account_groups_query_lower.clone();
-        use_memo(((*account_groups).clone(), q.clone()), move |(items, q)| {
+        use_memo(((*account_groups_page_items).clone(), q.clone()), move |(items, q)| {
             if q.is_empty() {
                 items.clone()
             } else {
@@ -3731,9 +3873,22 @@ pub fn admin_kiro_gateway_page() -> Html {
         .as_ref()
         .clone()
     };
+    let keys_total_pages = admin_kiro_key_total_pages(*keys_total, *keys_page_limit);
+    let keys_current_page = (*keys_page).clamp(1, keys_total_pages);
+    let account_groups_total_pages =
+        admin_kiro_group_total_pages(*account_groups_total, *account_groups_page_limit);
+    let account_groups_current_page = (*account_groups_page).clamp(1, account_groups_total_pages);
     let on_keys_search_change = {
         let keys_search = keys_search.clone();
         Callback::from(move |v: String| keys_search.set(v))
+    };
+    let on_keys_page_change = {
+        let keys_page = keys_page.clone();
+        Callback::from(move |page: usize| keys_page.set(page))
+    };
+    let on_account_groups_page_change = {
+        let account_groups_page = account_groups_page.clone();
+        Callback::from(move |page: usize| account_groups_page.set(page.max(1)))
     };
     let on_account_groups_search_change = {
         let account_groups_search = account_groups_search.clone();
@@ -4344,6 +4499,9 @@ pub fn admin_kiro_gateway_page() -> Html {
                 <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                     <div>
                         <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Kiro Key Inventory" }</h2>
+                        <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
+                            { format!("总数 {} · 第 {}/{} 页 · 每页 {}", *keys_total, keys_current_page, keys_total_pages, *keys_page_limit) }
+                        </p>
                     </div>
                     <button
                         type="button"
@@ -4365,7 +4523,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                 </div>
                 if !keys_query_lower.is_empty() {
                     <p class={classes!("mt-2", "text-xs", "text-[var(--muted)]", "font-mono")}>
-                        { format!("已加载匹配 {} / 全量 {}", filtered_keys.len(), key_summary.total) }
+                        { format!("当前页匹配 {} / 本页 {} · 总数 {}", filtered_keys.len(), keys.len(), key_summary.total) }
                     </p>
                 }
                 <div class={classes!("mt-4", "grid", "gap-4", "xl:grid-cols-2")}>
@@ -4407,8 +4565,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                                             (*persisted_kiro_billable_model_multipliers_json).clone()
                                         }
                                         available_models={(*kiro_models).clone()}
-                                        accounts={(*accounts).clone()}
-                                        account_groups={(*account_groups).clone()}
+                                        account_groups={(*account_group_options).clone()}
                                         on_reload={on_reload.clone()}
                                         on_copy={on_copy.clone()}
                                         on_flash={notify.clone()}
@@ -4417,6 +4574,13 @@ pub fn admin_kiro_gateway_page() -> Html {
                             }
                         }
                     }
+                </div>
+                <div class={classes!("mt-4")}>
+                    <Pagination
+                        current_page={keys_current_page}
+                        total_pages={keys_total_pages}
+                        on_page_change={on_keys_page_change}
+                    />
                 </div>
             </section>
             } // end TAB_KEYS
@@ -4451,7 +4615,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                 </div>
                 if !account_groups_query_lower.is_empty() {
                     <p class={classes!("mt-2", "text-xs", "text-[var(--muted)]", "font-mono")}>
-                        { format!("匹配 {}/{}", filtered_account_groups.len(), account_groups.len()) }
+                        { format!("当前页匹配 {}/{} · 总数 {}", filtered_account_groups.len(), account_groups_page_items.len(), *account_groups_total) }
                     </p>
                 }
 
@@ -4586,7 +4750,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                                     { format!("Kiro 账号组加载失败：{err}") }
                                 </div>
                             }
-                        } else if (*account_groups).is_empty() {
+                        } else if account_groups_page_items.is_empty() {
                             html! {
                                 <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-5", "text-sm", "text-[var(--muted)]")}>
                                     { "当前还没有 Kiro 账号组。" }
@@ -4612,6 +4776,16 @@ pub fn admin_kiro_gateway_page() -> Html {
                             }
                         }
                     }
+                </div>
+                <div class={classes!("mt-4")}>
+                    <div class={classes!("mb-2", "text-xs", "text-[var(--muted)]", "font-mono")}>
+                        { format!("总数 {} · 第 {}/{} 页 · 每页 {}", *account_groups_total, account_groups_current_page, account_groups_total_pages, *account_groups_page_limit) }
+                    </div>
+                    <Pagination
+                        current_page={account_groups_current_page}
+                        total_pages={account_groups_total_pages}
+                        on_page_change={on_account_groups_page_change}
+                    />
                 </div>
             </section>
             } // end TAB_GROUPS
@@ -4850,18 +5024,20 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        build_kiro_billable_multiplier_override_json,
+        admin_kiro_key_total_pages, build_kiro_billable_multiplier_override_json,
         build_kiro_billable_multiplier_override_patch, build_kiro_cache_policy_override_json,
         build_kiro_cache_policy_override_patch, format_compact_bytes,
-        format_kiro_cache_policy_summary, kiro_account_status_cta_text, kiro_account_status_route,
-        kiro_cache_token_percent, kiro_key_candidate_credit_summary, kiro_key_route_summary,
-        parse_kiro_cache_policy_form_json, sanitize_kiro_account_group_id,
-        should_load_kiro_inventory, should_load_kiro_usage_preview,
+        format_kiro_cache_policy_summary, format_kiro_key_candidate_credit_summary,
+        kiro_account_status_cta_text, kiro_account_status_route, kiro_cache_token_percent,
+        kiro_key_route_summary, parse_kiro_cache_policy_form_json, sanitize_kiro_account_group_id,
+        should_load_kiro_account_inventory, should_load_kiro_group_inventory,
+        should_load_kiro_group_options, should_load_kiro_inventory, should_load_kiro_key_inventory,
+        should_load_kiro_models_inventory, should_load_kiro_usage_preview,
         should_reset_kiro_cache_policy_editor, TAB_ACCOUNTS, TAB_GROUPS, TAB_KEYS, TAB_OVERVIEW,
         TAB_USAGE,
     };
     use crate::{
-        api::{AdminAccountGroupView, KiroAccountView, KiroBalanceView, KiroCacheView},
+        api::{AdminAccountGroupOptionView, AdminKiroKeyCandidateCreditSummaryView},
         router::Route,
     };
 
@@ -4884,35 +5060,20 @@ mod tests {
     }
 
     #[test]
-    fn kiro_key_candidate_credit_summary_uses_auto_group_only() {
-        let accounts = vec![
-            test_account("alpha", Some((100.0, 40.0))),
-            test_account("beta", Some((60.0, 10.0))),
-            test_account("gamma", Some((30.0, 5.0))),
-        ];
-        let groups = vec![test_group("group-beta", &["beta"])];
+    fn format_kiro_key_candidate_credit_summary_counts_missing_balances() {
+        let text =
+            format_kiro_key_candidate_credit_summary(&AdminKiroKeyCandidateCreditSummaryView {
+                candidate_count: 3,
+                loaded_balance_count: 2,
+                missing_balance_count: 1,
+                total_limit: 160.0,
+                total_remaining: 50.0,
+            });
 
-        let summary = kiro_key_candidate_credit_summary("auto", "group-beta", &accounts, &groups);
-
-        assert_eq!(summary.candidate_count, 1);
-        assert_eq!(summary.loaded_balance_count, 1);
-        assert_eq!(summary.missing_balance_count, 0);
-        assert_eq!(summary.total_limit, 60.0);
-        assert_eq!(summary.total_remaining, 10.0);
-    }
-
-    #[test]
-    fn kiro_key_candidate_credit_summary_counts_missing_balances() {
-        let accounts = vec![test_account("alpha", Some((100.0, 40.0))), test_account("beta", None)];
-        let groups = vec![test_group("group-beta", &["beta"])];
-
-        let summary = kiro_key_candidate_credit_summary("fixed", "group-beta", &accounts, &groups);
-
-        assert_eq!(summary.candidate_count, 1);
-        assert_eq!(summary.loaded_balance_count, 0);
-        assert_eq!(summary.missing_balance_count, 1);
-        assert_eq!(summary.total_limit, 0.0);
-        assert_eq!(summary.total_remaining, 0.0);
+        assert_eq!(
+            text,
+            "候选账号额度: 剩余 50.0000 / 总额 160.0000 · 2/3 已加载 · 1 个账号余额未加载"
+        );
     }
 
     #[test]
@@ -5365,6 +5526,34 @@ mod tests {
     }
 
     #[test]
+    fn admin_kiro_key_total_pages_never_drops_below_one() {
+        assert_eq!(admin_kiro_key_total_pages(0, 24), 1);
+        assert_eq!(admin_kiro_key_total_pages(25, 24), 2);
+        assert_eq!(admin_kiro_key_total_pages(48, 24), 2);
+    }
+
+    #[test]
+    fn kiro_inventory_helpers_only_load_required_datasets() {
+        assert!(should_load_kiro_account_inventory(TAB_ACCOUNTS));
+        assert!(!should_load_kiro_account_inventory(TAB_KEYS));
+        assert!(should_load_kiro_account_inventory(TAB_GROUPS));
+        assert!(!should_load_kiro_account_inventory(TAB_OVERVIEW));
+
+        assert!(should_load_kiro_key_inventory(TAB_KEYS));
+        assert!(!should_load_kiro_key_inventory(TAB_ACCOUNTS));
+
+        assert!(should_load_kiro_group_inventory(TAB_GROUPS));
+        assert!(!should_load_kiro_group_inventory(TAB_KEYS));
+        assert!(!should_load_kiro_group_inventory(TAB_ACCOUNTS));
+
+        assert!(should_load_kiro_group_options(TAB_KEYS));
+        assert!(!should_load_kiro_group_options(TAB_GROUPS));
+
+        assert!(should_load_kiro_models_inventory(TAB_KEYS));
+        assert!(!should_load_kiro_models_inventory(TAB_GROUPS));
+    }
+
+    #[test]
     fn kiro_cache_token_percent_handles_empty_limit() {
         assert_eq!(kiro_cache_token_percent(12, 0), 0.0);
     }
@@ -5376,38 +5565,13 @@ mod tests {
         assert_eq!(format_compact_bytes(2 * 1024 * 1024), "2.0 MiB");
     }
 
-    fn test_account(name: &str, balance: Option<(f64, f64)>) -> KiroAccountView {
-        KiroAccountView {
-            name: name.to_string(),
-            balance: balance.map(|(usage_limit, remaining)| KiroBalanceView {
-                current_usage: (usage_limit - remaining).max(0.0),
-                usage_limit,
-                remaining,
-                next_reset_at: None,
-                subscription_title: None,
-            }),
-            cache: KiroCacheView {
-                status: "ready".to_string(),
-                refresh_interval_seconds: 300,
-                last_checked_at: None,
-                last_success_at: None,
-                error_message: None,
-            },
-            ..KiroAccountView::default()
-        }
-    }
-
-    fn test_group(id: &str, account_names: &[&str]) -> AdminAccountGroupView {
-        AdminAccountGroupView {
+    fn test_group(id: &str, account_names: &[&str]) -> AdminAccountGroupOptionView {
+        AdminAccountGroupOptionView {
             id: id.to_string(),
             provider_type: "kiro".to_string(),
             name: id.to_string(),
-            account_names: account_names
-                .iter()
-                .map(|value| (*value).to_string())
-                .collect(),
-            created_at: 0,
-            updated_at: 0,
+            account_count: account_names.len(),
+            single_account_name: (account_names.len() == 1).then(|| account_names[0].to_string()),
         }
     }
 }

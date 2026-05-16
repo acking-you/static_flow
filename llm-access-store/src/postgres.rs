@@ -3,7 +3,8 @@
 use std::{
     collections::{BTreeMap, HashMap},
     env,
-    time::Duration,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 
 use anyhow::Context;
@@ -12,26 +13,27 @@ use llm_access_core::{
     provider::RouteStrategy,
     store::{
         self as core_store, default_proxy_bindings, AdminAccountContributionRequest,
-        AdminAccountContributionRequestsPage, AdminAccountGroup, AdminAccountGroupPatch,
-        AdminAccountGroupStore, AdminCodexAccount, AdminCodexAccountPatch, AdminCodexAccountStore,
-        AdminCodexAccountsPage, AdminCodexImportJobDetail, AdminCodexImportJobItem,
-        AdminCodexImportJobItemResult, AdminCodexImportJobSummary, AdminConfigStore, AdminKey,
-        AdminKeyPatch, AdminKeyStore, AdminKeysPage, AdminKiroAccount, AdminKiroAccountPatch,
+        AdminAccountContributionRequestsPage, AdminAccountGroup, AdminAccountGroupOption,
+        AdminAccountGroupPatch, AdminAccountGroupStore, AdminCodexAccount, AdminCodexAccountPatch,
+        AdminCodexAccountStore, AdminCodexAccountsPage, AdminCodexImportJobDetail,
+        AdminCodexImportJobItem, AdminCodexImportJobItemResult, AdminCodexImportJobSummary,
+        AdminConfigStore, AdminKey, AdminKeyPageQuery, AdminKeyPatch, AdminKeySortMode,
+        AdminKeyStore, AdminKeysPage, AdminKiroAccount, AdminKiroAccountPatch,
         AdminKiroAccountStore, AdminKiroAccountsPage, AdminKiroBalanceView, AdminKiroCacheView,
-        AdminKiroStatusCacheUpdate, AdminLegacyKiroProxyMigration, AdminPageRequest,
-        AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch, AdminProxyStore,
-        AdminReviewQueueAction, AdminReviewQueueQuery, AdminReviewQueueStore, AdminRuntimeConfig,
-        AdminSponsorRequest, AdminSponsorRequestsPage, AdminTokenRequest, AdminTokenRequestsPage,
-        AuthenticatedKey, CodexPublicAccountStatus, CodexRateLimitStatus, CodexStatusRefreshTarget,
-        ControlStore, KiroStatusRefreshTarget, NewAdminAccountGroup, NewAdminCodexAccount,
-        NewAdminCodexImportJob, NewAdminKey, NewAdminKiroAccount, NewAdminProxyConfig,
-        NewPublicAccountContributionRequest, NewPublicSponsorRequest, NewPublicTokenRequest,
-        ProviderCodexAuthUpdate, ProviderCodexRoute, ProviderKiroAuthUpdate, ProviderKiroRoute,
-        ProviderProxyConfig, ProviderRouteStore, PublicAccessKey, PublicAccessStore,
-        PublicAccountContribution, PublicCommunityStore, PublicSponsor, PublicStatusStore,
-        PublicSubmissionStore, PublicUsageLookupKey, PublicUsageStore, UsageEventSink,
-        DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_STATUS_REFRESH_SECONDS,
-        PUBLIC_ACCOUNT_CONTRIBUTION_STATUS_VALIDATED,
+        AdminKiroKeyCandidateCreditSummary, AdminKiroStatusCacheUpdate,
+        AdminLegacyKiroProxyMigration, AdminPageRequest, AdminProxyBinding, AdminProxyConfig,
+        AdminProxyConfigPatch, AdminProxyStore, AdminReviewQueueAction, AdminReviewQueueQuery,
+        AdminReviewQueueStore, AdminRuntimeConfig, AdminSponsorRequest, AdminSponsorRequestsPage,
+        AdminTokenRequest, AdminTokenRequestsPage, AuthenticatedKey, CodexPublicAccountStatus,
+        CodexRateLimitStatus, CodexStatusRefreshTarget, ControlStore, KiroStatusRefreshTarget,
+        NewAdminAccountGroup, NewAdminCodexAccount, NewAdminCodexImportJob, NewAdminKey,
+        NewAdminKiroAccount, NewAdminProxyConfig, NewPublicAccountContributionRequest,
+        NewPublicSponsorRequest, NewPublicTokenRequest, ProviderCodexAuthUpdate,
+        ProviderCodexRoute, ProviderKiroAuthUpdate, ProviderKiroRoute, ProviderProxyConfig,
+        ProviderRouteStore, PublicAccessKey, PublicAccessStore, PublicAccountContribution,
+        PublicCommunityStore, PublicSponsor, PublicStatusStore, PublicSubmissionStore,
+        PublicUsageLookupKey, PublicUsageStore, UsageEventSink, DEFAULT_AUTH_CACHE_TTL_SECONDS,
+        DEFAULT_CODEX_STATUS_REFRESH_SECONDS, PUBLIC_ACCOUNT_CONTRIBUTION_STATUS_VALIDATED,
         PUBLIC_SPONSOR_REQUEST_STATUS_PAYMENT_EMAIL_SENT, PUBLIC_SPONSOR_REQUEST_STATUS_SUBMITTED,
         PUBLIC_TOKEN_REQUEST_STATUS_PENDING,
     },
@@ -44,7 +46,7 @@ use sqlx_core::{
     query_builder::QueryBuilder, row::Row as SqlxRowTrait, types::Type,
 };
 use sqlx_postgres::{PgArguments, PgPool, PgPoolOptions, PgRow as SqlxPgRow, Postgres};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::sqlite::{
     CodexAccountRecord, KeyBundle, KeyRecord, KeyRouteConfig, KeyUsageRollup, KiroAccountRecord,
@@ -91,6 +93,7 @@ impl PgRow {
 const POSTGRES_MAX_BIND_PARAMS: usize = 65_535;
 const USAGE_ROLLUP_PARAMS_PER_ROW: usize = 8;
 const USAGE_ROLLUP_BATCH_ROW_LIMIT: usize = POSTGRES_MAX_BIND_PARAMS / USAGE_ROLLUP_PARAMS_PER_ROW;
+const CODEX_STATUS_CACHE_TTL: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 struct CodexRouteCandidateRow {
@@ -309,6 +312,13 @@ impl<'a> SqlxTransaction<'a> {
 /// Async Postgres-backed control-plane repository.
 pub struct PostgresControlRepository {
     client: SqlxClient,
+    codex_status_cache: Arc<RwLock<Option<CachedCodexRateLimitStatus>>>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedCodexRateLimitStatus {
+    snapshot: CodexRateLimitStatus,
+    loaded_at: Instant,
 }
 
 type KiroCachedStatusParts = (Option<AdminKiroBalanceView>, AdminKiroCacheView);
@@ -328,6 +338,57 @@ struct CodexAdminAccountViewContext {
 struct ProviderProxyResolutionContext {
     proxy_configs_by_id: BTreeMap<String, AdminProxyConfig>,
     binding: AdminProxyBinding,
+}
+
+#[derive(Debug, Clone)]
+struct CodexAdminAccountListRow {
+    account_name: String,
+    account_id: Option<String>,
+    status: String,
+    map_gpt53_codex_to_spark: bool,
+    auth_refresh_enabled: bool,
+    route_weight_tier: Option<String>,
+    proxy_mode: String,
+    proxy_config_id: Option<String>,
+    request_max_concurrency: Option<i64>,
+    request_min_start_interval_ms: Option<i64>,
+    last_refresh_at_ms: Option<i64>,
+    last_error: Option<String>,
+    access_token: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct KiroAdminAccountListRow {
+    account_name: String,
+    auth_method: String,
+    profile_arn: Option<String>,
+    user_id: Option<String>,
+    status: String,
+    provider: Option<String>,
+    email: Option<String>,
+    expires_at: Option<String>,
+    auth_profile_arn: Option<String>,
+    has_refresh_token: bool,
+    disabled_json: bool,
+    disabled_reason: Option<String>,
+    source: Option<String>,
+    source_db_path: Option<String>,
+    last_imported_at: Option<i64>,
+    subscription_title: Option<String>,
+    region: Option<String>,
+    auth_region: Option<String>,
+    api_region: Option<String>,
+    machine_id: Option<String>,
+    max_concurrency: Option<i64>,
+    auth_max_concurrency: Option<i64>,
+    min_start_interval_ms: Option<i64>,
+    auth_min_start_interval_ms: Option<i64>,
+    minimum_remaining_credits_before_block: Option<f64>,
+    proxy_mode: Option<String>,
+    proxy_config_id: Option<String>,
+    auth_proxy_config_id: Option<String>,
+    proxy_url: Option<String>,
+    last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -363,6 +424,7 @@ impl PostgresControlRepository {
         llm_access_migrations::run_postgres_migrations(&client.pool).await?;
         Ok(Self {
             client,
+            codex_status_cache: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -472,6 +534,35 @@ impl PostgresControlRepository {
             anyhow::bail!("sqlx postgres control pool is closed");
         }
         Ok(())
+    }
+
+    async fn cached_codex_rate_limit_status(&self) -> Option<CodexRateLimitStatus> {
+        let guard = self.codex_status_cache.read().await;
+        let cached = guard.as_ref()?;
+        if cached.loaded_at.elapsed() > CODEX_STATUS_CACHE_TTL {
+            return None;
+        }
+        Some(cached.snapshot.clone())
+    }
+
+    async fn store_cached_codex_rate_limit_status(&self, snapshot: Option<CodexRateLimitStatus>) {
+        let mut guard = self.codex_status_cache.write().await;
+        *guard = snapshot.map(|snapshot| CachedCodexRateLimitStatus {
+            snapshot,
+            loaded_at: Instant::now(),
+        });
+    }
+
+    async fn load_codex_rate_limit_status_cached(
+        &self,
+    ) -> anyhow::Result<Option<CodexRateLimitStatus>> {
+        if let Some(snapshot) = self.cached_codex_rate_limit_status().await {
+            return Ok(Some(snapshot));
+        }
+        let snapshot = self.load_codex_rate_limit_status_row().await?;
+        self.store_cached_codex_rate_limit_status(snapshot.clone())
+            .await;
+        Ok(snapshot)
     }
 
     async fn apply_usage_rollups_batch(&self, events: &[UsageEvent]) -> anyhow::Result<()> {
@@ -660,6 +751,11 @@ impl PostgresControlRepository {
         provider_type: Option<&str>,
         page: AdminPageRequest,
     ) -> anyhow::Result<AdminKeysPage> {
+        if provider_type == Some(core_store::PROVIDER_KIRO) {
+            return self
+                .list_kiro_key_bundles_page_with_candidate_summaries(page)
+                .await;
+        }
         self.ensure_connection_alive()?;
         let provider = provider_type.map(str::to_string);
         let total = self
@@ -714,6 +810,217 @@ impl PostgresControlRepository {
             .map(|bundle| bundle.map(|bundle| admin_key_from_bundle(&bundle)))
             .collect::<anyhow::Result<Vec<_>>>()?;
         let summary = self.admin_keys_summary(provider_type).await?;
+        Ok(AdminKeysPage {
+            has_more: page.has_more(keys.len(), total),
+            keys,
+            summary,
+            total,
+            limit,
+            offset,
+        })
+    }
+
+    async fn list_kiro_key_bundles_page_with_candidate_summaries(
+        &self,
+        page: AdminPageRequest,
+    ) -> anyhow::Result<AdminKeysPage> {
+        self.ensure_connection_alive()?;
+        let summary = self
+            .admin_keys_summary(Some(core_store::PROVIDER_KIRO))
+            .await?;
+        let total = summary.total;
+        let limit = page.limit.max(1);
+        let offset = page.offset;
+        let provider = core_store::PROVIDER_KIRO.to_string();
+        let rows = self
+            .client
+            .query(
+                "WITH page_keys AS (
+                    SELECT
+                        k.key_id, k.name, k.secret, k.key_hash, k.status, k.provider_type,
+                        k.protocol_family, k.public_visible, k.quota_billable_limit,
+                        k.created_at_ms, k.updated_at_ms,
+                        r.route_strategy, r.fixed_account_name, r.auto_account_names_json,
+                        r.account_group_id, r.model_name_map_json,
+                        r.request_max_concurrency, r.request_min_start_interval_ms,
+                        r.kiro_request_validation_enabled, r.kiro_cache_estimation_enabled,
+                        r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
+                        r.kiro_cache_policy_override_json,
+                        r.kiro_billable_model_multipliers_override_json,
+                        COALESCE(u.input_uncached_tokens, 0) AS input_uncached_tokens,
+                        COALESCE(u.input_cached_tokens, 0) AS input_cached_tokens,
+                        COALESCE(u.output_tokens, 0) AS output_tokens,
+                        COALESCE(u.billable_tokens, 0) AS billable_tokens,
+                        COALESCE(u.credit_total, '0') AS credit_total,
+                        COALESCE(u.credit_missing_events, 0) AS credit_missing_events,
+                        u.last_used_at_ms,
+                        COALESCE(u.updated_at_ms, k.updated_at_ms) AS rollup_updated_at_ms,
+                        g.account_names_json AS group_account_names_json,
+                        COALESCE(NULLIF(r.route_strategy, ''), 'auto') AS route_strategy_norm
+                    FROM llm_keys k
+                    LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
+                    LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
+                    LEFT JOIN llm_account_groups g
+                        ON g.group_id = r.account_group_id
+                       AND g.provider_type = $1
+                    WHERE k.provider_type = $1
+                    ORDER BY k.created_at_ms DESC, k.key_id DESC
+                    LIMIT $2 OFFSET $3
+                 ),
+                 all_accounts AS (
+                    SELECT account_name
+                    FROM llm_kiro_accounts
+                 ),
+                 group_candidates AS (
+                    SELECT
+                        page_keys.key_id,
+                        candidate.account_name AS account_name
+                    FROM page_keys
+                    CROSS JOIN LATERAL jsonb_array_elements_text(
+                        COALESCE(page_keys.group_account_names_json, '[]'::jsonb)
+                    ) AS candidate(account_name)
+                    WHERE page_keys.route_strategy_norm IN ('auto', 'fixed')
+                      AND page_keys.group_account_names_json IS NOT NULL
+                 ),
+                 fixed_candidates AS (
+                    SELECT
+                        page_keys.key_id,
+                        page_keys.fixed_account_name AS account_name
+                    FROM page_keys
+                    WHERE page_keys.route_strategy_norm = 'fixed'
+                      AND page_keys.group_account_names_json IS NULL
+                 ),
+                 auto_named_candidates AS (
+                    SELECT
+                        page_keys.key_id,
+                        candidate.account_name AS account_name
+                    FROM page_keys
+                    CROSS JOIN LATERAL jsonb_array_elements_text(
+                        COALESCE(page_keys.auto_account_names_json, '[]'::jsonb)
+                    ) AS candidate(account_name)
+                    WHERE page_keys.route_strategy_norm = 'auto'
+                      AND page_keys.group_account_names_json IS NULL
+                      AND COALESCE(
+                            jsonb_typeof(page_keys.auto_account_names_json) = 'array'
+                            AND jsonb_array_length(page_keys.auto_account_names_json) > 0,
+                            FALSE
+                        )
+                 ),
+                 all_auto_candidates AS (
+                    SELECT
+                        page_keys.key_id,
+                        all_accounts.account_name
+                    FROM page_keys
+                    CROSS JOIN all_accounts
+                    WHERE page_keys.route_strategy_norm = 'auto'
+                      AND page_keys.group_account_names_json IS NULL
+                      AND NOT COALESCE(
+                            jsonb_typeof(page_keys.auto_account_names_json) = 'array'
+                            AND jsonb_array_length(page_keys.auto_account_names_json) > 0,
+                            FALSE
+                        )
+                 ),
+                 key_candidate_names AS (
+                    SELECT key_id, account_name FROM group_candidates
+                    UNION ALL
+                    SELECT key_id, account_name FROM fixed_candidates
+                    UNION ALL
+                    SELECT key_id, account_name FROM auto_named_candidates
+                    UNION ALL
+                    SELECT key_id, account_name FROM all_auto_candidates
+                 ),
+                 valid_key_candidates AS (
+                    SELECT DISTINCT candidates.key_id, accounts.account_name
+                    FROM key_candidate_names candidates
+                    JOIN llm_kiro_accounts accounts
+                      ON accounts.account_name = candidates.account_name
+                    WHERE candidates.account_name IS NOT NULL
+                 ),
+                 key_candidate_summary AS (
+                    SELECT
+                        candidates.key_id,
+                        COUNT(*)::BIGINT AS candidate_count,
+                        COUNT(*) FILTER (
+                            WHERE status.balance_json IS NOT NULL
+                              AND status.balance_json <> 'null'::jsonb
+                        )::BIGINT AS loaded_balance_count,
+                        COUNT(*) FILTER (
+                            WHERE status.balance_json IS NULL
+                              OR status.balance_json = 'null'::jsonb
+                        )::BIGINT AS missing_balance_count,
+                        COALESCE(SUM(
+                            CASE
+                                WHEN status.balance_json IS NOT NULL
+                                 AND status.balance_json <> 'null'::jsonb
+                                THEN GREATEST(
+                                    COALESCE(
+                                        (status.balance_json ->> 'usage_limit')::double precision,
+                                        0.0
+                                    ),
+                                    0.0
+                                )
+                                ELSE 0.0
+                            END
+                        ), 0.0) AS total_limit,
+                        COALESCE(SUM(
+                            CASE
+                                WHEN status.balance_json IS NOT NULL
+                                 AND status.balance_json <> 'null'::jsonb
+                                THEN GREATEST(
+                                    COALESCE(
+                                        (status.balance_json ->> 'remaining')::double precision,
+                                        0.0
+                                    ),
+                                    0.0
+                                )
+                                ELSE 0.0
+                            END
+                        ), 0.0) AS total_remaining
+                    FROM valid_key_candidates candidates
+                    LEFT JOIN llm_kiro_status_cache status
+                      ON status.account_name = candidates.account_name
+                    GROUP BY candidates.key_id
+                 )
+                 SELECT
+                    page_keys.key_id, page_keys.name, page_keys.secret, page_keys.key_hash,
+                    page_keys.status, page_keys.provider_type, page_keys.protocol_family,
+                    page_keys.public_visible, page_keys.quota_billable_limit,
+                    page_keys.created_at_ms, page_keys.updated_at_ms,
+                    page_keys.route_strategy, page_keys.fixed_account_name,
+                    page_keys.auto_account_names_json::text,
+                    page_keys.account_group_id, page_keys.model_name_map_json::text,
+                    page_keys.request_max_concurrency, page_keys.request_min_start_interval_ms,
+                    page_keys.kiro_request_validation_enabled,
+                    page_keys.kiro_cache_estimation_enabled,
+                    page_keys.kiro_zero_cache_debug_enabled,
+                    page_keys.kiro_full_request_logging_enabled,
+                    page_keys.kiro_cache_policy_override_json::text,
+                    page_keys.kiro_billable_model_multipliers_override_json::text,
+                    page_keys.input_uncached_tokens,
+                    page_keys.input_cached_tokens,
+                    page_keys.output_tokens,
+                    page_keys.billable_tokens,
+                    page_keys.credit_total,
+                    page_keys.credit_missing_events,
+                    page_keys.last_used_at_ms,
+                    page_keys.rollup_updated_at_ms,
+                    COALESCE(summary.candidate_count, 0),
+                    COALESCE(summary.loaded_balance_count, 0),
+                    COALESCE(summary.missing_balance_count, 0),
+                    COALESCE(summary.total_limit, 0.0),
+                    COALESCE(summary.total_remaining, 0.0)
+                 FROM page_keys
+                 LEFT JOIN key_candidate_summary summary
+                   ON summary.key_id = page_keys.key_id
+                 ORDER BY page_keys.created_at_ms DESC, page_keys.key_id DESC",
+                &[&provider, &(limit as i64), &(offset as i64)],
+            )
+            .await
+            .context("list postgres kiro key bundles page with candidate summaries")?;
+        let keys = rows
+            .into_iter()
+            .map(decode_kiro_admin_key_row)
+            .collect::<anyhow::Result<Vec<_>>>()?;
         Ok(AdminKeysPage {
             has_more: page.has_more(keys.len(), total),
             keys,
@@ -924,6 +1231,51 @@ impl PostgresControlRepository {
         rows.into_iter()
             .map(decode_admin_account_group_row)
             .collect::<anyhow::Result<Vec<_>>>()
+    }
+
+    async fn list_admin_account_groups_page_rows(
+        &self,
+        provider_type: &str,
+        page: AdminPageRequest,
+    ) -> anyhow::Result<core_store::AdminAccountGroupsPage> {
+        self.ensure_connection_alive()?;
+        let total_row = self
+            .client
+            .query_one(
+                "SELECT COUNT(*)::bigint
+                 FROM llm_account_groups
+                 WHERE provider_type = $1",
+                &[&provider_type],
+            )
+            .await
+            .context("count admin account groups")?;
+        let total_i64 = total_row.get::<_, i64>(0);
+        let total = usize::try_from(total_i64)
+            .with_context(|| format!("admin account groups total out of range: {total_i64}"))?;
+        let rows = self
+            .client
+            .query(
+                "SELECT group_id, provider_type, name, account_names_json::text,
+                    created_at_ms, updated_at_ms
+                 FROM llm_account_groups
+                 WHERE provider_type = $1
+                 ORDER BY created_at_ms DESC, group_id DESC
+                 LIMIT $2 OFFSET $3",
+                &[&provider_type, &(page.limit.max(1) as i64), &(page.offset as i64)],
+            )
+            .await
+            .context("list admin account groups page")?;
+        let groups = rows
+            .into_iter()
+            .map(decode_admin_account_group_row)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(core_store::AdminAccountGroupsPage {
+            has_more: page.has_more(groups.len(), total),
+            groups,
+            total,
+            limit: page.limit,
+            offset: page.offset,
+        })
     }
 
     async fn get_admin_account_group_row(
@@ -1182,21 +1534,63 @@ impl PostgresControlRepository {
         Ok(count.max(0) as usize)
     }
 
-    async fn list_codex_accounts_rows(&self) -> anyhow::Result<Vec<CodexAccountRecord>> {
+    async fn list_codex_admin_account_rows(&self) -> anyhow::Result<Vec<CodexAdminAccountListRow>> {
         self.ensure_connection_alive()?;
         let rows = self
             .client
             .query(
                 "SELECT
-                    account_name, account_id, email, status, auth_json::text, settings_json::text,
-                    last_refresh_at_ms, last_error, created_at_ms, updated_at_ms
+                    account_name,
+                    account_id,
+                    status,
+                    COALESCE(
+                        CASE
+                            WHEN jsonb_typeof(settings_json -> 'map_gpt53_codex_to_spark')
+                                = 'boolean'
+                            THEN (settings_json ->> 'map_gpt53_codex_to_spark')::boolean
+                        END,
+                        false
+                    ),
+                    COALESCE(
+                        CASE
+                            WHEN jsonb_typeof(settings_json -> 'auth_refresh_enabled')
+                                = 'boolean'
+                            THEN (settings_json ->> 'auth_refresh_enabled')::boolean
+                        END,
+                        true
+                    ),
+                    NULLIF(BTRIM(settings_json ->> 'route_weight_tier'), ''),
+                    COALESCE(NULLIF(BTRIM(settings_json ->> 'proxy_mode'), ''), 'inherit'),
+                    NULLIF(BTRIM(settings_json ->> 'proxy_config_id'), ''),
+                    CASE
+                        WHEN jsonb_typeof(settings_json -> 'request_max_concurrency') = 'number'
+                        THEN (settings_json ->> 'request_max_concurrency')::bigint
+                        ELSE NULL
+                    END,
+                    CASE
+                        WHEN jsonb_typeof(settings_json -> 'request_min_start_interval_ms')
+                            = 'number'
+                        THEN (settings_json ->> 'request_min_start_interval_ms')::bigint
+                        ELSE NULL
+                    END,
+                    last_refresh_at_ms,
+                    last_error,
+                    COALESCE(
+                        auth_json #>> '{tokens,access_token}',
+                        auth_json #>> '{tokens,accessToken}',
+                        auth_json ->> 'access_token',
+                        auth_json ->> 'accessToken'
+                    )
                  FROM llm_codex_accounts
                  ORDER BY created_at_ms DESC, account_name DESC",
                 &[],
             )
             .await
-            .context("list codex accounts")?;
-        Ok(rows.into_iter().map(decode_codex_account_row).collect())
+            .context("list postgres codex admin account rows")?;
+        Ok(rows
+            .into_iter()
+            .map(decode_codex_admin_account_list_row)
+            .collect())
     }
 
     async fn admin_codex_accounts_summary(
@@ -1224,32 +1618,76 @@ impl PostgresControlRepository {
         })
     }
 
-    async fn list_codex_accounts_rows_page(
+    async fn list_codex_admin_account_rows_page(
         &self,
         page: AdminPageRequest,
-    ) -> anyhow::Result<(Vec<CodexAccountRecord>, usize)> {
+    ) -> anyhow::Result<(Vec<CodexAdminAccountListRow>, usize)> {
         self.ensure_connection_alive()?;
         let total = self
             .client
             .query_one("SELECT COUNT(*) FROM llm_codex_accounts", &[])
             .await
-            .context("count postgres codex accounts")?
+            .context("count postgres codex admin account rows")?
             .get::<_, i64>(0)
             .max(0) as usize;
         let rows = self
             .client
             .query(
                 "SELECT
-                    account_name, account_id, email, status, auth_json::text, settings_json::text,
-                    last_refresh_at_ms, last_error, created_at_ms, updated_at_ms
+                    account_name,
+                    account_id,
+                    status,
+                    COALESCE(
+                        CASE
+                            WHEN jsonb_typeof(settings_json -> 'map_gpt53_codex_to_spark')
+                                = 'boolean'
+                            THEN (settings_json ->> 'map_gpt53_codex_to_spark')::boolean
+                        END,
+                        false
+                    ),
+                    COALESCE(
+                        CASE
+                            WHEN jsonb_typeof(settings_json -> 'auth_refresh_enabled')
+                                = 'boolean'
+                            THEN (settings_json ->> 'auth_refresh_enabled')::boolean
+                        END,
+                        true
+                    ),
+                    NULLIF(BTRIM(settings_json ->> 'route_weight_tier'), ''),
+                    COALESCE(NULLIF(BTRIM(settings_json ->> 'proxy_mode'), ''), 'inherit'),
+                    NULLIF(BTRIM(settings_json ->> 'proxy_config_id'), ''),
+                    CASE
+                        WHEN jsonb_typeof(settings_json -> 'request_max_concurrency') = 'number'
+                        THEN (settings_json ->> 'request_max_concurrency')::bigint
+                        ELSE NULL
+                    END,
+                    CASE
+                        WHEN jsonb_typeof(settings_json -> 'request_min_start_interval_ms')
+                            = 'number'
+                        THEN (settings_json ->> 'request_min_start_interval_ms')::bigint
+                        ELSE NULL
+                    END,
+                    last_refresh_at_ms,
+                    last_error,
+                    COALESCE(
+                        auth_json #>> '{tokens,access_token}',
+                        auth_json #>> '{tokens,accessToken}',
+                        auth_json ->> 'access_token',
+                        auth_json ->> 'accessToken'
+                    )
                  FROM llm_codex_accounts
                  ORDER BY created_at_ms DESC, account_name DESC
                  LIMIT $1 OFFSET $2",
                 &[&(page.limit.max(1) as i64), &(page.offset as i64)],
             )
             .await
-            .context("list postgres codex accounts page")?;
-        Ok((rows.into_iter().map(decode_codex_account_row).collect(), total))
+            .context("list postgres codex admin account rows page")?;
+        Ok((
+            rows.into_iter()
+                .map(decode_codex_admin_account_list_row)
+                .collect(),
+            total,
+        ))
     }
 
     async fn get_codex_account_row(
@@ -1326,6 +1764,181 @@ impl PostgresControlRepository {
         Ok(rows.into_iter().map(decode_kiro_account_row).collect())
     }
 
+    async fn list_kiro_admin_account_rows(&self) -> anyhow::Result<Vec<KiroAdminAccountListRow>> {
+        self.ensure_connection_alive()?;
+        let rows = self
+            .client
+            .query(
+                "SELECT
+                    account_name,
+                    auth_method,
+                    profile_arn,
+                    user_id,
+                    status,
+                    NULLIF(BTRIM(auth_json ->> 'provider'), ''),
+                    NULLIF(BTRIM(auth_json ->> 'email'), ''),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'expiresAt',
+                                auth_json ->> 'expires_at'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'profileArn',
+                                auth_json ->> 'profile_arn'
+                            )
+                        ),
+                        ''
+                    ),
+                    COALESCE(
+                        NULLIF(BTRIM(auth_json ->> 'refreshToken'), ''),
+                        NULLIF(BTRIM(auth_json ->> 'refresh_token'), '')
+                    ) IS NOT NULL,
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'disabled') = 'boolean'
+                        THEN (auth_json ->> 'disabled')::boolean
+                        ELSE false
+                    END,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'disabledReason',
+                                auth_json ->> 'disabled_reason'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(BTRIM(auth_json ->> 'source'), ''),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'sourceDbPath',
+                                auth_json ->> 'source_db_path'
+                            )
+                        ),
+                        ''
+                    ),
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'lastImportedAt') = 'number'
+                        THEN (auth_json ->> 'lastImportedAt')::bigint
+                        WHEN jsonb_typeof(auth_json -> 'last_imported_at') = 'number'
+                        THEN (auth_json ->> 'last_imported_at')::bigint
+                        ELSE NULL
+                    END,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'subscriptionTitle',
+                                auth_json ->> 'subscription_title'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(BTRIM(auth_json ->> 'region'), ''),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'authRegion',
+                                auth_json ->> 'auth_region'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'apiRegion',
+                                auth_json ->> 'api_region'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'machineId',
+                                auth_json ->> 'machine_id'
+                            )
+                        ),
+                        ''
+                    ),
+                    max_concurrency,
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'kiroChannelMaxConcurrency') = 'number'
+                        THEN (auth_json ->> 'kiroChannelMaxConcurrency')::bigint
+                        WHEN jsonb_typeof(auth_json -> 'kiro_channel_max_concurrency')
+                            = 'number'
+                        THEN (auth_json ->> 'kiro_channel_max_concurrency')::bigint
+                        ELSE NULL
+                    END,
+                    min_start_interval_ms,
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'kiroChannelMinStartIntervalMs')
+                            = 'number'
+                        THEN (auth_json ->> 'kiroChannelMinStartIntervalMs')::bigint
+                        WHEN jsonb_typeof(auth_json -> 'kiro_channel_min_start_interval_ms')
+                            = 'number'
+                        THEN (auth_json ->> 'kiro_channel_min_start_interval_ms')::bigint
+                        ELSE NULL
+                    END,
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'minimumRemainingCreditsBeforeBlock')
+                            = 'number'
+                        THEN (auth_json ->> 'minimumRemainingCreditsBeforeBlock')::double precision
+                        WHEN jsonb_typeof(
+                            auth_json -> 'minimum_remaining_credits_before_block'
+                        ) = 'number'
+                        THEN (
+                            auth_json ->> 'minimum_remaining_credits_before_block'
+                        )::double precision
+                        ELSE NULL
+                    END,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'proxyMode',
+                                auth_json ->> 'proxy_mode'
+                            )
+                        ),
+                        ''
+                    ),
+                    proxy_config_id,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'proxyConfigId',
+                                auth_json ->> 'proxy_config_id'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'proxyUrl',
+                                auth_json ->> 'proxy_url'
+                            )
+                        ),
+                        ''
+                    ),
+                    last_error
+                 FROM llm_kiro_accounts
+                 ORDER BY created_at_ms DESC, account_name DESC",
+                &[],
+            )
+            .await
+            .context("list postgres kiro admin account rows")?;
+        Ok(rows
+            .into_iter()
+            .map(decode_kiro_admin_account_list_row)
+            .collect())
+    }
+
     async fn admin_kiro_accounts_summary(
         &self,
     ) -> anyhow::Result<core_store::AdminAccountsSummary> {
@@ -1365,33 +1978,379 @@ impl PostgresControlRepository {
         })
     }
 
-    async fn list_kiro_accounts_rows_page(
+    async fn list_kiro_admin_account_rows_page_filtered(
         &self,
         page: AdminPageRequest,
-    ) -> anyhow::Result<(Vec<KiroAccountRecord>, usize)> {
+        prefix: Option<&str>,
+    ) -> anyhow::Result<(Vec<KiroAdminAccountListRow>, usize)> {
         self.ensure_connection_alive()?;
-        let total = self
-            .client
-            .query_one("SELECT COUNT(*) FROM llm_kiro_accounts", &[])
-            .await
-            .context("count postgres kiro accounts")?
-            .get::<_, i64>(0)
-            .max(0) as usize;
-        let rows = self
-            .client
-            .query(
-                "SELECT
-                    account_name, auth_method, account_id, profile_arn, user_id, status,
-                    auth_json::text, max_concurrency, min_start_interval_ms, proxy_config_id,
-                    last_refresh_at_ms, last_error, created_at_ms, updated_at_ms
+        let normalized_prefix = prefix
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_lowercase);
+        let total = if let Some(prefix) = normalized_prefix.as_deref() {
+            self.client
+                .query_one(
+                    "SELECT COUNT(*)
+                     FROM llm_kiro_accounts
+                     WHERE lower(account_name) LIKE $1 || '%'",
+                    &[&prefix],
+                )
+                .await
+                .context("count filtered postgres kiro admin account rows")?
+                .get::<_, i64>(0)
+                .max(0) as usize
+        } else {
+            self.client
+                .query_one("SELECT COUNT(*) FROM llm_kiro_accounts", &[])
+                .await
+                .context("count postgres kiro admin account rows")?
+                .get::<_, i64>(0)
+                .max(0) as usize
+        };
+        let sql = if normalized_prefix.is_some() {
+            "SELECT
+                    account_name,
+                    auth_method,
+                    profile_arn,
+                    user_id,
+                    status,
+                    NULLIF(BTRIM(auth_json ->> 'provider'), ''),
+                    NULLIF(BTRIM(auth_json ->> 'email'), ''),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'expiresAt',
+                                auth_json ->> 'expires_at'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'profileArn',
+                                auth_json ->> 'profile_arn'
+                            )
+                        ),
+                        ''
+                    ),
+                    COALESCE(
+                        NULLIF(BTRIM(auth_json ->> 'refreshToken'), ''),
+                        NULLIF(BTRIM(auth_json ->> 'refresh_token'), '')
+                    ) IS NOT NULL,
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'disabled') = 'boolean'
+                        THEN (auth_json ->> 'disabled')::boolean
+                        ELSE false
+                    END,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'disabledReason',
+                                auth_json ->> 'disabled_reason'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(BTRIM(auth_json ->> 'source'), ''),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'sourceDbPath',
+                                auth_json ->> 'source_db_path'
+                            )
+                        ),
+                        ''
+                    ),
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'lastImportedAt') = 'number'
+                        THEN (auth_json ->> 'lastImportedAt')::bigint
+                        WHEN jsonb_typeof(auth_json -> 'last_imported_at') = 'number'
+                        THEN (auth_json ->> 'last_imported_at')::bigint
+                        ELSE NULL
+                    END,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'subscriptionTitle',
+                                auth_json ->> 'subscription_title'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(BTRIM(auth_json ->> 'region'), ''),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'authRegion',
+                                auth_json ->> 'auth_region'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'apiRegion',
+                                auth_json ->> 'api_region'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'machineId',
+                                auth_json ->> 'machine_id'
+                            )
+                        ),
+                        ''
+                    ),
+                    max_concurrency,
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'kiroChannelMaxConcurrency') = 'number'
+                        THEN (auth_json ->> 'kiroChannelMaxConcurrency')::bigint
+                        WHEN jsonb_typeof(auth_json -> 'kiro_channel_max_concurrency')
+                            = 'number'
+                        THEN (auth_json ->> 'kiro_channel_max_concurrency')::bigint
+                        ELSE NULL
+                    END,
+                    min_start_interval_ms,
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'kiroChannelMinStartIntervalMs')
+                            = 'number'
+                        THEN (auth_json ->> 'kiroChannelMinStartIntervalMs')::bigint
+                        WHEN jsonb_typeof(auth_json -> 'kiro_channel_min_start_interval_ms')
+                            = 'number'
+                        THEN (auth_json ->> 'kiro_channel_min_start_interval_ms')::bigint
+                        ELSE NULL
+                    END,
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'minimumRemainingCreditsBeforeBlock')
+                            = 'number'
+                        THEN (auth_json ->> 'minimumRemainingCreditsBeforeBlock')::double precision
+                        WHEN jsonb_typeof(
+                            auth_json -> 'minimum_remaining_credits_before_block'
+                        ) = 'number'
+                        THEN (
+                            auth_json ->> 'minimum_remaining_credits_before_block'
+                        )::double precision
+                        ELSE NULL
+                    END,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'proxyMode',
+                                auth_json ->> 'proxy_mode'
+                            )
+                        ),
+                        ''
+                    ),
+                    proxy_config_id,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'proxyConfigId',
+                                auth_json ->> 'proxy_config_id'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'proxyUrl',
+                                auth_json ->> 'proxy_url'
+                            )
+                        ),
+                        ''
+                    ),
+                    last_error
+                 FROM llm_kiro_accounts
+                 WHERE lower(account_name) LIKE $1 || '%'
+                 ORDER BY created_at_ms DESC, account_name DESC
+                 LIMIT $2 OFFSET $3"
+        } else {
+            "SELECT
+                    account_name,
+                    auth_method,
+                    profile_arn,
+                    user_id,
+                    status,
+                    NULLIF(BTRIM(auth_json ->> 'provider'), ''),
+                    NULLIF(BTRIM(auth_json ->> 'email'), ''),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'expiresAt',
+                                auth_json ->> 'expires_at'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'profileArn',
+                                auth_json ->> 'profile_arn'
+                            )
+                        ),
+                        ''
+                    ),
+                    COALESCE(
+                        NULLIF(BTRIM(auth_json ->> 'refreshToken'), ''),
+                        NULLIF(BTRIM(auth_json ->> 'refresh_token'), '')
+                    ) IS NOT NULL,
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'disabled') = 'boolean'
+                        THEN (auth_json ->> 'disabled')::boolean
+                        ELSE false
+                    END,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'disabledReason',
+                                auth_json ->> 'disabled_reason'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(BTRIM(auth_json ->> 'source'), ''),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'sourceDbPath',
+                                auth_json ->> 'source_db_path'
+                            )
+                        ),
+                        ''
+                    ),
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'lastImportedAt') = 'number'
+                        THEN (auth_json ->> 'lastImportedAt')::bigint
+                        WHEN jsonb_typeof(auth_json -> 'last_imported_at') = 'number'
+                        THEN (auth_json ->> 'last_imported_at')::bigint
+                        ELSE NULL
+                    END,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'subscriptionTitle',
+                                auth_json ->> 'subscription_title'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(BTRIM(auth_json ->> 'region'), ''),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'authRegion',
+                                auth_json ->> 'auth_region'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'apiRegion',
+                                auth_json ->> 'api_region'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'machineId',
+                                auth_json ->> 'machine_id'
+                            )
+                        ),
+                        ''
+                    ),
+                    max_concurrency,
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'kiroChannelMaxConcurrency') = 'number'
+                        THEN (auth_json ->> 'kiroChannelMaxConcurrency')::bigint
+                        WHEN jsonb_typeof(auth_json -> 'kiro_channel_max_concurrency')
+                            = 'number'
+                        THEN (auth_json ->> 'kiro_channel_max_concurrency')::bigint
+                        ELSE NULL
+                    END,
+                    min_start_interval_ms,
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'kiroChannelMinStartIntervalMs')
+                            = 'number'
+                        THEN (auth_json ->> 'kiroChannelMinStartIntervalMs')::bigint
+                        WHEN jsonb_typeof(auth_json -> 'kiro_channel_min_start_interval_ms')
+                            = 'number'
+                        THEN (auth_json ->> 'kiro_channel_min_start_interval_ms')::bigint
+                        ELSE NULL
+                    END,
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'minimumRemainingCreditsBeforeBlock')
+                            = 'number'
+                        THEN (auth_json ->> 'minimumRemainingCreditsBeforeBlock')::double precision
+                        WHEN jsonb_typeof(
+                            auth_json -> 'minimum_remaining_credits_before_block'
+                        ) = 'number'
+                        THEN (
+                            auth_json ->> 'minimum_remaining_credits_before_block'
+                        )::double precision
+                        ELSE NULL
+                    END,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'proxyMode',
+                                auth_json ->> 'proxy_mode'
+                            )
+                        ),
+                        ''
+                    ),
+                    proxy_config_id,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'proxyConfigId',
+                                auth_json ->> 'proxy_config_id'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'proxyUrl',
+                                auth_json ->> 'proxy_url'
+                            )
+                        ),
+                        ''
+                    ),
+                    last_error
                  FROM llm_kiro_accounts
                  ORDER BY created_at_ms DESC, account_name DESC
-                 LIMIT $1 OFFSET $2",
-                &[&(page.limit.max(1) as i64), &(page.offset as i64)],
-            )
-            .await
-            .context("list postgres kiro accounts page")?;
-        Ok((rows.into_iter().map(decode_kiro_account_row).collect(), total))
+                 LIMIT $1 OFFSET $2"
+        };
+        let rows = if let Some(prefix) = normalized_prefix.as_deref() {
+            self.client
+                .query(sql, &[&prefix, &(page.limit.max(1) as i64), &(page.offset as i64)])
+                .await
+                .context("list filtered postgres kiro admin account rows page")?
+        } else {
+            self.client
+                .query(sql, &[&(page.limit.max(1) as i64), &(page.offset as i64)])
+                .await
+                .context("list postgres kiro admin account rows page")?
+        };
+        Ok((
+            rows.into_iter()
+                .map(decode_kiro_admin_account_list_row)
+                .collect(),
+            total,
+        ))
     }
 
     async fn get_kiro_account_row(
@@ -1670,6 +2629,57 @@ impl PostgresControlRepository {
         }
     }
 
+    fn admin_codex_account_from_list_row_with_context(
+        &self,
+        row: &CodexAdminAccountListRow,
+        context: &CodexAdminAccountViewContext,
+    ) -> AdminCodexAccount {
+        let settings = CodexAccountSettings {
+            map_gpt53_codex_to_spark: row.map_gpt53_codex_to_spark,
+            auth_refresh_enabled: row.auth_refresh_enabled,
+            route_weight_tier: row.route_weight_tier.clone(),
+            proxy_mode: row.proxy_mode.clone(),
+            proxy_config_id: row.proxy_config_id.clone(),
+            request_max_concurrency: row
+                .request_max_concurrency
+                .and_then(non_negative_i64_to_u64),
+            request_min_start_interval_ms: row
+                .request_min_start_interval_ms
+                .and_then(non_negative_i64_to_u64),
+        };
+        let (effective_proxy_source, effective_proxy_url, effective_proxy_config_name) =
+            self.resolve_codex_account_proxy_view_with_context(&settings, context);
+        AdminCodexAccount {
+            name: row.account_name.clone(),
+            status: row.status.clone(),
+            account_id: row.account_id.clone(),
+            plan_type: None,
+            route_weight_tier: settings
+                .route_weight_tier
+                .clone()
+                .unwrap_or_else(|| "auto".to_string()),
+            primary_remaining_percent: None,
+            secondary_remaining_percent: None,
+            map_gpt53_codex_to_spark: settings.map_gpt53_codex_to_spark,
+            auto_refresh_enabled: settings.auth_refresh_enabled,
+            request_max_concurrency: settings.request_max_concurrency,
+            request_min_start_interval_ms: settings.request_min_start_interval_ms,
+            proxy_mode: settings.proxy_mode,
+            proxy_config_id: settings.proxy_config_id,
+            effective_proxy_source,
+            effective_proxy_url,
+            effective_proxy_config_name,
+            last_refresh: row.last_refresh_at_ms,
+            access_token_expires_at: core_store::codex_access_token_expires_at_ms(
+                row.access_token.as_deref(),
+            ),
+            auth_refresh_error_message: row.last_error.clone(),
+            last_usage_checked_at: None,
+            last_usage_success_at: None,
+            usage_error_message: None,
+        }
+    }
+
     fn admin_codex_account_from_record_with_context(
         &self,
         record: &CodexAccountRecord,
@@ -1777,6 +2787,103 @@ impl PostgresControlRepository {
                     .effective_proxy_config_name
                     .clone(),
             ),
+        }
+    }
+
+    fn admin_kiro_account_from_list_row_with_context(
+        &self,
+        row: &KiroAdminAccountListRow,
+        context: &KiroAdminAccountViewContext,
+    ) -> AdminKiroAccount {
+        let (balance, cache) = context
+            .status_by_account
+            .get(&row.account_name)
+            .cloned()
+            .unwrap_or_else(|| (None, context.default_cache.clone()));
+        let proxy_mode = row.proxy_mode.clone().unwrap_or_else(|| {
+            if row
+                .proxy_config_id
+                .as_deref()
+                .or(row.auth_proxy_config_id.as_deref())
+                .is_some()
+            {
+                "fixed".to_string()
+            } else {
+                "inherit".to_string()
+            }
+        });
+        let proxy_config_id = row
+            .proxy_config_id
+            .clone()
+            .or_else(|| row.auth_proxy_config_id.clone());
+        let (effective_proxy_source, effective_proxy_url, effective_proxy_config_name) = self
+            .resolve_kiro_account_proxy_view_with_context(
+                &proxy_mode,
+                proxy_config_id.as_deref(),
+                context,
+            );
+        let disabled = row.disabled_json || row.status != core_store::KEY_STATUS_ACTIVE;
+        let disabled_reason = row
+            .disabled_reason
+            .clone()
+            .or_else(|| row.last_error.clone());
+        let balance = if disabled { None } else { balance };
+        let subscription_title = balance
+            .as_ref()
+            .and_then(|value| value.subscription_title.clone())
+            .or_else(|| row.subscription_title.clone());
+        AdminKiroAccount {
+            name: row.account_name.clone(),
+            auth_method: row.auth_method.clone(),
+            provider: row.provider.clone(),
+            upstream_user_id: balance
+                .as_ref()
+                .and_then(|value| value.user_id.clone())
+                .or_else(|| row.user_id.clone()),
+            email: row.email.clone(),
+            expires_at: row.expires_at.clone(),
+            profile_arn: row
+                .profile_arn
+                .clone()
+                .or_else(|| row.auth_profile_arn.clone()),
+            has_refresh_token: row.has_refresh_token,
+            disabled,
+            disabled_reason,
+            source: row.source.clone(),
+            source_db_path: row.source_db_path.clone(),
+            last_imported_at: row.last_imported_at,
+            subscription_title,
+            region: row.region.clone(),
+            auth_region: row.auth_region.clone(),
+            api_region: row.api_region.clone(),
+            machine_id: row.machine_id.clone(),
+            kiro_channel_max_concurrency: row
+                .max_concurrency
+                .and_then(non_negative_i64_to_u64)
+                .or_else(|| row.auth_max_concurrency.and_then(non_negative_i64_to_u64))
+                .unwrap_or(core_store::DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY)
+                .max(1),
+            kiro_channel_min_start_interval_ms: row
+                .min_start_interval_ms
+                .and_then(non_negative_i64_to_u64)
+                .or_else(|| {
+                    row.auth_min_start_interval_ms
+                        .and_then(non_negative_i64_to_u64)
+                })
+                .unwrap_or(core_store::DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS),
+            minimum_remaining_credits_before_block: row
+                .minimum_remaining_credits_before_block
+                .filter(|value| value.is_finite())
+                .unwrap_or(0.0)
+                .max(0.0),
+            proxy_mode,
+            proxy_config_id,
+            effective_proxy_source,
+            effective_proxy_url,
+            effective_proxy_config_name,
+            proxy_url: row.proxy_url.clone(),
+            balance,
+            cache,
         }
     }
 
@@ -2389,7 +3496,7 @@ fn decode_runtime_config_row(row: PgRow) -> anyhow::Result<RuntimeConfigRecord> 
     })
 }
 
-fn decode_key_bundle_row(row: PgRow) -> anyhow::Result<KeyBundle> {
+fn decode_key_bundle(row: &PgRow) -> anyhow::Result<KeyBundle> {
     let key_id: String = row.get(0);
     let credit_total_raw: String = row.get(28);
     let credit_total = credit_total_raw
@@ -2437,6 +3544,10 @@ fn decode_key_bundle_row(row: PgRow) -> anyhow::Result<KeyBundle> {
             updated_at_ms: row.get(31),
         },
     })
+}
+
+fn decode_key_bundle_row(row: PgRow) -> anyhow::Result<KeyBundle> {
+    decode_key_bundle(&row)
 }
 
 fn admin_key_from_bundle(bundle: &KeyBundle) -> AdminKey {
@@ -2497,7 +3608,28 @@ fn admin_key_from_bundle(bundle: &KeyBundle) -> AdminKey {
             .route
             .kiro_billable_model_multipliers_override_json
             .is_none(),
+        kiro_candidate_credit_summary: None,
     }
+}
+
+fn decode_kiro_candidate_credit_summary_row(
+    row: &PgRow,
+    offset: usize,
+) -> AdminKiroKeyCandidateCreditSummary {
+    AdminKiroKeyCandidateCreditSummary {
+        candidate_count: row.get::<_, i64>(offset).max(0) as usize,
+        loaded_balance_count: row.get::<_, i64>(offset + 1).max(0) as usize,
+        missing_balance_count: row.get::<_, i64>(offset + 2).max(0) as usize,
+        total_limit: row.get(offset + 3),
+        total_remaining: row.get(offset + 4),
+    }
+}
+
+fn decode_kiro_admin_key_row(row: PgRow) -> anyhow::Result<AdminKey> {
+    let bundle = decode_key_bundle(&row)?;
+    let mut key = admin_key_from_bundle(&bundle);
+    key.kiro_candidate_credit_summary = Some(decode_kiro_candidate_credit_summary_row(&row, 32));
+    Ok(key)
 }
 
 fn decode_admin_account_group_row(row: PgRow) -> anyhow::Result<AdminAccountGroup> {
@@ -2558,6 +3690,59 @@ fn decode_kiro_account_row(row: PgRow) -> KiroAccountRecord {
         last_error: row.get(11),
         created_at_ms: row.get(12),
         updated_at_ms: row.get(13),
+    }
+}
+
+fn decode_codex_admin_account_list_row(row: PgRow) -> CodexAdminAccountListRow {
+    CodexAdminAccountListRow {
+        account_name: row.get(0),
+        account_id: row.get(1),
+        status: row.get(2),
+        map_gpt53_codex_to_spark: row.get(3),
+        auth_refresh_enabled: row.get(4),
+        route_weight_tier: row.get(5),
+        proxy_mode: row.get(6),
+        proxy_config_id: row.get(7),
+        request_max_concurrency: row.get(8),
+        request_min_start_interval_ms: row.get(9),
+        last_refresh_at_ms: row.get(10),
+        last_error: row.get(11),
+        access_token: row.get(12),
+    }
+}
+
+fn decode_kiro_admin_account_list_row(row: PgRow) -> KiroAdminAccountListRow {
+    KiroAdminAccountListRow {
+        account_name: row.get(0),
+        auth_method: row.get(1),
+        profile_arn: row.get(2),
+        user_id: row.get(3),
+        status: row.get(4),
+        provider: row.get(5),
+        email: row.get(6),
+        expires_at: row.get(7),
+        auth_profile_arn: row.get(8),
+        has_refresh_token: row.get(9),
+        disabled_json: row.get(10),
+        disabled_reason: row.get(11),
+        source: row.get(12),
+        source_db_path: row.get(13),
+        last_imported_at: row.get(14),
+        subscription_title: row.get(15),
+        region: row.get(16),
+        auth_region: row.get(17),
+        api_region: row.get(18),
+        machine_id: row.get(19),
+        max_concurrency: row.get(20),
+        auth_max_concurrency: row.get(21),
+        min_start_interval_ms: row.get(22),
+        auth_min_start_interval_ms: row.get(23),
+        minimum_remaining_credits_before_block: row.get(24),
+        proxy_mode: row.get(25),
+        proxy_config_id: row.get(26),
+        auth_proxy_config_id: row.get(27),
+        proxy_url: row.get(28),
+        last_error: row.get(29),
     }
 }
 
@@ -3157,6 +4342,122 @@ impl AdminKeyStore for PostgresControlRepository {
         self.list_key_bundles_page(provider_type, page).await
     }
 
+    async fn list_admin_keys_filtered_page(
+        &self,
+        provider_type: Option<&str>,
+        query: &AdminKeyPageQuery,
+        page: AdminPageRequest,
+    ) -> anyhow::Result<AdminKeysPage> {
+        if provider_type == Some(core_store::PROVIDER_KIRO)
+            && query == &AdminKeyPageQuery::default()
+        {
+            return self
+                .list_kiro_key_bundles_page_with_candidate_summaries(page)
+                .await;
+        }
+        self.ensure_connection_alive()?;
+        let provider = provider_type.map(str::to_string);
+        let search = query
+            .search
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("%{}%", value.to_ascii_lowercase()));
+        let total = self
+            .client
+            .query_one(
+                "SELECT COUNT(*)
+                 FROM llm_keys k
+                 WHERE ($1::text IS NULL OR k.provider_type = $1)
+                   AND ($2::text IS NULL
+                        OR lower(k.key_id) LIKE $2
+                        OR lower(k.name) LIKE $2
+                        OR lower(k.provider_type) LIKE $2
+                        OR lower(k.status) LIKE $2)
+                   AND ($3::boolean = FALSE OR k.status <> 'disabled')",
+                &[&provider, &search, &query.active_only],
+            )
+            .await
+            .context("count postgres filtered key bundles page")?
+            .get::<_, i64>(0)
+            .max(0) as usize;
+        let order_by = match query.sort {
+            AdminKeySortMode::Newest => "k.created_at_ms DESC, k.key_id DESC",
+            AdminKeySortMode::QuotaAsc => {
+                "(k.quota_billable_limit - COALESCE(u.billable_tokens, 0)) ASC, k.created_at_ms \
+                 DESC, k.key_id DESC"
+            },
+            AdminKeySortMode::QuotaDesc => {
+                "(k.quota_billable_limit - COALESCE(u.billable_tokens, 0)) DESC, k.created_at_ms \
+                 DESC, k.key_id DESC"
+            },
+            AdminKeySortMode::UsageAsc => {
+                "COALESCE(u.credit_total, '0') ASC, k.created_at_ms DESC, k.key_id DESC"
+            },
+            AdminKeySortMode::UsageDesc => {
+                "COALESCE(u.credit_total, '0') DESC, k.created_at_ms DESC, k.key_id DESC"
+            },
+        };
+        let sql = format!(
+            "SELECT
+                k.key_id, k.name, k.secret, k.key_hash, k.status, k.provider_type,
+                k.protocol_family, k.public_visible, k.quota_billable_limit,
+                k.created_at_ms, k.updated_at_ms,
+                r.route_strategy, r.fixed_account_name, r.auto_account_names_json::text,
+                r.account_group_id, r.model_name_map_json::text,
+                r.request_max_concurrency, r.request_min_start_interval_ms,
+                r.kiro_request_validation_enabled, r.kiro_cache_estimation_enabled,
+                r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
+                r.kiro_cache_policy_override_json::text,
+                r.kiro_billable_model_multipliers_override_json::text,
+                COALESCE(u.input_uncached_tokens, 0),
+                COALESCE(u.input_cached_tokens, 0),
+                COALESCE(u.output_tokens, 0),
+                COALESCE(u.billable_tokens, 0),
+                COALESCE(u.credit_total, '0'),
+                COALESCE(u.credit_missing_events, 0),
+                u.last_used_at_ms,
+                COALESCE(u.updated_at_ms, k.updated_at_ms)
+             FROM llm_keys k
+             LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
+             LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
+             WHERE ($1::text IS NULL OR k.provider_type = $1)
+               AND ($2::text IS NULL
+                    OR lower(k.key_id) LIKE $2
+                    OR lower(k.name) LIKE $2
+                    OR lower(k.provider_type) LIKE $2
+                    OR lower(k.status) LIKE $2)
+               AND ($3::boolean = FALSE OR k.status <> 'disabled')
+             ORDER BY {order_by}
+             LIMIT $4 OFFSET $5"
+        );
+        let rows = self
+            .client
+            .query(sql.as_str(), &[
+                &provider,
+                &search,
+                &query.active_only,
+                &(page.limit.max(1) as i64),
+                &(page.offset as i64),
+            ])
+            .await
+            .context("list postgres filtered key bundles page")?;
+        let keys = rows
+            .into_iter()
+            .map(decode_key_bundle_row)
+            .map(|bundle| bundle.map(|bundle| admin_key_from_bundle(&bundle)))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let summary = self.admin_keys_summary(provider_type).await?;
+        Ok(AdminKeysPage {
+            has_more: page.has_more(keys.len(), total),
+            keys,
+            summary,
+            total,
+            limit: page.limit.max(1),
+            offset: page.offset,
+        })
+    }
+
     async fn find_admin_key_referencing_account_group(
         &self,
         provider_type: &str,
@@ -3310,6 +4611,57 @@ impl AdminAccountGroupStore for PostgresControlRepository {
         provider_type: &str,
     ) -> anyhow::Result<Vec<AdminAccountGroup>> {
         self.list_admin_account_groups_rows(provider_type).await
+    }
+
+    async fn list_admin_account_groups_page(
+        &self,
+        provider_type: &str,
+        page: AdminPageRequest,
+    ) -> anyhow::Result<core_store::AdminAccountGroupsPage> {
+        self.list_admin_account_groups_page_rows(provider_type, page)
+            .await
+    }
+
+    async fn list_admin_account_group_options(
+        &self,
+        provider_type: &str,
+    ) -> anyhow::Result<Vec<AdminAccountGroupOption>> {
+        self.ensure_connection_alive()?;
+        let rows = self
+            .client
+            .query(
+                "SELECT
+                    group_id,
+                    provider_type,
+                    name,
+                    CASE
+                        WHEN jsonb_typeof(account_names_json) = 'array'
+                        THEN jsonb_array_length(account_names_json)
+                        ELSE 0
+                    END,
+                    CASE
+                        WHEN jsonb_typeof(account_names_json) = 'array'
+                             AND jsonb_array_length(account_names_json) = 1
+                        THEN account_names_json ->> 0
+                        ELSE NULL
+                    END
+                 FROM llm_account_groups
+                 WHERE provider_type = $1
+                 ORDER BY lower(name), group_id",
+                &[&provider_type],
+            )
+            .await
+            .context("list postgres admin account group options")?;
+        Ok(rows
+            .into_iter()
+            .map(|row| AdminAccountGroupOption {
+                id: row.get(0),
+                provider_type: row.get(1),
+                name: row.get(2),
+                account_count: row.get::<_, i32>(3).max(0) as usize,
+                single_account_name: row.get(4),
+            })
+            .collect())
     }
 
     async fn create_admin_account_group(
@@ -3634,12 +4986,12 @@ impl AdminProxyStore for PostgresControlRepository {
 #[async_trait]
 impl AdminCodexAccountStore for PostgresControlRepository {
     async fn list_admin_codex_accounts(&self) -> anyhow::Result<Vec<AdminCodexAccount>> {
-        let records = self.list_codex_accounts_rows().await?;
+        let rows = self.list_codex_admin_account_rows().await?;
         let context = self.load_codex_admin_account_view_context().await?;
-        records
+        Ok(rows
             .iter()
-            .map(|record| self.admin_codex_account_from_record_with_context(record, &context))
-            .collect()
+            .map(|row| self.admin_codex_account_from_list_row_with_context(row, &context))
+            .collect())
     }
 
     async fn list_admin_codex_accounts_page(
@@ -3650,12 +5002,12 @@ impl AdminCodexAccountStore for PostgresControlRepository {
             limit: page.limit.max(1),
             offset: page.offset,
         };
-        let (records, total) = self.list_codex_accounts_rows_page(page).await?;
+        let (rows, total) = self.list_codex_admin_account_rows_page(page).await?;
         let context = self.load_codex_admin_account_view_context().await?;
-        let accounts = records
+        let accounts = rows
             .iter()
-            .map(|record| self.admin_codex_account_from_record_with_context(record, &context))
-            .collect::<anyhow::Result<Vec<_>>>()?;
+            .map(|row| self.admin_codex_account_from_list_row_with_context(row, &context))
+            .collect::<Vec<_>>();
         let summary = self.admin_codex_accounts_summary().await?;
         Ok(AdminCodexAccountsPage {
             has_more: page.has_more(accounts.len(), total),
@@ -3843,7 +5195,7 @@ impl AdminCodexAccountStore for PostgresControlRepository {
             &proxy_context,
         )?;
         let status_by_account = self
-            .load_codex_rate_limit_status_row()
+            .load_codex_rate_limit_status_cached()
             .await?
             .map(|status| {
                 status
@@ -4138,28 +5490,39 @@ impl AdminCodexAccountStore for PostgresControlRepository {
 #[async_trait]
 impl AdminKiroAccountStore for PostgresControlRepository {
     async fn list_admin_kiro_accounts(&self) -> anyhow::Result<Vec<AdminKiroAccount>> {
-        let records = self.list_kiro_accounts_rows().await?;
+        let rows = self.list_kiro_admin_account_rows().await?;
         let context = self.load_kiro_admin_account_view_context().await?;
-        records
+        Ok(rows
             .iter()
-            .map(|record| self.admin_kiro_account_from_record_with_context(record, &context))
-            .collect()
+            .map(|row| self.admin_kiro_account_from_list_row_with_context(row, &context))
+            .collect())
     }
 
     async fn list_admin_kiro_accounts_page(
         &self,
         page: AdminPageRequest,
     ) -> anyhow::Result<AdminKiroAccountsPage> {
+        self.list_admin_kiro_accounts_filtered_page(None, page)
+            .await
+    }
+
+    async fn list_admin_kiro_accounts_filtered_page(
+        &self,
+        prefix: Option<&str>,
+        page: AdminPageRequest,
+    ) -> anyhow::Result<AdminKiroAccountsPage> {
         let page = AdminPageRequest {
             limit: page.limit.max(1),
             offset: page.offset,
         };
-        let (records, total) = self.list_kiro_accounts_rows_page(page).await?;
+        let (rows, total) = self
+            .list_kiro_admin_account_rows_page_filtered(page, prefix)
+            .await?;
         let context = self.load_kiro_admin_account_view_context().await?;
-        let accounts = records
+        let accounts = rows
             .iter()
-            .map(|record| self.admin_kiro_account_from_record_with_context(record, &context))
-            .collect::<anyhow::Result<Vec<_>>>()?;
+            .map(|row| self.admin_kiro_account_from_list_row_with_context(row, &context))
+            .collect::<Vec<_>>();
         let summary = self.admin_kiro_accounts_summary().await?;
         Ok(AdminKiroAccountsPage {
             has_more: page.has_more(accounts.len(), total),
@@ -4517,7 +5880,7 @@ impl ProviderRouteStore for PostgresControlRepository {
             .map(|record| (record.account_name.clone(), record))
             .collect::<BTreeMap<_, _>>();
         let status_by_account = self
-            .load_codex_rate_limit_status_row()
+            .load_codex_rate_limit_status_cached()
             .await?
             .map(|status| {
                 status
@@ -4582,7 +5945,7 @@ impl ProviderRouteStore for PostgresControlRepository {
                 proxy,
             });
         }
-        let codex_status = self.load_codex_rate_limit_status_row().await?;
+        let codex_status = self.load_codex_rate_limit_status_cached().await?;
         sort_codex_routes_by_cached_quota(
             &mut routes,
             codex_status.as_ref(),
@@ -5622,7 +6985,7 @@ impl AdminReviewQueueStore for PostgresControlRepository {
 #[async_trait]
 impl PublicStatusStore for PostgresControlRepository {
     async fn codex_rate_limit_status(&self) -> anyhow::Result<CodexRateLimitStatus> {
-        if let Some(snapshot) = self.load_codex_rate_limit_status_row().await? {
+        if let Some(snapshot) = self.load_codex_rate_limit_status_cached().await? {
             return Ok(snapshot);
         }
         let refresh_interval_seconds = self
@@ -5653,6 +7016,8 @@ impl PublicStatusStore for PostgresControlRepository {
             )
             .await
             .context("upsert postgres codex rate-limit status snapshot")?;
+        self.store_cached_codex_rate_limit_status(Some(snapshot))
+            .await;
         Ok(())
     }
 }
@@ -5665,7 +7030,7 @@ mod tests {
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType, RouteStrategy},
         store::{
-            AdminConfigStore, AdminReviewQueueStore, ControlStore,
+            AdminConfigStore, AdminKeyStore, AdminReviewQueueStore, ControlStore,
             NewPublicAccountContributionRequest, PublicSubmissionStore, PublicUsageStore,
             UsageEventSink,
         },
@@ -5758,6 +7123,92 @@ mod tests {
             )
             .await
             .context("insert postgres test key config rows")?;
+        client.close().await;
+        Ok(())
+    }
+
+    async fn seed_test_kiro_key_page_fixture(database_url: &str) -> anyhow::Result<()> {
+        let client = SqlxClient::connect(database_url)
+            .await
+            .context("connect postgres test database")?;
+        let key_hash_new = format!("{:x}", Sha256::digest(b"kiro-secret-new"));
+        let key_hash_mid = format!("{:x}", Sha256::digest(b"kiro-secret-mid"));
+        let key_hash_old = format!("{:x}", Sha256::digest(b"kiro-secret-old"));
+        client
+            .batch_execute(&format!(
+                "INSERT INTO llm_keys (
+                        key_id, name, secret, key_hash, status, provider_type, protocol_family,
+                        public_visible, quota_billable_limit, created_at_ms, updated_at_ms
+                     ) VALUES
+                        ('kiro-key-new', 'kiro-new', 'kiro-secret-new', '{key_hash_new}', \
+                 'active', 'kiro', 'anthropic', TRUE, 1000, 300, 300),
+                        ('kiro-key-mid', 'kiro-mid', 'kiro-secret-mid', '{key_hash_mid}', \
+                 'active', 'kiro', 'anthropic', TRUE, 1000, 200, 200),
+                        ('kiro-key-old', 'kiro-old', 'kiro-secret-old', '{key_hash_old}', \
+                 'active', 'kiro', 'anthropic', TRUE, 1000, 100, 100);
+                     INSERT INTO llm_key_route_config (
+                        key_id, route_strategy, fixed_account_name, auto_account_names_json,
+                        account_group_id, model_name_map_json, request_max_concurrency,
+                        request_min_start_interval_ms, kiro_request_validation_enabled,
+                        kiro_cache_estimation_enabled, kiro_zero_cache_debug_enabled,
+                        kiro_full_request_logging_enabled, kiro_cache_policy_override_json,
+                        kiro_billable_model_multipliers_override_json
+                     ) VALUES
+                        ('kiro-key-new', 'auto', NULL, NULL, NULL, NULL, NULL, NULL, TRUE, TRUE, \
+                 FALSE, FALSE, NULL, NULL),
+                        ('kiro-key-mid', 'fixed', 'kiro-a', NULL, 'group-beta', NULL, NULL, NULL, \
+                 TRUE, TRUE, FALSE, FALSE, NULL, NULL),
+                        ('kiro-key-old', 'auto', NULL, '[\"kiro-a\", \"kiro-d\", \
+                 \"kiro-a\"]'::jsonb, NULL, NULL, NULL, NULL, TRUE, TRUE, FALSE, FALSE, NULL, \
+                 NULL);
+                     INSERT INTO llm_key_usage_rollups (
+                        key_id, input_uncached_tokens, input_cached_tokens, output_tokens,
+                        billable_tokens, credit_total, credit_missing_events, last_used_at_ms,
+                        updated_at_ms
+                     ) VALUES
+                        ('kiro-key-new', 0, 0, 0, 0, '0', 0, NULL, 300),
+                        ('kiro-key-mid', 0, 0, 0, 0, '0', 0, NULL, 200),
+                        ('kiro-key-old', 0, 0, 0, 0, '0', 0, NULL, 100);
+                     INSERT INTO llm_account_groups (
+                        group_id, provider_type, name, account_names_json, created_at_ms, \
+                 updated_at_ms
+                     ) VALUES
+                        ('group-beta', 'kiro', 'group-beta', '[\"kiro-b\", \"kiro-c\", \
+                 \"kiro-b\"]'::jsonb, 10, 10);
+                     INSERT INTO llm_kiro_accounts (
+                        account_name, auth_method, account_id, profile_arn, user_id,
+                        status, auth_json, max_concurrency, min_start_interval_ms,
+                        proxy_config_id, last_refresh_at_ms, last_error, created_at_ms, \
+                 updated_at_ms
+                     ) VALUES
+                        ('kiro-a', 'social', NULL, NULL, NULL, 'active', '{{}}'::jsonb, 1, 0, \
+                 NULL, NULL, NULL, 10, 10),
+                        ('kiro-b', 'social', NULL, NULL, NULL, 'active', '{{}}'::jsonb, 1, 0, \
+                 NULL, NULL, NULL, 20, 20),
+                        ('kiro-c', 'social', NULL, NULL, NULL, 'active', '{{}}'::jsonb, 1, 0, \
+                 NULL, NULL, NULL, 30, 30),
+                        ('kiro-d', 'social', NULL, NULL, NULL, 'active', '{{}}'::jsonb, 1, 0, \
+                 NULL, NULL, NULL, 40, 40);
+                     INSERT INTO llm_kiro_status_cache (
+                        account_name, status, balance_json, cache_json, refreshed_at_ms,
+                        expires_at_ms, last_error
+                     ) VALUES
+                        ('kiro-a', 'active', \
+                 '{{\"current_usage\":60.0,\"usage_limit\":100.0,\"remaining\":40.0,\"\
+                 next_reset_at\":null,\"subscription_title\":\"Pro\"}}'::jsonb, '{{}}'::jsonb, 1, \
+                 2, NULL),
+                        ('kiro-b', 'active', \
+                 '{{\"current_usage\":50.0,\"usage_limit\":200.0,\"remaining\":150.0,\"\
+                 next_reset_at\":null,\"subscription_title\":\"Pro\"}}'::jsonb, '{{}}'::jsonb, 1, \
+                 2, NULL),
+                        ('kiro-c', 'active', 'null'::jsonb, '{{}}'::jsonb, 1, 2, NULL),
+                        ('kiro-d', 'active', \
+                 '{{\"current_usage\":210.0,\"usage_limit\":300.0,\"remaining\":90.0,\"\
+                 next_reset_at\":null,\"subscription_title\":\"Pro\"}}'::jsonb, '{{}}'::jsonb, 1, \
+                 2, NULL);"
+            ))
+            .await
+            .context("seed postgres kiro key page fixture")?;
         client.close().await;
         Ok(())
     }
@@ -6081,5 +7532,77 @@ mod tests {
         assert_eq!(key.usage_credit_total, 1.75);
         assert_eq!(key.usage_credit_missing_events, 0);
         assert_eq!(key.last_used_at_ms, Some(1_700_000_000_101));
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_lists_kiro_key_pages_with_candidate_credit_summaries() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        seed_test_kiro_key_page_fixture(&database_url)
+            .await
+            .expect("seed postgres kiro key page fixture");
+        let repo = super::PostgresControlRepository::connect(&database_url)
+            .await
+            .expect("connect postgres repository");
+
+        let first_page = repo
+            .list_admin_keys_page(Some("kiro"), llm_access_core::store::AdminPageRequest {
+                limit: 2,
+                offset: 0,
+            })
+            .await
+            .expect("list first kiro key page");
+        assert_eq!(first_page.total, 3);
+        assert!(first_page.has_more);
+        assert_eq!(
+            first_page
+                .keys
+                .iter()
+                .map(|key| key.id.as_str())
+                .collect::<Vec<_>>(),
+            ["kiro-key-new", "kiro-key-mid"]
+        );
+        let newest_summary = first_page.keys[0]
+            .kiro_candidate_credit_summary
+            .expect("newest key candidate summary");
+        assert_eq!(newest_summary.candidate_count, 4);
+        assert_eq!(newest_summary.loaded_balance_count, 3);
+        assert_eq!(newest_summary.missing_balance_count, 1);
+        assert_eq!(newest_summary.total_limit, 600.0);
+        assert_eq!(newest_summary.total_remaining, 280.0);
+        let middle_summary = first_page.keys[1]
+            .kiro_candidate_credit_summary
+            .expect("middle key candidate summary");
+        assert_eq!(middle_summary.candidate_count, 2);
+        assert_eq!(middle_summary.loaded_balance_count, 1);
+        assert_eq!(middle_summary.missing_balance_count, 1);
+        assert_eq!(middle_summary.total_limit, 200.0);
+        assert_eq!(middle_summary.total_remaining, 150.0);
+
+        let second_page = repo
+            .list_admin_keys_page(Some("kiro"), llm_access_core::store::AdminPageRequest {
+                limit: 2,
+                offset: 2,
+            })
+            .await
+            .expect("list second kiro key page");
+        assert_eq!(second_page.total, 3);
+        assert!(!second_page.has_more);
+        assert_eq!(second_page.keys.len(), 1);
+        assert_eq!(second_page.keys[0].id, "kiro-key-old");
+        let oldest_summary = second_page.keys[0]
+            .kiro_candidate_credit_summary
+            .expect("oldest key candidate summary");
+        assert_eq!(oldest_summary.candidate_count, 2);
+        assert_eq!(oldest_summary.loaded_balance_count, 2);
+        assert_eq!(oldest_summary.missing_balance_count, 0);
+        assert_eq!(oldest_summary.total_limit, 400.0);
+        assert_eq!(oldest_summary.total_remaining, 130.0);
     }
 }

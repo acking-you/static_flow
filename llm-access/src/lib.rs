@@ -227,6 +227,10 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
                 .post(admin::create_llm_gateway_account_group),
         )
         .route(
+            "/admin/llm-gateway/account-group-options",
+            get(admin::list_llm_gateway_account_group_options),
+        )
+        .route(
             "/admin/llm-gateway/account-groups/:group_id",
             axum::routing::patch(admin::patch_llm_gateway_account_group)
                 .delete(admin::delete_llm_gateway_account_group),
@@ -330,6 +334,10 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         .route(
             "/admin/kiro-gateway/account-groups",
             get(admin::list_admin_kiro_account_groups).post(admin::create_admin_kiro_account_group),
+        )
+        .route(
+            "/admin/kiro-gateway/account-group-options",
+            get(admin::list_admin_kiro_account_group_options),
         )
         .route(
             "/admin/kiro-gateway/account-groups/:group_id",

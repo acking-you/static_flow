@@ -2549,29 +2549,72 @@ impl SqliteControlStore {
         limit: usize,
         offset: usize,
     ) -> anyhow::Result<AdminKiroAccountsPage> {
+        self.list_admin_kiro_accounts_filtered_page(None, limit, offset)
+    }
+
+    /// List one persisted Kiro account page for the admin UI, optionally
+    /// filtered by a case-insensitive account-name prefix.
+    pub fn list_admin_kiro_accounts_filtered_page(
+        &self,
+        prefix: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> anyhow::Result<AdminKiroAccountsPage> {
         let limit = limit.max(1);
-        let total = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM llm_kiro_accounts", [], |row| row.get::<_, i64>(0))
-            .context("count admin kiro account page")?
-            .max(0) as usize;
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT
+        let normalized_prefix = prefix
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_lowercase);
+        let total = if let Some(prefix) = normalized_prefix.as_deref() {
+            self.conn
+                .query_row(
+                    "SELECT COUNT(*)
+                     FROM llm_kiro_accounts
+                     WHERE lower(account_name) LIKE ?1 || '%'",
+                    params![prefix],
+                    |row| row.get::<_, i64>(0),
+                )
+                .context("count filtered admin kiro account page")?
+                .max(0) as usize
+        } else {
+            self.conn
+                .query_row("SELECT COUNT(*) FROM llm_kiro_accounts", [], |row| row.get::<_, i64>(0))
+                .context("count admin kiro account page")?
+                .max(0) as usize
+        };
+        let sql = if normalized_prefix.is_some() {
+            "SELECT
+                    account_name, auth_method, account_id, profile_arn, user_id,
+                    status, auth_json, max_concurrency, min_start_interval_ms,
+                    proxy_config_id, last_refresh_at_ms, last_error, created_at_ms,
+                    updated_at_ms
+                 FROM llm_kiro_accounts
+                 WHERE lower(account_name) LIKE ?1 || '%'
+                 ORDER BY account_name
+                 LIMIT ?2 OFFSET ?3"
+        } else {
+            "SELECT
                     account_name, auth_method, account_id, profile_arn, user_id,
                     status, auth_json, max_concurrency, min_start_interval_ms,
                     proxy_config_id, last_refresh_at_ms, last_error, created_at_ms,
                     updated_at_ms
                  FROM llm_kiro_accounts
                  ORDER BY account_name
-                 LIMIT ?1 OFFSET ?2",
-            )
+                 LIMIT ?1 OFFSET ?2"
+        };
+        let mut stmt = self
+            .conn
+            .prepare(sql)
             .context("prepare admin kiro account page")?;
-        let records = stmt
-            .query_map(params![limit as i64, offset as i64], decode_kiro_account)?
-            .collect::<Result<Vec<_>, _>>()
-            .context("list admin kiro account page")?;
+        let records = if let Some(prefix) = normalized_prefix.as_deref() {
+            stmt.query_map(params![prefix, limit as i64, offset as i64], decode_kiro_account)?
+                .collect::<Result<Vec<_>, _>>()
+                .context("list filtered admin kiro account page")?
+        } else {
+            stmt.query_map(params![limit as i64, offset as i64], decode_kiro_account)?
+                .collect::<Result<Vec<_>, _>>()
+                .context("list admin kiro account page")?
+        };
         let context = self.load_kiro_admin_account_view_context()?;
         let accounts = records
             .iter()
@@ -4952,6 +4995,7 @@ fn admin_key_from_bundle(bundle: &KeyBundle) -> AdminKey {
             .route
             .kiro_billable_model_multipliers_override_json
             .is_none(),
+        kiro_candidate_credit_summary: None,
     }
 }
 
@@ -7549,6 +7593,44 @@ mod tests {
         assert!(account.disabled);
         assert_eq!(account.balance, None);
         assert_eq!(account.subscription_title, None);
+    }
+
+    #[test]
+    fn filtered_kiro_account_page_counts_and_pages_on_prefix() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlStore::new(conn);
+
+        for (name, created_at_ms) in [("alpha-1", 10_i64), ("alpha-2", 20), ("beta-1", 30)] {
+            repo.upsert_kiro_account(&super::KiroAccountRecord {
+                account_name: name.to_string(),
+                auth_method: "social".to_string(),
+                account_id: Some(format!("acct-{name}")),
+                profile_arn: None,
+                user_id: None,
+                status: "active".to_string(),
+                auth_json: r#"{"accessToken":"a"}"#.to_string(),
+                max_concurrency: Some(1),
+                min_start_interval_ms: Some(0),
+                proxy_config_id: None,
+                last_refresh_at_ms: Some(created_at_ms),
+                last_error: None,
+                created_at_ms,
+                updated_at_ms: created_at_ms,
+            })
+            .expect("upsert kiro account");
+        }
+
+        let page = repo
+            .list_admin_kiro_accounts_filtered_page(Some("ALPHA"), 1, 1)
+            .expect("page filtered kiro accounts");
+
+        assert_eq!(page.total, 2);
+        assert_eq!(page.limit, 1);
+        assert_eq!(page.offset, 1);
+        assert!(!page.has_more);
+        assert_eq!(page.accounts.len(), 1);
+        assert_eq!(page.accounts[0].name, "alpha-2");
     }
 
     #[test]

@@ -20,7 +20,7 @@ use llm_access_core::{
     provider::{ProtocolFamily, ProviderType, RouteStrategy},
     store::{
         self as core_store, AdminAccountContributionRequest, AdminAccountGroupPatch,
-        AdminCodexAccountPatch, AdminCodexImportJobItemResult, AdminKeyPatch,
+        AdminCodexAccountPatch, AdminCodexImportJobItemResult, AdminKeyPatch, AdminPageRequest,
         AdminProxyConfigPatch, AdminReviewQueueAction, AdminRuntimeConfig, NewAdminAccountGroup,
         NewAdminCodexAccount, NewAdminCodexImportJob, NewAdminCodexImportJobItem, NewAdminKey,
         NewAdminKiroAccount, NewAdminProxyConfig, UpdateAdminRuntimeConfig, KEY_STATUS_ACTIVE,
@@ -126,6 +126,16 @@ struct DeleteResponse {
 #[derive(Debug, Serialize)]
 struct AdminAccountGroupsResponse {
     groups: Vec<core_store::AdminAccountGroup>,
+    total: usize,
+    limit: usize,
+    offset: usize,
+    has_more: bool,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminAccountGroupOptionsResponse {
+    options: Vec<core_store::AdminAccountGroupOption>,
     generated_at: i64,
 }
 
@@ -207,6 +217,25 @@ struct AdminTokenRequestsResponse {
 pub(crate) struct AdminListQuery {
     limit: Option<usize>,
     offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(crate) struct AdminKeyListQuery {
+    limit: Option<usize>,
+    offset: Option<usize>,
+    q: Option<String>,
+    active_only: Option<bool>,
+    sort: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(crate) struct AdminCodexAccountListQuery {
+    limit: Option<usize>,
+    offset: Option<usize>,
+    q: Option<String>,
+    active_only: Option<bool>,
+    unhealthy_only: Option<bool>,
+    sort: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -702,15 +731,19 @@ pub(crate) async fn post_llm_gateway_config(
 pub(crate) async fn list_llm_gateway_keys(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Query(query): Query<AdminListQuery>,
+    Query(query): Query<AdminKeyListQuery>,
 ) -> Response {
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    let page_request = admin_page_request(query);
+    let page_request = admin_page_request(AdminListQuery {
+        limit: query.limit,
+        offset: query.offset,
+    });
+    let filter = admin_key_page_query(&query);
     let page = match state
         .admin_key_store
-        .list_admin_keys_page(Some(PROVIDER_CODEX), page_request)
+        .list_admin_keys_filtered_page(Some(PROVIDER_CODEX), &filter, page_request)
         .await
     {
         Ok(page) => page,
@@ -834,22 +867,35 @@ pub(crate) async fn delete_llm_gateway_key(
 pub(crate) async fn list_llm_gateway_account_groups(
     State(state): State<HttpState>,
     headers: HeaderMap,
+    Query(query): Query<AdminListQuery>,
 ) -> Response {
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
+    let page = admin_page_request(query);
     match state
         .admin_account_group_store
-        .list_admin_account_groups(PROVIDER_CODEX)
+        .list_admin_account_groups_page(PROVIDER_CODEX, page)
         .await
     {
         Ok(groups) => Json(AdminAccountGroupsResponse {
-            groups,
+            groups: groups.groups,
+            total: groups.total,
+            limit: groups.limit,
+            offset: groups.offset,
+            has_more: groups.has_more,
             generated_at: now_ms(),
         })
         .into_response(),
         Err(_) => internal_error("Failed to list llm gateway account groups").into_response(),
     }
+}
+
+pub(crate) async fn list_llm_gateway_account_group_options(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Response {
+    list_account_group_options_for_provider(state, headers, PROVIDER_CODEX, "llm gateway").await
 }
 
 pub(crate) async fn create_llm_gateway_account_group(
@@ -1350,36 +1396,239 @@ pub(crate) async fn get_usage_journal_preview(
 pub(crate) async fn list_llm_gateway_accounts(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Query(query): Query<AdminListQuery>,
+    Query(query): Query<AdminCodexAccountListQuery>,
 ) -> Response {
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    let page_request = admin_page_request(query);
-    let page = match state
-        .admin_codex_account_store
-        .list_admin_codex_accounts_page(page_request)
-        .await
-    {
-        Ok(page) => page,
-        Err(_) => return internal_error("Failed to list llm gateway accounts").into_response(),
-    };
+    let page_request = admin_page_request(AdminListQuery {
+        limit: query.limit,
+        offset: query.offset,
+    });
     let status = match state.public_status_store.codex_rate_limit_status().await {
         Ok(status) => Some(status),
         Err(_) => {
             return internal_error("Failed to load llm gateway account status").into_response();
         },
     };
-    Json(AdminAccountsResponse {
-        accounts: apply_cached_codex_status_to_admin_accounts(page.accounts, status),
-        summary: page.summary,
-        total: page.total,
+    let filter = admin_codex_account_page_query(&query);
+    let response_page = if codex_account_page_query_is_default(&filter) {
+        let page = match state
+            .admin_codex_account_store
+            .list_admin_codex_accounts_page(page_request)
+            .await
+        {
+            Ok(page) => page,
+            Err(_) => return internal_error("Failed to list llm gateway accounts").into_response(),
+        };
+        AdminAccountsResponse {
+            accounts: apply_cached_codex_status_to_admin_accounts(page.accounts, status),
+            summary: page.summary,
+            total: page.total,
+            limit: page.limit,
+            offset: page.offset,
+            has_more: page.has_more,
+            generated_at: now_ms(),
+        }
+    } else {
+        let accounts = match state
+            .admin_codex_account_store
+            .list_admin_codex_accounts()
+            .await
+        {
+            Ok(accounts) => accounts,
+            Err(_) => return internal_error("Failed to list llm gateway accounts").into_response(),
+        };
+        let summary = summarize_admin_accounts(&accounts);
+        let accounts = apply_cached_codex_status_to_admin_accounts(accounts, status);
+        admin_codex_accounts_response_from_filtered(accounts, summary, &filter, page_request)
+    };
+    Json(response_page).into_response()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum AdminCodexAccountSortMode {
+    #[default]
+    Newest,
+    PrimaryAsc,
+    PrimaryDesc,
+    SecondaryAsc,
+    SecondaryDesc,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct AdminCodexAccountPageQueryView {
+    search: Option<String>,
+    active_only: bool,
+    unhealthy_only: bool,
+    sort: AdminCodexAccountSortMode,
+}
+
+fn admin_key_page_query(query: &AdminKeyListQuery) -> core_store::AdminKeyPageQuery {
+    core_store::AdminKeyPageQuery {
+        search: query.q.clone(),
+        active_only: query.active_only.unwrap_or(false),
+        sort: match query.sort.as_deref() {
+            Some("quota_asc") => core_store::AdminKeySortMode::QuotaAsc,
+            Some("quota_desc") => core_store::AdminKeySortMode::QuotaDesc,
+            Some("usage_asc") => core_store::AdminKeySortMode::UsageAsc,
+            Some("usage_desc") => core_store::AdminKeySortMode::UsageDesc,
+            _ => core_store::AdminKeySortMode::Newest,
+        },
+    }
+}
+
+fn admin_codex_account_page_query(
+    query: &AdminCodexAccountListQuery,
+) -> AdminCodexAccountPageQueryView {
+    AdminCodexAccountPageQueryView {
+        search: query.q.clone(),
+        active_only: query.active_only.unwrap_or(false),
+        unhealthy_only: query.unhealthy_only.unwrap_or(false),
+        sort: match query.sort.as_deref() {
+            Some("primary_asc") => AdminCodexAccountSortMode::PrimaryAsc,
+            Some("primary_desc") => AdminCodexAccountSortMode::PrimaryDesc,
+            Some("secondary_asc") => AdminCodexAccountSortMode::SecondaryAsc,
+            Some("secondary_desc") => AdminCodexAccountSortMode::SecondaryDesc,
+            _ => AdminCodexAccountSortMode::Newest,
+        },
+    }
+}
+
+fn codex_account_page_query_is_default(query: &AdminCodexAccountPageQueryView) -> bool {
+    query
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+        && !query.active_only
+        && !query.unhealthy_only
+        && matches!(query.sort, AdminCodexAccountSortMode::Newest)
+}
+
+fn summarize_admin_accounts(
+    accounts: &[core_store::AdminCodexAccount],
+) -> core_store::AdminAccountsSummary {
+    let mut summary = core_store::AdminAccountsSummary::default();
+    for account in accounts {
+        summary.total += 1;
+        match account.status.as_str() {
+            KEY_STATUS_ACTIVE => summary.active_count += 1,
+            KEY_STATUS_DISABLED => summary.disabled_count += 1,
+            "unavailable" => summary.unavailable_count += 1,
+            _ => {},
+        }
+    }
+    summary
+}
+
+fn admin_codex_account_matches_query(
+    account: &core_store::AdminCodexAccount,
+    query: &AdminCodexAccountPageQueryView,
+) -> bool {
+    if query.active_only && account.status == KEY_STATUS_DISABLED {
+        return false;
+    }
+    if query.unhealthy_only
+        && account.status != KEY_STATUS_DISABLED
+        && account.auth_refresh_error_message.is_none()
+        && account.usage_error_message.is_none()
+    {
+        return false;
+    }
+    let Some(search) = query
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return true;
+    };
+    let search = search.to_ascii_lowercase();
+    account.name.to_ascii_lowercase().contains(&search)
+        || account.status.to_ascii_lowercase().contains(&search)
+        || account
+            .plan_type
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .contains(&search)
+        || account
+            .account_id
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .contains(&search)
+        || account
+            .route_weight_tier
+            .to_ascii_lowercase()
+            .contains(&search)
+}
+
+fn codex_account_primary_pct(account: &core_store::AdminCodexAccount) -> f64 {
+    account.primary_remaining_percent.unwrap_or(100.0)
+}
+
+fn codex_account_secondary_pct(account: &core_store::AdminCodexAccount) -> f64 {
+    account.secondary_remaining_percent.unwrap_or(100.0)
+}
+
+fn sort_admin_codex_accounts(
+    accounts: &mut [core_store::AdminCodexAccount],
+    sort: AdminCodexAccountSortMode,
+) {
+    match sort {
+        AdminCodexAccountSortMode::Newest => {},
+        AdminCodexAccountSortMode::PrimaryAsc => accounts.sort_by(|a, b| {
+            codex_account_primary_pct(a)
+                .partial_cmp(&codex_account_primary_pct(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.name.cmp(&a.name))
+        }),
+        AdminCodexAccountSortMode::PrimaryDesc => accounts.sort_by(|a, b| {
+            codex_account_primary_pct(b)
+                .partial_cmp(&codex_account_primary_pct(a))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.name.cmp(&a.name))
+        }),
+        AdminCodexAccountSortMode::SecondaryAsc => accounts.sort_by(|a, b| {
+            codex_account_secondary_pct(a)
+                .partial_cmp(&codex_account_secondary_pct(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.name.cmp(&a.name))
+        }),
+        AdminCodexAccountSortMode::SecondaryDesc => accounts.sort_by(|a, b| {
+            codex_account_secondary_pct(b)
+                .partial_cmp(&codex_account_secondary_pct(a))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.name.cmp(&a.name))
+        }),
+    }
+}
+
+fn admin_codex_accounts_response_from_filtered(
+    mut accounts: Vec<core_store::AdminCodexAccount>,
+    summary: core_store::AdminAccountsSummary,
+    query: &AdminCodexAccountPageQueryView,
+    page: core_store::AdminPageRequest,
+) -> AdminAccountsResponse {
+    accounts.retain(|account| admin_codex_account_matches_query(account, query));
+    sort_admin_codex_accounts(&mut accounts, query.sort);
+    let total = accounts.len();
+    let start = page.offset.min(total);
+    let end = start.saturating_add(page.limit).min(total);
+    let accounts = accounts[start..end].to_vec();
+    let page_len = accounts.len();
+    AdminAccountsResponse {
+        accounts,
+        summary,
+        total,
         limit: page.limit,
         offset: page.offset,
-        has_more: page.has_more,
+        has_more: page.has_more(page_len, total),
         generated_at: now_ms(),
-    })
-    .into_response()
+    }
 }
 
 fn apply_cached_codex_status_to_admin_accounts(
@@ -1923,6 +2172,13 @@ pub(crate) async fn list_admin_kiro_keys(
         Ok(keys) => keys,
         Err(_) => return internal_error("Failed to resolve Kiro cache policy").into_response(),
     };
+    let keys = match attach_kiro_candidate_credit_summaries(&state, keys).await {
+        Ok(keys) => keys,
+        Err(_) => {
+            return internal_error("Failed to compute Kiro candidate credit summary")
+                .into_response();
+        },
+    };
     Json(AdminKeysResponse {
         keys,
         summary: page.summary,
@@ -1968,7 +2224,10 @@ pub(crate) async fn create_admin_kiro_key(
         created_at_ms: now_ms(),
     };
     match state.admin_key_store.create_admin_key(key).await {
-        Ok(key) => Json(key).into_response(),
+        Ok(key) => match resolve_key_effective_kiro_cache_policy(&state, key).await {
+            Ok(key) => Json(key).into_response(),
+            Err(_) => internal_error("Failed to resolve Kiro cache policy").into_response(),
+        },
         Err(_) => internal_error("Failed to create Kiro gateway key").into_response(),
     }
 }
@@ -2026,8 +2285,16 @@ pub(crate) async fn delete_admin_kiro_key(
 pub(crate) async fn list_admin_kiro_account_groups(
     State(state): State<HttpState>,
     headers: HeaderMap,
+    Query(query): Query<AdminListQuery>,
 ) -> Response {
-    list_account_groups_for_provider(state, headers, PROVIDER_KIRO, "Kiro gateway").await
+    list_account_groups_for_provider(state, headers, query, PROVIDER_KIRO, "Kiro gateway").await
+}
+
+pub(crate) async fn list_admin_kiro_account_group_options(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Response {
+    list_account_group_options_for_provider(state, headers, PROVIDER_KIRO, "Kiro gateway").await
 }
 
 pub(crate) async fn create_admin_kiro_account_group(
@@ -2123,32 +2390,28 @@ pub(crate) async fn list_admin_kiro_account_statuses(
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    let mut accounts = match state
-        .admin_kiro_account_store
-        .list_admin_kiro_accounts()
-        .await
-    {
-        Ok(accounts) => accounts,
-        Err(_) => return internal_error("Failed to list Kiro gateway accounts").into_response(),
+    let page_request = AdminPageRequest {
+        limit: query.limit.unwrap_or(24).clamp(1, 200),
+        offset: query.offset.unwrap_or(0),
     };
-    if let Some(prefix) = query
+    let prefix = query
         .prefix
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_ascii_lowercase)
+        .filter(|value| !value.is_empty());
+    let page = match state
+        .admin_kiro_account_store
+        .list_admin_kiro_accounts_filtered_page(prefix, page_request)
+        .await
     {
-        accounts.retain(|account| account.name.to_ascii_lowercase().starts_with(&prefix));
-    }
-    let total = accounts.len();
-    let limit = query.limit.unwrap_or(24).clamp(1, 200);
-    let offset = query.offset.unwrap_or(0);
-    let accounts = accounts.into_iter().skip(offset).take(limit).collect();
+        Ok(page) => page,
+        Err(_) => return internal_error("Failed to list Kiro gateway accounts").into_response(),
+    };
     Json(AdminKiroAccountStatusesResponse {
-        accounts,
-        total,
-        limit,
-        offset,
+        accounts: page.accounts,
+        total: page.total,
+        limit: page.limit,
+        offset: page.offset,
         generated_at: now_ms(),
     })
     .into_response()
@@ -3002,6 +3265,35 @@ async fn admin_key_provider(state: &HttpState, key_id: &str) -> anyhow::Result<O
 async fn list_account_groups_for_provider(
     state: HttpState,
     headers: HeaderMap,
+    query: AdminListQuery,
+    provider_type: &str,
+    label: &str,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let page = admin_page_request(query);
+    match state
+        .admin_account_group_store
+        .list_admin_account_groups_page(provider_type, page)
+        .await
+    {
+        Ok(groups) => Json(AdminAccountGroupsResponse {
+            groups: groups.groups,
+            total: groups.total,
+            limit: groups.limit,
+            offset: groups.offset,
+            has_more: groups.has_more,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error(&format!("Failed to list {label} account groups")).into_response(),
+    }
+}
+
+async fn list_account_group_options_for_provider(
+    state: HttpState,
+    headers: HeaderMap,
     provider_type: &str,
     label: &str,
 ) -> Response {
@@ -3010,15 +3302,17 @@ async fn list_account_groups_for_provider(
     }
     match state
         .admin_account_group_store
-        .list_admin_account_groups(provider_type)
+        .list_admin_account_group_options(provider_type)
         .await
     {
-        Ok(groups) => Json(AdminAccountGroupsResponse {
-            groups,
+        Ok(options) => Json(AdminAccountGroupOptionsResponse {
+            options,
             generated_at: now_ms(),
         })
         .into_response(),
-        Err(_) => internal_error(&format!("Failed to list {label} account groups")).into_response(),
+        Err(_) => {
+            internal_error(&format!("Failed to list {label} account group options")).into_response()
+        },
     }
 }
 
@@ -4668,8 +4962,9 @@ async fn resolve_key_effective_kiro_cache_policy(
     key: core_store::AdminKey,
 ) -> anyhow::Result<core_store::AdminKey> {
     let config = state.admin_config_store.get_admin_runtime_config().await?;
-    let mut keys = apply_effective_kiro_cache_policies(vec![key], &config)?;
-    Ok(keys.pop().expect("single key should remain"))
+    let keys = apply_effective_kiro_cache_policies(vec![key], &config)?;
+    let keys = attach_kiro_candidate_credit_summaries(state, keys).await?;
+    Ok(keys.into_iter().next().expect("single key should remain"))
 }
 
 fn apply_effective_kiro_cache_policies(
@@ -4690,6 +4985,129 @@ fn apply_effective_kiro_cache_policies(
             uses_global_kiro_cache_policy(key.kiro_cache_policy_override_json.as_deref());
     }
     Ok(keys)
+}
+
+async fn attach_kiro_candidate_credit_summaries(
+    state: &HttpState,
+    keys: Vec<core_store::AdminKey>,
+) -> anyhow::Result<Vec<core_store::AdminKey>> {
+    if !keys.iter().any(|key| key.provider_type == PROVIDER_KIRO) {
+        return Ok(keys);
+    }
+    if keys
+        .iter()
+        .filter(|key| key.provider_type == PROVIDER_KIRO)
+        .all(|key| key.kiro_candidate_credit_summary.is_some())
+    {
+        return Ok(keys);
+    }
+    let accounts = state
+        .admin_kiro_account_store
+        .list_admin_kiro_accounts()
+        .await?;
+    let groups = state
+        .admin_account_group_store
+        .list_admin_account_groups(PROVIDER_KIRO)
+        .await?;
+    Ok(apply_kiro_candidate_credit_summaries(keys, &accounts, &groups))
+}
+
+fn apply_kiro_candidate_credit_summaries(
+    mut keys: Vec<core_store::AdminKey>,
+    accounts: &[core_store::AdminKiroAccount],
+    groups: &[core_store::AdminAccountGroup],
+) -> Vec<core_store::AdminKey> {
+    let all_account_names = accounts
+        .iter()
+        .map(|account| account.name.clone())
+        .collect::<Vec<_>>();
+    let accounts_by_name = accounts
+        .iter()
+        .map(|account| (account.name.as_str(), account))
+        .collect::<BTreeMap<_, _>>();
+    let groups_by_id = groups
+        .iter()
+        .map(|group| (group.id.as_str(), group))
+        .collect::<BTreeMap<_, _>>();
+    for key in keys
+        .iter_mut()
+        .filter(|key| key.provider_type == PROVIDER_KIRO)
+    {
+        key.kiro_candidate_credit_summary = Some(build_kiro_candidate_credit_summary(
+            key,
+            &accounts_by_name,
+            &groups_by_id,
+            &all_account_names,
+        ));
+    }
+    keys
+}
+
+fn build_kiro_candidate_credit_summary(
+    key: &core_store::AdminKey,
+    accounts_by_name: &BTreeMap<&str, &core_store::AdminKiroAccount>,
+    groups_by_id: &BTreeMap<&str, &core_store::AdminAccountGroup>,
+    all_account_names: &[String],
+) -> core_store::AdminKiroKeyCandidateCreditSummary {
+    let mut seen = HashSet::<String>::new();
+    let mut summary = core_store::AdminKiroKeyCandidateCreditSummary::default();
+    for account_name in select_kiro_candidate_account_names(key, groups_by_id, all_account_names) {
+        if !seen.insert(account_name.clone()) {
+            continue;
+        }
+        let Some(account) = accounts_by_name.get(account_name.as_str()) else {
+            continue;
+        };
+        summary.candidate_count += 1;
+        if let Some(balance) = account.balance.as_ref() {
+            summary.loaded_balance_count += 1;
+            summary.total_limit += balance.usage_limit.max(0.0);
+            summary.total_remaining += balance.remaining.max(0.0);
+        } else {
+            summary.missing_balance_count += 1;
+        }
+    }
+    summary
+}
+
+fn select_kiro_candidate_account_names(
+    key: &core_store::AdminKey,
+    groups_by_id: &BTreeMap<&str, &core_store::AdminAccountGroup>,
+    all_account_names: &[String],
+) -> Vec<String> {
+    let route_strategy = key.route_strategy.as_deref().unwrap_or("auto");
+    let group_account_names = key
+        .account_group_id
+        .as_deref()
+        .and_then(|group_id| groups_by_id.get(group_id))
+        .map(|group| group.account_names.clone());
+    match route_strategy {
+        "fixed" => {
+            if let Some(group_account_names) = group_account_names {
+                group_account_names
+            } else {
+                key.fixed_account_name
+                    .as_ref()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| vec![value.clone()])
+                    .unwrap_or_default()
+            }
+        },
+        "auto" => {
+            if let Some(group_account_names) = group_account_names {
+                group_account_names
+            } else if let Some(auto_account_names) = key
+                .auto_account_names
+                .as_ref()
+                .filter(|names| !names.is_empty())
+            {
+                auto_account_names.clone()
+            } else {
+                all_account_names.to_vec()
+            }
+        },
+        _ => Vec::new(),
+    }
 }
 
 fn normalize_key_patch(
@@ -5769,6 +6187,62 @@ mod tests {
             effective_kiro_billable_model_multipliers_json:
                 core_store::default_kiro_billable_model_multipliers_json(),
             uses_global_kiro_billable_model_multipliers: true,
+            kiro_candidate_credit_summary: None,
+        }
+    }
+
+    fn sample_kiro_account(name: &str, remaining: f64, limit: f64) -> core_store::AdminKiroAccount {
+        core_store::AdminKiroAccount {
+            name: name.to_string(),
+            auth_method: "oauth".to_string(),
+            provider: Some("aws".to_string()),
+            upstream_user_id: Some(format!("user-{name}")),
+            email: None,
+            expires_at: None,
+            profile_arn: None,
+            has_refresh_token: true,
+            disabled: false,
+            disabled_reason: None,
+            source: None,
+            source_db_path: None,
+            last_imported_at: None,
+            subscription_title: Some("Pro".to_string()),
+            region: Some("us-east-1".to_string()),
+            auth_region: Some("us-east-1".to_string()),
+            api_region: Some("us-east-1".to_string()),
+            machine_id: None,
+            kiro_channel_max_concurrency: 1,
+            kiro_channel_min_start_interval_ms: 0,
+            minimum_remaining_credits_before_block: 0.0,
+            proxy_mode: "inherit".to_string(),
+            proxy_config_id: None,
+            effective_proxy_source: "inherit".to_string(),
+            effective_proxy_url: None,
+            effective_proxy_config_name: None,
+            proxy_url: None,
+            balance: Some(core_store::AdminKiroBalanceView {
+                current_usage: (limit - remaining).max(0.0),
+                usage_limit: limit,
+                remaining,
+                next_reset_at: None,
+                subscription_title: Some("Pro".to_string()),
+                user_id: Some(format!("user-{name}")),
+            }),
+            cache: core_store::AdminKiroCacheView::default(),
+        }
+    }
+
+    fn sample_kiro_group(id: &str, account_names: &[&str]) -> core_store::AdminAccountGroup {
+        core_store::AdminAccountGroup {
+            id: id.to_string(),
+            provider_type: PROVIDER_KIRO.to_string(),
+            name: id.to_string(),
+            account_names: account_names
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
+            created_at: 1,
+            updated_at: 1,
         }
     }
 
@@ -5833,6 +6307,49 @@ mod tests {
         assert_eq!(policy["small_input_high_credit_boost"]["target_input_tokens"], 50_000);
         assert_eq!(policy["small_input_high_credit_boost"]["credit_start"], 1.0);
         assert!(!keys[0].uses_global_kiro_cache_policy);
+    }
+
+    #[test]
+    fn apply_kiro_candidate_credit_summaries_uses_all_accounts_for_auto_pool() {
+        let keys = vec![sample_kiro_key(None)];
+        let accounts = vec![
+            sample_kiro_account("kiro-a", 800.0, 1_000.0),
+            sample_kiro_account("kiro-b", 650.0, 1_000.0),
+            sample_kiro_account("kiro-c", 900.0, 1_000.0),
+        ];
+
+        let keys = apply_kiro_candidate_credit_summaries(keys, &accounts, &[]);
+        let summary = keys[0]
+            .kiro_candidate_credit_summary
+            .expect("summary should be attached");
+
+        assert_eq!(summary.candidate_count, 3);
+        assert_eq!(summary.loaded_balance_count, 3);
+        assert_eq!(summary.missing_balance_count, 0);
+        assert_eq!(summary.total_limit, 3_000.0);
+        assert_eq!(summary.total_remaining, 2_350.0);
+    }
+
+    #[test]
+    fn apply_kiro_candidate_credit_summaries_respects_account_group_scope() {
+        let mut key = sample_kiro_key(None);
+        key.account_group_id = Some("group-beta".to_string());
+        let accounts = vec![
+            sample_kiro_account("kiro-a", 800.0, 1_000.0),
+            sample_kiro_account("kiro-b", 650.0, 1_000.0),
+            sample_kiro_account("kiro-c", 900.0, 1_000.0),
+        ];
+        let groups = vec![sample_kiro_group("group-beta", &["kiro-b", "kiro-c"])];
+
+        let keys = apply_kiro_candidate_credit_summaries(vec![key], &accounts, &groups);
+        let summary = keys[0]
+            .kiro_candidate_credit_summary
+            .expect("summary should be attached");
+
+        assert_eq!(summary.candidate_count, 2);
+        assert_eq!(summary.loaded_balance_count, 2);
+        assert_eq!(summary.total_limit, 2_000.0);
+        assert_eq!(summary.total_remaining, 1_550.0);
     }
 
     #[test]

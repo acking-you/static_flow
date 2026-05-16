@@ -552,6 +552,24 @@ pub struct AdminKey {
     pub effective_kiro_billable_model_multipliers_json: String,
     /// Whether the effective billable multipliers are global.
     pub uses_global_kiro_billable_model_multipliers: bool,
+    /// Admin-facing candidate-credit summary for Kiro routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kiro_candidate_credit_summary: Option<AdminKiroKeyCandidateCreditSummary>,
+}
+
+/// Admin-facing candidate-credit summary for one Kiro key.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+pub struct AdminKiroKeyCandidateCreditSummary {
+    /// Number of candidate accounts matched by the key route.
+    pub candidate_count: usize,
+    /// Number of candidate accounts with a loaded balance snapshot.
+    pub loaded_balance_count: usize,
+    /// Number of candidate accounts still missing a balance snapshot.
+    pub missing_balance_count: usize,
+    /// Sum of upstream credit limits across loaded candidate accounts.
+    pub total_limit: f64,
+    /// Sum of remaining upstream credits across loaded candidate accounts.
+    pub total_remaining: f64,
 }
 
 /// Offset pagination request shared by admin list endpoints.
@@ -614,6 +632,118 @@ pub struct AdminKeysSummary {
     pub usage_credit_total: f64,
     /// Sum of events missing credit usage.
     pub usage_credit_missing_events: u64,
+}
+
+/// Admin key list query shared by paginated inventory screens.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdminKeyPageQuery {
+    /// Optional case-insensitive search query.
+    pub search: Option<String>,
+    /// Whether disabled rows should be excluded.
+    pub active_only: bool,
+    /// Sort mode applied before pagination.
+    pub sort: AdminKeySortMode,
+}
+
+/// Supported admin key list sort modes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AdminKeySortMode {
+    /// Default created-at descending order.
+    #[default]
+    Newest,
+    /// Remaining quota ascending.
+    QuotaAsc,
+    /// Remaining quota descending.
+    QuotaDesc,
+    /// Recorded credit usage ascending.
+    UsageAsc,
+    /// Recorded credit usage descending.
+    UsageDesc,
+}
+
+fn summarize_admin_keys(keys: &[AdminKey]) -> AdminKeysSummary {
+    let mut summary = AdminKeysSummary::default();
+    for key in keys {
+        summary.total += 1;
+        if key.public_visible {
+            summary.public_visible_count += 1;
+        }
+        match key.status.as_str() {
+            KEY_STATUS_ACTIVE => summary.active_count += 1,
+            KEY_STATUS_DISABLED => summary.disabled_count += 1,
+            _ => {},
+        }
+        summary.quota_billable_limit_sum = summary
+            .quota_billable_limit_sum
+            .saturating_add(key.quota_billable_limit);
+        summary.remaining_billable_sum = summary
+            .remaining_billable_sum
+            .saturating_add(key.remaining_billable);
+        summary.usage_input_uncached_tokens_sum = summary
+            .usage_input_uncached_tokens_sum
+            .saturating_add(key.usage_input_uncached_tokens);
+        summary.usage_input_cached_tokens_sum = summary
+            .usage_input_cached_tokens_sum
+            .saturating_add(key.usage_input_cached_tokens);
+        summary.usage_output_tokens_sum = summary
+            .usage_output_tokens_sum
+            .saturating_add(key.usage_output_tokens);
+        summary.usage_billable_tokens_sum = summary.usage_billable_tokens_sum.saturating_add(
+            key.quota_billable_limit
+                .saturating_sub(key.remaining_billable.max(0) as u64),
+        );
+        summary.usage_credit_total += key.usage_credit_total;
+        summary.usage_credit_missing_events = summary
+            .usage_credit_missing_events
+            .saturating_add(key.usage_credit_missing_events);
+    }
+    summary
+}
+
+fn admin_key_matches_query(key: &AdminKey, query: &AdminKeyPageQuery) -> bool {
+    if query.active_only && key.status == KEY_STATUS_DISABLED {
+        return false;
+    }
+    let Some(search) = query
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return true;
+    };
+    let search = search.to_ascii_lowercase();
+    key.id.to_ascii_lowercase().contains(&search)
+        || key.name.to_ascii_lowercase().contains(&search)
+        || key.provider_type.to_ascii_lowercase().contains(&search)
+        || key.status.to_ascii_lowercase().contains(&search)
+}
+
+fn apply_admin_key_query(keys: &mut Vec<AdminKey>, query: &AdminKeyPageQuery) {
+    keys.retain(|key| admin_key_matches_query(key, query));
+    match query.sort {
+        AdminKeySortMode::Newest => keys.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| b.id.cmp(&a.id))
+        }),
+        AdminKeySortMode::QuotaAsc => keys.sort_by_key(|key| key.remaining_billable),
+        AdminKeySortMode::QuotaDesc => {
+            keys.sort_by_key(|key| std::cmp::Reverse(key.remaining_billable));
+        },
+        AdminKeySortMode::UsageAsc => keys.sort_by(|a, b| {
+            a.usage_credit_total
+                .partial_cmp(&b.usage_credit_total)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.created_at.cmp(&a.created_at))
+        }),
+        AdminKeySortMode::UsageDesc => keys.sort_by(|a, b| {
+            b.usage_credit_total
+                .partial_cmp(&a.usage_credit_total)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.created_at.cmp(&a.created_at))
+        }),
+    }
 }
 
 /// New admin key row after request validation and secret generation.
@@ -699,6 +829,36 @@ pub struct AdminAccountGroup {
     pub created_at: i64,
     /// Update timestamp.
     pub updated_at: i64,
+}
+
+/// Page of admin account groups.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminAccountGroupsPage {
+    /// Page rows.
+    pub groups: Vec<AdminAccountGroup>,
+    /// Total rows matching the provider before pagination.
+    pub total: usize,
+    /// Page limit.
+    pub limit: usize,
+    /// Page offset.
+    pub offset: usize,
+    /// Whether another page is available.
+    pub has_more: bool,
+}
+
+/// Lightweight reusable account-group projection for routing selectors.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminAccountGroupOption {
+    /// Group id.
+    pub id: String,
+    /// Provider type.
+    pub provider_type: String,
+    /// Human-readable group name.
+    pub name: String,
+    /// Total accounts in this group.
+    pub account_count: usize,
+    /// The lone account name when this group contains exactly one account.
+    pub single_account_name: Option<String>,
 }
 
 /// New reusable account group row.
@@ -1373,7 +1533,15 @@ pub fn codex_auth_access_token_expires_at_ms(auth_json: &str) -> Option<i64> {
             .get("tokens")
             .and_then(|tokens| json_string_any(tokens, &["access_token", "accessToken"]))
     })?;
-    jwt_expiry_unix_ms(&access_token)
+    codex_access_token_expires_at_ms(Some(access_token.as_str()))
+}
+
+/// Decode the JWT expiry from a Codex access token string.
+pub fn codex_access_token_expires_at_ms(access_token: Option<&str>) -> Option<i64> {
+    let access_token = access_token
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    jwt_expiry_unix_ms(access_token)
 }
 
 fn json_string_any(value: &Value, fields: &[&str]) -> Option<String> {
@@ -2160,6 +2328,33 @@ pub trait AdminKeyStore: Send + Sync {
         page: AdminPageRequest,
     ) -> anyhow::Result<AdminKeysPage>;
 
+    /// List one filtered page of managed keys.
+    async fn list_admin_keys_filtered_page(
+        &self,
+        provider_type: Option<&str>,
+        query: &AdminKeyPageQuery,
+        page: AdminPageRequest,
+    ) -> anyhow::Result<AdminKeysPage> {
+        let mut keys = self.list_admin_keys().await?;
+        if let Some(provider_type) = provider_type {
+            keys.retain(|key| key.provider_type == provider_type);
+        }
+        let summary = summarize_admin_keys(&keys);
+        apply_admin_key_query(&mut keys, query);
+        let total = keys.len();
+        let start = page.offset.min(total);
+        let end = start.saturating_add(page.limit).min(total);
+        let keys = keys[start..end].to_vec();
+        Ok(AdminKeysPage {
+            has_more: page.has_more(keys.len(), total),
+            keys,
+            summary,
+            total,
+            limit: page.limit,
+            offset: page.offset,
+        })
+    }
+
     /// Find one key that references an account group.
     async fn find_admin_key_referencing_account_group(
         &self,
@@ -2189,6 +2384,46 @@ pub trait AdminAccountGroupStore: Send + Sync {
         &self,
         provider_type: &str,
     ) -> anyhow::Result<Vec<AdminAccountGroup>>;
+
+    /// List one page of account groups for one provider.
+    async fn list_admin_account_groups_page(
+        &self,
+        provider_type: &str,
+        page: AdminPageRequest,
+    ) -> anyhow::Result<AdminAccountGroupsPage> {
+        let groups = self.list_admin_account_groups(provider_type).await?;
+        let total = groups.len();
+        let start = page.offset.min(total);
+        let end = start.saturating_add(page.limit).min(total);
+        let groups = groups[start..end].to_vec();
+        Ok(AdminAccountGroupsPage {
+            has_more: page.has_more(groups.len(), total),
+            groups,
+            total,
+            limit: page.limit,
+            offset: page.offset,
+        })
+    }
+
+    /// List lightweight account-group selector options for one provider.
+    async fn list_admin_account_group_options(
+        &self,
+        provider_type: &str,
+    ) -> anyhow::Result<Vec<AdminAccountGroupOption>> {
+        Ok(self
+            .list_admin_account_groups(provider_type)
+            .await?
+            .into_iter()
+            .map(|group| AdminAccountGroupOption {
+                account_count: group.account_names.len(),
+                single_account_name: (group.account_names.len() == 1)
+                    .then(|| group.account_names[0].clone()),
+                id: group.id,
+                provider_type: group.provider_type,
+                name: group.name,
+            })
+            .collect())
+    }
 
     /// Create one account group.
     async fn create_admin_account_group(
@@ -2377,6 +2612,14 @@ pub trait AdminKiroAccountStore: Send + Sync {
     /// List one page of persisted Kiro accounts.
     async fn list_admin_kiro_accounts_page(
         &self,
+        page: AdminPageRequest,
+    ) -> anyhow::Result<AdminKiroAccountsPage>;
+
+    /// List one page of persisted Kiro accounts, optionally filtered by a
+    /// case-insensitive account-name prefix.
+    async fn list_admin_kiro_accounts_filtered_page(
+        &self,
+        prefix: Option<&str>,
         page: AdminPageRequest,
     ) -> anyhow::Result<AdminKiroAccountsPage>;
 
@@ -2799,6 +3042,7 @@ impl AdminKeyStore for EmptyAdminKeyStore {
             effective_kiro_billable_model_multipliers_json:
                 default_kiro_billable_model_multipliers_json(),
             uses_global_kiro_billable_model_multipliers: true,
+            kiro_candidate_credit_summary: None,
         })
     }
 
@@ -3132,6 +3376,21 @@ impl AdminKiroAccountStore for EmptyAdminKiroAccountStore {
 
     async fn list_admin_kiro_accounts_page(
         &self,
+        page: AdminPageRequest,
+    ) -> anyhow::Result<AdminKiroAccountsPage> {
+        Ok(AdminKiroAccountsPage {
+            accounts: Vec::new(),
+            summary: AdminAccountsSummary::default(),
+            total: 0,
+            limit: page.limit,
+            offset: page.offset,
+            has_more: false,
+        })
+    }
+
+    async fn list_admin_kiro_accounts_filtered_page(
+        &self,
+        _prefix: Option<&str>,
         page: AdminPageRequest,
     ) -> anyhow::Result<AdminKiroAccountsPage> {
         Ok(AdminKiroAccountsPage {
