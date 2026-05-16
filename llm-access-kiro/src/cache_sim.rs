@@ -23,7 +23,8 @@ use sha2::{Digest, Sha256};
 use xxhash_rust::xxh3::{xxh3_128, xxh3_64};
 
 use crate::wire::{
-    AssistantMessage, ConversationState, Message, Tool, UserInputMessage, UserMessage,
+    AssistantMessage, ConversationState, KiroDocument, KiroImage, Message, Tool, UserInputMessage,
+    UserInputMessageContext, UserMessage,
 };
 
 const PREFIX_CACHE_PAGE_SIZE: usize = 64;
@@ -159,6 +160,10 @@ pub struct RuntimePromptProjection {
 }
 
 impl RuntimePromptProjection {
+    pub fn from_conversation_state(state: &ConversationState) -> Self {
+        build_runtime_prompt_projection(state)
+    }
+
     pub fn lookup_anchor_hash(&self) -> &str {
         &self.lookup_anchor_hash
     }
@@ -258,6 +263,19 @@ impl KiroCacheSimulator {
         }
         let mut tree = self.prefix_tree.lock();
         tree.match_prefix(&projection.stable_prefix_pages, now, config.prefix_cache_entry_ttl)
+    }
+
+    pub fn match_prefix_from_runtime_projection(
+        &self,
+        projection: &RuntimePromptProjection,
+        config: KiroCacheSimulationConfig,
+        now: Instant,
+    ) -> PrefixCacheMatch {
+        if matches!(config.mode, KiroCacheSimulationMode::Formula) {
+            return PrefixCacheMatch::default();
+        }
+        let mut tree = self.prefix_tree.lock();
+        tree.match_prefix(projection.stable_prefix_pages(), now, config.prefix_cache_entry_ttl)
     }
 
     pub fn recover_conversation_id(
@@ -895,34 +913,181 @@ fn canonicalize_history(history: &[Message]) -> Vec<CanonicalInputUnit> {
     units
 }
 
+fn build_runtime_prompt_projection(state: &ConversationState) -> RuntimePromptProjection {
+    let mut builder = RuntimePromptProjectionBuilder::new();
+
+    for message in &state.history {
+        match message {
+            Message::User(message) => {
+                builder.add_history_units(canonicalize_user_message(
+                    "history_user",
+                    &message.user_input_message,
+                ));
+            },
+            Message::Assistant(message) => {
+                builder.add_history_units(canonicalize_assistant_segments(
+                    "history_assistant",
+                    &message.assistant_response_message,
+                ));
+            },
+        }
+    }
+
+    builder.add_stable_units(canonicalize_tools(
+        &state
+            .current_message
+            .user_input_message
+            .user_input_message_context
+            .tools,
+    ));
+    builder.add_current_input_units(canonicalize_current_turn_for_input(
+        &state.current_message.user_input_message,
+    ));
+    builder.add_current_history_units(canonicalize_current_turn_as_history(
+        &state.current_message.user_input_message,
+    ));
+
+    builder.finish()
+}
+
+struct RuntimePromptProjectionBuilder {
+    lookup_anchor_hasher: Sha256,
+    resume_anchor_hasher: Sha256,
+    stable_prefix_pages: TokenPageBuilder,
+    projected_input_token_count: u64,
+}
+
+impl RuntimePromptProjectionBuilder {
+    fn new() -> Self {
+        Self {
+            lookup_anchor_hasher: Sha256::new(),
+            resume_anchor_hasher: Sha256::new(),
+            stable_prefix_pages: TokenPageBuilder::new(),
+            projected_input_token_count: 0,
+        }
+    }
+
+    fn add_history_units(&mut self, units: Vec<CanonicalInputUnit>) {
+        for unit in units {
+            update_hash_segment(&mut self.lookup_anchor_hasher, &unit.key);
+            update_hash_segment(&mut self.resume_anchor_hasher, &unit.key);
+            self.add_stable_unit(unit);
+        }
+    }
+
+    fn add_stable_units(&mut self, units: Vec<CanonicalInputUnit>) {
+        for unit in units {
+            self.add_stable_unit(unit);
+        }
+    }
+
+    fn add_current_input_units(&mut self, units: Vec<CanonicalInputUnit>) {
+        for unit in units {
+            self.projected_input_token_count = self
+                .projected_input_token_count
+                .saturating_add(unit.token_atoms.len() as u64);
+        }
+    }
+
+    fn add_current_history_units(&mut self, units: Vec<String>) {
+        for unit in units {
+            update_hash_segment(&mut self.resume_anchor_hasher, &unit);
+        }
+    }
+
+    fn add_stable_unit(&mut self, unit: CanonicalInputUnit) {
+        self.projected_input_token_count = self
+            .projected_input_token_count
+            .saturating_add(unit.token_atoms.len() as u64);
+        self.stable_prefix_pages.push_atoms(&unit.token_atoms);
+    }
+
+    fn finish(self) -> RuntimePromptProjection {
+        RuntimePromptProjection {
+            lookup_anchor_hash: format!("{:x}", self.lookup_anchor_hasher.finalize()),
+            stable_prefix_pages: self.stable_prefix_pages.finish(),
+            projected_input_token_count: self.projected_input_token_count,
+            resume_anchor_hasher: self.resume_anchor_hasher,
+        }
+    }
+}
+
+struct TokenPageBuilder {
+    pages: Vec<CanonicalTokenPage>,
+    current: Vec<u64>,
+}
+
+impl TokenPageBuilder {
+    fn new() -> Self {
+        Self {
+            pages: Vec::new(),
+            current: Vec::with_capacity(PREFIX_CACHE_PAGE_SIZE),
+        }
+    }
+
+    fn push_atoms(&mut self, atoms: &[u64]) {
+        for atom in atoms {
+            self.current.push(*atom);
+            if self.current.len() == PREFIX_CACHE_PAGE_SIZE {
+                self.pages.push(build_token_page(&self.current));
+                self.current.clear();
+            }
+        }
+    }
+
+    fn finish(mut self) -> Vec<CanonicalTokenPage> {
+        if !self.current.is_empty() {
+            self.pages.push(build_token_page(&self.current));
+        }
+        self.pages
+    }
+}
+
 fn canonicalize_current_turn_as_history(message: &UserInputMessage) -> Vec<String> {
-    canonicalize_user_message("history_user", &UserMessage {
-        content: message.content.clone(),
-        images: message.images.clone(),
-        documents: message.documents.clone(),
-        user_input_message_context: message.user_input_message_context.clone(),
-        model_id: message.model_id.clone(),
-        origin: message.origin.clone(),
-    })
-    .into_iter()
-    .map(|unit| unit.key)
-    .collect()
+    canonicalize_user_input_message("history_user", message)
+        .into_iter()
+        .map(|unit| unit.key)
+        .collect()
 }
 
 fn canonicalize_current_turn_for_input(message: &UserInputMessage) -> Vec<CanonicalInputUnit> {
-    canonicalize_user_message("current_user", &UserMessage {
-        content: message.content.clone(),
-        images: message.images.clone(),
-        documents: message.documents.clone(),
-        user_input_message_context: message.user_input_message_context.clone(),
-        model_id: message.model_id.clone(),
-        origin: message.origin.clone(),
-    })
+    canonicalize_user_input_message("current_user", message)
 }
 
 fn canonicalize_user_message(kind_prefix: &str, message: &UserMessage) -> Vec<CanonicalInputUnit> {
+    canonicalize_user_message_parts(kind_prefix, UserMessageParts {
+        content: &message.content,
+        images: &message.images,
+        documents: &message.documents,
+        context: &message.user_input_message_context,
+    })
+}
+
+fn canonicalize_user_input_message(
+    kind_prefix: &str,
+    message: &UserInputMessage,
+) -> Vec<CanonicalInputUnit> {
+    canonicalize_user_message_parts(kind_prefix, UserMessageParts {
+        content: &message.content,
+        images: &message.images,
+        documents: &message.documents,
+        context: &message.user_input_message_context,
+    })
+}
+
+struct UserMessageParts<'a> {
+    content: &'a str,
+    images: &'a [KiroImage],
+    documents: &'a [KiroDocument],
+    context: &'a UserInputMessageContext,
+}
+
+fn canonicalize_user_message_parts(
+    kind_prefix: &str,
+    message: UserMessageParts<'_>,
+) -> Vec<CanonicalInputUnit> {
     let mut units = Vec::new();
-    let normalized_content = normalize_text(&message.content);
+    let normalized_content = normalize_text(message.content);
     if !normalized_content.is_empty() {
         let key = serialize_canonical_segment(&CanonicalTextSegment {
             kind: format!("{kind_prefix}_text"),
@@ -934,7 +1099,7 @@ fn canonicalize_user_message(kind_prefix: &str, message: &UserMessage) -> Vec<Ca
         });
     }
 
-    for image in &message.images {
+    for image in message.images {
         let key = serialize_canonical_segment(&CanonicalImageSegment {
             kind: format!("{kind_prefix}_image"),
             format: normalize_text(&image.format),
@@ -946,7 +1111,7 @@ fn canonicalize_user_message(kind_prefix: &str, message: &UserMessage) -> Vec<Ca
         });
     }
 
-    for document in &message.documents {
+    for document in message.documents {
         let key = serialize_canonical_segment(&CanonicalDocumentSegment {
             kind: format!("{kind_prefix}_document"),
             name: normalize_text(&document.name),
@@ -959,7 +1124,7 @@ fn canonicalize_user_message(kind_prefix: &str, message: &UserMessage) -> Vec<Ca
         });
     }
 
-    for result in &message.user_input_message_context.tool_results {
+    for result in &message.context.tool_results {
         let canonical_content = canonical_tool_result_content(&result.content);
         let key = serialize_canonical_segment(&CanonicalToolResultSegment {
             kind: format!("{kind_prefix}_tool_result"),
@@ -1152,10 +1317,14 @@ fn hash_segments(segments: &[String]) -> String {
 
 fn update_hash_segments<'a>(hasher: &mut Sha256, segments: impl IntoIterator<Item = &'a String>) {
     for segment in segments {
-        let len = segment.len() as u64;
-        hasher.update(len.to_le_bytes());
-        hasher.update(segment.as_bytes());
+        update_hash_segment(hasher, segment);
     }
+}
+
+fn update_hash_segment(hasher: &mut Sha256, segment: &str) {
+    let len = segment.len() as u64;
+    hasher.update(len.to_le_bytes());
+    hasher.update(segment.as_bytes());
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -1404,7 +1573,7 @@ mod tests {
         let expected_pages = projection.stable_prefix_pages.clone();
         let expected_projected_tokens = projection.projected_input_token_count;
 
-        let runtime_projection = projection.into_runtime_projection();
+        let runtime_projection = RuntimePromptProjection::from_conversation_state(&state);
 
         assert_eq!(runtime_projection.lookup_anchor_hash(), expected_lookup_anchor);
         assert_eq!(runtime_projection.stable_prefix_pages(), expected_pages);

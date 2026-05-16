@@ -50,10 +50,10 @@ pub fn count_tokens(text: &str) -> u64 {
 /// and tool definitions. The `_model` parameter is reserved for future
 /// model-specific adjustments.
 pub fn count_all_tokens(
-    _model: String,
-    system: Option<Vec<SystemMessage>>,
-    messages: Vec<Message>,
-    tools: Option<Vec<Tool>>,
+    _model: &str,
+    system: Option<&[SystemMessage]>,
+    messages: &[Message],
+    tools: Option<&[Tool]>,
 ) -> u64 {
     let mut total = 0;
     if let Some(system) = system {
@@ -62,8 +62,8 @@ pub fn count_all_tokens(
         }
     }
     for message in messages {
-        match message.content {
-            serde_json::Value::String(text) => total += count_tokens(&text),
+        match &message.content {
+            serde_json::Value::String(text) => total += count_tokens(text),
             serde_json::Value::Array(items) => {
                 for item in items {
                     if let Some(text) = item.get("text").and_then(|value| value.as_str()) {

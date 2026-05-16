@@ -2920,10 +2920,10 @@ async fn dispatch_kiro_proxy(
     }
     if route_mcp_web_search {
         let request_input_tokens = token::count_all_tokens(
-            payload.model.clone(),
-            payload.system.clone(),
-            payload.messages.clone(),
-            payload.tools.clone(),
+            &payload.model,
+            payload.system.as_deref(),
+            &payload.messages,
+            payload.tools.as_deref(),
         ) as i32;
         override_kiro_thinking_from_model_name(&mut payload);
         if routes[0].full_request_logging_enabled {
@@ -2971,10 +2971,10 @@ async fn dispatch_kiro_proxy(
         key_permit = Some(permit);
     }
     let request_input_tokens = token::count_all_tokens(
-        payload.model.clone(),
-        payload.system.clone(),
-        payload.messages.clone(),
-        payload.tools.clone(),
+        &payload.model,
+        payload.system.as_deref(),
+        &payload.messages,
+        payload.tools.as_deref(),
     ) as i32;
     override_kiro_thinking_from_model_name(&mut payload);
     let normalized = match normalize_request(&payload) {
@@ -4912,19 +4912,22 @@ fn build_kiro_cache_context(
         conversation_anchor_max_entries: route.conversation_anchor_max_entries as usize,
         conversation_anchor_ttl: Duration::from_secs(route.conversation_anchor_ttl_seconds),
     };
-    let projection =
-        llm_access_kiro::cache_sim::PromptProjection::from_conversation_state(conversation_state);
+    let projection = RuntimePromptProjection::from_conversation_state(conversation_state);
     let prefix_cache_match = if route.cache_estimation_enabled
         && simulation_config.mode == KiroCacheSimulationMode::PrefixTree
     {
-        cache_simulator.match_prefix(&projection, simulation_config, Instant::now())
+        cache_simulator.match_prefix_from_runtime_projection(
+            &projection,
+            simulation_config,
+            Instant::now(),
+        )
     } else {
         llm_access_kiro::cache_sim::PrefixCacheMatch::default()
     };
     Ok(KiroCacheContext {
         policy,
         simulation_config,
-        projection: projection.into_runtime_projection(),
+        projection,
         prefix_cache_match,
         conversation_id: conversation_state.conversation_id.clone(),
         cache_kmodels: parse_kiro_cache_kmodels_json(&route.cache_kmodels_json)?,

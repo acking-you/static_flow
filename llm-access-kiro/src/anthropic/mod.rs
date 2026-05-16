@@ -43,10 +43,10 @@ pub fn supported_models_response() -> ModelsResponse {
 pub fn count_tokens_response(payload: CountTokensRequest) -> CountTokensResponse {
     CountTokensResponse {
         input_tokens: token::count_all_tokens(
-            payload.model,
-            payload.system,
-            payload.messages,
-            payload.tools,
+            &payload.model,
+            payload.system.as_deref(),
+            &payload.messages,
+            payload.tools.as_deref(),
         ) as i32,
     }
 }
