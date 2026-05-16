@@ -30,6 +30,7 @@ llm-access-core = { path = "../llm-access-core" }
 llm-access-kiro = { path = "../llm-access-kiro" }
 llm-access-store = { path = "../llm-access-store" }
 llm-usage-journal = { path = "../llm-usage-journal" }
+lru = { workspace = true }
 maxminddb = "0.27"
 rand = "0.8"
 reqwest = { workspace = true, features = ["stream"] }

@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    num::NonZeroUsize,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -80,6 +81,7 @@ use llm_access_kiro::{
         UserInputMessageContext,
     },
 };
+use lru::LruCache;
 use serde_json::{json, Value};
 
 use crate::{
@@ -98,6 +100,10 @@ const KIRO_LAST_MESSAGE_PART_PREVIEW_CHARS: usize = 320;
 const KIRO_LAST_MESSAGE_TOTAL_PREVIEW_CHARS: usize = 1_024;
 const KIRO_VISION_BRIDGE_MODEL: &str = "claude-sonnet-4.6";
 const CODEX_QUOTA_EXHAUSTION_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+const DEFAULT_PROVIDER_CLIENT_CACHE_CAPACITY: usize = 8;
+const MAX_PROVIDER_CLIENT_CACHE_CAPACITY: usize = 64;
+const DEFAULT_PROVIDER_CLIENT_POOL_MAX_IDLE_PER_HOST: usize = 1;
+const MAX_PROVIDER_CLIENT_POOL_MAX_IDLE_PER_HOST: usize = 8;
 const KIRO_VISION_BRIDGE_PROMPT: &str = "Describe the attached image(s) for another Claude model \
                                          that will answer the user's request. Include visible \
                                          text, objects, colors, layout, charts, tables, and \
@@ -301,6 +307,26 @@ fn capture_codex_dispatch_request_json(
         meta.client_request_body_json = Some(client_body.clone());
     }
     meta.upstream_request_body_json = Some(prepared.request_body.clone());
+}
+
+fn capture_codex_prepared_request_json(
+    meta: &mut ProviderUsageMetadata,
+    prepared: &PreparedGatewayRequest,
+) {
+    if meta.client_request_body_json.is_none() {
+        meta.client_request_body_json = Some(prepared.client_request_body_or_upstream().clone());
+    }
+    if meta.upstream_request_body_json.is_none() {
+        meta.upstream_request_body_json = Some(prepared.request_body.clone());
+    }
+}
+
+fn strip_codex_stream_request_bodies(
+    mut prepared: PreparedGatewayRequest,
+) -> PreparedGatewayRequest {
+    prepared.client_request_body = None;
+    prepared.request_body = Bytes::new();
+    prepared
 }
 
 fn captured_body_json(body: &Option<Bytes>) -> Option<String> {
@@ -1189,7 +1215,6 @@ async fn dispatch_codex_proxy(
                 continue;
             },
         };
-        capture_codex_dispatch_request_json(&mut usage_meta, &body, &prepared);
         let upstream = add_codex_upstream_headers(
             client.request(method.clone(), upstream_url.clone()),
             &request_headers,
@@ -1224,7 +1249,6 @@ async fn dispatch_codex_proxy(
                         account_id: ctx.account_id,
                         is_fedramp_account: ctx.is_fedramp_account,
                     };
-                    capture_codex_dispatch_request_json(&mut usage_meta, &body, &prepared);
                     let retry = add_codex_upstream_headers(
                         client.request(method.clone(), upstream_url.clone()),
                         &request_headers,
@@ -1303,6 +1327,7 @@ async fn dispatch_codex_proxy(
                     .expect("codex key permit should be held until response is returned"),
                 account_permit,
             ];
+            capture_codex_dispatch_request_json(&mut usage_meta, &body, &prepared);
             return adapt_codex_upstream_response_from_parts(
                 CodexUpstreamResponseParts {
                     status,
@@ -1355,7 +1380,6 @@ async fn dispatch_codex_proxy(
         };
         if is_codex_invalid_encrypted_content_response(status, &bytes) {
             if let Some(retry_prepared) = retry_codex_without_encrypted_reasoning(&prepared) {
-                capture_codex_dispatch_request_json(&mut usage_meta, &body, &retry_prepared);
                 let retry = add_codex_upstream_headers(
                     client.request(method.clone(), upstream_url.clone()),
                     &request_headers,
@@ -1435,6 +1459,7 @@ async fn dispatch_codex_proxy(
                 .expect("codex key permit should be held until response is returned"),
             account_permit,
         ];
+        capture_codex_dispatch_request_json(&mut usage_meta, &body, &response_prepared);
         return adapt_codex_upstream_response_from_parts(
             CodexUpstreamResponseParts {
                 status,
@@ -1507,6 +1532,7 @@ async fn adapt_codex_upstream_response(
                     message = %err.message,
                     "codex forced-SSE upstream request failed before response.completed"
                 );
+                capture_codex_prepared_request_json(&mut usage_meta, &prepared);
                 if let Err(record_err) = record_codex_usage(
                     control_store.as_ref(),
                     &key,
@@ -1577,6 +1603,7 @@ async fn adapt_codex_upstream_response(
     }
 
     if expects_sse {
+        let prepared = strip_codex_stream_request_bodies(prepared);
         return stream_codex_upstream_response(
             response,
             status,
@@ -4528,15 +4555,15 @@ static DEFAULT_PROVIDER_CLIENT: std::sync::LazyLock<reqwest::Client> =
         build_provider_client(None).expect("default provider client should build")
     });
 static PROVIDER_CLIENT_CACHE: std::sync::LazyLock<
-    Mutex<HashMap<ProviderClientCacheKey, reqwest::Client>>,
-> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    Mutex<LruCache<ProviderClientCacheKey, reqwest::Client>>,
+> = std::sync::LazyLock::new(|| Mutex::new(LruCache::new(provider_client_cache_capacity())));
 static KIRO_REMOTE_MEDIA_CLIENT: std::sync::LazyLock<reqwest::Client> =
     std::sync::LazyLock::new(|| {
         reqwest::Client::builder()
             .timeout(KIRO_REMOTE_MEDIA_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
             .pool_idle_timeout(Duration::from_secs(90))
-            .pool_max_idle_per_host(8)
+            .pool_max_idle_per_host(provider_client_pool_max_idle_per_host())
             .tcp_keepalive(Duration::from_secs(30))
             .build()
             .expect("kiro remote media client should build")
@@ -4545,7 +4572,7 @@ static KIRO_REMOTE_MEDIA_CLIENT: std::sync::LazyLock<reqwest::Client> =
 fn build_provider_client(proxy: Option<&ProviderProxyConfig>) -> anyhow::Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder()
         .pool_idle_timeout(Duration::from_secs(90))
-        .pool_max_idle_per_host(8)
+        .pool_max_idle_per_host(provider_client_pool_max_idle_per_host())
         .tcp_keepalive(Duration::from_secs(30));
     if let Some(proxy_config) = proxy {
         let mut proxy = reqwest::Proxy::all(&proxy_config.proxy_url)?;
@@ -4567,20 +4594,37 @@ fn provider_client(proxy: Option<&ProviderProxyConfig>) -> anyhow::Result<reqwes
         proxy_username: proxy_config.proxy_username.clone(),
         proxy_password: proxy_config.proxy_password.clone(),
     };
-    if let Some(client) = PROVIDER_CLIENT_CACHE
-        .lock()
-        .expect("provider client cache lock")
-        .get(&cache_key)
-        .cloned()
     {
-        return Ok(client);
+        let mut cache = PROVIDER_CLIENT_CACHE
+            .lock()
+            .expect("provider client cache lock");
+        if let Some(client) = cache.get(&cache_key).cloned() {
+            return Ok(client);
+        }
     }
     let client = build_provider_client(Some(proxy_config))?;
     PROVIDER_CLIENT_CACHE
         .lock()
         .expect("provider client cache lock")
-        .insert(cache_key, client.clone());
+        .put(cache_key, client.clone());
     Ok(client)
+}
+
+fn provider_client_cache_capacity() -> NonZeroUsize {
+    let capacity = std::env::var("LLM_ACCESS_PROVIDER_CLIENT_CACHE_CAPACITY")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.clamp(1, MAX_PROVIDER_CLIENT_CACHE_CAPACITY))
+        .unwrap_or(DEFAULT_PROVIDER_CLIENT_CACHE_CAPACITY);
+    NonZeroUsize::new(capacity).expect("provider client cache capacity is non-zero")
+}
+
+fn provider_client_pool_max_idle_per_host() -> usize {
+    std::env::var("LLM_ACCESS_PROVIDER_CLIENT_POOL_MAX_IDLE_PER_HOST")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.min(MAX_PROVIDER_CLIENT_POOL_MAX_IDLE_PER_HOST))
+        .unwrap_or(DEFAULT_PROVIDER_CLIENT_POOL_MAX_IDLE_PER_HOST)
 }
 
 fn proxy_cooldown_key_for_route(route: &ProviderKiroRoute) -> Option<String> {

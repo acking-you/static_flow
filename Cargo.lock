@@ -6184,6 +6184,7 @@ dependencies = [
  "llm-access-kiro",
  "llm-access-store",
  "llm-usage-journal",
+ "lru 0.16.4",
  "maxminddb",
  "rand 0.8.5",
  "reqwest 0.12.28",

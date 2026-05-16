@@ -24,6 +24,8 @@ Environment=mimalloc_purge_extend_delay=0
 Environment=mimalloc_arena_purge_mult=1
 Environment=mimalloc_generic_collect=1000
 Environment=LLM_ACCESS_BACKGROUND_STATUS_REFRESH_ENABLED=0
+Environment=LLM_ACCESS_PROVIDER_CLIENT_CACHE_CAPACITY=8
+Environment=LLM_ACCESS_PROVIDER_CLIENT_POOL_MAX_IDLE_PER_HOST=1
 Environment=LLM_ACCESS_USAGE_JOURNAL_DIR=/var/lib/staticflow/llm-access/usage-journal
 WorkingDirectory=/mnt/llm-access
 ExecStartPre=/usr/bin/bash -lc 'set -a; . /mnt/llm-access/config/neon.env; exec /usr/local/bin/staticflow-wait-llm-access-state api'
