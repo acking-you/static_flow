@@ -7,8 +7,7 @@ use yew_router::prelude::Link;
 
 use crate::{
     api::{
-        fetch_llm_gateway_access, fetch_llm_gateway_account_contributions,
-        fetch_llm_gateway_sponsors, fetch_llm_gateway_support_config,
+        fetch_llm_gateway_access, fetch_llm_gateway_public_page,
         submit_gpt2api_account_contribution_request,
         submit_llm_gateway_account_contribution_request, submit_llm_gateway_sponsor_request,
         submit_llm_gateway_token_request, LlmGatewayAccessResponse, LlmGatewayPublicKeyView,
@@ -286,76 +285,37 @@ pub fn llm_access_page() -> Html {
         let access = access.clone();
         let loading = loading.clone();
         let error = error.clone();
-        use_effect_with((), move |_| {
-            wasm_bindgen_futures::spawn_local(async move {
-                match fetch_llm_gateway_access().await {
-                    Ok(data) => {
-                        access.set(Some(data));
-                        error.set(None);
-                    },
-                    Err(err) => {
-                        access.set(None);
-                        error.set(Some(err));
-                    },
-                }
-                loading.set(false);
-            });
-            || ()
-        });
-    }
-    {
         let contributions = contributions.clone();
         let contribution_error = contribution_error.clone();
-        use_effect_with((), move |_| {
-            wasm_bindgen_futures::spawn_local(async move {
-                match fetch_llm_gateway_account_contributions().await {
-                    Ok(data) => {
-                        contributions.set(data.contributions);
-                        contribution_error.set(None);
-                    },
-                    Err(err) => {
-                        contributions.set(vec![]);
-                        contribution_error.set(Some(err));
-                    },
-                }
-            });
-            || ()
-        });
-    }
-    {
         let support_config = support_config.clone();
         let support_error = support_error.clone();
-        use_effect_with((), move |_| {
-            wasm_bindgen_futures::spawn_local(async move {
-                match fetch_llm_gateway_support_config().await {
-                    Ok(data) => {
-                        support_config.set(Some(data));
-                        support_error.set(None);
-                    },
-                    Err(err) => {
-                        support_config.set(None);
-                        support_error.set(Some(err));
-                    },
-                }
-            });
-            || ()
-        });
-    }
-    {
         let sponsors = sponsors.clone();
         let sponsor_error = sponsor_error.clone();
         use_effect_with((), move |_| {
             wasm_bindgen_futures::spawn_local(async move {
-                match fetch_llm_gateway_sponsors().await {
+                match fetch_llm_gateway_public_page().await {
                     Ok(data) => {
-                        sponsors.set(data.sponsors);
+                        access.set(Some(data.access));
+                        contributions.set(data.account_contributions.contributions);
+                        support_config.set(Some(data.support_config));
+                        sponsors.set(data.sponsors.sponsors);
+                        error.set(None);
+                        contribution_error.set(None);
+                        support_error.set(None);
                         sponsor_error.set(None);
                     },
                     Err(err) => {
+                        access.set(None);
+                        contributions.set(vec![]);
+                        support_config.set(None);
                         sponsors.set(vec![]);
+                        error.set(Some(err.clone()));
+                        contribution_error.set(Some(err.clone()));
+                        support_error.set(Some(err.clone()));
                         sponsor_error.set(Some(err));
                     },
                 }
+                loading.set(false);
             });
             || ()
         });

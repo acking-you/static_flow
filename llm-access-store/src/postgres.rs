@@ -588,12 +588,17 @@ impl PostgresControlRepository {
                     r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
                     r.kiro_cache_policy_override_json::text,
                     r.kiro_billable_model_multipliers_override_json::text,
-                    u.input_uncached_tokens, u.input_cached_tokens, u.output_tokens,
-                    u.billable_tokens, u.credit_total, u.credit_missing_events,
-                    u.last_used_at_ms, u.updated_at_ms
+                    COALESCE(u.input_uncached_tokens, 0),
+                    COALESCE(u.input_cached_tokens, 0),
+                    COALESCE(u.output_tokens, 0),
+                    COALESCE(u.billable_tokens, 0),
+                    COALESCE(u.credit_total, '0'),
+                    COALESCE(u.credit_missing_events, 0),
+                    u.last_used_at_ms,
+                    COALESCE(u.updated_at_ms, k.updated_at_ms)
                  FROM llm_keys k
-                 JOIN llm_key_route_config r ON r.key_id = k.key_id
-                 JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
+                 LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
+                 LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
                  ORDER BY k.created_at_ms DESC, k.key_id DESC",
                 &[],
             )
@@ -619,7 +624,8 @@ impl PostgresControlRepository {
                     COALESCE(SUM(CASE WHEN k.status = 'active' THEN 1 ELSE 0 END), 0)::BIGINT,
                     COALESCE(SUM(CASE WHEN k.status = 'disabled' THEN 1 ELSE 0 END), 0)::BIGINT,
                     COALESCE(SUM(k.quota_billable_limit), 0)::BIGINT,
-                    COALESCE(SUM(k.quota_billable_limit - u.billable_tokens), 0)::BIGINT,
+                    COALESCE(SUM(k.quota_billable_limit - COALESCE(u.billable_tokens, 0)), \
+                 0)::BIGINT,
                     COALESCE(SUM(u.input_uncached_tokens), 0)::BIGINT,
                     COALESCE(SUM(u.input_cached_tokens), 0)::BIGINT,
                     COALESCE(SUM(u.output_tokens), 0)::BIGINT,
@@ -627,8 +633,7 @@ impl PostgresControlRepository {
                     COALESCE(SUM((u.credit_total)::DOUBLE PRECISION), 0)::DOUBLE PRECISION,
                     COALESCE(SUM(u.credit_missing_events), 0)::BIGINT
                  FROM llm_keys k
-                 JOIN llm_key_route_config r ON r.key_id = k.key_id
-                 JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
+                 LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
                  WHERE ($1::text IS NULL OR k.provider_type = $1)",
                 &[&provider],
             )
@@ -662,8 +667,6 @@ impl PostgresControlRepository {
             .query_one(
                 "SELECT COUNT(*)
                  FROM llm_keys k
-                 JOIN llm_key_route_config r ON r.key_id = k.key_id
-                 JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
                  WHERE ($1::text IS NULL OR k.provider_type = $1)",
                 &[&provider],
             )
@@ -687,12 +690,17 @@ impl PostgresControlRepository {
                     r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
                     r.kiro_cache_policy_override_json::text,
                     r.kiro_billable_model_multipliers_override_json::text,
-                    u.input_uncached_tokens, u.input_cached_tokens, u.output_tokens,
-                    u.billable_tokens, u.credit_total, u.credit_missing_events,
-                    u.last_used_at_ms, u.updated_at_ms
+                    COALESCE(u.input_uncached_tokens, 0),
+                    COALESCE(u.input_cached_tokens, 0),
+                    COALESCE(u.output_tokens, 0),
+                    COALESCE(u.billable_tokens, 0),
+                    COALESCE(u.credit_total, '0'),
+                    COALESCE(u.credit_missing_events, 0),
+                    u.last_used_at_ms,
+                    COALESCE(u.updated_at_ms, k.updated_at_ms)
                  FROM llm_keys k
-                 JOIN llm_key_route_config r ON r.key_id = k.key_id
-                 JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
+                 LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
+                 LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
                  WHERE ($1::text IS NULL OR k.provider_type = $1)
                  ORDER BY k.created_at_ms DESC, k.key_id DESC
                  LIMIT $2 OFFSET $3",
@@ -736,12 +744,17 @@ impl PostgresControlRepository {
                     r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
                     r.kiro_cache_policy_override_json::text,
                     r.kiro_billable_model_multipliers_override_json::text,
-                    u.input_uncached_tokens, u.input_cached_tokens, u.output_tokens,
-                    u.billable_tokens, u.credit_total, u.credit_missing_events,
-                    u.last_used_at_ms, u.updated_at_ms
+                    COALESCE(u.input_uncached_tokens, 0),
+                    COALESCE(u.input_cached_tokens, 0),
+                    COALESCE(u.output_tokens, 0),
+                    COALESCE(u.billable_tokens, 0),
+                    COALESCE(u.credit_total, '0'),
+                    COALESCE(u.credit_missing_events, 0),
+                    u.last_used_at_ms,
+                    COALESCE(u.updated_at_ms, k.updated_at_ms)
                  FROM llm_keys k
                  JOIN llm_key_route_config r ON r.key_id = k.key_id
-                 JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
+                 LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
                  WHERE k.provider_type = $1 AND r.account_group_id = $2
                  ORDER BY k.created_at_ms DESC, k.key_id DESC
                  LIMIT 1",

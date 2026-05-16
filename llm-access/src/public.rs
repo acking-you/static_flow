@@ -28,6 +28,9 @@ const PUBLIC_USAGE_LOOKUP_MAX_OFFSET: usize = 200;
 const PUBLIC_USAGE_LOOKUP_CHART_BUCKETS: usize = 24;
 const PUBLIC_USAGE_LOOKUP_BUCKET_MS: i64 = 60 * 60 * 1000;
 const PUBLIC_USAGE_WORKER_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+const PUBLIC_PAGE_CACHE_CONTROL: &str = "public, max-age=10, stale-while-revalidate=30";
+
+type PublicEndpointResult<T> = Result<T, (StatusCode, &'static str)>;
 
 #[derive(Debug, Serialize)]
 struct LlmGatewayAccessResponse {
@@ -36,6 +39,15 @@ struct LlmGatewayAccessResponse {
     model_catalog_path: String,
     auth_cache_ttl_seconds: u64,
     keys: Vec<LlmGatewayPublicKeyView>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct LlmGatewayPublicPageResponse {
+    access: LlmGatewayAccessResponse,
+    account_contributions: PublicLlmGatewayAccountContributionsResponse,
+    support_config: LlmGatewaySupportConfigView,
+    sponsors: PublicLlmGatewaySponsorsResponse,
     generated_at: i64,
 }
 
@@ -281,36 +293,45 @@ pub(crate) async fn get_llm_gateway_access(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Response {
-    let auth_cache_ttl_seconds = match state.public_access_store.auth_cache_ttl_seconds().await {
-        Ok(value) => value,
-        Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "public access store error").into_response()
-        },
-    };
-    let keys = match state.public_access_store.list_public_access_keys().await {
-        Ok(keys) => keys
-            .into_iter()
-            .map(LlmGatewayPublicKeyView::from)
-            .collect(),
-        Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "public access store error").into_response()
-        },
-    };
-    let gateway_path = "/api/llm-gateway/v1".to_string();
-    let model_catalog_path = "/api/llm-gateway/model-catalog.json".to_string();
-    let base_url = external_origin(&headers)
-        .map(|origin| format!("{origin}{gateway_path}"))
-        .unwrap_or_else(|| gateway_path.clone());
+    match build_llm_gateway_access_response(&state, &headers).await {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => public_endpoint_error(err),
+    }
+}
 
-    Json(LlmGatewayAccessResponse {
-        base_url,
-        gateway_path,
-        model_catalog_path,
-        auth_cache_ttl_seconds,
-        keys,
+pub(crate) async fn get_llm_gateway_public_page(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Response {
+    let access = match build_llm_gateway_access_response(&state, &headers).await {
+        Ok(response) => response,
+        Err(err) => return public_endpoint_error(err),
+    };
+    let account_contributions = match build_llm_gateway_account_contributions_response(&state).await
+    {
+        Ok(response) => response,
+        Err(err) => return public_endpoint_error(err),
+    };
+    let support_config = match build_llm_gateway_support_config_response() {
+        Ok(response) => response,
+        Err(err) => return public_endpoint_error(err),
+    };
+    let sponsors = match build_llm_gateway_sponsors_response(&state).await {
+        Ok(response) => response,
+        Err(err) => return public_endpoint_error(err),
+    };
+    let mut response = Json(LlmGatewayPublicPageResponse {
+        access,
+        account_contributions,
+        support_config,
+        sponsors,
         generated_at: now_ms(),
     })
-    .into_response()
+    .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static(PUBLIC_PAGE_CACHE_CONTROL));
+    response
 }
 
 pub(crate) async fn get_llm_gateway_model_catalog(
@@ -544,61 +565,109 @@ where
 pub(crate) async fn get_llm_gateway_account_contributions(
     State(state): State<HttpState>,
 ) -> Response {
-    let contributions = match state
-        .public_community_store
-        .list_public_account_contributions(MAX_PUBLIC_ACCOUNT_CONTRIBUTIONS)
-        .await
-    {
-        Ok(contributions) => contributions
-            .into_iter()
-            .map(PublicLlmGatewayAccountContributionView::from)
-            .collect(),
-        Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "public community store error")
-                .into_response()
-        },
-    };
-    Json(PublicLlmGatewayAccountContributionsResponse {
-        contributions,
-        generated_at: now_ms(),
-    })
-    .into_response()
+    match build_llm_gateway_account_contributions_response(&state).await {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => public_endpoint_error(err),
+    }
 }
 
 pub(crate) async fn get_llm_gateway_sponsors(State(state): State<HttpState>) -> Response {
-    let sponsors = match state
-        .public_community_store
-        .list_public_sponsors(MAX_PUBLIC_SPONSORS)
-        .await
-    {
-        Ok(sponsors) => sponsors
-            .into_iter()
-            .map(PublicLlmGatewaySponsorView::from)
-            .collect(),
-        Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "public community store error")
-                .into_response()
-        },
-    };
-    Json(PublicLlmGatewaySponsorsResponse {
-        sponsors,
-        generated_at: now_ms(),
-    })
-    .into_response()
+    match build_llm_gateway_sponsors_response(&state).await {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => public_endpoint_error(err),
+    }
 }
 
 pub(crate) async fn get_llm_gateway_support_config() -> Response {
+    match build_llm_gateway_support_config_response() {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => public_endpoint_error(err),
+    }
+}
+
+fn public_endpoint_error((status, message): (StatusCode, &'static str)) -> Response {
+    (status, message).into_response()
+}
+
+async fn build_llm_gateway_access_response(
+    state: &HttpState,
+    headers: &HeaderMap,
+) -> PublicEndpointResult<LlmGatewayAccessResponse> {
+    let auth_cache_ttl_seconds = state
+        .public_access_store
+        .auth_cache_ttl_seconds()
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "public access store error"))?;
+    let keys = state
+        .public_access_store
+        .list_public_access_keys()
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "public access store error"))?
+        .into_iter()
+        .map(LlmGatewayPublicKeyView::from)
+        .collect();
+    let gateway_path = "/api/llm-gateway/v1".to_string();
+    let model_catalog_path = "/api/llm-gateway/model-catalog.json".to_string();
+    let base_url = external_origin(headers)
+        .map(|origin| format!("{origin}{gateway_path}"))
+        .unwrap_or_else(|| gateway_path.clone());
+
+    Ok(LlmGatewayAccessResponse {
+        base_url,
+        gateway_path,
+        model_catalog_path,
+        auth_cache_ttl_seconds,
+        keys,
+        generated_at: now_ms(),
+    })
+}
+
+async fn build_llm_gateway_account_contributions_response(
+    state: &HttpState,
+) -> PublicEndpointResult<PublicLlmGatewayAccountContributionsResponse> {
+    let contributions = state
+        .public_community_store
+        .list_public_account_contributions(MAX_PUBLIC_ACCOUNT_CONTRIBUTIONS)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "public community store error"))?
+        .into_iter()
+        .map(PublicLlmGatewayAccountContributionView::from)
+        .collect();
+    Ok(PublicLlmGatewayAccountContributionsResponse {
+        contributions,
+        generated_at: now_ms(),
+    })
+}
+
+async fn build_llm_gateway_sponsors_response(
+    state: &HttpState,
+) -> PublicEndpointResult<PublicLlmGatewaySponsorsResponse> {
+    let sponsors = state
+        .public_community_store
+        .list_public_sponsors(MAX_PUBLIC_SPONSORS)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "public community store error"))?
+        .into_iter()
+        .map(PublicLlmGatewaySponsorView::from)
+        .collect();
+    Ok(PublicLlmGatewaySponsorsResponse {
+        sponsors,
+        generated_at: now_ms(),
+    })
+}
+
+fn build_llm_gateway_support_config_response() -> PublicEndpointResult<LlmGatewaySupportConfigView>
+{
     let config = match crate::support::load_support_config() {
         Ok(config) => config,
         Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to load support config")
-                .into_response()
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to load support config"));
         },
     };
     let qq_group_qr_url = config
         .has_group_qr()
         .then(|| format!("/api/llm-gateway/support-assets/{}", crate::support::QQ_GROUP_QR_FILE));
-    Json(LlmGatewaySupportConfigView {
+    Ok(LlmGatewaySupportConfigView {
         sponsor_title: config.sponsor_title,
         sponsor_intro: config.sponsor_intro,
         group_name: config.group_name,
@@ -615,7 +684,6 @@ pub(crate) async fn get_llm_gateway_support_config() -> Response {
         qq_group_qr_url,
         generated_at: now_ms(),
     })
-    .into_response()
 }
 
 pub(crate) async fn get_llm_gateway_support_asset(Path(file_name): Path<String>) -> Response {

@@ -367,6 +367,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
                 .post(admin::refresh_admin_kiro_account_balance),
         )
         .route("/api/llm-gateway/access", get(public::get_llm_gateway_access))
+        .route("/api/llm-gateway/public-page", get(public::get_llm_gateway_public_page))
         .route("/api/llm-gateway/model-catalog.json", get(public::get_llm_gateway_model_catalog))
         .route("/api/llm-gateway/status", get(public::get_llm_gateway_status))
         .route(
@@ -1149,6 +1150,71 @@ mod tests {
         assert!(body.contains(r#""base_url":"https://example.test/api/llm-gateway/v1""#));
         assert!(body.contains(r#""model_catalog_path":"/api/llm-gateway/model-catalog.json""#));
         assert!(body.contains(r#""keys":[]"#));
+    }
+
+    #[tokio::test]
+    async fn router_serves_llm_gateway_public_page_without_provider_key() {
+        let _guard = SUPPORT_ENV_LOCK.lock().expect("support env lock");
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-public-page-{}-{unique}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create support dir");
+        std::fs::write(
+            root.join("config.json"),
+            r#"{
+                "owner_display_name":"StaticFlow",
+                "sponsor_title":"Support StaticFlow",
+                "sponsor_intro":"Keep the shared LLM pool healthy.",
+                "group_name":"StaticFlow Group",
+                "qq_group_number":"123456",
+                "group_invite_text":"Join the group",
+                "payment_email_subject":"Payment instructions",
+                "payment_email_signature":"StaticFlow"
+            }"#,
+        )
+        .expect("write support config");
+        std::env::set_var("LLM_ACCESS_SUPPORT_DIR", &root);
+
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/llm-gateway/public-page")
+                    .header(header::HOST, "example.test")
+                    .header("x-forwarded-proto", "https")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        std::env::remove_var("LLM_ACCESS_SUPPORT_DIR");
+        std::fs::remove_dir_all(&root).expect("cleanup support dir");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let cache_control = response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(value["access"]["base_url"], "https://example.test/api/llm-gateway/v1");
+        assert_eq!(value["access"]["model_catalog_path"], "/api/llm-gateway/model-catalog.json");
+        assert!(value["access"]["keys"].as_array().expect("keys").is_empty());
+        assert!(value["account_contributions"]["contributions"]
+            .as_array()
+            .expect("contributions")
+            .is_empty());
+        assert!(value["sponsors"]["sponsors"]
+            .as_array()
+            .expect("sponsors")
+            .is_empty());
+        assert_eq!(cache_control.as_deref(), Some("public, max-age=10, stale-while-revalidate=30"));
     }
 
     #[tokio::test]

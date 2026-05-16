@@ -5810,6 +5810,17 @@ pub struct LlmGatewayAccessResponse {
     pub generated_at: i64,
 }
 
+/// Cached public payload used for the first paint of `/llm-access`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct LlmGatewayPublicPageResponse {
+    pub access: LlmGatewayAccessResponse,
+    pub account_contributions: PublicLlmGatewayAccountContributionsResponse,
+    pub support_config: LlmGatewaySupportConfigView,
+    pub sponsors: PublicLlmGatewaySponsorsResponse,
+    pub generated_at: i64,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(default)]
 pub struct PublicLlmGatewayUsageLookupRequest {
@@ -6043,6 +6054,50 @@ pub struct AdminLlmGatewayKeysResponse {
     pub offset: usize,
     pub has_more: bool,
     pub generated_at: i64,
+}
+
+const ADMIN_GATEWAY_INVENTORY_PAGE_LIMIT: usize = 200;
+
+fn merge_admin_llm_gateway_key_pages(
+    mut first: AdminLlmGatewayKeysResponse,
+    mut next: AdminLlmGatewayKeysResponse,
+) -> AdminLlmGatewayKeysResponse {
+    first.keys.append(&mut next.keys);
+    first.summary = next.summary;
+    first.total = next.total;
+    first.generated_at = next.generated_at;
+    first.has_more = next.has_more;
+    first.offset = 0;
+    first.limit = first.keys.len();
+    first
+}
+
+fn merge_admin_codex_account_pages(
+    mut first: AccountListResponse,
+    mut next: AccountListResponse,
+) -> AccountListResponse {
+    first.accounts.append(&mut next.accounts);
+    first.summary = next.summary;
+    first.total = next.total;
+    first.generated_at = next.generated_at;
+    first.has_more = next.has_more;
+    first.offset = 0;
+    first.limit = first.accounts.len();
+    first
+}
+
+fn merge_admin_kiro_account_pages(
+    mut first: AdminKiroAccountsResponse,
+    mut next: AdminKiroAccountsResponse,
+) -> AdminKiroAccountsResponse {
+    first.accounts.append(&mut next.accounts);
+    first.summary = next.summary;
+    first.total = next.total;
+    first.generated_at = next.generated_at;
+    first.has_more = next.has_more;
+    first.offset = 0;
+    first.limit = first.accounts.len();
+    first
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -6330,14 +6385,14 @@ pub struct PublicLlmGatewayAccountContributionView {
 }
 
 /// Public response for approved account contribution cards.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct PublicLlmGatewayAccountContributionsResponse {
     pub contributions: Vec<PublicLlmGatewayAccountContributionView>,
     pub generated_at: i64,
 }
 
 /// Public support/community config rendered on `/llm-access`.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct LlmGatewaySupportConfigView {
     pub sponsor_title: String,
     pub sponsor_intro: String,
@@ -6412,7 +6467,7 @@ pub struct PublicLlmGatewaySponsorView {
 }
 
 /// Public response for approved sponsor cards.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct PublicLlmGatewaySponsorsResponse {
     pub sponsors: Vec<PublicLlmGatewaySponsorView>,
     pub generated_at: i64,
@@ -6761,6 +6816,62 @@ pub async fn fetch_llm_gateway_access() -> Result<LlmGatewayAccessResponse, Stri
         let response = api_get(&url)
             .header("Cache-Control", "no-cache, no-store, max-age=0")
             .header("Pragma", "no-cache")
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+/// Fetch the cached first-paint bundle for `/llm-access`.
+pub async fn fetch_llm_gateway_public_page() -> Result<LlmGatewayPublicPageResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(LlmGatewayPublicPageResponse {
+            access: LlmGatewayAccessResponse {
+                base_url: "http://localhost:3000/api/llm-gateway/v1".to_string(),
+                gateway_path: "/api/llm-gateway/v1".to_string(),
+                model_catalog_path: "/api/llm-gateway/model-catalog.json".to_string(),
+                auth_cache_ttl_seconds: 60,
+                keys: vec![],
+                generated_at: 0,
+            },
+            account_contributions: PublicLlmGatewayAccountContributionsResponse {
+                contributions: vec![],
+                generated_at: 0,
+            },
+            support_config: LlmGatewaySupportConfigView {
+                sponsor_title: "请作者喝杯咖啡".to_string(),
+                sponsor_intro: "填写邮箱后，系统会把赞助说明和收款码发给你。".to_string(),
+                group_name: "美区词元魔盗团".to_string(),
+                qq_group_number: "1092356490".to_string(),
+                group_invite_text: "遇到 token、贡献或使用问题都可以进群交流。".to_string(),
+                alipay_qr_url: "/api/llm-gateway/support-assets/alipay_qr.png".to_string(),
+                wechat_qr_url: "/api/llm-gateway/support-assets/wechat_qr.png".to_string(),
+                qq_group_qr_url: Some(
+                    "/api/llm-gateway/support-assets/qq_group_qr.png".to_string(),
+                ),
+                generated_at: 0,
+            },
+            sponsors: PublicLlmGatewaySponsorsResponse {
+                sponsors: vec![],
+                generated_at: 0,
+            },
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/llm-gateway/public-page", API_BASE);
+        let response = api_get(&url)
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -7208,75 +7319,6 @@ pub async fn submit_gpt2api_account_contribution_request(
     }
 }
 
-/// Fetch approved public account contributions for the thank-you wall.
-pub async fn fetch_llm_gateway_account_contributions(
-) -> Result<PublicLlmGatewayAccountContributionsResponse, String> {
-    #[cfg(feature = "mock")]
-    {
-        Ok(PublicLlmGatewayAccountContributionsResponse {
-            contributions: vec![],
-            generated_at: 0,
-        })
-    }
-
-    #[cfg(not(feature = "mock"))]
-    {
-        let url =
-            format!("{}/llm-gateway/account-contributions?_ts={}", API_BASE, Date::now() as u64);
-        let response = api_get(&url)
-            .header("Cache-Control", "no-cache, no-store, max-age=0")
-            .header("Pragma", "no-cache")
-            .send()
-            .await
-            .map_err(|e| format!("Network error: {:?}", e))?;
-        if !response.ok() {
-            let text = response.text().await.unwrap_or_default();
-            return Err(format!("Failed: {text}"));
-        }
-        response
-            .json()
-            .await
-            .map_err(|e| format!("Parse error: {:?}", e))
-    }
-}
-
-/// Fetch public sponsor/community configuration for `/llm-access`.
-pub async fn fetch_llm_gateway_support_config() -> Result<LlmGatewaySupportConfigView, String> {
-    #[cfg(feature = "mock")]
-    {
-        Ok(LlmGatewaySupportConfigView {
-            sponsor_title: "请作者喝杯咖啡".to_string(),
-            sponsor_intro: "填写邮箱后，系统会把赞助说明和收款码发给你。".to_string(),
-            group_name: "美区词元魔盗团".to_string(),
-            qq_group_number: "1092356490".to_string(),
-            group_invite_text: "遇到 token、贡献或使用问题都可以进群交流。".to_string(),
-            alipay_qr_url: "/api/llm-gateway/support-assets/alipay_qr.png".to_string(),
-            wechat_qr_url: "/api/llm-gateway/support-assets/wechat_qr.png".to_string(),
-            qq_group_qr_url: Some("/api/llm-gateway/support-assets/qq_group_qr.png".to_string()),
-            generated_at: 0,
-        })
-    }
-
-    #[cfg(not(feature = "mock"))]
-    {
-        let url = format!("{}/llm-gateway/support-config?_ts={}", API_BASE, Date::now() as u64);
-        let response = api_get(&url)
-            .header("Cache-Control", "no-cache, no-store, max-age=0")
-            .header("Pragma", "no-cache")
-            .send()
-            .await
-            .map_err(|e| format!("Network error: {:?}", e))?;
-        if !response.ok() {
-            let text = response.text().await.unwrap_or_default();
-            return Err(format!("Failed: {text}"));
-        }
-        response
-            .json()
-            .await
-            .map_err(|e| format!("Parse error: {:?}", e))
-    }
-}
-
 /// Submit a public sponsor request from `/llm-access`.
 pub async fn submit_llm_gateway_sponsor_request(
     input: &SubmitLlmGatewaySponsorInput,
@@ -7318,36 +7360,6 @@ pub async fn submit_llm_gateway_sponsor_request(
         let response = api_post(&url)
             .json(&body)
             .map_err(|e| format!("Serialize error: {:?}", e))?
-            .send()
-            .await
-            .map_err(|e| format!("Network error: {:?}", e))?;
-        if !response.ok() {
-            let text = response.text().await.unwrap_or_default();
-            return Err(format!("Failed: {text}"));
-        }
-        response
-            .json()
-            .await
-            .map_err(|e| format!("Parse error: {:?}", e))
-    }
-}
-
-/// Fetch approved public sponsors for the thank-you wall.
-pub async fn fetch_llm_gateway_sponsors() -> Result<PublicLlmGatewaySponsorsResponse, String> {
-    #[cfg(feature = "mock")]
-    {
-        Ok(PublicLlmGatewaySponsorsResponse {
-            sponsors: vec![],
-            generated_at: 0,
-        })
-    }
-
-    #[cfg(not(feature = "mock"))]
-    {
-        let url = format!("{}/llm-gateway/sponsors?_ts={}", API_BASE, Date::now() as u64);
-        let response = api_get(&url)
-            .header("Cache-Control", "no-cache, no-store, max-age=0")
-            .header("Pragma", "no-cache")
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;
@@ -7880,7 +7892,7 @@ pub async fn import_admin_legacy_kiro_proxy_configs(
     }
 }
 
-/// Fetch the first admin key page, including secrets and current counters.
+/// Fetch all admin key pages, including secrets and current counters.
 pub async fn fetch_admin_llm_gateway_keys() -> Result<AdminLlmGatewayKeysResponse, String> {
     #[cfg(feature = "mock")]
     {
@@ -7898,20 +7910,44 @@ pub async fn fetch_admin_llm_gateway_keys() -> Result<AdminLlmGatewayKeysRespons
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-gateway/keys?limit=200&offset=0", admin_base());
-        let response = api_get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("Network error: {:?}", e))?;
-        if !response.ok() {
-            let text = response.text().await.unwrap_or_default();
-            return Err(format!("Failed: {text}"));
+        let mut offset = 0;
+        let mut result =
+            fetch_admin_llm_gateway_keys_page(ADMIN_GATEWAY_INVENTORY_PAGE_LIMIT, offset).await?;
+        while result.has_more {
+            offset = result.keys.len();
+            let next =
+                fetch_admin_llm_gateway_keys_page(ADMIN_GATEWAY_INVENTORY_PAGE_LIMIT, offset)
+                    .await?;
+            let returned = next.keys.len();
+            result = merge_admin_llm_gateway_key_pages(result, next);
+            if returned == 0 {
+                break;
+            }
         }
-        response
-            .json()
-            .await
-            .map_err(|e| format!("Parse error: {:?}", e))
+        result.has_more = false;
+        result.limit = result.keys.len();
+        Ok(result)
     }
+}
+
+#[cfg(not(feature = "mock"))]
+async fn fetch_admin_llm_gateway_keys_page(
+    limit: usize,
+    offset: usize,
+) -> Result<AdminLlmGatewayKeysResponse, String> {
+    let url = format!("{}/admin/llm-gateway/keys?limit={limit}&offset={offset}", admin_base());
+    let response = api_get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {:?}", e))?;
+    if !response.ok() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("Failed: {text}"));
+    }
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {:?}", e))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -8997,20 +9033,45 @@ pub async fn fetch_admin_llm_gateway_accounts() -> Result<AccountListResponse, S
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-gateway/accounts?limit=200&offset=0", admin_base());
-        let response = api_get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("Network error: {:?}", e))?;
-        if !response.ok() {
-            let text = response.text().await.unwrap_or_default();
-            return Err(format!("Failed: {text}"));
+        let mut offset = 0;
+        let mut result =
+            fetch_admin_llm_gateway_accounts_page(ADMIN_GATEWAY_INVENTORY_PAGE_LIMIT, offset)
+                .await?;
+        while result.has_more {
+            offset = result.accounts.len();
+            let next =
+                fetch_admin_llm_gateway_accounts_page(ADMIN_GATEWAY_INVENTORY_PAGE_LIMIT, offset)
+                    .await?;
+            let returned = next.accounts.len();
+            result = merge_admin_codex_account_pages(result, next);
+            if returned == 0 {
+                break;
+            }
         }
-        response
-            .json()
-            .await
-            .map_err(|e| format!("Parse error: {:?}", e))
+        result.has_more = false;
+        result.limit = result.accounts.len();
+        Ok(result)
     }
+}
+
+#[cfg(not(feature = "mock"))]
+async fn fetch_admin_llm_gateway_accounts_page(
+    limit: usize,
+    offset: usize,
+) -> Result<AccountListResponse, String> {
+    let url = format!("{}/admin/llm-gateway/accounts?limit={limit}&offset={offset}", admin_base());
+    let response = api_get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {:?}", e))?;
+    if !response.ok() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("Failed: {text}"));
+    }
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {:?}", e))
 }
 
 pub async fn create_admin_llm_gateway_account_import_job(
@@ -9813,26 +9874,55 @@ pub async fn fetch_admin_kiro_keys() -> Result<AdminLlmGatewayKeysResponse, Stri
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!(
-            "{}/admin/kiro-gateway/keys?limit=200&offset=0&_ts={}",
-            admin_base(),
-            Date::now() as u64
-        );
-        let response = api_get(&url)
-            .header("Cache-Control", "no-cache, no-store, max-age=0")
-            .header("Pragma", "no-cache")
-            .send()
-            .await
-            .map_err(|e| format!("Network error: {:?}", e))?;
-        if !response.ok() {
-            let text = response.text().await.unwrap_or_default();
-            return Err(format!("Failed: {text}"));
+        let cache_buster = Date::now() as u64;
+        let mut offset = 0;
+        let mut result =
+            fetch_admin_kiro_keys_page(ADMIN_GATEWAY_INVENTORY_PAGE_LIMIT, offset, cache_buster)
+                .await?;
+        while result.has_more {
+            offset = result.keys.len();
+            let next = fetch_admin_kiro_keys_page(
+                ADMIN_GATEWAY_INVENTORY_PAGE_LIMIT,
+                offset,
+                cache_buster,
+            )
+            .await?;
+            let returned = next.keys.len();
+            result = merge_admin_llm_gateway_key_pages(result, next);
+            if returned == 0 {
+                break;
+            }
         }
-        response
-            .json()
-            .await
-            .map_err(|e| format!("Parse error: {:?}", e))
+        result.has_more = false;
+        result.limit = result.keys.len();
+        Ok(result)
     }
+}
+
+#[cfg(not(feature = "mock"))]
+async fn fetch_admin_kiro_keys_page(
+    limit: usize,
+    offset: usize,
+    cache_buster: u64,
+) -> Result<AdminLlmGatewayKeysResponse, String> {
+    let url = format!(
+        "{}/admin/kiro-gateway/keys?limit={limit}&offset={offset}&_ts={cache_buster}",
+        admin_base()
+    );
+    let response = api_get(&url)
+        .header("Cache-Control", "no-cache, no-store, max-age=0")
+        .header("Pragma", "no-cache")
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {:?}", e))?;
+    if !response.ok() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("Failed: {text}"));
+    }
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {:?}", e))
 }
 
 pub async fn fetch_admin_kiro_account_groups() -> Result<AdminAccountGroupsResponse, String> {
@@ -10332,20 +10422,43 @@ pub async fn fetch_admin_kiro_accounts() -> Result<AdminKiroAccountsResponse, St
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/kiro-gateway/accounts?limit=200&offset=0", admin_base());
-        let response = api_get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("Network error: {:?}", e))?;
-        if !response.ok() {
-            let text = response.text().await.unwrap_or_default();
-            return Err(format!("Failed: {text}"));
+        let mut offset = 0;
+        let mut result =
+            fetch_admin_kiro_accounts_page(ADMIN_GATEWAY_INVENTORY_PAGE_LIMIT, offset).await?;
+        while result.has_more {
+            offset = result.accounts.len();
+            let next =
+                fetch_admin_kiro_accounts_page(ADMIN_GATEWAY_INVENTORY_PAGE_LIMIT, offset).await?;
+            let returned = next.accounts.len();
+            result = merge_admin_kiro_account_pages(result, next);
+            if returned == 0 {
+                break;
+            }
         }
-        response
-            .json()
-            .await
-            .map_err(|e| format!("Parse error: {:?}", e))
+        result.has_more = false;
+        result.limit = result.accounts.len();
+        Ok(result)
     }
+}
+
+#[cfg(not(feature = "mock"))]
+async fn fetch_admin_kiro_accounts_page(
+    limit: usize,
+    offset: usize,
+) -> Result<AdminKiroAccountsResponse, String> {
+    let url = format!("{}/admin/kiro-gateway/accounts?limit={limit}&offset={offset}", admin_base());
+    let response = api_get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {:?}", e))?;
+    if !response.ok() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("Failed: {text}"));
+    }
+    response
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {:?}", e))
 }
 
 pub async fn fetch_admin_kiro_account_statuses(
@@ -10621,6 +10734,118 @@ mod tests {
                 .expect("key should parse");
 
         assert!(!key.kiro_full_request_logging_enabled);
+    }
+
+    #[test]
+    fn admin_gateway_key_page_merge_preserves_all_rows_and_latest_summary() {
+        let first = AdminLlmGatewayKeysResponse {
+            keys: vec![AdminLlmGatewayKeyView {
+                id: "k1".to_string(),
+                ..AdminLlmGatewayKeyView::default()
+            }],
+            total: 3,
+            limit: 1,
+            offset: 0,
+            has_more: true,
+            summary: AdminLlmGatewayKeysSummaryView {
+                total: 3,
+                remaining_billable_sum: 10,
+                ..AdminLlmGatewayKeysSummaryView::default()
+            },
+            generated_at: 10,
+            ..AdminLlmGatewayKeysResponse::default()
+        };
+        let next = AdminLlmGatewayKeysResponse {
+            keys: vec![
+                AdminLlmGatewayKeyView {
+                    id: "k2".to_string(),
+                    ..AdminLlmGatewayKeyView::default()
+                },
+                AdminLlmGatewayKeyView {
+                    id: "k3".to_string(),
+                    ..AdminLlmGatewayKeyView::default()
+                },
+            ],
+            total: 3,
+            limit: 2,
+            offset: 1,
+            has_more: false,
+            summary: AdminLlmGatewayKeysSummaryView {
+                total: 3,
+                remaining_billable_sum: 30,
+                ..AdminLlmGatewayKeysSummaryView::default()
+            },
+            generated_at: 20,
+            ..AdminLlmGatewayKeysResponse::default()
+        };
+
+        let merged = merge_admin_llm_gateway_key_pages(first, next);
+
+        assert_eq!(
+            merged
+                .keys
+                .iter()
+                .map(|key| key.id.as_str())
+                .collect::<Vec<_>>(),
+            ["k1", "k2", "k3"]
+        );
+        assert_eq!(merged.limit, 3);
+        assert_eq!(merged.offset, 0);
+        assert!(!merged.has_more);
+        assert_eq!(merged.summary.remaining_billable_sum, 30);
+        assert_eq!(merged.generated_at, 20);
+    }
+
+    #[test]
+    fn admin_account_page_merges_append_rows_without_losing_totals() {
+        let first = AccountListResponse {
+            accounts: vec![AccountSummaryView {
+                name: "a1".to_string(),
+                ..AccountSummaryView::default()
+            }],
+            total: 2,
+            limit: 1,
+            offset: 0,
+            has_more: true,
+            summary: AdminAccountsSummaryView {
+                total: 2,
+                active_count: 1,
+                ..AdminAccountsSummaryView::default()
+            },
+            generated_at: 10,
+        };
+        let next = AccountListResponse {
+            accounts: vec![AccountSummaryView {
+                name: "a2".to_string(),
+                ..AccountSummaryView::default()
+            }],
+            total: 2,
+            limit: 1,
+            offset: 1,
+            has_more: false,
+            summary: AdminAccountsSummaryView {
+                total: 2,
+                active_count: 2,
+                ..AdminAccountsSummaryView::default()
+            },
+            generated_at: 20,
+        };
+
+        let merged = merge_admin_codex_account_pages(first, next);
+
+        assert_eq!(
+            merged
+                .accounts
+                .iter()
+                .map(|account| account.name.as_str())
+                .collect::<Vec<_>>(),
+            ["a1", "a2"]
+        );
+        assert_eq!(merged.limit, 2);
+        assert_eq!(merged.offset, 0);
+        assert!(!merged.has_more);
+        assert_eq!(merged.summary.active_count, 2);
+        assert_eq!(merged.generated_at, 20);
     }
 
     #[test]

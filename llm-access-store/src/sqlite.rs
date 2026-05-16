@@ -494,9 +494,14 @@ impl SqliteControlStore {
                     r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
                     r.kiro_cache_policy_override_json,
                     r.kiro_billable_model_multipliers_override_json,
-                    u.input_uncached_tokens, u.input_cached_tokens, u.output_tokens,
-                    u.billable_tokens, u.credit_total, u.credit_missing_events,
-                    u.last_used_at_ms, u.updated_at_ms
+                    COALESCE(u.input_uncached_tokens, 0),
+                    COALESCE(u.input_cached_tokens, 0),
+                    COALESCE(u.output_tokens, 0),
+                    COALESCE(u.billable_tokens, 0),
+                    COALESCE(u.credit_total, '0'),
+                    COALESCE(u.credit_missing_events, 0),
+                    u.last_used_at_ms,
+                    COALESCE(u.updated_at_ms, k.updated_at_ms)
                  FROM llm_keys k
                  LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
                  LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -523,9 +528,14 @@ impl SqliteControlStore {
                     r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
                     r.kiro_cache_policy_override_json,
                     r.kiro_billable_model_multipliers_override_json,
-                    u.input_uncached_tokens, u.input_cached_tokens, u.output_tokens,
-                    u.billable_tokens, u.credit_total, u.credit_missing_events,
-                    u.last_used_at_ms, u.updated_at_ms
+                    COALESCE(u.input_uncached_tokens, 0),
+                    COALESCE(u.input_cached_tokens, 0),
+                    COALESCE(u.output_tokens, 0),
+                    COALESCE(u.billable_tokens, 0),
+                    COALESCE(u.credit_total, '0'),
+                    COALESCE(u.credit_missing_events, 0),
+                    u.last_used_at_ms,
+                    COALESCE(u.updated_at_ms, k.updated_at_ms)
                  FROM llm_keys k
                  LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
                  LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -553,12 +563,17 @@ impl SqliteControlStore {
                     r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
                     r.kiro_cache_policy_override_json,
                     r.kiro_billable_model_multipliers_override_json,
-                    u.input_uncached_tokens, u.input_cached_tokens, u.output_tokens,
-                    u.billable_tokens, u.credit_total, u.credit_missing_events,
-                    u.last_used_at_ms, u.updated_at_ms
+                    COALESCE(u.input_uncached_tokens, 0),
+                    COALESCE(u.input_cached_tokens, 0),
+                    COALESCE(u.output_tokens, 0),
+                    COALESCE(u.billable_tokens, 0),
+                    COALESCE(u.credit_total, '0'),
+                    COALESCE(u.credit_missing_events, 0),
+                    u.last_used_at_ms,
+                    COALESCE(u.updated_at_ms, k.updated_at_ms)
                  FROM llm_keys k
-                 JOIN llm_key_route_config r ON r.key_id = k.key_id
-                 JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
+                 LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
+                 LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
                  ORDER BY k.created_at_ms DESC, k.key_id DESC",
             )
             .context("prepare admin key list")?;
@@ -589,7 +604,7 @@ impl SqliteControlStore {
                     COALESCE(SUM(CASE WHEN k.status = 'active' THEN 1 ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN k.status = 'disabled' THEN 1 ELSE 0 END), 0),
                     COALESCE(SUM(k.quota_billable_limit), 0),
-                    COALESCE(SUM(k.quota_billable_limit - u.billable_tokens), 0),
+                    COALESCE(SUM(k.quota_billable_limit - COALESCE(u.billable_tokens, 0)), 0),
                     COALESCE(SUM(u.input_uncached_tokens), 0),
                     COALESCE(SUM(u.input_cached_tokens), 0),
                     COALESCE(SUM(u.output_tokens), 0),
@@ -597,8 +612,7 @@ impl SqliteControlStore {
                     COALESCE(SUM(CAST(u.credit_total AS REAL)), 0.0),
                     COALESCE(SUM(u.credit_missing_events), 0)
                  FROM llm_keys k
-                 JOIN llm_key_route_config r ON r.key_id = k.key_id
-                 JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
+                 LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
                  WHERE (?1 IS NULL OR k.provider_type = ?1)",
                 [provider_type],
                 |row| {
@@ -639,8 +653,6 @@ impl SqliteControlStore {
             .query_row(
                 "SELECT COUNT(*)
                  FROM llm_keys k
-                 JOIN llm_key_route_config r ON r.key_id = k.key_id
-                 JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
                  WHERE (?1 IS NULL OR k.provider_type = ?1)",
                 [provider_type],
                 |row| row.get::<_, i64>(0),
@@ -661,12 +673,17 @@ impl SqliteControlStore {
                     r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
                     r.kiro_cache_policy_override_json,
                     r.kiro_billable_model_multipliers_override_json,
-                    u.input_uncached_tokens, u.input_cached_tokens, u.output_tokens,
-                    u.billable_tokens, u.credit_total, u.credit_missing_events,
-                    u.last_used_at_ms, u.updated_at_ms
+                    COALESCE(u.input_uncached_tokens, 0),
+                    COALESCE(u.input_cached_tokens, 0),
+                    COALESCE(u.output_tokens, 0),
+                    COALESCE(u.billable_tokens, 0),
+                    COALESCE(u.credit_total, '0'),
+                    COALESCE(u.credit_missing_events, 0),
+                    u.last_used_at_ms,
+                    COALESCE(u.updated_at_ms, k.updated_at_ms)
                  FROM llm_keys k
-                 JOIN llm_key_route_config r ON r.key_id = k.key_id
-                 JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
+                 LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
+                 LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
                  WHERE (?1 IS NULL OR k.provider_type = ?1)
                  ORDER BY k.created_at_ms DESC, k.key_id DESC
                  LIMIT ?2 OFFSET ?3",
@@ -708,12 +725,17 @@ impl SqliteControlStore {
                     r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
                     r.kiro_cache_policy_override_json,
                     r.kiro_billable_model_multipliers_override_json,
-                    u.input_uncached_tokens, u.input_cached_tokens, u.output_tokens,
-                    u.billable_tokens, u.credit_total, u.credit_missing_events,
-                    u.last_used_at_ms, u.updated_at_ms
+                    COALESCE(u.input_uncached_tokens, 0),
+                    COALESCE(u.input_cached_tokens, 0),
+                    COALESCE(u.output_tokens, 0),
+                    COALESCE(u.billable_tokens, 0),
+                    COALESCE(u.credit_total, '0'),
+                    COALESCE(u.credit_missing_events, 0),
+                    u.last_used_at_ms,
+                    COALESCE(u.updated_at_ms, k.updated_at_ms)
                  FROM llm_keys k
                  JOIN llm_key_route_config r ON r.key_id = k.key_id
-                 JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
+                 LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
                  WHERE k.provider_type = ?1 AND r.account_group_id = ?2
                  ORDER BY k.created_at_ms DESC, k.key_id DESC
                  LIMIT 1",
@@ -6027,6 +6049,43 @@ mod tests {
             .find_admin_key_referencing_account_group("codex", "kiro-group")
             .expect("find absent reference")
             .is_none());
+    }
+
+    #[test]
+    fn admin_key_page_keeps_key_rows_without_rollup_or_route_in_totals() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open sqlite");
+        crate::initialize_sqlite_target(&conn).expect("init schema");
+        let repo = super::SqliteControlStore::new(conn);
+
+        repo.conn
+            .execute(
+                "INSERT INTO llm_keys (
+                    key_id, name, secret, key_hash, status, provider_type,
+                    protocol_family, public_visible, quota_billable_limit,
+                    created_at_ms, updated_at_ms
+                 ) VALUES (?1, ?2, ?3, ?4, 'active', 'codex', 'openai', 1, 1000, 10, 10)",
+                rusqlite::params![
+                    "key-missing-rollup",
+                    "missing rollup",
+                    "sk-test",
+                    "hash-missing"
+                ],
+            )
+            .expect("insert key without child rows");
+
+        let page = repo
+            .list_admin_keys_page(Some("codex"), 10, 0)
+            .expect("page admin keys");
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.keys.len(), 1);
+        assert_eq!(page.summary.total, 1);
+        assert_eq!(page.summary.public_visible_count, 1);
+        assert_eq!(page.summary.active_count, 1);
+        assert_eq!(page.summary.quota_billable_limit_sum, 1000);
+        assert_eq!(page.summary.remaining_billable_sum, 1000);
+        assert_eq!(page.summary.usage_billable_tokens_sum, 0);
+        assert_eq!(page.summary.usage_credit_total, 0.0);
     }
 
     #[test]
