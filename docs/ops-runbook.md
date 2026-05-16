@@ -217,6 +217,15 @@ private env files, not in tracked docs.
     `sudo journalctl -u juicefs-llm-access.service -f`
     and `sudo journalctl -u juicefs-llm-access-usage.service -f`
   Runtime logs rotate hourly and retain the latest 4 files per stream.
+- Background provider status refresh should stay enabled on
+  `llm-access.service` during normal production operation. Do not pin
+  `LLM_ACCESS_BACKGROUND_STATUS_REFRESH_ENABLED=0` in the service unit unless
+  you are intentionally pausing periodic Codex/Kiro account-status refresh for
+  incident mitigation.
+- The service-level background refresher is separate from the per-account
+  Codex "auto refresh" toggle in admin. The per-account toggle only controls
+  whether that account may use its `refresh_token` to renew auth when needed;
+  it does not replace the global periodic refresher.
 - Current GCP JuiceFS local cache uses:
   - control mount cache: `/var/cache/juicefs/llm-access`
   - usage mount cache: `/var/cache/juicefs/llm-access-usage`
