@@ -20,6 +20,7 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 base64 = "0.22.1"
 better_mimalloc_rs = { workspace = true }
+better_mimalloc_sys = { version = "0.1.1", default-features = false, features = ["extended"] }
 chrono = { workspace = true }
 eventsource-stream = "0.2"
 flate2 = "1.1"

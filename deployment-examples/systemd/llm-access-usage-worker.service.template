@@ -12,6 +12,15 @@ EnvironmentFile=/etc/llm-access/llm-access.env
 Environment=STATICFLOW_LOG_DIR=/var/log/staticflow-runtime
 Environment=STATICFLOW_LOG_SERVICE=llm-access-usage-worker
 Environment=STATICFLOW_LOG_STDOUT=0
+Environment=mimalloc_eager_commit=0
+Environment=mimalloc_arena_eager_commit=0
+Environment=mimalloc_allow_thp=0
+Environment=mimalloc_disallow_arena_alloc=1
+Environment=mimalloc_purge_decommits=1
+Environment=mimalloc_purge_delay=0
+Environment=mimalloc_purge_extend_delay=0
+Environment=mimalloc_arena_purge_mult=1
+Environment=mimalloc_generic_collect=1000
 Environment=LLM_ACCESS_USAGE_QUERY_BIND_ADDR=127.0.0.1:19081
 Environment=LLM_ACCESS_STATE_ROOT=/mnt/llm-access-usage
 Environment=LLM_ACCESS_DUCKDB_ACTIVE_DIR=/var/lib/staticflow/llm-access/analytics-active

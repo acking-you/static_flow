@@ -79,7 +79,9 @@ async fn refresh_all_kiro_statuses(
                 "failed to refresh Kiro account status"
             );
         }
+        crate::allocator::collect_process_allocator();
     }
+    crate::allocator::collect_process_allocator();
     Ok(())
 }
 

@@ -2,6 +2,8 @@
 
 mod activity;
 mod admin;
+/// Process allocator tuning.
+pub mod allocator;
 mod codex_refresh;
 mod codex_status;
 /// Command-line and environment configuration.

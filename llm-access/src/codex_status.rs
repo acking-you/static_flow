@@ -236,7 +236,9 @@ async fn refresh_codex_status(
             ))
             .await
             .context("persist incremental Codex public status snapshot")?;
+        crate::allocator::collect_process_allocator();
     }
+    crate::allocator::collect_process_allocator();
     Ok(())
 }
 

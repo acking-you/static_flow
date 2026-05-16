@@ -10,7 +10,7 @@ static GLOBAL_MIMALLOC: MiMalloc = MiMalloc;
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 fn main() -> anyhow::Result<()> {
-    MiMalloc::init();
+    llm_access::allocator::configure_process_allocator_for_low_rss();
     let _log_guards = static_flow_runtime::runtime_logging::init_runtime_logging(
         "llm-access-usage-worker",
         DEFAULT_LOG_FILTER,
