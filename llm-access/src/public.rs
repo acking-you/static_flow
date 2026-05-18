@@ -16,7 +16,9 @@ use llm_access_core::store::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
-    usage_query::{AdminUsageEventView, AdminUsageEventsResponse, UsageChartResponse},
+    usage_query::{
+        AdminUsageEventView, AdminUsageEventsResponse, AdminUsageTotalsView, UsageChartResponse,
+    },
     HttpState,
 };
 
@@ -24,7 +26,6 @@ const MAX_PUBLIC_ACCOUNT_CONTRIBUTIONS: usize = 24;
 const MAX_PUBLIC_SPONSORS: usize = 36;
 const PUBLIC_USAGE_LOOKUP_DEFAULT_LIMIT: usize = 20;
 const PUBLIC_USAGE_LOOKUP_MAX_LIMIT: usize = 20;
-const PUBLIC_USAGE_LOOKUP_MAX_OFFSET: usize = 200;
 const PUBLIC_USAGE_LOOKUP_CHART_BUCKETS: usize = 24;
 const PUBLIC_USAGE_LOOKUP_BUCKET_MS: i64 = 60 * 60 * 1000;
 const PUBLIC_USAGE_WORKER_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -98,6 +99,7 @@ struct PublicLlmGatewayUsageLookupResponse {
     offset: usize,
     limit: usize,
     has_more: bool,
+    totals: AdminUsageTotalsView,
     events: Vec<PublicLlmGatewayUsageEventView>,
     generated_at: i64,
 }
@@ -457,10 +459,7 @@ pub(crate) async fn post_llm_gateway_public_usage_query(
         Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "public usage store error"),
     };
     let now = now_ms();
-    let offset = request
-        .offset
-        .unwrap_or(0)
-        .min(PUBLIC_USAGE_LOOKUP_MAX_OFFSET);
+    let offset = request.offset.unwrap_or(0);
     let (start_ms, end_ms) = normalize_usage_time_range(request.start_ms, request.end_ms);
     let limit = request
         .limit
@@ -518,9 +517,10 @@ pub(crate) async fn post_llm_gateway_public_usage_query(
         key: PublicLlmGatewayUsageKeyView::from(key),
         chart_points,
         total: page.total,
-        offset,
-        limit,
+        offset: page.offset,
+        limit: page.limit,
         has_more: page.has_more,
+        totals: page.totals,
         events: page
             .events
             .iter()

@@ -46,7 +46,7 @@ use crate::{
         AdminLlmGatewayUsageEventsQuery, AdminUpstreamProxyBindingView,
         AdminUpstreamProxyCheckResponse, AdminUpstreamProxyCheckTargetView,
         AdminUpstreamProxyConfigView, AdminUsageJournalFileView, AdminUsageJournalPreviewResponse,
-        AdminUsageJournalStatusView, CodexAccountImportJobDetailView,
+        AdminUsageJournalStatusView, AdminUsageTotalsView, CodexAccountImportJobDetailView,
         CodexAccountImportJobSummaryView, CreateAdminAccountGroupInput,
         CreateAdminUpstreamProxyConfigInput, LlmGatewayRuntimeConfig, PatchAdminAccountGroupInput,
         PatchAdminLlmGatewayAccountInput, PatchAdminLlmGatewayKeyRequest,
@@ -62,8 +62,6 @@ use crate::{
 };
 
 const USAGE_PAGE_SIZE: usize = 20;
-const USAGE_MAX_OFFSET: usize = 200;
-const USAGE_MAX_PAGES: usize = (USAGE_MAX_OFFSET / USAGE_PAGE_SIZE) + 1;
 const JOURNAL_PREVIEW_PAGE_SIZE: usize = 20;
 const DEFAULT_ADMIN_GROUP_PAGE_SIZE: usize = 24;
 const USAGE_TIME_RANGE_ALL: &str = "all";
@@ -732,6 +730,31 @@ fn usage_source_label(value: &str) -> &'static str {
         USAGE_SOURCE_ALL => "全部",
         _ => "在线",
     }
+}
+
+#[derive(Clone, Default, PartialEq)]
+struct UsageReloadArgs {
+    page: Option<usize>,
+    key_id: Option<String>,
+    time_range: Option<String>,
+    source: Option<String>,
+    model: Option<String>,
+    account_name: Option<String>,
+    endpoint: Option<String>,
+    status_code: Option<String>,
+}
+
+fn normalized_usage_filter_text(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn normalized_usage_status_filter(value: &str) -> Option<i32> {
+    value
+        .trim()
+        .parse::<i32>()
+        .ok()
+        .filter(|status| *status >= 100)
 }
 
 fn sanitize_auto_account_names(names: &[String], accounts: &[AccountSummaryView]) -> Vec<String> {
@@ -2164,6 +2187,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let account_groups_search = use_state(String::new);
     let usage_events = use_state(Vec::<AdminLlmGatewayUsageEventView>::new);
     let usage_total = use_state(|| 0_usize);
+    let usage_totals = use_state(AdminUsageTotalsView::default);
     let usage_page = use_state(|| 1_usize);
     let usage_current_rpm = use_state(|| 0_u32);
     let usage_current_in_flight = use_state(|| 0_u32);
@@ -2174,6 +2198,10 @@ pub fn admin_llm_gateway_page() -> Html {
     let usage_key_search = use_state(String::new);
     let usage_time_range = use_state(|| USAGE_TIME_RANGE_ALL.to_string());
     let usage_source = use_state(|| USAGE_SOURCE_HOT.to_string());
+    let usage_model_filter = use_state(String::new);
+    let usage_account_filter = use_state(String::new);
+    let usage_endpoint_filter = use_state(String::new);
+    let usage_status_filter = use_state(String::new);
     let usage_journal_status = use_state(|| None::<AdminUsageJournalStatusView>);
     let usage_journal_preview = use_state(|| None::<AdminUsageJournalPreviewResponse>);
     let usage_journal_preview_page = use_state(|| 1_usize);
@@ -2329,6 +2357,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let reload_usage = {
         let usage_events = usage_events.clone();
         let usage_total = usage_total.clone();
+        let usage_totals = usage_totals.clone();
         let usage_page = usage_page.clone();
         let usage_current_rpm = usage_current_rpm.clone();
         let usage_current_in_flight = usage_current_in_flight.clone();
@@ -2338,62 +2367,80 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_key_filter = usage_key_filter.clone();
         let usage_time_range = usage_time_range.clone();
         let usage_source = usage_source.clone();
-        Callback::from(
-            move |(requested_page, override_key_id, override_time_range, override_source): (
-                Option<usize>,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-            )| {
-                let usage_events = usage_events.clone();
-                let usage_total = usage_total.clone();
-                let usage_page = usage_page.clone();
-                let usage_current_rpm = usage_current_rpm.clone();
-                let usage_current_in_flight = usage_current_in_flight.clone();
-                let usage_retention_days = usage_retention_days.clone();
-                let usage_loading = usage_loading.clone();
-                let usage_error = usage_error.clone();
-                let usage_key_filter = usage_key_filter.clone();
-                let usage_time_range = usage_time_range.clone();
-                let usage_source = usage_source.clone();
-                let page = requested_page.unwrap_or(*usage_page).max(1);
-                let selected_key_id =
-                    override_key_id.unwrap_or_else(|| (*usage_key_filter).clone());
-                let selected_time_range =
-                    override_time_range.unwrap_or_else(|| (*usage_time_range).clone());
-                let selected_source = override_source.unwrap_or_else(|| (*usage_source).clone());
-                let (start_ms, end_ms) = usage_time_range_bounds(&selected_time_range);
-                usage_loading.set(true);
-                usage_error.set(None);
-                wasm_bindgen_futures::spawn_local(async move {
-                    let query = AdminLlmGatewayUsageEventsQuery {
-                        key_id: (!selected_key_id.is_empty()).then_some(selected_key_id),
-                        start_ms,
-                        end_ms,
-                        source: Some(selected_source),
-                        limit: Some(USAGE_PAGE_SIZE),
-                        offset: Some((page - 1) * USAGE_PAGE_SIZE),
-                    };
-                    match fetch_admin_llm_gateway_usage_events(&query).await {
-                        Ok(resp) => {
-                            usage_total.set(resp.total);
-                            usage_current_rpm.set(resp.current_rpm);
-                            usage_current_in_flight.set(resp.current_in_flight);
-                            usage_retention_days.set(resp.retention_days);
-                            usage_events.set(resp.events);
-                            let actual_page = (resp.offset / resp.limit.max(1)).saturating_add(1);
-                            usage_page.set(actual_page.max(1));
-                        },
-                        Err(err) => {
-                            usage_current_rpm.set(0);
-                            usage_current_in_flight.set(0);
-                            usage_error.set(Some(err));
-                        },
-                    }
-                    usage_loading.set(false);
-                });
-            },
-        )
+        let usage_model_filter = usage_model_filter.clone();
+        let usage_account_filter = usage_account_filter.clone();
+        let usage_endpoint_filter = usage_endpoint_filter.clone();
+        let usage_status_filter = usage_status_filter.clone();
+        Callback::from(move |args: UsageReloadArgs| {
+            let usage_events = usage_events.clone();
+            let usage_total = usage_total.clone();
+            let usage_totals = usage_totals.clone();
+            let usage_page = usage_page.clone();
+            let usage_current_rpm = usage_current_rpm.clone();
+            let usage_current_in_flight = usage_current_in_flight.clone();
+            let usage_retention_days = usage_retention_days.clone();
+            let usage_loading = usage_loading.clone();
+            let usage_error = usage_error.clone();
+            let usage_key_filter = usage_key_filter.clone();
+            let usage_time_range = usage_time_range.clone();
+            let usage_source = usage_source.clone();
+            let usage_model_filter = usage_model_filter.clone();
+            let usage_account_filter = usage_account_filter.clone();
+            let usage_endpoint_filter = usage_endpoint_filter.clone();
+            let usage_status_filter = usage_status_filter.clone();
+            let page = args.page.unwrap_or(*usage_page).max(1);
+            let selected_key_id = args.key_id.unwrap_or_else(|| (*usage_key_filter).clone());
+            let selected_time_range = args
+                .time_range
+                .unwrap_or_else(|| (*usage_time_range).clone());
+            let selected_source = args.source.unwrap_or_else(|| (*usage_source).clone());
+            let selected_model = args.model.unwrap_or_else(|| (*usage_model_filter).clone());
+            let selected_account = args
+                .account_name
+                .unwrap_or_else(|| (*usage_account_filter).clone());
+            let selected_endpoint = args
+                .endpoint
+                .unwrap_or_else(|| (*usage_endpoint_filter).clone());
+            let selected_status = args
+                .status_code
+                .unwrap_or_else(|| (*usage_status_filter).clone());
+            let (start_ms, end_ms) = usage_time_range_bounds(&selected_time_range);
+            usage_loading.set(true);
+            usage_error.set(None);
+            wasm_bindgen_futures::spawn_local(async move {
+                let query = AdminLlmGatewayUsageEventsQuery {
+                    key_id: (!selected_key_id.is_empty()).then_some(selected_key_id),
+                    start_ms,
+                    end_ms,
+                    source: Some(selected_source),
+                    model: normalized_usage_filter_text(&selected_model),
+                    account_name: normalized_usage_filter_text(&selected_account),
+                    endpoint: normalized_usage_filter_text(&selected_endpoint),
+                    status_code: normalized_usage_status_filter(&selected_status),
+                    limit: Some(USAGE_PAGE_SIZE),
+                    offset: Some((page - 1) * USAGE_PAGE_SIZE),
+                };
+                match fetch_admin_llm_gateway_usage_events(&query).await {
+                    Ok(resp) => {
+                        usage_total.set(resp.total);
+                        usage_totals.set(resp.totals);
+                        usage_current_rpm.set(resp.current_rpm);
+                        usage_current_in_flight.set(resp.current_in_flight);
+                        usage_retention_days.set(resp.retention_days);
+                        usage_events.set(resp.events);
+                        let actual_page = (resp.offset / resp.limit.max(1)).saturating_add(1);
+                        usage_page.set(actual_page.max(1));
+                    },
+                    Err(err) => {
+                        usage_totals.set(AdminUsageTotalsView::default());
+                        usage_current_rpm.set(0);
+                        usage_current_in_flight.set(0);
+                        usage_error.set(Some(err));
+                    },
+                }
+                usage_loading.set(false);
+            });
+        })
     };
 
     let reload_usage_journal_status = {
@@ -2959,12 +3006,11 @@ pub fn admin_llm_gateway_page() -> Html {
                         }
                         load_error.set(None);
                         if *active_tab == TAB_USAGE {
-                            reload_usage.emit((
-                                Some(current_page),
-                                Some(usage_filter_for_reload),
-                                None,
-                                None,
-                            ));
+                            reload_usage.emit(UsageReloadArgs {
+                                page: Some(current_page),
+                                key_id: Some(usage_filter_for_reload),
+                                ..UsageReloadArgs::default()
+                            });
                         }
                     },
                     Err(err) => load_error.set(Some(err)),
@@ -3719,7 +3765,11 @@ pub fn admin_llm_gateway_page() -> Html {
             }
             usage_key_filter.set(selected_key_id.clone());
             usage_page.set(1);
-            reload_usage.emit((Some(1), Some(selected_key_id), None, None));
+            reload_usage.emit(UsageReloadArgs {
+                page: Some(1),
+                key_id: Some(selected_key_id),
+                ..UsageReloadArgs::default()
+            });
         })
     };
 
@@ -3744,7 +3794,11 @@ pub fn admin_llm_gateway_page() -> Html {
             if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
                 let selected = target.value();
                 usage_time_range.set(selected.clone());
-                reload_usage.emit((Some(1), None, Some(selected), None));
+                reload_usage.emit(UsageReloadArgs {
+                    page: Some(1),
+                    time_range: Some(selected),
+                    ..UsageReloadArgs::default()
+                });
             }
         })
     };
@@ -3756,8 +3810,76 @@ pub fn admin_llm_gateway_page() -> Html {
             if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
                 let selected = target.value();
                 usage_source.set(selected.clone());
-                reload_usage.emit((Some(1), None, None, Some(selected)));
+                reload_usage.emit(UsageReloadArgs {
+                    page: Some(1),
+                    source: Some(selected),
+                    ..UsageReloadArgs::default()
+                });
             }
+        })
+    };
+
+    let on_usage_model_filter_input = {
+        let usage_model_filter = usage_model_filter.clone();
+        Callback::from(move |event: InputEvent| {
+            let value = event.target_unchecked_into::<HtmlInputElement>().value();
+            usage_model_filter.set(value.clone());
+        })
+    };
+
+    let on_usage_account_filter_input = {
+        let usage_account_filter = usage_account_filter.clone();
+        Callback::from(move |event: InputEvent| {
+            let value = event.target_unchecked_into::<HtmlInputElement>().value();
+            usage_account_filter.set(value.clone());
+        })
+    };
+
+    let on_usage_endpoint_filter_input = {
+        let usage_endpoint_filter = usage_endpoint_filter.clone();
+        Callback::from(move |event: InputEvent| {
+            let value = event.target_unchecked_into::<HtmlInputElement>().value();
+            usage_endpoint_filter.set(value.clone());
+        })
+    };
+
+    let on_usage_status_filter_input = {
+        let usage_status_filter = usage_status_filter.clone();
+        Callback::from(move |event: InputEvent| {
+            let value = event.target_unchecked_into::<HtmlInputElement>().value();
+            usage_status_filter.set(value.clone());
+        })
+    };
+
+    let on_apply_usage_filters = {
+        let reload_usage = reload_usage.clone();
+        Callback::from(move |_| {
+            reload_usage.emit(UsageReloadArgs {
+                page: Some(1),
+                ..UsageReloadArgs::default()
+            });
+        })
+    };
+
+    let on_clear_usage_filters = {
+        let usage_model_filter = usage_model_filter.clone();
+        let usage_account_filter = usage_account_filter.clone();
+        let usage_endpoint_filter = usage_endpoint_filter.clone();
+        let usage_status_filter = usage_status_filter.clone();
+        let reload_usage = reload_usage.clone();
+        Callback::from(move |_| {
+            usage_model_filter.set(String::new());
+            usage_account_filter.set(String::new());
+            usage_endpoint_filter.set(String::new());
+            usage_status_filter.set(String::new());
+            reload_usage.emit(UsageReloadArgs {
+                page: Some(1),
+                model: Some(String::new()),
+                account_name: Some(String::new()),
+                endpoint: Some(String::new()),
+                status_code: Some(String::new()),
+                ..UsageReloadArgs::default()
+            });
         })
     };
 
@@ -3766,7 +3888,10 @@ pub fn admin_llm_gateway_page() -> Html {
         let reload_usage = reload_usage.clone();
         Callback::from(move |page: usize| {
             usage_page.set(page);
-            reload_usage.emit((Some(page), None, None, None));
+            reload_usage.emit(UsageReloadArgs {
+                page: Some(page),
+                ..UsageReloadArgs::default()
+            });
         })
     };
 
@@ -3849,10 +3974,7 @@ pub fn admin_llm_gateway_page() -> Html {
         });
     }
 
-    let usage_total_pages = (*usage_total)
-        .max(1)
-        .div_ceil(USAGE_PAGE_SIZE)
-        .min(USAGE_MAX_PAGES);
+    let usage_total_pages = (*usage_total).max(1).div_ceil(USAGE_PAGE_SIZE);
     let usage_journal_preview_total_pages = (*usage_journal_preview)
         .as_ref()
         .map(|resp| resp.total.max(1).div_ceil(resp.limit.max(1)))
@@ -8156,7 +8278,9 @@ pub fn admin_llm_gateway_page() -> Html {
                                 aria-label="刷新事件"
                                 onclick={{
                                     let reload_usage = reload_usage.clone();
-                                    Callback::from(move |_| reload_usage.emit((None, None, None, None)))
+                                    Callback::from(move |_| {
+                                        reload_usage.emit(UsageReloadArgs::default())
+                                    })
                                 }}
                                 disabled={*usage_loading}
                             >
@@ -8165,7 +8289,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
                     </div>
 
-                    <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-[minmax(16rem,1fr)_minmax(14rem,18rem)_minmax(10rem,12rem)_minmax(9rem,10rem)_auto_auto]", "items-end")}>
+                    <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-[minmax(16rem,1fr)_minmax(14rem,18rem)_minmax(10rem,12rem)_minmax(9rem,10rem)_minmax(12rem,1fr)_minmax(12rem,1fr)]", "items-end")}>
                         <label class={classes!("text-sm")}>
                             <span class={classes!("text-[var(--muted)]")}>{ "搜索 Key" }</span>
                             <div class={classes!("mt-1")}>
@@ -8236,12 +8360,102 @@ pub fn admin_llm_gateway_page() -> Html {
                                 <option value={USAGE_SOURCE_ALL} selected={*usage_source == USAGE_SOURCE_ALL}>{ "全部" }</option>
                             </select>
                         </label>
-                        <span class={classes!("text-sm", "font-semibold", "text-[var(--muted)]")}>
-                            { format!("{} · {} · {} 条", usage_source_label(&usage_source), usage_time_range_label(&usage_time_range), *usage_total) }
-                        </span>
-                        <span class={classes!("text-sm", "font-semibold", "text-[var(--muted)]")}>
-                            { format!("第 {} 页", *usage_page) }
-                        </span>
+                        <label class={classes!("text-sm")}>
+                            <span class={classes!("text-[var(--muted)]")}>{ "模型 / 账号" }</span>
+                            <div class={classes!("mt-1", "grid", "gap-2", "sm:grid-cols-2")}>
+                                <input
+                                    type="text"
+                                    class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                    placeholder="model"
+                                    value={(*usage_model_filter).clone()}
+                                    oninput={on_usage_model_filter_input}
+                                />
+                                <input
+                                    type="text"
+                                    class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                    placeholder="account"
+                                    value={(*usage_account_filter).clone()}
+                                    oninput={on_usage_account_filter_input}
+                                />
+                            </div>
+                        </label>
+                        <label class={classes!("text-sm")}>
+                            <span class={classes!("text-[var(--muted)]")}>{ "Endpoint / 状态码" }</span>
+                            <div class={classes!("mt-1", "grid", "gap-2", "sm:grid-cols-[minmax(0,1fr)_8rem]")}>
+                                <input
+                                    type="text"
+                                    class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                    placeholder="/v1/responses"
+                                    value={(*usage_endpoint_filter).clone()}
+                                    oninput={on_usage_endpoint_filter_input}
+                                />
+                                <input
+                                    type="number"
+                                    class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                    placeholder="200"
+                                    value={(*usage_status_filter).clone()}
+                                    oninput={on_usage_status_filter_input}
+                                />
+                            </div>
+                        </label>
+                    </div>
+
+                    <div class={classes!("mt-3", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <div class={classes!("flex", "items-center", "gap-2", "flex-wrap", "text-sm", "font-semibold", "text-[var(--muted)]")}>
+                            <span>{ format!("{} · {} · {} 条", usage_source_label(&usage_source), usage_time_range_label(&usage_time_range), *usage_total) }</span>
+                            <span>{ format!("第 {} 页", *usage_page) }</span>
+                        </div>
+                        <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal")}
+                                onclick={on_apply_usage_filters}
+                                disabled={*usage_loading}
+                            >
+                                { "应用筛选" }
+                            </button>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal")}
+                                onclick={on_clear_usage_filters}
+                                disabled={*usage_loading}
+                            >
+                                { "清空文本筛选" }
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class={classes!("mt-3", "grid", "gap-3", "sm:grid-cols-2", "xl:grid-cols-5")}>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-4", "py-3")}>
+                            <div class={classes!("text-xs", "text-[var(--muted)]")}>{ "匹配事件" }</div>
+                            <div class={classes!("mt-1", "font-mono", "text-base", "font-semibold")}>
+                                { format_number_u64(usage_totals.event_count as u64) }
+                            </div>
+                        </div>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-4", "py-3")}>
+                            <div class={classes!("text-xs", "text-[var(--muted)]")}>{ "Input Uncached" }</div>
+                            <div class={classes!("mt-1", "font-mono", "text-base", "font-semibold")}>
+                                { format_number_u64(usage_totals.input_uncached_tokens) }
+                            </div>
+                        </div>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-4", "py-3")}>
+                            <div class={classes!("text-xs", "text-[var(--muted)]")}>{ "Input Cached" }</div>
+                            <div class={classes!("mt-1", "font-mono", "text-base", "font-semibold")}>
+                                { format_number_u64(usage_totals.input_cached_tokens) }
+                            </div>
+                        </div>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-4", "py-3")}>
+                            <div class={classes!("text-xs", "text-[var(--muted)]")}>{ "Output" }</div>
+                            <div class={classes!("mt-1", "font-mono", "text-base", "font-semibold")}>
+                                { format_number_u64(usage_totals.output_tokens) }
+                            </div>
+                        </div>
+                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-4", "py-3")}>
+                            <div class={classes!("text-xs", "text-[var(--muted)]")}>{ "Billable" }</div>
+                            <div class={classes!("mt-1", "font-mono", "text-base", "font-semibold")}>
+                                { format_number_u64(usage_totals.billable_tokens) }
+                            </div>
+                        </div>
                     </div>
 
                     if !usage_key_query_lower.is_empty() {

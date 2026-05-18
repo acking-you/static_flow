@@ -2044,6 +2044,14 @@ pub struct UsageEventQuery {
     pub key_id: Option<String>,
     /// Optional provider filter.
     pub provider_type: Option<String>,
+    /// Optional model filter.
+    pub model: Option<String>,
+    /// Optional account filter.
+    pub account_name: Option<String>,
+    /// Optional endpoint filter.
+    pub endpoint: Option<String>,
+    /// Optional status code filter.
+    pub status_code: Option<i32>,
     /// Physical usage event source.
     pub source: UsageEventSource,
     /// Optional inclusive lower creation timestamp bound in Unix milliseconds.
@@ -2054,6 +2062,21 @@ pub struct UsageEventQuery {
     pub limit: usize,
     /// Page offset.
     pub offset: usize,
+}
+
+/// Aggregate totals over a filtered usage-event result set.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct UsageEventTotals {
+    /// Count of matching events.
+    pub event_count: usize,
+    /// Sum of uncached input tokens across all matches.
+    pub input_uncached_tokens: u64,
+    /// Sum of cached input tokens across all matches.
+    pub input_cached_tokens: u64,
+    /// Sum of output tokens across all matches.
+    pub output_tokens: u64,
+    /// Sum of billable tokens across all matches.
+    pub billable_tokens: u64,
 }
 
 /// Usage-event page returned by the analytics store.
@@ -2067,6 +2090,8 @@ pub struct UsageEventPage {
     pub limit: usize,
     /// Whether more rows remain after this page.
     pub has_more: bool,
+    /// Aggregate totals over the full filtered result set.
+    pub totals: UsageEventTotals,
     /// Usage events in newest-first order.
     pub events: Vec<UsageEvent>,
 }
@@ -2871,6 +2896,7 @@ impl UsageAnalyticsStore for EmptyUsageAnalyticsStore {
             offset: query.offset,
             limit: query.limit,
             has_more: false,
+            totals: UsageEventTotals::default(),
             events: Vec::new(),
         })
     }

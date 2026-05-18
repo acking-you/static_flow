@@ -18,8 +18,7 @@ use llm_access_core::{
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_ADMIN_USAGE_LIMIT: usize = 20;
-const MAX_ADMIN_USAGE_LIMIT: usize = 20;
-const MAX_ADMIN_USAGE_OFFSET: usize = 200;
+const MAX_ADMIN_USAGE_LIMIT: usize = 200;
 const DEFAULT_USAGE_CHART_BUCKET_MS: i64 = 60 * 60 * 1000;
 const DEFAULT_USAGE_CHART_BUCKETS: usize = 24;
 const MAX_USAGE_CHART_BUCKETS: usize = 168;
@@ -30,6 +29,14 @@ pub(crate) struct ListUsageEventsRequest {
     #[serde(default)]
     key_id: Option<String>,
     #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    account_name: Option<String>,
+    #[serde(default)]
+    endpoint: Option<String>,
+    #[serde(default)]
+    status_code: Option<i32>,
+    #[serde(default)]
     start_ms: Option<i64>,
     #[serde(default)]
     end_ms: Option<i64>,
@@ -39,6 +46,16 @@ pub(crate) struct ListUsageEventsRequest {
     limit: Option<usize>,
     #[serde(default)]
     offset: Option<usize>,
+}
+
+/// Aggregate totals over the full filtered result set.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub(crate) struct AdminUsageTotalsView {
+    pub(crate) event_count: usize,
+    pub(crate) input_uncached_tokens: u64,
+    pub(crate) input_cached_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) billable_tokens: u64,
 }
 
 /// Paginated usage response.
@@ -52,6 +69,8 @@ pub(crate) struct AdminUsageEventsResponse {
     pub(crate) current_in_flight: u32,
     #[serde(default = "default_usage_analytics_retention_days")]
     pub(crate) retention_days: u64,
+    #[serde(default)]
+    pub(crate) totals: AdminUsageTotalsView,
     pub(crate) events: Vec<AdminUsageEventView>,
     pub(crate) generated_at: i64,
 }
@@ -264,6 +283,13 @@ fn response_from_page(page: UsageEventPage, retention_days: u64) -> AdminUsageEv
         current_rpm: 0,
         current_in_flight: 0,
         retention_days,
+        totals: AdminUsageTotalsView {
+            event_count: page.totals.event_count,
+            input_uncached_tokens: page.totals.input_uncached_tokens,
+            input_cached_tokens: page.totals.input_cached_tokens,
+            output_tokens: page.totals.output_tokens,
+            billable_tokens: page.totals.billable_tokens,
+        },
         events: page.events.iter().map(AdminUsageEventView::from).collect(),
         generated_at: now_ms(),
     }
@@ -308,6 +334,16 @@ fn normalize_usage_query(
             .key_id
             .and_then(|value| normalize_optional_string(&value)),
         provider_type: provider_type.map(str::to_string),
+        model: request
+            .model
+            .and_then(|value| normalize_optional_string(&value)),
+        account_name: request
+            .account_name
+            .and_then(|value| normalize_optional_string(&value)),
+        endpoint: request
+            .endpoint
+            .and_then(|value| normalize_optional_string(&value)),
+        status_code: request.status_code,
         source,
         start_ms,
         end_ms,
@@ -315,7 +351,7 @@ fn normalize_usage_query(
             .limit
             .unwrap_or(DEFAULT_ADMIN_USAGE_LIMIT)
             .clamp(1, MAX_ADMIN_USAGE_LIMIT),
-        offset: request.offset.unwrap_or(0).min(MAX_ADMIN_USAGE_OFFSET),
+        offset: request.offset.unwrap_or(0),
     })
 }
 
@@ -473,6 +509,43 @@ mod tests {
     }
 
     #[test]
+    fn normalize_usage_query_keeps_large_offsets() {
+        let query = normalize_usage_query(
+            ListUsageEventsRequest {
+                limit: Some(500),
+                offset: Some(1_000),
+                ..ListUsageEventsRequest::default()
+            },
+            None,
+        )
+        .expect("large offset should remain valid");
+
+        assert_eq!(query.limit, 200);
+        assert_eq!(query.offset, 1_000);
+    }
+
+    #[test]
+    fn normalize_usage_query_preserves_exact_filters() {
+        let query = normalize_usage_query(
+            ListUsageEventsRequest {
+                model: Some(" gpt-5.4 ".to_string()),
+                account_name: Some(" account-a ".to_string()),
+                endpoint: Some(" /v1/responses ".to_string()),
+                status_code: Some(524),
+                ..ListUsageEventsRequest::default()
+            },
+            Some("codex"),
+        )
+        .expect("filters should normalize");
+
+        assert_eq!(query.provider_type.as_deref(), Some("codex"));
+        assert_eq!(query.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(query.account_name.as_deref(), Some("account-a"));
+        assert_eq!(query.endpoint.as_deref(), Some("/v1/responses"));
+        assert_eq!(query.status_code, Some(524));
+    }
+
+    #[test]
     fn usage_events_response_declares_retention_days() {
         let response = response_from_page(
             UsageEventPage {
@@ -480,6 +553,7 @@ mod tests {
                 offset: 0,
                 limit: 20,
                 has_more: false,
+                totals: llm_access_core::store::UsageEventTotals::default(),
                 events: Vec::new(),
             },
             7,
@@ -497,6 +571,13 @@ mod tests {
             "has_more": false,
             "current_rpm": 0,
             "current_in_flight": 0,
+            "totals": {
+                "event_count": 0,
+                "input_uncached_tokens": 0,
+                "input_cached_tokens": 0,
+                "output_tokens": 0,
+                "billable_tokens": 0
+            },
             "events": [],
             "generated_at": 1_700_000_000_000_i64
         }))
@@ -506,5 +587,6 @@ mod tests {
             response.retention_days,
             llm_access_core::store::DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS
         );
+        assert_eq!(response.totals.event_count, 0);
     }
 }

@@ -16,8 +16,6 @@ use crate::{
 };
 
 const PUBLIC_USAGE_PAGE_LIMIT: usize = 20;
-const PUBLIC_USAGE_MAX_OFFSET: usize = 200;
-const PUBLIC_USAGE_MAX_PAGES: usize = (PUBLIC_USAGE_MAX_OFFSET / PUBLIC_USAGE_PAGE_LIMIT) + 1;
 const PUBLIC_USAGE_TIME_RANGE_ALL: &str = "all";
 const PUBLIC_USAGE_TIME_RANGE_24H: &str = "24h";
 const PUBLIC_USAGE_TIME_RANGE_7D: &str = "7d";
@@ -199,7 +197,7 @@ pub fn llm_access_usage_page() -> Html {
     let total_pages = (*lookup).as_ref().map_or(1, |response| {
         let total = response.total.max(1);
         let limit = response.limit.max(1);
-        total.div_ceil(limit).min(PUBLIC_USAGE_MAX_PAGES)
+        total.div_ceil(limit)
     });
 
     html! {
@@ -364,6 +362,29 @@ pub fn llm_access_usage_page() -> Html {
                             <span>{ format!("Cached {}", format_number_u64(response.key.usage_input_cached_tokens)) }</span>
                             <span>{ format!("Out {}", format_number_u64(response.key.usage_output_tokens)) }</span>
                         </div>
+                    </div>
+
+                    <div class={classes!("mt-4", "grid", "gap-3", "sm:grid-cols-2", "xl:grid-cols-5")}>
+                        <article class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Events" }</div>
+                            <div class={classes!("mt-2", "font-mono", "text-xl", "font-black", "text-[var(--text)]")}>{ format_number_u64(response.totals.event_count as u64) }</div>
+                        </article>
+                        <article class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Input Uncached" }</div>
+                            <div class={classes!("mt-2", "font-mono", "text-xl", "font-black", "text-[var(--text)]")}>{ format_number_u64(response.totals.input_uncached_tokens) }</div>
+                        </article>
+                        <article class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Input Cached" }</div>
+                            <div class={classes!("mt-2", "font-mono", "text-xl", "font-black", "text-[var(--text)]")}>{ format_number_u64(response.totals.input_cached_tokens) }</div>
+                        </article>
+                        <article class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Output" }</div>
+                            <div class={classes!("mt-2", "font-mono", "text-xl", "font-black", "text-[var(--text)]")}>{ format_number_u64(response.totals.output_tokens) }</div>
+                        </article>
+                        <article class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
+                            <div class={classes!("font-mono", "text-[11px]", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Billable" }</div>
+                            <div class={classes!("mt-2", "font-mono", "text-xl", "font-black", "text-[var(--text)]")}>{ format_number_u64(response.totals.billable_tokens) }</div>
+                        </article>
                     </div>
 
                     if response.events.is_empty() {

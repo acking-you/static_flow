@@ -5902,6 +5902,7 @@ pub struct PublicLlmGatewayUsageLookupResponse {
     pub offset: usize,
     pub limit: usize,
     pub has_more: bool,
+    pub totals: AdminUsageTotalsView,
     pub events: Vec<PublicLlmGatewayUsageEventView>,
     pub generated_at: i64,
 }
@@ -6267,8 +6268,19 @@ pub struct AdminLlmGatewayUsageEventsResponse {
     pub current_in_flight: u32,
     #[serde(default = "default_usage_analytics_retention_days")]
     pub retention_days: u64,
+    pub totals: AdminUsageTotalsView,
     pub events: Vec<AdminLlmGatewayUsageEventView>,
     pub generated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct AdminUsageTotalsView {
+    pub event_count: usize,
+    pub input_uncached_tokens: u64,
+    pub input_cached_tokens: u64,
+    pub output_tokens: u64,
+    pub billable_tokens: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -6416,6 +6428,10 @@ pub struct AdminLlmGatewayUsageEventsQuery {
     pub start_ms: Option<i64>,
     pub end_ms: Option<i64>,
     pub source: Option<String>,
+    pub model: Option<String>,
+    pub account_name: Option<String>,
+    pub endpoint: Option<String>,
+    pub status_code: Option<i32>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -7024,6 +7040,13 @@ pub async fn fetch_public_llm_gateway_usage(
             offset: request.offset.unwrap_or(0),
             limit: request.limit.unwrap_or(50),
             has_more: false,
+            totals: AdminUsageTotalsView {
+                event_count: 2,
+                input_uncached_tokens: 730,
+                input_cached_tokens: 64,
+                output_tokens: 364,
+                billable_tokens: 1_094,
+            },
             events: vec![
                 PublicLlmGatewayUsageEventView {
                     id: "mock-usage-2".to_string(),
@@ -8954,6 +8977,7 @@ pub async fn fetch_admin_llm_gateway_usage_events(
             current_rpm: 0,
             current_in_flight: 0,
             retention_days: default_usage_analytics_retention_days(),
+            totals: AdminUsageTotalsView::default(),
             events: vec![],
             generated_at: 0,
         })
@@ -8984,6 +9008,33 @@ pub async fn fetch_admin_llm_gateway_usage_events(
             .filter(|value| !value.is_empty())
         {
             params.push(format!("source={}", urlencoding::encode(source)));
+        }
+        if let Some(model) = query
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("model={}", urlencoding::encode(model)));
+        }
+        if let Some(account_name) = query
+            .account_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("account_name={}", urlencoding::encode(account_name)));
+        }
+        if let Some(endpoint) = query
+            .endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("endpoint={}", urlencoding::encode(endpoint)));
+        }
+        if let Some(status_code) = query.status_code {
+            params.push(format!("status_code={status_code}"));
         }
         if let Some(limit) = query.limit {
             params.push(format!("limit={limit}"));
@@ -10539,6 +10590,7 @@ pub async fn fetch_admin_kiro_usage_events(
             current_rpm: 0,
             current_in_flight: 0,
             retention_days: default_usage_analytics_retention_days(),
+            totals: AdminUsageTotalsView::default(),
             events: vec![],
             generated_at: 0,
         })
@@ -10548,7 +10600,12 @@ pub async fn fetch_admin_kiro_usage_events(
     {
         let mut url = format!("{}/admin/kiro-gateway/usage", admin_base());
         let mut params = Vec::new();
-        if let Some(key_id) = query.key_id.as_deref() {
+        if let Some(key_id) = query
+            .key_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             params.push(format!("key_id={}", urlencoding::encode(key_id)));
         }
         if let Some(start_ms) = query.start_ms {
@@ -10564,6 +10621,33 @@ pub async fn fetch_admin_kiro_usage_events(
             .filter(|value| !value.is_empty())
         {
             params.push(format!("source={}", urlencoding::encode(source)));
+        }
+        if let Some(model) = query
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("model={}", urlencoding::encode(model)));
+        }
+        if let Some(account_name) = query
+            .account_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("account_name={}", urlencoding::encode(account_name)));
+        }
+        if let Some(endpoint) = query
+            .endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("endpoint={}", urlencoding::encode(endpoint)));
+        }
+        if let Some(status_code) = query.status_code {
+            params.push(format!("status_code={status_code}"));
         }
         if let Some(limit) = query.limit {
             params.push(format!("limit={limit}"));
@@ -11262,6 +11346,13 @@ mod tests {
                 "current_rpm": 0,
                 "current_in_flight": 0,
                 "retention_days": 7,
+                "totals": {
+                    "event_count": 12,
+                    "input_uncached_tokens": 1200,
+                    "input_cached_tokens": 300,
+                    "output_tokens": 450,
+                    "billable_tokens": 1650
+                },
                 "events": [],
                 "generated_at": 1700000000000
             }"#,
@@ -11269,6 +11360,8 @@ mod tests {
         .expect("usage response should parse retention days");
 
         assert_eq!(response.retention_days, 7);
+        assert_eq!(response.totals.event_count, 12);
+        assert_eq!(response.totals.billable_tokens, 1_650);
     }
 
     #[test]

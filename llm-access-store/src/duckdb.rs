@@ -25,8 +25,8 @@ use llm_access_core::{
     provider::{ProtocolFamily, ProviderType, RouteStrategy},
     store::{
         AdminRuntimeConfig, UsageAnalyticsStore, UsageChartPoint, UsageEventPage, UsageEventQuery,
-        UsageEventSink, UsageEventSource, DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB,
-        DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
+        UsageEventSink, UsageEventSource, UsageEventTotals,
+        DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB, DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
     },
     usage::{UsageEvent, UsageStreamDetails, UsageTiming},
 };
@@ -473,30 +473,74 @@ fn compact_source_expr(
 }
 
 #[cfg(feature = "duckdb-runtime")]
-const USAGE_EVENT_ONLINE_MAX_LIMIT: usize = 20;
-#[cfg(feature = "duckdb-runtime")]
-const USAGE_EVENT_ONLINE_MAX_OFFSET: usize = 200;
+const USAGE_EVENT_PAGE_MAX_LIMIT: usize = 200;
 
 #[cfg(feature = "duckdb-runtime")]
-const COUNT_USAGE_EVENTS_SQL: &str = "SELECT count(*)
-    FROM usage_events
-    WHERE (?1 IS NULL OR key_id = ?1)
-      AND (?2 IS NULL OR provider_type = ?2)
-      AND (?3 IS NULL OR created_at_ms >= ?3)
-      AND (?4 IS NULL OR created_at_ms < ?4)";
+fn usage_event_filter_column_sql(
+    columns: &HashSet<String>,
+    table_alias: &str,
+    column: &'static str,
+    missing_sql: &'static str,
+) -> String {
+    if columns.contains(column) {
+        format!("{table_alias}.{column}")
+    } else {
+        missing_sql.to_string()
+    }
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn usage_event_filter_where_sql(columns: &HashSet<String>, table_alias: &str) -> String {
+    let model_sql =
+        usage_event_filter_column_sql(columns, table_alias, "model", "CAST(NULL AS VARCHAR)");
+    let account_name_sql = usage_event_filter_column_sql(
+        columns,
+        table_alias,
+        "account_name",
+        "CAST(NULL AS VARCHAR)",
+    );
+    let endpoint_sql =
+        usage_event_filter_column_sql(columns, table_alias, "endpoint", "CAST(NULL AS VARCHAR)");
+    let status_code_sql =
+        usage_event_filter_column_sql(columns, table_alias, "status_code", "CAST(NULL AS INTEGER)");
+    format!(
+        "WHERE (?1 IS NULL OR {table_alias}.key_id = ?1)
+      AND (?2 IS NULL OR {table_alias}.provider_type = ?2)
+      AND (?3 IS NULL OR {table_alias}.created_at_ms >= ?3)
+      AND (?4 IS NULL OR {table_alias}.created_at_ms < ?4)
+      AND (?5 IS NULL OR {model_sql} = ?5)
+      AND (?6 IS NULL OR {account_name_sql} = ?6)
+      AND (?7 IS NULL OR {endpoint_sql} = ?7)
+      AND (?8 IS NULL OR {status_code_sql} = ?8)"
+    )
+}
 
 #[cfg(feature = "duckdb-runtime")]
 fn list_usage_event_summaries_sql(conn: &duckdb::Connection) -> anyhow::Result<String> {
     let columns = duckdb_table_columns(conn, "usage_events")?;
     let select = usage_event_summary_select_exprs(&columns).join(",\n        ");
+    let where_sql = usage_event_filter_where_sql(&columns, "e");
     Ok(format!(
         "SELECT {select}
     FROM usage_events e
-    WHERE (?1 IS NULL OR key_id = ?1)
-      AND (?2 IS NULL OR provider_type = ?2)
-      AND (?3 IS NULL OR created_at_ms >= ?3)
-      AND (?4 IS NULL OR created_at_ms < ?4)
-    LIMIT ?5 OFFSET ?6"
+    {where_sql}
+    LIMIT ?9 OFFSET ?10"
+    ))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn usage_event_totals_sql(conn: &duckdb::Connection) -> anyhow::Result<String> {
+    let columns = duckdb_table_columns(conn, "usage_events")?;
+    let where_sql = usage_event_filter_where_sql(&columns, "e");
+    Ok(format!(
+        "SELECT
+            count(*) AS event_count,
+            COALESCE(sum(e.input_uncached_tokens), 0) AS input_uncached_tokens,
+            COALESCE(sum(e.input_cached_tokens), 0) AS input_cached_tokens,
+            COALESCE(sum(e.output_tokens), 0) AS output_tokens,
+            COALESCE(sum(e.billable_tokens), 0) AS billable_tokens
+         FROM usage_events e
+         {where_sql}"
     ))
 }
 
@@ -1291,6 +1335,7 @@ enum TieredUsagePartitionKind {
 struct TieredUsagePartition {
     path: PathBuf,
     count: usize,
+    totals: UsageEventTotals,
     kind: TieredUsagePartitionKind,
 }
 
@@ -3133,15 +3178,17 @@ fn list_usage_events_from_conn(
     conn: &duckdb::Connection,
     query: &UsageEventQuery,
 ) -> anyhow::Result<UsageEventPage> {
-    let total = count_usage_events_from_conn(conn, query)?;
-    let safe_limit = query.limit.min(USAGE_EVENT_ONLINE_MAX_LIMIT);
-    let safe_offset = query.offset.min(USAGE_EVENT_ONLINE_MAX_OFFSET);
+    let totals = fetch_usage_event_totals_from_conn(conn, query)?;
+    let total = totals.event_count;
+    let safe_limit = query.limit.min(USAGE_EVENT_PAGE_MAX_LIMIT);
+    let safe_offset = query.offset;
     if safe_limit == 0 || safe_offset >= total {
         return Ok(UsageEventPage {
             total,
             offset: safe_offset,
             limit: safe_limit,
             has_more: false,
+            totals,
             events: Vec::new(),
         });
     }
@@ -3155,28 +3202,40 @@ fn list_usage_events_from_conn(
         offset: safe_offset,
         limit: safe_limit,
         has_more: safe_offset.saturating_add(events.len()) < total,
+        totals,
         events,
     })
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn count_usage_events_from_conn(
+fn fetch_usage_event_totals_from_conn(
     conn: &duckdb::Connection,
     query: &UsageEventQuery,
-) -> anyhow::Result<usize> {
-    let total: i64 = conn
-        .query_row(
-            COUNT_USAGE_EVENTS_SQL,
-            duckdb::params![
-                query.key_id.as_deref(),
-                query.provider_type.as_deref(),
-                query.start_ms,
-                query.end_ms
-            ],
-            |row| row.get(0),
-        )
-        .context("count duckdb usage events")?;
-    Ok(i64_to_usize(total))
+) -> anyhow::Result<UsageEventTotals> {
+    let sql = usage_event_totals_sql(conn)?;
+    conn.query_row(
+        &sql,
+        duckdb::params![
+            query.key_id.as_deref(),
+            query.provider_type.as_deref(),
+            query.start_ms,
+            query.end_ms,
+            query.model.as_deref(),
+            query.account_name.as_deref(),
+            query.endpoint.as_deref(),
+            query.status_code
+        ],
+        |row| {
+            Ok(UsageEventTotals {
+                event_count: i64_to_usize(row.get(0)?),
+                input_uncached_tokens: row.get::<_, i64>(1).map(|value| value.max(0) as u64)?,
+                input_cached_tokens: row.get::<_, i64>(2).map(|value| value.max(0) as u64)?,
+                output_tokens: row.get::<_, i64>(3).map(|value| value.max(0) as u64)?,
+                billable_tokens: row.get::<_, i64>(4).map(|value| value.max(0) as u64)?,
+            })
+        },
+    )
+    .context("aggregate duckdb usage event totals")
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -3197,6 +3256,10 @@ fn fetch_usage_event_summaries_from_conn(
                 query.provider_type.as_deref(),
                 query.start_ms,
                 query.end_ms,
+                query.model.as_deref(),
+                query.account_name.as_deref(),
+                query.endpoint.as_deref(),
+                query.status_code,
                 usize_to_i64(limit),
                 usize_to_i64(offset)
             ],
@@ -3213,9 +3276,10 @@ fn list_usage_events_from_tiered(
     state: &Mutex<TieredDuckDbUsageState>,
     query: &UsageEventQuery,
 ) -> anyhow::Result<UsageEventPage> {
-    let safe_limit = query.limit.min(USAGE_EVENT_ONLINE_MAX_LIMIT);
-    let safe_offset = query.offset.min(USAGE_EVENT_ONLINE_MAX_OFFSET);
+    let safe_limit = query.limit.min(USAGE_EVENT_PAGE_MAX_LIMIT);
+    let safe_offset = query.offset;
     let mut total = 0usize;
+    let mut totals = UsageEventTotals::default();
     let mut partitions = Vec::new();
     let mut events = Vec::new();
 
@@ -3227,12 +3291,15 @@ fn list_usage_events_from_tiered(
             state.active_path.clone()
         };
         let conn = DuckDbUsageRepository::open_read_only_conn(&active_path)?;
-        let count = count_usage_events_from_conn(&conn, query)?;
+        let partition_totals = fetch_usage_event_totals_from_conn(&conn, query)?;
+        let count = partition_totals.event_count;
         total = total.saturating_add(count);
+        merge_usage_event_totals(&mut totals, &partition_totals);
         if count > 0 {
             partitions.push(TieredUsagePartition {
                 path: active_path,
                 count,
+                totals: partition_totals,
                 kind: TieredUsagePartitionKind::Active,
             });
         }
@@ -3242,6 +3309,7 @@ fn list_usage_events_from_tiered(
         for partition in archived_usage_partitions_for_query(config, query)? {
             let count = partition.count;
             total = total.saturating_add(count);
+            merge_usage_event_totals(&mut totals, &partition.totals);
             partitions.push(partition);
         }
     }
@@ -3277,6 +3345,7 @@ fn list_usage_events_from_tiered(
         offset: safe_offset,
         limit: safe_limit,
         has_more: safe_offset.saturating_add(events.len()) < total,
+        totals,
         events,
     })
 }
@@ -3330,16 +3399,24 @@ fn archived_usage_partitions_for_query(
 ) -> anyhow::Result<Vec<TieredUsagePartition>> {
     let mut partitions = Vec::new();
     for (segment, catalog_count) in archived_segments_with_catalog_counts(config, query)? {
-        let count = if segment_fully_inside(&segment, query) {
-            catalog_count
-        } else {
-            let conn = DuckDbUsageRepository::open_read_only_conn(&segment.archive_path)?;
-            count_usage_events_from_conn(&conn, query)?
-        };
+        let conn = DuckDbUsageRepository::open_read_only_conn(&segment.archive_path)?;
+        let totals = fetch_usage_event_totals_from_conn(&conn, query)?;
+        let count = totals.event_count;
         if count > 0 {
+            let effective_count = if segment_fully_inside(&segment, query)
+                && query.model.is_none()
+                && query.account_name.is_none()
+                && query.endpoint.is_none()
+                && query.status_code.is_none()
+            {
+                catalog_count
+            } else {
+                count
+            };
             partitions.push(TieredUsagePartition {
                 path: segment.archive_path,
-                count,
+                count: effective_count,
+                totals,
                 kind: TieredUsagePartitionKind::Archive,
             });
         }
@@ -3658,10 +3735,14 @@ fn usage_chart_points_from_tiered(
     let query = UsageEventQuery {
         key_id: Some(key_id.to_string()),
         provider_type: None,
+        model: None,
+        account_name: None,
+        endpoint: None,
+        status_code: None,
         source: UsageEventSource::Archive,
         start_ms: Some(start_ms),
         end_ms: Some(start_ms.saturating_add((bucket_count as i64).saturating_mul(bucket_ms))),
-        limit: USAGE_EVENT_ONLINE_MAX_LIMIT,
+        limit: USAGE_EVENT_PAGE_MAX_LIMIT,
         offset: 0,
     };
     for (segment, _) in archived_segments_with_catalog_counts(config, &query)? {
@@ -3700,6 +3781,19 @@ fn empty_usage_chart_points(
             tokens: 0,
         })
         .collect()
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn merge_usage_event_totals(target: &mut UsageEventTotals, added: &UsageEventTotals) {
+    target.event_count = target.event_count.saturating_add(added.event_count);
+    target.input_uncached_tokens = target
+        .input_uncached_tokens
+        .saturating_add(added.input_uncached_tokens);
+    target.input_cached_tokens = target
+        .input_cached_tokens
+        .saturating_add(added.input_cached_tokens);
+    target.output_tokens = target.output_tokens.saturating_add(added.output_tokens);
+    target.billable_tokens = target.billable_tokens.saturating_add(added.billable_tokens);
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -4161,6 +4255,10 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(event.key_id.clone()),
                 provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -4381,6 +4479,10 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(first.key_id.clone()),
                 provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -4433,6 +4535,10 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(existing.key_id.clone()),
                 provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -4741,6 +4847,10 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(first.key_id.clone()),
                 provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -4759,6 +4869,10 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(first.key_id.clone()),
                 provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -4777,6 +4891,10 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(first.key_id.clone()),
                 provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
                 source: UsageEventSource::All,
                 start_ms: Some(second.created_at_ms),
                 end_ms: Some(second.created_at_ms.saturating_add(1)),
@@ -4815,17 +4933,21 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: None,
                 provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
-                limit: 100,
+                limit: 500,
                 offset: 1_000,
             })
             .await
             .expect("list clamped page");
 
-        assert_eq!(page.limit, super::USAGE_EVENT_ONLINE_MAX_LIMIT);
-        assert_eq!(page.offset, super::USAGE_EVENT_ONLINE_MAX_OFFSET);
+        assert_eq!(page.limit, super::USAGE_EVENT_PAGE_MAX_LIMIT);
+        assert_eq!(page.offset, 1_000);
         assert_eq!(page.total, 25);
         assert!(page.events.is_empty());
         assert!(!page.has_more);
@@ -4834,19 +4956,162 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: None,
                 provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
-                limit: 100,
+                limit: 500,
                 offset: 0,
             })
             .await
             .expect("list first clamped page");
-        assert_eq!(first_page.limit, super::USAGE_EVENT_ONLINE_MAX_LIMIT);
+        assert_eq!(first_page.limit, super::USAGE_EVENT_PAGE_MAX_LIMIT);
         assert_eq!(first_page.total, 25);
-        assert_eq!(first_page.events.len(), super::USAGE_EVENT_ONLINE_MAX_LIMIT);
-        assert!(first_page.has_more);
+        assert_eq!(first_page.events.len(), 25);
+        assert!(!first_page.has_more);
         assert_eq!(first_page.events[0].event_id, "online-clamp-24");
+
+        std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn list_usage_events_supports_offsets_beyond_two_hundred() {
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-duckdb-test-{}-usage-online-offset", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create duckdb test directory");
+        let db_path = root.join("usage.duckdb");
+        let repo = super::DuckDbUsageRepository::open_path(&db_path).expect("open duckdb usage db");
+
+        for index in 0..260 {
+            let mut event = test_usage_event();
+            event.event_id = format!("offset-page-{index:03}");
+            event.created_at_ms = 1_700_100_000_000 + i64::from(index);
+            repo.append_usage_event(&event)
+                .await
+                .expect("append duckdb usage event");
+        }
+
+        let page = repo
+            .list_usage_events(UsageEventQuery {
+                key_id: None,
+                provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
+                source: UsageEventSource::All,
+                start_ms: None,
+                end_ms: None,
+                limit: 20,
+                offset: 220,
+            })
+            .await
+            .expect("list usage page after offset two hundred");
+
+        assert_eq!(page.total, 260);
+        assert_eq!(page.offset, 220);
+        assert_eq!(page.limit, 20);
+        assert_eq!(page.events.len(), 20);
+        assert!(page.has_more);
+        assert_eq!(page.events[0].event_id, "offset-page-039");
+        assert_eq!(page.events[19].event_id, "offset-page-020");
+
+        std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn list_usage_events_returns_full_totals_for_filtered_result_set() {
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-duckdb-test-{}-usage-filtered-totals", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create duckdb test directory");
+        let db_path = root.join("usage.duckdb");
+        let repo = super::DuckDbUsageRepository::open_path(&db_path).expect("open duckdb usage db");
+
+        let mut first = test_usage_event();
+        first.event_id = "filtered-totals-1".to_string();
+        first.created_at_ms = 1_700_200_000_000;
+        first.provider_type = ProviderType::Codex;
+        first.protocol_family = ProtocolFamily::OpenAi;
+        first.key_id = "key-filtered".to_string();
+        first.account_name = Some("account-a".to_string());
+        first.endpoint = "/v1/responses".to_string();
+        first.model = Some("gpt-5.4".to_string());
+        first.status_code = 200;
+        first.input_uncached_tokens = 11;
+        first.input_cached_tokens = 7;
+        first.output_tokens = 5;
+        first.billable_tokens = 16;
+        repo.append_usage_event(&first)
+            .await
+            .expect("append first filtered event");
+
+        let mut second = first.clone();
+        second.event_id = "filtered-totals-2".to_string();
+        second.created_at_ms += 1_000;
+        second.input_uncached_tokens = 19;
+        second.input_cached_tokens = 13;
+        second.output_tokens = 17;
+        second.billable_tokens = 36;
+        repo.append_usage_event(&second)
+            .await
+            .expect("append second filtered event");
+
+        let mut non_matching = first.clone();
+        non_matching.event_id = "filtered-totals-3".to_string();
+        non_matching.created_at_ms += 2_000;
+        non_matching.account_name = Some("account-b".to_string());
+        non_matching.endpoint = "/v1/chat/completions".to_string();
+        non_matching.model = Some("gpt-5.5".to_string());
+        non_matching.status_code = 524;
+        non_matching.input_uncached_tokens = 100;
+        non_matching.input_cached_tokens = 100;
+        non_matching.output_tokens = 100;
+        non_matching.billable_tokens = 200;
+        repo.append_usage_event(&non_matching)
+            .await
+            .expect("append non matching event");
+
+        let page = repo
+            .list_usage_events(UsageEventQuery {
+                key_id: Some("key-filtered".to_string()),
+                provider_type: Some("codex".to_string()),
+                model: Some("gpt-5.4".to_string()),
+                account_name: Some("account-a".to_string()),
+                endpoint: Some("/v1/responses".to_string()),
+                status_code: Some(200),
+                source: UsageEventSource::All,
+                start_ms: None,
+                end_ms: None,
+                limit: 1,
+                offset: 0,
+            })
+            .await
+            .expect("list filtered usage page");
+
+        assert_eq!(page.total, 2);
+        assert_eq!(page.events.len(), 1);
+        assert_eq!(page.events[0].event_id, second.event_id);
+        assert_eq!(page.totals.event_count, 2);
+        assert_eq!(
+            page.totals.input_uncached_tokens,
+            (first.input_uncached_tokens + second.input_uncached_tokens) as u64
+        );
+        assert_eq!(
+            page.totals.input_cached_tokens,
+            (first.input_cached_tokens + second.input_cached_tokens) as u64
+        );
+        assert_eq!(page.totals.output_tokens, (first.output_tokens + second.output_tokens) as u64);
+        assert_eq!(
+            page.totals.billable_tokens,
+            (first.billable_tokens + second.billable_tokens) as u64
+        );
 
         std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
     }
@@ -4916,6 +5181,10 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(first.key_id.clone()),
                 provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -4933,6 +5202,10 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(first.key_id.clone()),
                 provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -4998,6 +5271,10 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some("key-duckdb".to_string()),
                 provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -5155,6 +5432,10 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some("key-duckdb".to_string()),
                 provider_type: Some("kiro".to_string()),
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
                 source: UsageEventSource::Archive,
                 start_ms: Some(1_700_000_010_000),
                 end_ms: Some(1_700_000_020_000),
@@ -5216,6 +5497,10 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(archived.key_id.clone()),
                 provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -5379,6 +5664,10 @@ mod tests {
             .list_usage_events(UsageEventQuery {
                 key_id: Some(first.key_id.clone()),
                 provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,

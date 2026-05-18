@@ -2956,6 +2956,10 @@ pub fn admin_kiro_gateway_page() -> Html {
                     start_ms: None,
                     end_ms: None,
                     source: Some("all".to_string()),
+                    model: None,
+                    account_name: None,
+                    endpoint: None,
+                    status_code: None,
                     limit: Some(5),
                     offset: Some(0),
                 })
