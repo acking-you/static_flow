@@ -25,7 +25,7 @@ use llm_access_core::{
     provider::{ProtocolFamily, ProviderType, RouteStrategy},
     store::{
         AdminRuntimeConfig, UsageAnalyticsStore, UsageChartPoint, UsageEventPage, UsageEventQuery,
-        UsageEventSink, UsageEventSource, UsageEventTotals,
+        UsageEventSink, UsageEventSource, UsageEventStatusKind, UsageEventTotals,
         DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB, DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
     },
     usage::{UsageEvent, UsageStreamDetails, UsageTiming},
@@ -511,7 +511,10 @@ fn usage_event_filter_where_sql(columns: &HashSet<String>, table_alias: &str) ->
       AND (?5 IS NULL OR {model_sql} = ?5)
       AND (?6 IS NULL OR {account_name_sql} = ?6)
       AND (?7 IS NULL OR {endpoint_sql} = ?7)
-      AND (?8 IS NULL OR {status_code_sql} = ?8)"
+      AND (?8 IS NULL OR {status_code_sql} = ?8)
+      AND (?9 IS NULL
+           OR (?9 = 'ok' AND {status_code_sql} = 200)
+           OR (?9 = 'non_ok' AND {status_code_sql} <> 200))"
     )
 }
 
@@ -524,7 +527,7 @@ fn list_usage_event_summaries_sql(conn: &duckdb::Connection) -> anyhow::Result<S
         "SELECT {select}
     FROM usage_events e
     {where_sql}
-    LIMIT ?9 OFFSET ?10"
+    LIMIT ?10 OFFSET ?11"
     ))
 }
 
@@ -3223,7 +3226,8 @@ fn fetch_usage_event_totals_from_conn(
             query.model.as_deref(),
             query.account_name.as_deref(),
             query.endpoint.as_deref(),
-            query.status_code
+            query.status_code,
+            query.status_kind.map(UsageEventStatusKind::as_query_value)
         ],
         |row| {
             Ok(UsageEventTotals {
@@ -3260,6 +3264,7 @@ fn fetch_usage_event_summaries_from_conn(
                 query.account_name.as_deref(),
                 query.endpoint.as_deref(),
                 query.status_code,
+                query.status_kind.map(UsageEventStatusKind::as_query_value),
                 usize_to_i64(limit),
                 usize_to_i64(offset)
             ],
@@ -3408,6 +3413,7 @@ fn archived_usage_partitions_for_query(
                 && query.account_name.is_none()
                 && query.endpoint.is_none()
                 && query.status_code.is_none()
+                && query.status_kind.is_none()
             {
                 catalog_count
             } else {
@@ -3739,6 +3745,7 @@ fn usage_chart_points_from_tiered(
         account_name: None,
         endpoint: None,
         status_code: None,
+        status_kind: None,
         source: UsageEventSource::Archive,
         start_ms: Some(start_ms),
         end_ms: Some(start_ms.saturating_add((bucket_count as i64).saturating_mul(bucket_ms))),
@@ -3966,7 +3973,10 @@ mod tests {
     #[cfg(feature = "duckdb-runtime")]
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType, RouteStrategy},
-        store::{UsageAnalyticsStore, UsageEventQuery, UsageEventSink, UsageEventSource},
+        store::{
+            UsageAnalyticsStore, UsageEventQuery, UsageEventSink, UsageEventSource,
+            UsageEventStatusKind,
+        },
         usage::{UsageEvent, UsageStreamDetails, UsageTiming},
     };
 
@@ -4259,6 +4269,7 @@ mod tests {
                 account_name: None,
                 endpoint: None,
                 status_code: None,
+                status_kind: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -4483,6 +4494,7 @@ mod tests {
                 account_name: None,
                 endpoint: None,
                 status_code: None,
+                status_kind: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -4539,6 +4551,7 @@ mod tests {
                 account_name: None,
                 endpoint: None,
                 status_code: None,
+                status_kind: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -4851,6 +4864,7 @@ mod tests {
                 account_name: None,
                 endpoint: None,
                 status_code: None,
+                status_kind: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -4873,6 +4887,7 @@ mod tests {
                 account_name: None,
                 endpoint: None,
                 status_code: None,
+                status_kind: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -4895,6 +4910,7 @@ mod tests {
                 account_name: None,
                 endpoint: None,
                 status_code: None,
+                status_kind: None,
                 source: UsageEventSource::All,
                 start_ms: Some(second.created_at_ms),
                 end_ms: Some(second.created_at_ms.saturating_add(1)),
@@ -4937,6 +4953,7 @@ mod tests {
                 account_name: None,
                 endpoint: None,
                 status_code: None,
+                status_kind: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -4960,6 +4977,7 @@ mod tests {
                 account_name: None,
                 endpoint: None,
                 status_code: None,
+                status_kind: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -5004,6 +5022,7 @@ mod tests {
                 account_name: None,
                 endpoint: None,
                 status_code: None,
+                status_kind: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -5086,6 +5105,7 @@ mod tests {
                 account_name: Some("account-a".to_string()),
                 endpoint: Some("/v1/responses".to_string()),
                 status_code: Some(200),
+                status_kind: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -5112,6 +5132,63 @@ mod tests {
             page.totals.billable_tokens,
             (first.billable_tokens + second.billable_tokens) as u64
         );
+
+        std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn list_usage_events_supports_status_kind_buckets() {
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-duckdb-test-{}-usage-status-kind", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create duckdb test directory");
+        let db_path = root.join("usage.duckdb");
+        let repo = super::DuckDbUsageRepository::open_path(&db_path).expect("open duckdb usage db");
+
+        let mut ok_event = test_usage_event();
+        ok_event.event_id = "status-kind-ok".to_string();
+        ok_event.created_at_ms = 1_700_300_000_000;
+        ok_event.key_id = "status-kind-key".to_string();
+        ok_event.status_code = 200;
+        ok_event.billable_tokens = 10;
+        repo.append_usage_event(&ok_event)
+            .await
+            .expect("append ok usage event");
+
+        let mut error_event = ok_event.clone();
+        error_event.event_id = "status-kind-error".to_string();
+        error_event.created_at_ms += 1_000;
+        error_event.status_code = 524;
+        error_event.billable_tokens = 25;
+        repo.append_usage_event(&error_event)
+            .await
+            .expect("append non-ok usage event");
+
+        let page = repo
+            .list_usage_events(UsageEventQuery {
+                key_id: Some("status-kind-key".to_string()),
+                provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
+                status_kind: Some(UsageEventStatusKind::NonOk),
+                source: UsageEventSource::All,
+                start_ms: None,
+                end_ms: None,
+                limit: 10,
+                offset: 0,
+            })
+            .await
+            .expect("list usage events filtered by status kind");
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.events.len(), 1);
+        assert_eq!(page.events[0].event_id, error_event.event_id);
+        assert_eq!(page.events[0].status_code, 524);
+        assert_eq!(page.totals.event_count, 1);
+        assert_eq!(page.totals.billable_tokens, error_event.billable_tokens as u64);
 
         std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
     }
@@ -5185,6 +5262,7 @@ mod tests {
                 account_name: None,
                 endpoint: None,
                 status_code: None,
+                status_kind: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -5206,6 +5284,7 @@ mod tests {
                 account_name: None,
                 endpoint: None,
                 status_code: None,
+                status_kind: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -5275,6 +5354,7 @@ mod tests {
                 account_name: None,
                 endpoint: None,
                 status_code: None,
+                status_kind: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -5436,6 +5516,7 @@ mod tests {
                 account_name: None,
                 endpoint: None,
                 status_code: None,
+                status_kind: None,
                 source: UsageEventSource::Archive,
                 start_ms: Some(1_700_000_010_000),
                 end_ms: Some(1_700_000_020_000),
@@ -5501,6 +5582,7 @@ mod tests {
                 account_name: None,
                 endpoint: None,
                 status_code: None,
+                status_kind: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,
@@ -5668,6 +5750,7 @@ mod tests {
                 account_name: None,
                 endpoint: None,
                 status_code: None,
+                status_kind: None,
                 source: UsageEventSource::All,
                 start_ms: None,
                 end_ms: None,

@@ -6432,6 +6432,7 @@ pub struct AdminLlmGatewayUsageEventsQuery {
     pub account_name: Option<String>,
     pub endpoint: Option<String>,
     pub status_code: Option<i32>,
+    pub status_kind: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -9036,6 +9037,14 @@ pub async fn fetch_admin_llm_gateway_usage_events(
         if let Some(status_code) = query.status_code {
             params.push(format!("status_code={status_code}"));
         }
+        if let Some(status_kind) = query
+            .status_kind
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("status_kind={}", urlencoding::encode(status_kind)));
+        }
         if let Some(limit) = query.limit {
             params.push(format!("limit={limit}"));
         }
@@ -10648,6 +10657,14 @@ pub async fn fetch_admin_kiro_usage_events(
         }
         if let Some(status_code) = query.status_code {
             params.push(format!("status_code={status_code}"));
+        }
+        if let Some(status_kind) = query
+            .status_kind
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("status_kind={}", urlencoding::encode(status_kind)));
         }
         if let Some(limit) = query.limit {
             params.push(format!("limit={limit}"));

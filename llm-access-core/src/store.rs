@@ -2038,6 +2038,34 @@ impl UsageEventSource {
 }
 
 /// Paginated usage-event query used by admin and public compatibility views.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageEventStatusKind {
+    /// Only requests that completed with HTTP 200.
+    Ok,
+    /// Any non-200 request, regardless of the exact status code.
+    NonOk,
+}
+
+impl UsageEventStatusKind {
+    /// Parse the public query-string value into a typed status bucket.
+    pub fn from_query_value(value: &str) -> Option<Self> {
+        match value {
+            "ok" => Some(Self::Ok),
+            "non_ok" => Some(Self::NonOk),
+            _ => None,
+        }
+    }
+
+    /// Stable query-string value used by HTTP handlers and tests.
+    pub fn as_query_value(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::NonOk => "non_ok",
+        }
+    }
+}
+
+/// Paginated usage-event query used by admin and public compatibility views.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageEventQuery {
     /// Optional key filter.
@@ -2052,6 +2080,8 @@ pub struct UsageEventQuery {
     pub endpoint: Option<String>,
     /// Optional status code filter.
     pub status_code: Option<i32>,
+    /// Optional status bucket filter for common "200 vs non-200" analysis.
+    pub status_kind: Option<UsageEventStatusKind>,
     /// Physical usage event source.
     pub source: UsageEventSource,
     /// Optional inclusive lower creation timestamp bound in Unix milliseconds.

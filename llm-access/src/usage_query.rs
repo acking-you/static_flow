@@ -11,7 +11,7 @@ use axum::{
 use llm_access_core::{
     store::{
         UsageAnalyticsStore, UsageChartPoint, UsageEventPage, UsageEventQuery, UsageEventSource,
-        DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS,
+        UsageEventStatusKind, DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS,
     },
     usage::UsageEvent,
 };
@@ -36,6 +36,8 @@ pub(crate) struct ListUsageEventsRequest {
     endpoint: Option<String>,
     #[serde(default)]
     status_code: Option<i32>,
+    #[serde(default)]
+    status_kind: Option<String>,
     #[serde(default)]
     start_ms: Option<i64>,
     #[serde(default)]
@@ -206,6 +208,7 @@ pub(crate) async fn usage_chart_points(
 ) -> Response {
     let key_id = request.key_id.trim();
     if key_id.is_empty() {
+        tracing::warn!("invalid usage chart query: missing key_id");
         return (StatusCode::BAD_REQUEST, "key_id is required").into_response();
     }
     let start_ms = request.start_ms.unwrap_or(0).max(0);
@@ -226,11 +229,14 @@ pub(crate) async fn usage_chart_points(
             chart_points: points.into_iter().map(UsageChartPointView::from).collect(),
         })
         .into_response(),
-        Err(err) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to load usage chart: {err:#}"),
-        )
-            .into_response(),
+        Err(err) => {
+            tracing::error!(key_id, error = ?err, "failed to load usage chart");
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to load usage chart: {err:#}"),
+            )
+                .into_response()
+        },
     }
 }
 
@@ -241,15 +247,21 @@ async fn list_usage_events(
 ) -> Response {
     let query = match normalize_usage_query(request, provider_type) {
         Ok(query) => query,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(message) => {
+            tracing::warn!(provider_type, message, "invalid usage events query");
+            return (StatusCode::BAD_REQUEST, message).into_response();
+        },
     };
     match state.usage_analytics_store.list_usage_events(query).await {
         Ok(page) => Json(response_from_page(page, usage_retention_days(&state))).into_response(),
-        Err(err) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to list usage events: {err:#}"),
-        )
-            .into_response(),
+        Err(err) => {
+            tracing::error!(provider_type, error = ?err, "failed to list usage events");
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to list usage events: {err:#}"),
+            )
+                .into_response()
+        },
     }
 }
 
@@ -266,11 +278,14 @@ async fn get_usage_event(
             Json(detail_from_event(&event)).into_response()
         },
         Ok(_) => axum::http::StatusCode::NOT_FOUND.into_response(),
-        Err(err) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to load usage event: {err:#}"),
-        )
-            .into_response(),
+        Err(err) => {
+            tracing::error!(provider_type, event_id, error = ?err, "failed to load usage event");
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to load usage event: {err:#}"),
+            )
+                .into_response()
+        },
     }
 }
 
@@ -329,6 +344,18 @@ fn normalize_usage_query(
             .ok_or("source must be one of hot, archive, or all")?,
         None => UsageEventSource::Hot,
     };
+    let status_kind = match request
+        .status_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => Some(
+            UsageEventStatusKind::from_query_value(value)
+                .ok_or("status_kind must be one of ok or non_ok")?,
+        ),
+        None => None,
+    };
     Ok(UsageEventQuery {
         key_id: request
             .key_id
@@ -344,6 +371,7 @@ fn normalize_usage_query(
             .endpoint
             .and_then(|value| normalize_optional_string(&value)),
         status_code: request.status_code,
+        status_kind,
         source,
         start_ms,
         end_ms,
@@ -472,7 +500,7 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use llm_access_core::store::{UsageEventPage, UsageEventSource};
+    use llm_access_core::store::{UsageEventPage, UsageEventSource, UsageEventStatusKind};
 
     use super::{normalize_usage_query, response_from_page, ListUsageEventsRequest};
 
@@ -543,6 +571,35 @@ mod tests {
         assert_eq!(query.account_name.as_deref(), Some("account-a"));
         assert_eq!(query.endpoint.as_deref(), Some("/v1/responses"));
         assert_eq!(query.status_code, Some(524));
+        assert_eq!(query.status_kind, None);
+    }
+
+    #[test]
+    fn normalize_usage_query_maps_status_kind_bucket() {
+        let query = normalize_usage_query(
+            ListUsageEventsRequest {
+                status_kind: Some("non_ok".to_string()),
+                ..ListUsageEventsRequest::default()
+            },
+            None,
+        )
+        .expect("status bucket should normalize");
+
+        assert_eq!(query.status_kind, Some(UsageEventStatusKind::NonOk));
+    }
+
+    #[test]
+    fn normalize_usage_query_rejects_unknown_status_kind() {
+        let err = normalize_usage_query(
+            ListUsageEventsRequest {
+                status_kind: Some("500-class".to_string()),
+                ..ListUsageEventsRequest::default()
+            },
+            None,
+        )
+        .expect_err("unknown status bucket should fail");
+
+        assert!(err.contains("status_kind must be one of ok or non_ok"));
     }
 
     #[test]

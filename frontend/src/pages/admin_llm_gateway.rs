@@ -64,13 +64,12 @@ use crate::{
 const USAGE_PAGE_SIZE: usize = 20;
 const JOURNAL_PREVIEW_PAGE_SIZE: usize = 20;
 const DEFAULT_ADMIN_GROUP_PAGE_SIZE: usize = 24;
-const USAGE_TIME_RANGE_ALL: &str = "all";
-const USAGE_TIME_RANGE_1H: &str = "1h";
-const USAGE_TIME_RANGE_24H: &str = "24h";
-const USAGE_TIME_RANGE_7D: &str = "7d";
 const USAGE_SOURCE_HOT: &str = "hot";
 const USAGE_SOURCE_ARCHIVE: &str = "archive";
 const USAGE_SOURCE_ALL: &str = "all";
+const USAGE_STATUS_KIND_ALL: &str = "all";
+const USAGE_STATUS_KIND_OK: &str = "ok";
+const USAGE_STATUS_KIND_NON_OK: &str = "non_ok";
 const TOKEN_REQUEST_PAGE_SIZE: usize = 20;
 const ACCOUNT_CONTRIBUTION_REQUEST_PAGE_SIZE: usize = 20;
 const SPONSOR_REQUEST_PAGE_SIZE: usize = 20;
@@ -705,25 +704,6 @@ fn filter_gateway_keys_for_query(
         .collect()
 }
 
-fn usage_time_range_bounds(value: &str) -> (Option<i64>, Option<i64>) {
-    let now = Date::now() as i64;
-    match value {
-        USAGE_TIME_RANGE_1H => (Some(now.saturating_sub(60 * 60 * 1000)), Some(now)),
-        USAGE_TIME_RANGE_24H => (Some(now.saturating_sub(24 * 60 * 60 * 1000)), Some(now)),
-        USAGE_TIME_RANGE_7D => (Some(now.saturating_sub(7 * 24 * 60 * 60 * 1000)), Some(now)),
-        _ => (None, None),
-    }
-}
-
-fn usage_time_range_label(value: &str) -> &'static str {
-    match value {
-        USAGE_TIME_RANGE_1H => "最近 1 小时",
-        USAGE_TIME_RANGE_24H => "最近 24 小时",
-        USAGE_TIME_RANGE_7D => "最近 7 天",
-        _ => "全部时间",
-    }
-}
-
 fn usage_source_label(value: &str) -> &'static str {
     match value {
         USAGE_SOURCE_ARCHIVE => "历史归档",
@@ -732,16 +712,53 @@ fn usage_source_label(value: &str) -> &'static str {
     }
 }
 
+fn usage_status_kind_label(value: &str) -> &'static str {
+    match value {
+        USAGE_STATUS_KIND_OK => "正常",
+        USAGE_STATUS_KIND_NON_OK => "异常",
+        _ => "全部状态",
+    }
+}
+
+fn parse_datetime_local_input_to_ms(value: &str) -> Option<i64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let parsed = Date::new(&JsValue::from_str(trimmed)).get_time();
+    (!parsed.is_nan()).then_some(parsed as i64)
+}
+
+fn format_datetime_local_input(ms: i64) -> String {
+    let date = Date::new(&JsValue::from_f64(ms as f64));
+    let year = date.get_full_year();
+    let month = date.get_month() + 1;
+    let day = date.get_date();
+    let hours = date.get_hours();
+    let minutes = date.get_minutes();
+    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}")
+}
+
+fn usage_time_description(start_input: &str, end_input: &str) -> String {
+    match (start_input.trim(), end_input.trim()) {
+        ("", "") => "全部时间".to_string(),
+        (start, "") => format!("{start} -> now"),
+        ("", end) => format!("start -> {end}"),
+        (start, end) => format!("{start} -> {end}"),
+    }
+}
+
 #[derive(Clone, Default, PartialEq)]
 struct UsageReloadArgs {
     page: Option<usize>,
     key_id: Option<String>,
-    time_range: Option<String>,
+    start_input: Option<String>,
+    end_input: Option<String>,
     source: Option<String>,
     model: Option<String>,
     account_name: Option<String>,
     endpoint: Option<String>,
-    status_code: Option<String>,
+    status_kind: Option<String>,
 }
 
 fn normalized_usage_filter_text(value: &str) -> Option<String> {
@@ -749,12 +766,12 @@ fn normalized_usage_filter_text(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-fn normalized_usage_status_filter(value: &str) -> Option<i32> {
-    value
-        .trim()
-        .parse::<i32>()
-        .ok()
-        .filter(|status| *status >= 100)
+fn normalized_usage_status_kind(value: &str) -> Option<String> {
+    match value.trim() {
+        USAGE_STATUS_KIND_OK => Some(USAGE_STATUS_KIND_OK.to_string()),
+        USAGE_STATUS_KIND_NON_OK => Some(USAGE_STATUS_KIND_NON_OK.to_string()),
+        _ => None,
+    }
 }
 
 fn sanitize_auto_account_names(names: &[String], accounts: &[AccountSummaryView]) -> Vec<String> {
@@ -2196,12 +2213,13 @@ pub fn admin_llm_gateway_page() -> Html {
     let usage_error = use_state(|| None::<String>);
     let usage_key_filter = use_state(String::new);
     let usage_key_search = use_state(String::new);
-    let usage_time_range = use_state(|| USAGE_TIME_RANGE_ALL.to_string());
+    let usage_start_input = use_state(String::new);
+    let usage_end_input = use_state(String::new);
     let usage_source = use_state(|| USAGE_SOURCE_HOT.to_string());
     let usage_model_filter = use_state(String::new);
     let usage_account_filter = use_state(String::new);
     let usage_endpoint_filter = use_state(String::new);
-    let usage_status_filter = use_state(String::new);
+    let usage_status_kind = use_state(|| USAGE_STATUS_KIND_ALL.to_string());
     let usage_journal_status = use_state(|| None::<AdminUsageJournalStatusView>);
     let usage_journal_preview = use_state(|| None::<AdminUsageJournalPreviewResponse>);
     let usage_journal_preview_page = use_state(|| 1_usize);
@@ -2365,12 +2383,13 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_loading = usage_loading.clone();
         let usage_error = usage_error.clone();
         let usage_key_filter = usage_key_filter.clone();
-        let usage_time_range = usage_time_range.clone();
+        let usage_start_input = usage_start_input.clone();
+        let usage_end_input = usage_end_input.clone();
         let usage_source = usage_source.clone();
         let usage_model_filter = usage_model_filter.clone();
         let usage_account_filter = usage_account_filter.clone();
         let usage_endpoint_filter = usage_endpoint_filter.clone();
-        let usage_status_filter = usage_status_filter.clone();
+        let usage_status_kind = usage_status_kind.clone();
         Callback::from(move |args: UsageReloadArgs| {
             let usage_events = usage_events.clone();
             let usage_total = usage_total.clone();
@@ -2382,17 +2401,19 @@ pub fn admin_llm_gateway_page() -> Html {
             let usage_loading = usage_loading.clone();
             let usage_error = usage_error.clone();
             let usage_key_filter = usage_key_filter.clone();
-            let usage_time_range = usage_time_range.clone();
+            let usage_start_input = usage_start_input.clone();
+            let usage_end_input = usage_end_input.clone();
             let usage_source = usage_source.clone();
             let usage_model_filter = usage_model_filter.clone();
             let usage_account_filter = usage_account_filter.clone();
             let usage_endpoint_filter = usage_endpoint_filter.clone();
-            let usage_status_filter = usage_status_filter.clone();
+            let usage_status_kind = usage_status_kind.clone();
             let page = args.page.unwrap_or(*usage_page).max(1);
             let selected_key_id = args.key_id.unwrap_or_else(|| (*usage_key_filter).clone());
-            let selected_time_range = args
-                .time_range
-                .unwrap_or_else(|| (*usage_time_range).clone());
+            let selected_start_input = args
+                .start_input
+                .unwrap_or_else(|| (*usage_start_input).clone());
+            let selected_end_input = args.end_input.unwrap_or_else(|| (*usage_end_input).clone());
             let selected_source = args.source.unwrap_or_else(|| (*usage_source).clone());
             let selected_model = args.model.unwrap_or_else(|| (*usage_model_filter).clone());
             let selected_account = args
@@ -2401,10 +2422,11 @@ pub fn admin_llm_gateway_page() -> Html {
             let selected_endpoint = args
                 .endpoint
                 .unwrap_or_else(|| (*usage_endpoint_filter).clone());
-            let selected_status = args
-                .status_code
-                .unwrap_or_else(|| (*usage_status_filter).clone());
-            let (start_ms, end_ms) = usage_time_range_bounds(&selected_time_range);
+            let selected_status_kind = args
+                .status_kind
+                .unwrap_or_else(|| (*usage_status_kind).clone());
+            let start_ms = parse_datetime_local_input_to_ms(&selected_start_input);
+            let end_ms = parse_datetime_local_input_to_ms(&selected_end_input);
             usage_loading.set(true);
             usage_error.set(None);
             wasm_bindgen_futures::spawn_local(async move {
@@ -2416,7 +2438,8 @@ pub fn admin_llm_gateway_page() -> Html {
                     model: normalized_usage_filter_text(&selected_model),
                     account_name: normalized_usage_filter_text(&selected_account),
                     endpoint: normalized_usage_filter_text(&selected_endpoint),
-                    status_code: normalized_usage_status_filter(&selected_status),
+                    status_code: None,
+                    status_kind: normalized_usage_status_kind(&selected_status_kind),
                     limit: Some(USAGE_PAGE_SIZE),
                     offset: Some((page - 1) * USAGE_PAGE_SIZE),
                 };
@@ -3758,18 +3781,12 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_key_filter = usage_key_filter.clone();
         let usage_key_search = usage_key_search.clone();
         let usage_page = usage_page.clone();
-        let reload_usage = reload_usage.clone();
         Callback::from(move |selected_key_id: String| {
             if selected_key_id.is_empty() {
                 usage_key_search.set(String::new());
             }
             usage_key_filter.set(selected_key_id.clone());
             usage_page.set(1);
-            reload_usage.emit(UsageReloadArgs {
-                page: Some(1),
-                key_id: Some(selected_key_id),
-                ..UsageReloadArgs::default()
-            });
         })
     };
 
@@ -3787,35 +3804,28 @@ pub fn admin_llm_gateway_page() -> Html {
         Callback::from(move |value: String| usage_key_search.set(value))
     };
 
-    let on_usage_time_range_change = {
-        let usage_time_range = usage_time_range.clone();
-        let reload_usage = reload_usage.clone();
+    let on_usage_source_change = {
+        let usage_source = usage_source.clone();
         Callback::from(move |event: Event| {
             if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
-                let selected = target.value();
-                usage_time_range.set(selected.clone());
-                reload_usage.emit(UsageReloadArgs {
-                    page: Some(1),
-                    time_range: Some(selected),
-                    ..UsageReloadArgs::default()
-                });
+                usage_source.set(target.value());
             }
         })
     };
 
-    let on_usage_source_change = {
-        let usage_source = usage_source.clone();
-        let reload_usage = reload_usage.clone();
-        Callback::from(move |event: Event| {
-            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
-                let selected = target.value();
-                usage_source.set(selected.clone());
-                reload_usage.emit(UsageReloadArgs {
-                    page: Some(1),
-                    source: Some(selected),
-                    ..UsageReloadArgs::default()
-                });
-            }
+    let on_usage_start_input_change = {
+        let usage_start_input = usage_start_input.clone();
+        Callback::from(move |event: InputEvent| {
+            let value = event.target_unchecked_into::<HtmlInputElement>().value();
+            usage_start_input.set(value);
+        })
+    };
+
+    let on_usage_end_input_change = {
+        let usage_end_input = usage_end_input.clone();
+        Callback::from(move |event: InputEvent| {
+            let value = event.target_unchecked_into::<HtmlInputElement>().value();
+            usage_end_input.set(value);
         })
     };
 
@@ -3843,11 +3853,12 @@ pub fn admin_llm_gateway_page() -> Html {
         })
     };
 
-    let on_usage_status_filter_input = {
-        let usage_status_filter = usage_status_filter.clone();
-        Callback::from(move |event: InputEvent| {
-            let value = event.target_unchecked_into::<HtmlInputElement>().value();
-            usage_status_filter.set(value.clone());
+    let on_usage_status_kind_change = {
+        let usage_status_kind = usage_status_kind.clone();
+        Callback::from(move |event: Event| {
+            if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                usage_status_kind.set(target.value());
+            }
         })
     };
 
@@ -3862,24 +3873,57 @@ pub fn admin_llm_gateway_page() -> Html {
     };
 
     let on_clear_usage_filters = {
+        let usage_key_filter = usage_key_filter.clone();
+        let usage_key_search = usage_key_search.clone();
+        let usage_start_input = usage_start_input.clone();
+        let usage_end_input = usage_end_input.clone();
+        let usage_source = usage_source.clone();
         let usage_model_filter = usage_model_filter.clone();
         let usage_account_filter = usage_account_filter.clone();
         let usage_endpoint_filter = usage_endpoint_filter.clone();
-        let usage_status_filter = usage_status_filter.clone();
+        let usage_status_kind = usage_status_kind.clone();
         let reload_usage = reload_usage.clone();
         Callback::from(move |_| {
+            usage_key_filter.set(String::new());
+            usage_key_search.set(String::new());
+            usage_start_input.set(String::new());
+            usage_end_input.set(String::new());
+            usage_source.set(USAGE_SOURCE_HOT.to_string());
             usage_model_filter.set(String::new());
             usage_account_filter.set(String::new());
             usage_endpoint_filter.set(String::new());
-            usage_status_filter.set(String::new());
+            usage_status_kind.set(USAGE_STATUS_KIND_ALL.to_string());
             reload_usage.emit(UsageReloadArgs {
                 page: Some(1),
+                key_id: Some(String::new()),
+                start_input: Some(String::new()),
+                end_input: Some(String::new()),
+                source: Some(USAGE_SOURCE_HOT.to_string()),
                 model: Some(String::new()),
                 account_name: Some(String::new()),
                 endpoint: Some(String::new()),
-                status_code: Some(String::new()),
-                ..UsageReloadArgs::default()
+                status_kind: Some(String::new()),
             });
+        })
+    };
+
+    let on_usage_set_quick_range = {
+        let usage_start_input = usage_start_input.clone();
+        let usage_end_input = usage_end_input.clone();
+        Callback::from(move |hours: i64| {
+            let end_ms = Date::now() as i64;
+            let start_ms = end_ms.saturating_sub(hours.saturating_mul(60 * 60 * 1000));
+            usage_start_input.set(format_datetime_local_input(start_ms));
+            usage_end_input.set(format_datetime_local_input(end_ms));
+        })
+    };
+
+    let on_usage_clear_time_range = {
+        let usage_start_input = usage_start_input.clone();
+        let usage_end_input = usage_end_input.clone();
+        Callback::from(move |_| {
+            usage_start_input.set(String::new());
+            usage_end_input.set(String::new());
         })
     };
 
@@ -8289,139 +8333,164 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
                     </div>
 
-                    <div class={classes!("mt-3", "grid", "gap-3", "xl:grid-cols-[minmax(16rem,1fr)_minmax(14rem,18rem)_minmax(10rem,12rem)_minmax(9rem,10rem)_minmax(12rem,1fr)_minmax(12rem,1fr)]", "items-end")}>
-                        <label class={classes!("text-sm")}>
-                            <span class={classes!("text-[var(--muted)]")}>{ "搜索 Key" }</span>
-                            <div class={classes!("mt-1")}>
-                                <SearchBox
-                                    value={(*usage_key_search).clone()}
-                                    on_change={on_usage_key_search_change.clone()}
-                                    placeholder={AttrValue::Static("搜索 key 名称 / id / provider / 状态")}
-                                />
-                            </div>
-                        </label>
-                        <label class={classes!("text-sm")}>
-                            <span class={classes!("text-[var(--muted)]")}>{ "筛选 Key" }</span>
-                            <select
-                                key={format!("usage-filter-{}-{}", (*usage_key_filter).clone(), usage_key_query_lower)}
-                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
-                                onchange={on_usage_key_filter_change}
-                            >
-                                <option value="" selected={(*usage_key_filter).is_empty()}>{ "全部" }</option>
-                                if !(*usage_key_filter).is_empty()
-                                    && !filtered_usage_keys
-                                        .iter()
-                                        .any(|key_item| key_item.id.as_str() == (*usage_key_filter).as_str())
-                                {
-                                    if let Some(selected_key) = keys
-                                        .iter()
-                                        .find(|key_item| key_item.id.as_str() == (*usage_key_filter).as_str())
+                    <div class={classes!("mt-4", "flex", "flex-col", "gap-3")}>
+                        <div class={classes!("grid", "grid-cols-1", "md:grid-cols-2", "xl:grid-cols-4", "gap-3", "items-end")}>
+                            <label class={classes!("text-sm", "md:col-span-2")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "开始时间 / 结束时间" }</span>
+                                <div class={classes!("mt-1", "grid", "gap-2", "sm:grid-cols-2")}>
+                                    <input
+                                        type="datetime-local"
+                                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-sm")}
+                                        value={(*usage_start_input).clone()}
+                                        oninput={on_usage_start_input_change}
+                                    />
+                                    <input
+                                        type="datetime-local"
+                                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-sm")}
+                                        value={(*usage_end_input).clone()}
+                                        oninput={on_usage_end_input_change}
+                                    />
+                                </div>
+                                <div class={classes!("mt-2", "flex", "items-center", "gap-2", "flex-wrap")}>
+                                    <button type="button" class={classes!("btn-terminal")} onclick={{
+                                        let on_usage_set_quick_range = on_usage_set_quick_range.clone();
+                                        Callback::from(move |_| on_usage_set_quick_range.emit(1))
+                                    }}>{ "最近 1h" }</button>
+                                    <button type="button" class={classes!("btn-terminal")} onclick={{
+                                        let on_usage_set_quick_range = on_usage_set_quick_range.clone();
+                                        Callback::from(move |_| on_usage_set_quick_range.emit(24))
+                                    }}>{ "最近 24h" }</button>
+                                    <button type="button" class={classes!("btn-terminal")} onclick={{
+                                        let on_usage_set_quick_range = on_usage_set_quick_range.clone();
+                                        Callback::from(move |_| on_usage_set_quick_range.emit(24 * 7))
+                                    }}>{ "最近 7d" }</button>
+                                    <button type="button" class={classes!("btn-terminal")} onclick={on_usage_clear_time_range}>{ "清空时间" }</button>
+                                </div>
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "搜索 Key" }</span>
+                                <div class={classes!("mt-1")}>
+                                    <SearchBox
+                                        value={(*usage_key_search).clone()}
+                                        on_change={on_usage_key_search_change.clone()}
+                                        placeholder={AttrValue::Static("搜索 key 名称 / id / provider / 状态")}
+                                    />
+                                </div>
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "筛选 Key" }</span>
+                                <select
+                                    key={format!("usage-filter-{}-{}", (*usage_key_filter).clone(), usage_key_query_lower)}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    onchange={on_usage_key_filter_change}
+                                >
+                                    <option value="" selected={(*usage_key_filter).is_empty()}>{ "全部" }</option>
+                                    if !(*usage_key_filter).is_empty()
+                                        && !filtered_usage_keys
+                                            .iter()
+                                            .any(|key_item| key_item.id.as_str() == (*usage_key_filter).as_str())
                                     {
-                                        <option
-                                            value={selected_key.id.clone()}
-                                            selected=true
-                                        >
-                                            { format!("{} · {} (当前)", selected_key.name, selected_key.id) }
-                                        </option>
+                                        if let Some(selected_key) = keys
+                                            .iter()
+                                            .find(|key_item| key_item.id.as_str() == (*usage_key_filter).as_str())
+                                        {
+                                            <option
+                                                value={selected_key.id.clone()}
+                                                selected=true
+                                            >
+                                                { format!("{} · {} (当前)", selected_key.name, selected_key.id) }
+                                            </option>
+                                        }
                                     }
-                                }
-                                { for filtered_usage_keys.iter().map(|key_item| html! {
-                                    <option
-                                        value={key_item.id.clone()}
-                                        selected={(*usage_key_filter).as_str() == key_item.id.as_str()}
-                                    >
-                                        { format!("{} · {}", key_item.name, key_item.id) }
-                                    </option>
-                                }) }
-                            </select>
-                        </label>
-                        <label class={classes!("text-sm")}>
-                            <span class={classes!("text-[var(--muted)]")}>{ "时间范围" }</span>
-                            <select
-                                key={format!("usage-time-range-{}", (*usage_time_range).clone())}
-                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
-                                onchange={on_usage_time_range_change}
-                            >
-                                <option value={USAGE_TIME_RANGE_ALL} selected={*usage_time_range == USAGE_TIME_RANGE_ALL}>{ "全部时间" }</option>
-                                <option value={USAGE_TIME_RANGE_1H} selected={*usage_time_range == USAGE_TIME_RANGE_1H}>{ "最近 1 小时" }</option>
-                                <option value={USAGE_TIME_RANGE_24H} selected={*usage_time_range == USAGE_TIME_RANGE_24H}>{ "最近 24 小时" }</option>
-                                <option value={USAGE_TIME_RANGE_7D} selected={*usage_time_range == USAGE_TIME_RANGE_7D}>{ "最近 7 天" }</option>
-                            </select>
-                        </label>
-                        <label class={classes!("text-sm")}>
-                            <span class={classes!("text-[var(--muted)]")}>{ "数据源" }</span>
-                            <select
-                                key={format!("usage-source-{}", (*usage_source).clone())}
-                                class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
-                                onchange={on_usage_source_change}
-                            >
-                                <option value={USAGE_SOURCE_HOT} selected={*usage_source == USAGE_SOURCE_HOT}>{ "在线" }</option>
-                                <option value={USAGE_SOURCE_ARCHIVE} selected={*usage_source == USAGE_SOURCE_ARCHIVE}>{ "历史归档" }</option>
-                                <option value={USAGE_SOURCE_ALL} selected={*usage_source == USAGE_SOURCE_ALL}>{ "全部" }</option>
-                            </select>
-                        </label>
-                        <label class={classes!("text-sm")}>
-                            <span class={classes!("text-[var(--muted)]")}>{ "模型 / 账号" }</span>
-                            <div class={classes!("mt-1", "grid", "gap-2", "sm:grid-cols-2")}>
+                                    { for filtered_usage_keys.iter().map(|key_item| html! {
+                                        <option
+                                            value={key_item.id.clone()}
+                                            selected={(*usage_key_filter).as_str() == key_item.id.as_str()}
+                                        >
+                                            { format!("{} · {}", key_item.name, key_item.id) }
+                                        </option>
+                                    }) }
+                                </select>
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "数据源" }</span>
+                                <select
+                                    key={format!("usage-source-{}", (*usage_source).clone())}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    onchange={on_usage_source_change}
+                                >
+                                    <option value={USAGE_SOURCE_HOT} selected={*usage_source == USAGE_SOURCE_HOT}>{ "在线" }</option>
+                                    <option value={USAGE_SOURCE_ARCHIVE} selected={*usage_source == USAGE_SOURCE_ARCHIVE}>{ "历史归档" }</option>
+                                    <option value={USAGE_SOURCE_ALL} selected={*usage_source == USAGE_SOURCE_ALL}>{ "全部" }</option>
+                                </select>
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "状态" }</span>
+                                <select
+                                    key={format!("usage-status-kind-{}", (*usage_status_kind).clone())}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    onchange={on_usage_status_kind_change}
+                                >
+                                    <option value={USAGE_STATUS_KIND_ALL} selected={*usage_status_kind == USAGE_STATUS_KIND_ALL}>{ "全部" }</option>
+                                    <option value={USAGE_STATUS_KIND_OK} selected={*usage_status_kind == USAGE_STATUS_KIND_OK}>{ "正常 (200)" }</option>
+                                    <option value={USAGE_STATUS_KIND_NON_OK} selected={*usage_status_kind == USAGE_STATUS_KIND_NON_OK}>{ "异常 (非 200)" }</option>
+                                </select>
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "模型" }</span>
                                 <input
                                     type="text"
-                                    class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
-                                    placeholder="model"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                    placeholder="gpt-5.4"
                                     value={(*usage_model_filter).clone()}
                                     oninput={on_usage_model_filter_input}
                                 />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "账号" }</span>
                                 <input
                                     type="text"
-                                    class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
                                     placeholder="account"
                                     value={(*usage_account_filter).clone()}
                                     oninput={on_usage_account_filter_input}
                                 />
-                            </div>
-                        </label>
-                        <label class={classes!("text-sm")}>
-                            <span class={classes!("text-[var(--muted)]")}>{ "Endpoint / 状态码" }</span>
-                            <div class={classes!("mt-1", "grid", "gap-2", "sm:grid-cols-[minmax(0,1fr)_8rem]")}>
+                            </label>
+                            <label class={classes!("text-sm", "md:col-span-2", "xl:col-span-2")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "Endpoint" }</span>
                                 <input
                                     type="text"
-                                    class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
                                     placeholder="/v1/responses"
                                     value={(*usage_endpoint_filter).clone()}
                                     oninput={on_usage_endpoint_filter_input}
                                 />
-                                <input
-                                    type="number"
-                                    class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
-                                    placeholder="200"
-                                    value={(*usage_status_filter).clone()}
-                                    oninput={on_usage_status_filter_input}
-                                />
-                            </div>
-                        </label>
-                    </div>
-
-                    <div class={classes!("mt-3", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                        <div class={classes!("flex", "items-center", "gap-2", "flex-wrap", "text-sm", "font-semibold", "text-[var(--muted)]")}>
-                            <span>{ format!("{} · {} · {} 条", usage_source_label(&usage_source), usage_time_range_label(&usage_time_range), *usage_total) }</span>
-                            <span>{ format!("第 {} 页", *usage_page) }</span>
+                            </label>
                         </div>
-                        <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                            <button
-                                type="button"
-                                class={classes!("btn-terminal")}
-                                onclick={on_apply_usage_filters}
-                                disabled={*usage_loading}
-                            >
-                                { "应用筛选" }
-                            </button>
-                            <button
-                                type="button"
-                                class={classes!("btn-terminal")}
-                                onclick={on_clear_usage_filters}
-                                disabled={*usage_loading}
-                            >
-                                { "清空文本筛选" }
-                            </button>
+
+                        <div class={classes!("flex", "flex-col", "sm:flex-row", "justify-between", "items-start", "sm:items-center", "gap-3")}>
+                            <div class={classes!("flex", "items-center", "gap-2", "flex-wrap", "text-sm", "font-semibold", "text-[var(--muted)]")}>
+                                <span>{ format!("{} · {} · {} · {} 条", usage_source_label(&usage_source), usage_status_kind_label(&usage_status_kind), usage_time_description(&usage_start_input, &usage_end_input), *usage_total) }</span>
+                                <span>{ format!("第 {} 页", *usage_page) }</span>
+                            </div>
+                            <div class={classes!("flex", "items-center", "gap-2", "flex-wrap", "w-full", "sm:w-auto", "justify-end")}>
+                                <button
+                                    type="button"
+                                    class={classes!("btn-terminal")}
+                                    onclick={on_apply_usage_filters}
+                                    disabled={*usage_loading}
+                                >
+                                    { "查询" }
+                                </button>
+                                <button
+                                    type="button"
+                                    class={classes!("btn-terminal")}
+                                    onclick={on_clear_usage_filters}
+                                    disabled={*usage_loading}
+                                >
+                                    { "重置" }
+                                </button>
+                            </div>
                         </div>
                     </div>
 
@@ -8504,7 +8573,8 @@ pub fn admin_llm_gateway_page() -> Html {
                     }
                     if let Some(err) = (*usage_error).clone() {
                         <div class={classes!("mt-3", "rounded-lg", "border", "border-red-400/35", "bg-red-500/8", "px-4", "py-3", "text-sm", "text-red-700", "dark:text-red-200")}>
-                            { err }
+                            <div class={classes!("font-semibold")}>{ "查询失败" }</div>
+                            <pre class={classes!("mt-2", "m-0", "whitespace-pre-wrap", "break-all", "font-mono", "text-xs")}>{ err }</pre>
                         </div>
                     }
 

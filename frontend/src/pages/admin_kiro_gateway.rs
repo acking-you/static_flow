@@ -2960,6 +2960,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                     account_name: None,
                     endpoint: None,
                     status_code: None,
+                    status_kind: None,
                     limit: Some(5),
                     offset: Some(0),
                 })
