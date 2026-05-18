@@ -82,6 +82,7 @@ use llm_access_kiro::{
     },
 };
 use lru::LruCache;
+use rand::Rng;
 use serde_json::{json, Value};
 
 use crate::{
@@ -108,6 +109,8 @@ const KIRO_VISION_BRIDGE_PROMPT: &str = "Describe the attached image(s) for anot
                                          that will answer the user's request. Include visible \
                                          text, objects, colors, layout, charts, tables, and \
                                          uncertainty. Return concise numbered visual facts only.";
+const CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MIN: Duration = Duration::from_secs(45);
+const CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MAX: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Clone)]
 struct CodexDispatchRuntimeConfig {
@@ -567,6 +570,13 @@ impl RequestLimiter {
 }
 
 impl CodexAccountCooldowns {
+    /// Return the remaining request-path cooldown for one Codex account.
+    ///
+    /// This state is intentionally local and ephemeral:
+    /// - it is only used to keep request routing from hammering an account that
+    ///   just failed in the request path;
+    /// - it does not participate in background refresh or token refresh;
+    /// - it lazily expires on read so we do not need a separate cleanup task.
     fn cooldown_for_account(&self, account_name: &str) -> Option<ActiveCooldown> {
         let Ok(mut blocked_until) = self.blocked_until.lock() else {
             return None;
@@ -582,6 +592,13 @@ impl CodexAccountCooldowns {
         })
     }
 
+    /// Mark one Codex account as temporarily unavailable for request routing.
+    ///
+    /// The write semantics are deliberately "single-flight-like": once one
+    /// request has already established a cooldown window, concurrent failures
+    /// do not shorten it by overwriting with a smaller randomly sampled
+    /// TTL. A new write only takes effect when it extends the blocked-until
+    /// instant.
     fn mark_account_cooldown(&self, account_name: &str, cooldown: Duration) {
         if cooldown.is_zero() {
             return;
@@ -589,7 +606,14 @@ impl CodexAccountCooldowns {
         let Ok(mut blocked_until) = self.blocked_until.lock() else {
             return;
         };
-        blocked_until.insert(account_name.to_string(), Instant::now() + cooldown);
+        let next_until = Instant::now() + cooldown;
+        match blocked_until.get_mut(account_name) {
+            Some(existing_until) if *existing_until >= next_until => {},
+            Some(existing_until) => *existing_until = next_until,
+            None => {
+                blocked_until.insert(account_name.to_string(), next_until);
+            },
+        }
     }
 }
 
@@ -675,7 +699,7 @@ async fn select_codex_route_with_account_permit(
     }
     loop {
         let mut saw_limit = false;
-        let mut saw_quota_cooldown = false;
+        let mut saw_account_cooldown = false;
         let mut saw_terminal_auth_error = false;
         let mut shortest_wait: Option<LimitRejection> = None;
         for route in routes {
@@ -698,11 +722,11 @@ async fn select_codex_route_with_account_permit(
             if let Some(cooldown) =
                 codex_account_cooldowns.cooldown_for_account(&route.account_name)
             {
-                saw_quota_cooldown = true;
+                saw_account_cooldown = true;
                 tracing::debug!(
                     account = %route.account_name,
                     cooldown_remaining_ms = cooldown.remaining.as_millis() as u64,
-                    "skipping codex account on temporary quota cooldown"
+                    "skipping codex account on temporary request-path cooldown"
                 );
                 continue;
             }
@@ -740,7 +764,7 @@ async fn select_codex_route_with_account_permit(
             wait_for_limit(shortest_wait.as_ref()).await;
             continue;
         }
-        if saw_quota_cooldown {
+        if saw_account_cooldown {
             return Err((StatusCode::TOO_MANY_REQUESTS, "quota_exceeded").into_response());
         }
         if saw_terminal_auth_error {
@@ -1153,6 +1177,10 @@ async fn dispatch_codex_proxy(
         let route = match hydrate_codex_route_for_dispatch(route, route_store.as_ref()).await {
             Ok(route) => route,
             Err(_) => {
+                mark_codex_transient_request_failure_cooldown(
+                    &codex_account_cooldowns,
+                    &selected_account_name,
+                );
                 usage_meta.mark_failover();
                 failed_accounts.insert(selected_account_name);
                 if attempt_count >= account_attempt_limit {
@@ -1178,6 +1206,10 @@ async fn dispatch_codex_proxy(
                 is_fedramp_account: ctx.is_fedramp_account,
             },
             Err(_) => {
+                mark_codex_transient_request_failure_cooldown(
+                    &codex_account_cooldowns,
+                    &route.account_name,
+                );
                 usage_meta.mark_failover();
                 failed_accounts.insert(route.account_name.clone());
                 if attempt_count >= account_attempt_limit {
@@ -1203,6 +1235,10 @@ async fn dispatch_codex_proxy(
         let client = match provider_client(route.proxy.as_ref()) {
             Ok(client) => client,
             Err(_) => {
+                mark_codex_transient_request_failure_cooldown(
+                    &codex_account_cooldowns,
+                    &route.account_name,
+                );
                 usage_meta.mark_failover();
                 failed_accounts.insert(route.account_name.clone());
                 if attempt_count >= account_attempt_limit {
@@ -1228,6 +1264,10 @@ async fn dispatch_codex_proxy(
                 response
             },
             Err(_) => {
+                mark_codex_transient_request_failure_cooldown(
+                    &codex_account_cooldowns,
+                    &route.account_name,
+                );
                 usage_meta.mark_failover();
                 failed_accounts.insert(route.account_name.clone());
                 if attempt_count >= account_attempt_limit {
@@ -1262,6 +1302,10 @@ async fn dispatch_codex_proxy(
                             response
                         },
                         Err(_) => {
+                            mark_codex_transient_request_failure_cooldown(
+                                &codex_account_cooldowns,
+                                &route.account_name,
+                            );
                             usage_meta.mark_failover();
                             failed_accounts.insert(route.account_name.clone());
                             if attempt_count >= account_attempt_limit {
@@ -1276,6 +1320,10 @@ async fn dispatch_codex_proxy(
                     };
                 },
                 Err(_) => {
+                    mark_codex_transient_request_failure_cooldown(
+                        &codex_account_cooldowns,
+                        &route.account_name,
+                    );
                     usage_meta.mark_failover();
                     failed_accounts.insert(route.account_name.clone());
                     if attempt_count >= account_attempt_limit {
@@ -1311,6 +1359,10 @@ async fn dispatch_codex_proxy(
                 &bytes,
             )
             .await;
+            mark_codex_transient_request_failure_cooldown(
+                &codex_account_cooldowns,
+                &route.account_name,
+            );
             if attempt_count < account_attempt_limit
                 && routes.iter().any(|candidate| {
                     !failed_accounts.contains(&candidate.account_name)
@@ -1393,6 +1445,10 @@ async fn dispatch_codex_proxy(
                         response
                     },
                     Err(_) => {
+                        mark_codex_transient_request_failure_cooldown(
+                            &codex_account_cooldowns,
+                            &route.account_name,
+                        );
                         usage_meta.mark_failover();
                         failed_accounts.insert(route.account_name.clone());
                         if attempt_count >= account_attempt_limit {
@@ -1439,7 +1495,7 @@ async fn dispatch_codex_proxy(
                 };
             }
         }
-        if let Some(cooldown) = codex_quota_exhaustion_cooldown(status, &bytes) {
+        if let Some(cooldown) = codex_temporary_request_failure_cooldown(status, &bytes) {
             codex_account_cooldowns.mark_account_cooldown(&route.account_name, cooldown);
         }
         if !is_codex_invalid_encrypted_content_response(status, &bytes)
@@ -1843,6 +1899,59 @@ fn codex_message_indicates_usage_limit(message: &str) -> bool {
         || normalized.contains("insufficient_quota")
         || normalized.contains("quota_exceeded")
         || normalized.contains("quota exceeded")
+}
+
+fn randomized_codex_transient_account_failure_cooldown<R: Rng + ?Sized>(rng: &mut R) -> Duration {
+    let min_ms = CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MIN
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64;
+    let max_ms = CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MAX
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64;
+    Duration::from_millis(rng.gen_range(min_ms..=max_ms))
+}
+
+fn codex_temporary_request_failure_cooldown(status: StatusCode, bytes: &Bytes) -> Option<Duration> {
+    // Request-shape failures must stay on the existing same-account retry path.
+    // Cooling the account for those errors would poison healthy accounts for a
+    // client-side bug that is independent of the selected route.
+    if is_codex_invalid_encrypted_content_response(status, bytes) {
+        return None;
+    }
+
+    // Explicit upstream quota signals still deserve the stronger existing
+    // cooldown window because they are not a transient transport blip.
+    if let Some(cooldown) = codex_quota_exhaustion_cooldown(status, bytes) {
+        return Some(cooldown);
+    }
+
+    // Everything else here is a request-path account failure signal: a
+    // transport/proxy/upstream problem happened after we already selected an
+    // account. We do not write this into persisted account status. We only
+    // keep the account out of the selection pool for a short randomized window
+    // so subsequent requests stop paying the same failover tax immediately.
+    if status.is_server_error()
+        || matches!(
+            status,
+            StatusCode::UNAUTHORIZED
+                | StatusCode::FORBIDDEN
+                | StatusCode::PAYMENT_REQUIRED
+                | StatusCode::TOO_MANY_REQUESTS
+                | StatusCode::REQUEST_TIMEOUT
+        )
+    {
+        return Some(randomized_codex_transient_account_failure_cooldown(&mut rand::thread_rng()));
+    }
+
+    None
+}
+
+fn mark_codex_transient_request_failure_cooldown(
+    codex_account_cooldowns: &Arc<CodexAccountCooldowns>,
+    account_name: &str,
+) {
+    let cooldown = randomized_codex_transient_account_failure_cooldown(&mut rand::thread_rng());
+    codex_account_cooldowns.mark_account_cooldown(account_name, cooldown);
 }
 
 fn codex_status_from_error_json_value(value: &Value) -> Option<StatusCode> {
@@ -10776,6 +10885,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn codex_dispatch_cools_down_transiently_failed_accounts_between_requests() {
+        let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("codex upstream env lock");
+        let captured = Arc::new(CapturedCodexUpstream::default());
+        let app = Router::new()
+            .route("/v1/responses", post(fake_codex_responses_fail_first_three))
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+        let route_store = Arc::new(StaticMultiCodexRouteStore {
+            codex_routes: vec![
+                codex_route_for_account("codex-a", "upstream-token-a"),
+                codex_route_for_account("codex-b", "upstream-token-b"),
+                codex_route_for_account("codex-c", "upstream-token-c"),
+                codex_route_for_account("codex-d", "upstream-token-d"),
+            ],
+            kiro_route: static_kiro_route(),
+        });
+        let state = super::ProviderState::new(Arc::new(TestStore), route_store);
+        let request = || {
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(header::AUTHORIZATION, "Bearer codex-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "gpt-5.3-codex",
+                        "input": [{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
+                        "max_output_tokens": 64,
+                        "stream": false
+                    }"#,
+                ))
+                .expect("request")
+        };
+
+        let first = super::provider_entry(state.clone(), request()).await;
+        let second = super::provider_entry(state, request()).await;
+
+        std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(second.status(), StatusCode::OK);
+        let requests = captured.requests.lock().expect("captured requests");
+        let auths = requests
+            .iter()
+            .filter_map(|request| request.authorization.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(auths, vec![
+            "Bearer upstream-token-a".to_string(),
+            "Bearer upstream-token-b".to_string(),
+            "Bearer upstream-token-c".to_string(),
+            "Bearer upstream-token-d".to_string(),
+            "Bearer upstream-token-d".to_string(),
+        ]);
+    }
+
+    #[tokio::test]
     async fn codex_dispatch_respects_runtime_account_failure_retry_limit() {
         let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
             .lock()
@@ -10988,6 +11165,36 @@ mod tests {
             .expect("response body");
         let body = String::from_utf8(body.to_vec()).expect("utf8 body");
         assert!(body.contains("all eligible codex accounts failed for this request"));
+    }
+
+    #[test]
+    fn codex_account_cooldown_marks_only_extend_existing_window() {
+        let cooldowns = CodexAccountCooldowns::default();
+        cooldowns.mark_account_cooldown("codex-a", Duration::from_secs(60));
+        let first_until = *cooldowns
+            .blocked_until
+            .lock()
+            .expect("cooldown mutex")
+            .get("codex-a")
+            .expect("initial cooldown");
+
+        cooldowns.mark_account_cooldown("codex-a", Duration::from_secs(5));
+        let second_until = *cooldowns
+            .blocked_until
+            .lock()
+            .expect("cooldown mutex")
+            .get("codex-a")
+            .expect("shorter cooldown should not remove entry");
+        assert!(second_until >= first_until);
+
+        cooldowns.mark_account_cooldown("codex-a", Duration::from_secs(90));
+        let third_until = *cooldowns
+            .blocked_until
+            .lock()
+            .expect("cooldown mutex")
+            .get("codex-a")
+            .expect("longer cooldown should keep entry");
+        assert!(third_until > second_until);
     }
 
     #[tokio::test]
