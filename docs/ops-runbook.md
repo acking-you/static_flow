@@ -10,6 +10,10 @@ Current source-of-truth production facts verified on 2026-05-02:
 - Caddy config path: `/etc/caddy/Caddyfile`.
 - Active Caddy site block proxies LLM paths to `127.0.0.1:19080` and all
   other paths to `127.0.0.1:39080`.
+- Active Caddy reverse proxies explicitly use `15m` origin response-header,
+  read, and write timeouts. The LLM route also sets `flush_interval -1` so
+  SSE-style traffic flushes immediately once Cloudflare orange-cloud proxying
+  is removed.
 - Server-side pb-mapper client systemd unit:
   `pb-mapper-client-cli@sf-backend.service`.
 - Server-side pb-mapper client env file:

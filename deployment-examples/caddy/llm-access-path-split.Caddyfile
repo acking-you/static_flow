@@ -5,22 +5,41 @@ ackingliu.top, www.ackingliu.top {
         @admin path /admin*
         respond @admin "forbidden" 403
 
-        @llm_access path /v1/* /cc/v1/* /api/llm-gateway/* /api/kiro-gateway/* /api/codex-gateway/* /api/llm-access/*
-        handle @llm_access {
-                reverse_proxy 127.0.0.1:19080 {
-                        header_up X-Real-IP {remote_host}
-                        header_up X-Forwarded-For {remote_host}
-                        header_up X-Forwarded-Proto {scheme}
-                        header_up X-Forwarded-Host {host}
-                }
+	@llm_access path /v1/* /cc/v1/* /api/llm-gateway/* /api/kiro-gateway/* /api/codex-gateway/* /api/llm-access/*
+	handle @llm_access {
+		reverse_proxy 127.0.0.1:19080 {
+			# LLM requests can legitimately stream or wait on upstreams for several
+			# minutes, so keep origin-side read/write/header timeouts generous and
+			# disable proxy buffering for SSE-style responses.
+			flush_interval -1
+			transport http {
+				dial_timeout 10s
+				response_header_timeout 15m
+				read_timeout 15m
+				write_timeout 15m
+			}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host {host}
+		}
         }
 
-        handle {
-                reverse_proxy 127.0.0.1:39080 {
-                        header_up X-Real-IP {remote_host}
-                        header_up X-Forwarded-For {remote_host}
-                        header_up X-Forwarded-Proto {scheme}
-                        header_up X-Forwarded-Host {host}
-                }
+	handle {
+		reverse_proxy 127.0.0.1:39080 {
+			# Keep the non-LLM relay path aligned with the longer origin timeout so
+			# large page generations or relay-backed responses do not get cut short
+			# by Caddy once Cloudflare proxying is disabled.
+			transport http {
+				dial_timeout 10s
+				response_header_timeout 15m
+				read_timeout 15m
+				write_timeout 15m
+			}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host {host}
+		}
         }
 }
