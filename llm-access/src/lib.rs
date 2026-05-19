@@ -295,6 +295,10 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
             post(admin::probe_llm_gateway_account_models),
         )
         .route("/admin/llm-gateway/usage", get(admin::list_llm_gateway_usage_events))
+        .route(
+            "/admin/llm-gateway/usage/filter-options",
+            get(admin::get_llm_gateway_usage_filter_options),
+        )
         .route("/admin/llm-gateway/usage/:event_id", get(admin::get_llm_gateway_usage_event))
         .route("/admin/llm-access/usage-journal/status", get(admin::get_usage_journal_status))
         .route("/admin/llm-gateway/usage-journal/status", get(admin::get_usage_journal_status))

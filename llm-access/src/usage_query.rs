@@ -240,6 +240,48 @@ pub(crate) async fn usage_chart_points(
     }
 }
 
+/// Filter options response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct UsageFilterOptionsResponse {
+    pub(crate) models: Vec<String>,
+    pub(crate) accounts: Vec<String>,
+    pub(crate) endpoints: Vec<String>,
+}
+
+/// Return distinct model/account/endpoint values for filter autocomplete.
+pub(crate) async fn usage_filter_options(
+    State(state): State<UsageQueryState>,
+    Query(request): Query<ListUsageEventsRequest>,
+) -> Response {
+    let query = match normalize_usage_query(request, None) {
+        Ok(query) => query,
+        Err(message) => {
+            tracing::warn!(message, "invalid usage filter options query");
+            return (StatusCode::BAD_REQUEST, message).into_response();
+        },
+    };
+    match state
+        .usage_analytics_store
+        .list_usage_filter_options(query)
+        .await
+    {
+        Ok(options) => Json(UsageFilterOptionsResponse {
+            models: options.models,
+            accounts: options.accounts,
+            endpoints: options.endpoints,
+        })
+        .into_response(),
+        Err(err) => {
+            tracing::error!(error = ?err, "failed to load usage filter options");
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to load usage filter options: {err:#}"),
+            )
+                .into_response()
+        },
+    }
+}
+
 async fn list_usage_events(
     state: UsageQueryState,
     request: ListUsageEventsRequest,

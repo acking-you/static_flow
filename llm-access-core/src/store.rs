@@ -2314,6 +2314,24 @@ pub trait UsageAnalyticsStore: Send + Sync {
         bucket_ms: i64,
         bucket_count: usize,
     ) -> anyhow::Result<Vec<UsageChartPoint>>;
+
+    /// Return distinct model/account/endpoint values for filter autocomplete
+    /// within the current usage query scope.
+    async fn list_usage_filter_options(
+        &self,
+        query: UsageEventQuery,
+    ) -> anyhow::Result<UsageFilterOptions>;
+}
+
+/// Distinct values available for usage filter autocomplete.
+#[derive(Debug, Clone, Default)]
+pub struct UsageFilterOptions {
+    /// Distinct model names.
+    pub models: Vec<String>,
+    /// Distinct account names.
+    pub accounts: Vec<String>,
+    /// Distinct endpoint values.
+    pub endpoints: Vec<String>,
 }
 
 /// Public write queries used by unauthenticated public endpoints.
@@ -2948,6 +2966,13 @@ impl UsageAnalyticsStore for EmptyUsageAnalyticsStore {
                 tokens: 0,
             })
             .collect())
+    }
+
+    async fn list_usage_filter_options(
+        &self,
+        _query: UsageEventQuery,
+    ) -> anyhow::Result<UsageFilterOptions> {
+        Ok(UsageFilterOptions::default())
     }
 }
 

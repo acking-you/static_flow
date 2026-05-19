@@ -4,6 +4,7 @@
 pub mod admin_local_media_uploads;
 pub mod article_card;
 pub mod audio_player;
+pub mod date_range_picker;
 pub mod error_banner;
 pub mod footer;
 pub mod header;

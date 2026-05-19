@@ -6273,6 +6273,14 @@ pub struct AdminLlmGatewayUsageEventsResponse {
     pub generated_at: i64,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminLlmGatewayUsageFilterOptionsResponse {
+    pub models: Vec<String>,
+    pub accounts: Vec<String>,
+    pub endpoints: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct AdminUsageTotalsView {
@@ -8987,70 +8995,7 @@ pub async fn fetch_admin_llm_gateway_usage_events(
     #[cfg(not(feature = "mock"))]
     {
         let mut url = format!("{}/admin/llm-gateway/usage", admin_base());
-        let mut params = Vec::new();
-        if let Some(key_id) = query
-            .key_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            params.push(format!("key_id={}", urlencoding::encode(key_id)));
-        }
-        if let Some(start_ms) = query.start_ms {
-            params.push(format!("start_ms={start_ms}"));
-        }
-        if let Some(end_ms) = query.end_ms {
-            params.push(format!("end_ms={end_ms}"));
-        }
-        if let Some(source) = query
-            .source
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            params.push(format!("source={}", urlencoding::encode(source)));
-        }
-        if let Some(model) = query
-            .model
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            params.push(format!("model={}", urlencoding::encode(model)));
-        }
-        if let Some(account_name) = query
-            .account_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            params.push(format!("account_name={}", urlencoding::encode(account_name)));
-        }
-        if let Some(endpoint) = query
-            .endpoint
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            params.push(format!("endpoint={}", urlencoding::encode(endpoint)));
-        }
-        if let Some(status_code) = query.status_code {
-            params.push(format!("status_code={status_code}"));
-        }
-        if let Some(status_kind) = query
-            .status_kind
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            params.push(format!("status_kind={}", urlencoding::encode(status_kind)));
-        }
-        if let Some(limit) = query.limit {
-            params.push(format!("limit={limit}"));
-        }
-        if let Some(offset) = query.offset {
-            params.push(format!("offset={offset}"));
-        }
+        let params = admin_usage_query_params(query);
         if !params.is_empty() {
             url.push('?');
             url.push_str(&params.join("&"));
@@ -9070,6 +9015,74 @@ pub async fn fetch_admin_llm_gateway_usage_events(
     }
 }
 
+fn admin_usage_query_params(query: &AdminLlmGatewayUsageEventsQuery) -> Vec<String> {
+    let mut params = Vec::new();
+    if let Some(key_id) = query
+        .key_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        params.push(format!("key_id={}", urlencoding::encode(key_id)));
+    }
+    if let Some(start_ms) = query.start_ms {
+        params.push(format!("start_ms={start_ms}"));
+    }
+    if let Some(end_ms) = query.end_ms {
+        params.push(format!("end_ms={end_ms}"));
+    }
+    if let Some(source) = query
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        params.push(format!("source={}", urlencoding::encode(source)));
+    }
+    if let Some(model) = query
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        params.push(format!("model={}", urlencoding::encode(model)));
+    }
+    if let Some(account_name) = query
+        .account_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        params.push(format!("account_name={}", urlencoding::encode(account_name)));
+    }
+    if let Some(endpoint) = query
+        .endpoint
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        params.push(format!("endpoint={}", urlencoding::encode(endpoint)));
+    }
+    if let Some(status_code) = query.status_code {
+        params.push(format!("status_code={status_code}"));
+    }
+    if let Some(status_kind) = query
+        .status_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        params.push(format!("status_kind={}", urlencoding::encode(status_kind)));
+    }
+    if let Some(limit) = query.limit {
+        params.push(format!("limit={limit}"));
+    }
+    if let Some(offset) = query.offset {
+        params.push(format!("offset={offset}"));
+    }
+    params
+}
+
 pub async fn fetch_admin_llm_gateway_usage_event_detail(
     event_id: &str,
 ) -> Result<AdminLlmGatewayUsageEventDetailView, String> {
@@ -9084,6 +9097,38 @@ pub async fn fetch_admin_llm_gateway_usage_event_detail(
         let encoded = urlencoding::encode(event_id);
         let url = format!("{}/admin/llm-gateway/usage/{}", admin_base(), encoded);
         let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_llm_gateway_usage_filter_options(
+    query: &AdminLlmGatewayUsageEventsQuery,
+) -> Result<AdminLlmGatewayUsageFilterOptionsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminLlmGatewayUsageFilterOptionsResponse::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/usage/filter-options", admin_base());
+        let params = admin_usage_query_params(query);
+        let request = if params.is_empty() {
+            api_get(&url)
+        } else {
+            api_get(&format!("{url}?{}", params.join("&")))
+        };
+        let response = request
             .send()
             .await
             .map_err(|e| format!("Network error: {:?}", e))?;

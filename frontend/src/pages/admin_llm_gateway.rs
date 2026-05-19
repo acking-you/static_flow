@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use gloo_timers::callback::{Interval, Timeout};
 use js_sys::Date;
 use wasm_bindgen::prelude::*;
-use web_sys::{HtmlElement, HtmlInputElement, HtmlSelectElement};
+use web_sys::{HtmlInputElement, HtmlSelectElement};
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
@@ -29,31 +29,35 @@ use crate::{
         fetch_admin_llm_gateway_keys_page_with_query, fetch_admin_llm_gateway_proxy_bindings,
         fetch_admin_llm_gateway_proxy_configs, fetch_admin_llm_gateway_sponsor_requests,
         fetch_admin_llm_gateway_token_requests, fetch_admin_llm_gateway_usage_event_detail,
-        fetch_admin_llm_gateway_usage_events, fetch_admin_usage_journal_preview,
-        fetch_admin_usage_journal_status, import_admin_legacy_kiro_proxy_configs,
-        import_admin_llm_gateway_account, patch_admin_llm_gateway_account,
-        patch_admin_llm_gateway_account_group, patch_admin_llm_gateway_key,
-        patch_admin_llm_gateway_proxy_config, probe_admin_llm_gateway_account_models,
-        refresh_admin_llm_gateway_account_auth, refresh_admin_llm_gateway_account_usage,
-        update_admin_llm_gateway_config, update_admin_llm_gateway_proxy_binding,
-        AccountSummaryView, AdminAccountGroupOptionView, AdminAccountGroupView,
-        AdminAccountsSummaryView, AdminLlmGatewayAccountContributionRequestView,
+        fetch_admin_llm_gateway_usage_events, fetch_admin_llm_gateway_usage_filter_options,
+        fetch_admin_usage_journal_preview, fetch_admin_usage_journal_status,
+        import_admin_legacy_kiro_proxy_configs, import_admin_llm_gateway_account,
+        patch_admin_llm_gateway_account, patch_admin_llm_gateway_account_group,
+        patch_admin_llm_gateway_key, patch_admin_llm_gateway_proxy_config,
+        probe_admin_llm_gateway_account_models, refresh_admin_llm_gateway_account_auth,
+        refresh_admin_llm_gateway_account_usage, update_admin_llm_gateway_config,
+        update_admin_llm_gateway_proxy_binding, AccountSummaryView, AdminAccountGroupOptionView,
+        AdminAccountGroupView, AdminAccountsSummaryView,
+        AdminLlmGatewayAccountContributionRequestView,
         AdminLlmGatewayAccountContributionRequestsQuery, AdminLlmGatewayAccountPageQuery,
         AdminLlmGatewayKeyPageQuery, AdminLlmGatewayKeyView, AdminLlmGatewayKeysSummaryView,
         AdminLlmGatewaySponsorRequestView, AdminLlmGatewaySponsorRequestsQuery,
         AdminLlmGatewayTokenRequestView, AdminLlmGatewayTokenRequestsQuery,
         AdminLlmGatewayUsageEventDetailView, AdminLlmGatewayUsageEventView,
-        AdminLlmGatewayUsageEventsQuery, AdminUpstreamProxyBindingView,
-        AdminUpstreamProxyCheckResponse, AdminUpstreamProxyCheckTargetView,
-        AdminUpstreamProxyConfigView, AdminUsageJournalFileView, AdminUsageJournalPreviewResponse,
-        AdminUsageJournalStatusView, AdminUsageTotalsView, CodexAccountImportJobDetailView,
-        CodexAccountImportJobSummaryView, CreateAdminAccountGroupInput,
-        CreateAdminUpstreamProxyConfigInput, LlmGatewayRuntimeConfig, PatchAdminAccountGroupInput,
-        PatchAdminLlmGatewayAccountInput, PatchAdminLlmGatewayKeyRequest,
-        PatchAdminUpstreamProxyConfigInput, ProcessMemoryRuntimeStats,
-        DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION,
+        AdminLlmGatewayUsageEventsQuery, AdminLlmGatewayUsageFilterOptionsResponse,
+        AdminUpstreamProxyBindingView, AdminUpstreamProxyCheckResponse,
+        AdminUpstreamProxyCheckTargetView, AdminUpstreamProxyConfigView, AdminUsageJournalFileView,
+        AdminUsageJournalPreviewResponse, AdminUsageJournalStatusView, AdminUsageTotalsView,
+        CodexAccountImportJobDetailView, CodexAccountImportJobSummaryView,
+        CreateAdminAccountGroupInput, CreateAdminUpstreamProxyConfigInput, LlmGatewayRuntimeConfig,
+        PatchAdminAccountGroupInput, PatchAdminLlmGatewayAccountInput,
+        PatchAdminLlmGatewayKeyRequest, PatchAdminUpstreamProxyConfigInput,
+        ProcessMemoryRuntimeStats, DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION,
     },
-    components::{pagination::Pagination, search_box::SearchBox, tab_bar::render_tab_bar},
+    components::{
+        date_range_picker::DateRangePicker, pagination::Pagination, search_box::SearchBox,
+        tab_bar::render_tab_bar,
+    },
     pages::llm_access_shared::{
         confirm_destructive, credit_usage_missing_label, format_ms, format_number_i64,
         format_number_u64, token_usage_missing_label, MaskedSecretCode,
@@ -748,7 +752,7 @@ fn usage_time_description(start_input: &str, end_input: &str) -> String {
     }
 }
 
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, PartialEq)]
 struct UsageReloadArgs {
     page: Option<usize>,
     key_id: Option<String>,
@@ -759,6 +763,24 @@ struct UsageReloadArgs {
     account_name: Option<String>,
     endpoint: Option<String>,
     status_kind: Option<String>,
+    refresh_filter_options: bool,
+}
+
+impl Default for UsageReloadArgs {
+    fn default() -> Self {
+        Self {
+            page: None,
+            key_id: None,
+            start_input: None,
+            end_input: None,
+            source: None,
+            model: None,
+            account_name: None,
+            endpoint: None,
+            status_kind: None,
+            refresh_filter_options: true,
+        }
+    }
 }
 
 fn normalized_usage_filter_text(value: &str) -> Option<String> {
@@ -953,6 +975,7 @@ fn pretty_headers_json(raw: &str) -> String {
         .unwrap_or_else(|| raw.to_string())
 }
 
+#[cfg(test)]
 fn usage_last_message_preview(event: &AdminLlmGatewayUsageEventView) -> String {
     event
         .last_message_content
@@ -961,6 +984,7 @@ fn usage_last_message_preview(event: &AdminLlmGatewayUsageEventView) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+#[cfg(test)]
 fn usage_last_message_table_preview(event: &AdminLlmGatewayUsageEventView) -> String {
     let preview = usage_last_message_preview(event);
     if preview == "-" {
@@ -2219,6 +2243,7 @@ pub fn admin_llm_gateway_page() -> Html {
     let usage_model_filter = use_state(String::new);
     let usage_account_filter = use_state(String::new);
     let usage_endpoint_filter = use_state(String::new);
+    let usage_filter_options = use_state(AdminLlmGatewayUsageFilterOptionsResponse::default);
     let usage_status_kind = use_state(|| USAGE_STATUS_KIND_ALL.to_string());
     let usage_journal_status = use_state(|| None::<AdminUsageJournalStatusView>);
     let usage_journal_preview = use_state(|| None::<AdminUsageJournalPreviewResponse>);
@@ -2247,9 +2272,6 @@ pub fn admin_llm_gateway_page() -> Html {
     let sponsor_request_action_inflight = use_state(HashSet::<String>::new);
     let selected_usage_event = use_state(|| None::<AdminLlmGatewayUsageEventDetailView>);
     let usage_detail_loading = use_state(|| false);
-    let usage_scroll_top_ref = use_node_ref();
-    let usage_scroll_bottom_ref = use_node_ref();
-    let usage_scroll_width = use_state(|| 1_i32);
     let loading = use_state(|| true);
     let load_error = use_state(|| None::<String>);
     let ttl_input = use_state(|| "60".to_string());
@@ -2376,6 +2398,7 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_events = usage_events.clone();
         let usage_total = usage_total.clone();
         let usage_totals = usage_totals.clone();
+        let usage_filter_options = usage_filter_options.clone();
         let usage_page = usage_page.clone();
         let usage_current_rpm = usage_current_rpm.clone();
         let usage_current_in_flight = usage_current_in_flight.clone();
@@ -2394,6 +2417,7 @@ pub fn admin_llm_gateway_page() -> Html {
             let usage_events = usage_events.clone();
             let usage_total = usage_total.clone();
             let usage_totals = usage_totals.clone();
+            let usage_filter_options = usage_filter_options.clone();
             let usage_page = usage_page.clone();
             let usage_current_rpm = usage_current_rpm.clone();
             let usage_current_in_flight = usage_current_in_flight.clone();
@@ -2443,6 +2467,18 @@ pub fn admin_llm_gateway_page() -> Html {
                     limit: Some(USAGE_PAGE_SIZE),
                     offset: Some((page - 1) * USAGE_PAGE_SIZE),
                 };
+                if args.refresh_filter_options {
+                    let filter_options_query = AdminLlmGatewayUsageEventsQuery {
+                        offset: None,
+                        limit: None,
+                        ..query.clone()
+                    };
+                    if let Ok(options) =
+                        fetch_admin_llm_gateway_usage_filter_options(&filter_options_query).await
+                    {
+                        usage_filter_options.set(options);
+                    }
+                }
                 match fetch_admin_llm_gateway_usage_events(&query).await {
                     Ok(resp) => {
                         usage_total.set(resp.total);
@@ -3813,22 +3849,6 @@ pub fn admin_llm_gateway_page() -> Html {
         })
     };
 
-    let on_usage_start_input_change = {
-        let usage_start_input = usage_start_input.clone();
-        Callback::from(move |event: InputEvent| {
-            let value = event.target_unchecked_into::<HtmlInputElement>().value();
-            usage_start_input.set(value);
-        })
-    };
-
-    let on_usage_end_input_change = {
-        let usage_end_input = usage_end_input.clone();
-        Callback::from(move |event: InputEvent| {
-            let value = event.target_unchecked_into::<HtmlInputElement>().value();
-            usage_end_input.set(value);
-        })
-    };
-
     let on_usage_model_filter_input = {
         let usage_model_filter = usage_model_filter.clone();
         Callback::from(move |event: InputEvent| {
@@ -3867,6 +3887,7 @@ pub fn admin_llm_gateway_page() -> Html {
         Callback::from(move |_| {
             reload_usage.emit(UsageReloadArgs {
                 page: Some(1),
+                refresh_filter_options: true,
                 ..UsageReloadArgs::default()
             });
         })
@@ -3903,27 +3924,8 @@ pub fn admin_llm_gateway_page() -> Html {
                 account_name: Some(String::new()),
                 endpoint: Some(String::new()),
                 status_kind: Some(String::new()),
+                refresh_filter_options: true,
             });
-        })
-    };
-
-    let on_usage_set_quick_range = {
-        let usage_start_input = usage_start_input.clone();
-        let usage_end_input = usage_end_input.clone();
-        Callback::from(move |hours: i64| {
-            let end_ms = Date::now() as i64;
-            let start_ms = end_ms.saturating_sub(hours.saturating_mul(60 * 60 * 1000));
-            usage_start_input.set(format_datetime_local_input(start_ms));
-            usage_end_input.set(format_datetime_local_input(end_ms));
-        })
-    };
-
-    let on_usage_clear_time_range = {
-        let usage_start_input = usage_start_input.clone();
-        let usage_end_input = usage_end_input.clone();
-        Callback::from(move |_| {
-            usage_start_input.set(String::new());
-            usage_end_input.set(String::new());
         })
     };
 
@@ -3934,6 +3936,7 @@ pub fn admin_llm_gateway_page() -> Html {
             usage_page.set(page);
             reload_usage.emit(UsageReloadArgs {
                 page: Some(page),
+                refresh_filter_options: false,
                 ..UsageReloadArgs::default()
             });
         })
@@ -3948,75 +3951,6 @@ pub fn admin_llm_gateway_page() -> Html {
         })
     };
 
-    let on_usage_scroll_top = {
-        let usage_scroll_top_ref = usage_scroll_top_ref.clone();
-        let usage_scroll_bottom_ref = usage_scroll_bottom_ref.clone();
-        Callback::from(move |_| {
-            let Some(top) = usage_scroll_top_ref.cast::<HtmlElement>() else {
-                return;
-            };
-            let Some(bottom) = usage_scroll_bottom_ref.cast::<HtmlElement>() else {
-                return;
-            };
-            let left = top.scroll_left();
-            if bottom.scroll_left() != left {
-                bottom.set_scroll_left(left);
-            }
-        })
-    };
-
-    let on_usage_scroll_bottom = {
-        let usage_scroll_top_ref = usage_scroll_top_ref.clone();
-        let usage_scroll_bottom_ref = usage_scroll_bottom_ref.clone();
-        Callback::from(move |_| {
-            let Some(bottom) = usage_scroll_bottom_ref.cast::<HtmlElement>() else {
-                return;
-            };
-            let Some(top) = usage_scroll_top_ref.cast::<HtmlElement>() else {
-                return;
-            };
-            let left = bottom.scroll_left();
-            if top.scroll_left() != left {
-                top.set_scroll_left(left);
-            }
-        })
-    };
-
-    // Programmatically scroll the usage table left/right by `delta` pixels,
-    // keeping the top mirror scrollbar in sync.
-    let scroll_usage_table_by = {
-        let usage_scroll_top_ref = usage_scroll_top_ref.clone();
-        let usage_scroll_bottom_ref = usage_scroll_bottom_ref.clone();
-        Callback::from(move |delta: i32| {
-            let Some(bottom) = usage_scroll_bottom_ref.cast::<HtmlElement>() else {
-                return;
-            };
-            let next_left = (bottom.scroll_left() + delta).max(0);
-            bottom.set_scroll_left(next_left);
-            if let Some(top) = usage_scroll_top_ref.cast::<HtmlElement>() {
-                top.set_scroll_left(next_left);
-            }
-        })
-    };
-
-    {
-        let usage_scroll_top_ref = usage_scroll_top_ref.clone();
-        let usage_scroll_bottom_ref = usage_scroll_bottom_ref.clone();
-        let usage_scroll_width = usage_scroll_width.clone();
-        let event_count = usage_events.len();
-        let usage_loading_flag = *usage_loading;
-        let usage_page_value = *usage_page;
-        use_effect_with((event_count, usage_loading_flag, usage_page_value), move |_| {
-            if let Some(bottom) = usage_scroll_bottom_ref.cast::<HtmlElement>() {
-                let measured_width = bottom.scroll_width().max(bottom.client_width()).max(1);
-                usage_scroll_width.set(measured_width);
-                if let Some(top) = usage_scroll_top_ref.cast::<HtmlElement>() {
-                    top.set_scroll_left(bottom.scroll_left());
-                }
-            }
-            || ()
-        });
-    }
 
     let usage_total_pages = (*usage_total).max(1).div_ceil(USAGE_PAGE_SIZE);
     let usage_journal_preview_total_pages = (*usage_journal_preview)
@@ -8310,10 +8244,13 @@ pub fn admin_llm_gateway_page() -> Html {
                             </p>
                         </div>
                         <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                            <span class={classes!("rounded-full", "border", "border-[var(--border)]", "px-3", "py-1", "text-xs", "font-semibold", "text-[var(--muted)]")}>
+                            <span class={classes!("text-xs", "text-[var(--muted)]")}>
+                                { format!("{} · {} · {} · {} 条 · p{}", usage_source_label(&usage_source), usage_status_kind_label(&usage_status_kind), usage_time_description(&usage_start_input, &usage_end_input), *usage_total, *usage_page) }
+                            </span>
+                            <span class={classes!("rounded-full", "border", "border-[var(--border)]", "px-2.5", "py-0.5", "text-xs", "font-semibold", "text-[var(--muted)]")}>
                                 { format!("RPM {}", *usage_current_rpm) }
                             </span>
-                            <span class={classes!("rounded-full", "border", "border-[var(--border)]", "px-3", "py-1", "text-xs", "font-semibold", "text-[var(--muted)]")}>
+                            <span class={classes!("rounded-full", "border", "border-[var(--border)]", "px-2.5", "py-0.5", "text-xs", "font-semibold", "text-[var(--muted)]")}>
                                 { format!("In Flight {}", *usage_current_in_flight) }
                             </span>
                             <button
@@ -8333,198 +8270,146 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
                     </div>
 
-                    <div class={classes!("mt-4", "flex", "flex-col", "gap-3")}>
-                        <div class={classes!("grid", "grid-cols-1", "md:grid-cols-2", "xl:grid-cols-4", "gap-3", "items-end")}>
-                            <label class={classes!("text-sm", "md:col-span-2")}>
-                                <span class={classes!("text-[var(--muted)]")}>{ "开始时间 / 结束时间" }</span>
-                                <div class={classes!("mt-1", "grid", "gap-2", "sm:grid-cols-2")}>
-                                    <input
-                                        type="datetime-local"
-                                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-sm")}
-                                        value={(*usage_start_input).clone()}
-                                        oninput={on_usage_start_input_change}
-                                    />
-                                    <input
-                                        type="datetime-local"
-                                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-sm")}
-                                        value={(*usage_end_input).clone()}
-                                        oninput={on_usage_end_input_change}
-                                    />
-                                </div>
-                                <div class={classes!("mt-2", "flex", "items-center", "gap-2", "flex-wrap")}>
-                                    <button type="button" class={classes!("btn-terminal")} onclick={{
-                                        let on_usage_set_quick_range = on_usage_set_quick_range.clone();
-                                        Callback::from(move |_| on_usage_set_quick_range.emit(1))
-                                    }}>{ "最近 1h" }</button>
-                                    <button type="button" class={classes!("btn-terminal")} onclick={{
-                                        let on_usage_set_quick_range = on_usage_set_quick_range.clone();
-                                        Callback::from(move |_| on_usage_set_quick_range.emit(24))
-                                    }}>{ "最近 24h" }</button>
-                                    <button type="button" class={classes!("btn-terminal")} onclick={{
-                                        let on_usage_set_quick_range = on_usage_set_quick_range.clone();
-                                        Callback::from(move |_| on_usage_set_quick_range.emit(24 * 7))
-                                    }}>{ "最近 7d" }</button>
-                                    <button type="button" class={classes!("btn-terminal")} onclick={on_usage_clear_time_range}>{ "清空时间" }</button>
-                                </div>
-                            </label>
-                            <label class={classes!("text-sm")}>
-                                <span class={classes!("text-[var(--muted)]")}>{ "搜索 Key" }</span>
-                                <div class={classes!("mt-1")}>
-                                    <SearchBox
-                                        value={(*usage_key_search).clone()}
-                                        on_change={on_usage_key_search_change.clone()}
-                                        placeholder={AttrValue::Static("搜索 key 名称 / id / provider / 状态")}
-                                    />
-                                </div>
-                            </label>
-                            <label class={classes!("text-sm")}>
-                                <span class={classes!("text-[var(--muted)]")}>{ "筛选 Key" }</span>
-                                <select
-                                    key={format!("usage-filter-{}-{}", (*usage_key_filter).clone(), usage_key_query_lower)}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
-                                    onchange={on_usage_key_filter_change}
-                                >
-                                    <option value="" selected={(*usage_key_filter).is_empty()}>{ "全部" }</option>
-                                    if !(*usage_key_filter).is_empty()
-                                        && !filtered_usage_keys
-                                            .iter()
-                                            .any(|key_item| key_item.id.as_str() == (*usage_key_filter).as_str())
-                                    {
-                                        if let Some(selected_key) = keys
-                                            .iter()
-                                            .find(|key_item| key_item.id.as_str() == (*usage_key_filter).as_str())
-                                        {
-                                            <option
-                                                value={selected_key.id.clone()}
-                                                selected=true
-                                            >
-                                                { format!("{} · {} (当前)", selected_key.name, selected_key.id) }
-                                            </option>
-                                        }
-                                    }
-                                    { for filtered_usage_keys.iter().map(|key_item| html! {
-                                        <option
-                                            value={key_item.id.clone()}
-                                            selected={(*usage_key_filter).as_str() == key_item.id.as_str()}
-                                        >
-                                            { format!("{} · {}", key_item.name, key_item.id) }
-                                        </option>
-                                    }) }
-                                </select>
-                            </label>
-                            <label class={classes!("text-sm")}>
-                                <span class={classes!("text-[var(--muted)]")}>{ "数据源" }</span>
-                                <select
-                                    key={format!("usage-source-{}", (*usage_source).clone())}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
-                                    onchange={on_usage_source_change}
-                                >
-                                    <option value={USAGE_SOURCE_HOT} selected={*usage_source == USAGE_SOURCE_HOT}>{ "在线" }</option>
-                                    <option value={USAGE_SOURCE_ARCHIVE} selected={*usage_source == USAGE_SOURCE_ARCHIVE}>{ "历史归档" }</option>
-                                    <option value={USAGE_SOURCE_ALL} selected={*usage_source == USAGE_SOURCE_ALL}>{ "全部" }</option>
-                                </select>
-                            </label>
-                            <label class={classes!("text-sm")}>
-                                <span class={classes!("text-[var(--muted)]")}>{ "状态" }</span>
-                                <select
-                                    key={format!("usage-status-kind-{}", (*usage_status_kind).clone())}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
-                                    onchange={on_usage_status_kind_change}
-                                >
-                                    <option value={USAGE_STATUS_KIND_ALL} selected={*usage_status_kind == USAGE_STATUS_KIND_ALL}>{ "全部" }</option>
-                                    <option value={USAGE_STATUS_KIND_OK} selected={*usage_status_kind == USAGE_STATUS_KIND_OK}>{ "正常 (200)" }</option>
-                                    <option value={USAGE_STATUS_KIND_NON_OK} selected={*usage_status_kind == USAGE_STATUS_KIND_NON_OK}>{ "异常 (非 200)" }</option>
-                                </select>
-                            </label>
-                            <label class={classes!("text-sm")}>
-                                <span class={classes!("text-[var(--muted)]")}>{ "模型" }</span>
-                                <input
-                                    type="text"
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
-                                    placeholder="gpt-5.4"
-                                    value={(*usage_model_filter).clone()}
-                                    oninput={on_usage_model_filter_input}
-                                />
-                            </label>
-                            <label class={classes!("text-sm")}>
-                                <span class={classes!("text-[var(--muted)]")}>{ "账号" }</span>
-                                <input
-                                    type="text"
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
-                                    placeholder="account"
-                                    value={(*usage_account_filter).clone()}
-                                    oninput={on_usage_account_filter_input}
-                                />
-                            </label>
-                            <label class={classes!("text-sm", "md:col-span-2", "xl:col-span-2")}>
-                                <span class={classes!("text-[var(--muted)]")}>{ "Endpoint" }</span>
-                                <input
-                                    type="text"
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "font-mono", "text-sm")}
-                                    placeholder="/v1/responses"
-                                    value={(*usage_endpoint_filter).clone()}
-                                    oninput={on_usage_endpoint_filter_input}
-                                />
-                            </label>
+                    <div class={classes!("mt-3", "flex", "flex-col", "gap-2")}>
+                        // Row 1: date range picker
+                        <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                            <DateRangePicker
+                                start_ms={parse_datetime_local_input_to_ms(&usage_start_input)}
+                                end_ms={parse_datetime_local_input_to_ms(&usage_end_input)}
+                                on_change={{
+                                    let usage_start_input = usage_start_input.clone();
+                                    let usage_end_input = usage_end_input.clone();
+                                    Callback::from(move |(start, end): (Option<i64>, Option<i64>)| {
+                                        usage_start_input.set(start.map(format_datetime_local_input).unwrap_or_default());
+                                        usage_end_input.set(end.map(format_datetime_local_input).unwrap_or_default());
+                                    })
+                                }}
+                            />
                         </div>
-
-                        <div class={classes!("flex", "flex-col", "sm:flex-row", "justify-between", "items-start", "sm:items-center", "gap-3")}>
-                            <div class={classes!("flex", "items-center", "gap-2", "flex-wrap", "text-sm", "font-semibold", "text-[var(--muted)]")}>
-                                <span>{ format!("{} · {} · {} · {} 条", usage_source_label(&usage_source), usage_status_kind_label(&usage_status_kind), usage_time_description(&usage_start_input, &usage_end_input), *usage_total) }</span>
-                                <span>{ format!("第 {} 页", *usage_page) }</span>
+                        // Row 2: key search + key filter dropdown
+                        <div class={classes!("grid", "grid-cols-1", "sm:grid-cols-2", "gap-2", "items-end")}>
+                            <div class={classes!("text-xs")}>
+                                <SearchBox
+                                    value={(*usage_key_search).clone()}
+                                    on_change={on_usage_key_search_change.clone()}
+                                    placeholder={AttrValue::Static("搜索 key 名称 / id / provider")}
+                                />
                             </div>
-                            <div class={classes!("flex", "items-center", "gap-2", "flex-wrap", "w-full", "sm:w-auto", "justify-end")}>
-                                <button
-                                    type="button"
-                                    class={classes!("btn-terminal")}
-                                    onclick={on_apply_usage_filters}
-                                    disabled={*usage_loading}
-                                >
-                                    { "查询" }
-                                </button>
-                                <button
-                                    type="button"
-                                    class={classes!("btn-terminal")}
-                                    onclick={on_clear_usage_filters}
-                                    disabled={*usage_loading}
-                                >
-                                    { "重置" }
-                                </button>
-                            </div>
+                            <select
+                                key={format!("usage-filter-{}-{}", (*usage_key_filter).clone(), usage_key_query_lower)}
+                                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2.5", "py-1.5", "text-xs")}
+                                onchange={on_usage_key_filter_change}
+                            >
+                                <option value="" selected={(*usage_key_filter).is_empty()}>{ "全部 Key" }</option>
+                                if !(*usage_key_filter).is_empty()
+                                    && !filtered_usage_keys
+                                        .iter()
+                                        .any(|key_item| key_item.id.as_str() == (*usage_key_filter).as_str())
+                                {
+                                    if let Some(selected_key) = keys
+                                        .iter()
+                                        .find(|key_item| key_item.id.as_str() == (*usage_key_filter).as_str())
+                                    {
+                                        <option
+                                            value={selected_key.id.clone()}
+                                            selected=true
+                                        >
+                                            { format!("{} · {} (当前)", selected_key.name, selected_key.id) }
+                                        </option>
+                                    }
+                                }
+                                { for filtered_usage_keys.iter().map(|key_item| html! {
+                                    <option
+                                        value={key_item.id.clone()}
+                                        selected={(*usage_key_filter).as_str() == key_item.id.as_str()}
+                                    >
+                                        { format!("{} · {}", key_item.name, key_item.id) }
+                                    </option>
+                                }) }
+                            </select>
+                        </div>
+                        // Row 3: source, status, model, account, endpoint + action buttons
+                        <div class={classes!("flex", "items-end", "gap-2", "flex-wrap")}>
+                            <select
+                                key={format!("usage-source-{}", (*usage_source).clone())}
+                                class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2.5", "py-1.5", "text-xs")}
+                                onchange={on_usage_source_change}
+                            >
+                                <option value={USAGE_SOURCE_HOT} selected={*usage_source == USAGE_SOURCE_HOT}>{ "在线" }</option>
+                                <option value={USAGE_SOURCE_ARCHIVE} selected={*usage_source == USAGE_SOURCE_ARCHIVE}>{ "归档" }</option>
+                                <option value={USAGE_SOURCE_ALL} selected={*usage_source == USAGE_SOURCE_ALL}>{ "全部" }</option>
+                            </select>
+                            <select
+                                key={format!("usage-status-kind-{}", (*usage_status_kind).clone())}
+                                class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2.5", "py-1.5", "text-xs")}
+                                onchange={on_usage_status_kind_change}
+                            >
+                                <option value={USAGE_STATUS_KIND_ALL} selected={*usage_status_kind == USAGE_STATUS_KIND_ALL}>{ "全部状态" }</option>
+                                <option value={USAGE_STATUS_KIND_OK} selected={*usage_status_kind == USAGE_STATUS_KIND_OK}>{ "200" }</option>
+                                <option value={USAGE_STATUS_KIND_NON_OK} selected={*usage_status_kind == USAGE_STATUS_KIND_NON_OK}>{ "非200" }</option>
+                            </select>
+                            <input
+                                type="text"
+                                list="usage-filter-models"
+                                class={classes!("w-28", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2.5", "py-1.5", "font-mono", "text-xs")}
+                                placeholder="model"
+                                value={(*usage_model_filter).clone()}
+                                oninput={on_usage_model_filter_input}
+                            />
+                            <datalist id="usage-filter-models">
+                                { for usage_filter_options.models.iter().map(|m| html! { <option value={m.clone()} /> }) }
+                            </datalist>
+                            <input
+                                type="text"
+                                list="usage-filter-accounts"
+                                class={classes!("w-28", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2.5", "py-1.5", "font-mono", "text-xs")}
+                                placeholder="account"
+                                value={(*usage_account_filter).clone()}
+                                oninput={on_usage_account_filter_input}
+                            />
+                            <datalist id="usage-filter-accounts">
+                                { for usage_filter_options.accounts.iter().map(|a| html! { <option value={a.clone()} /> }) }
+                            </datalist>
+                            <input
+                                type="text"
+                                list="usage-filter-endpoints"
+                                class={classes!("w-36", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2.5", "py-1.5", "font-mono", "text-xs")}
+                                placeholder="endpoint"
+                                value={(*usage_endpoint_filter).clone()}
+                                oninput={on_usage_endpoint_filter_input}
+                            />
+                            <datalist id="usage-filter-endpoints">
+                                { for usage_filter_options.endpoints.iter().map(|ep| html! { <option value={ep.clone()} /> }) }
+                            </datalist>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal", "!py-1", "!px-2.5", "!text-xs")}
+                                onclick={on_apply_usage_filters}
+                                disabled={*usage_loading}
+                            >
+                                { "查询" }
+                            </button>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal", "!py-1", "!px-2.5", "!text-xs")}
+                                onclick={on_clear_usage_filters}
+                                disabled={*usage_loading}
+                            >
+                                { "重置" }
+                            </button>
                         </div>
                     </div>
 
-                    <div class={classes!("mt-3", "grid", "gap-3", "sm:grid-cols-2", "xl:grid-cols-5")}>
-                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-4", "py-3")}>
-                            <div class={classes!("text-xs", "text-[var(--muted)]")}>{ "匹配事件" }</div>
-                            <div class={classes!("mt-1", "font-mono", "text-base", "font-semibold")}>
-                                { format_number_u64(usage_totals.event_count as u64) }
-                            </div>
-                        </div>
-                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-4", "py-3")}>
-                            <div class={classes!("text-xs", "text-[var(--muted)]")}>{ "Input Uncached" }</div>
-                            <div class={classes!("mt-1", "font-mono", "text-base", "font-semibold")}>
-                                { format_number_u64(usage_totals.input_uncached_tokens) }
-                            </div>
-                        </div>
-                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-4", "py-3")}>
-                            <div class={classes!("text-xs", "text-[var(--muted)]")}>{ "Input Cached" }</div>
-                            <div class={classes!("mt-1", "font-mono", "text-base", "font-semibold")}>
-                                { format_number_u64(usage_totals.input_cached_tokens) }
-                            </div>
-                        </div>
-                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-4", "py-3")}>
-                            <div class={classes!("text-xs", "text-[var(--muted)]")}>{ "Output" }</div>
-                            <div class={classes!("mt-1", "font-mono", "text-base", "font-semibold")}>
-                                { format_number_u64(usage_totals.output_tokens) }
-                            </div>
-                        </div>
-                        <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-4", "py-3")}>
-                            <div class={classes!("text-xs", "text-[var(--muted)]")}>{ "Billable" }</div>
-                            <div class={classes!("mt-1", "font-mono", "text-base", "font-semibold")}>
-                                { format_number_u64(usage_totals.billable_tokens) }
-                            </div>
-                        </div>
+                    <div class={classes!("mt-3", "flex", "items-center", "gap-x-4", "gap-y-1", "flex-wrap", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-4", "py-2", "font-mono", "text-xs")}>
+                        <span><span class={classes!("text-[var(--muted)]")}>{ "匹配 " }</span><span class={classes!("font-semibold")}>{ format_number_u64(usage_totals.event_count as u64) }</span></span>
+                        <span class={classes!("text-[var(--border)]")}>{ "·" }</span>
+                        <span><span class={classes!("text-[var(--muted)]")}>{ "In " }</span><span class={classes!("font-semibold")}>{ format_number_u64(usage_totals.input_uncached_tokens) }</span></span>
+                        <span class={classes!("text-[var(--border)]")}>{ "·" }</span>
+                        <span><span class={classes!("text-[var(--muted)]")}>{ "Cached " }</span><span class={classes!("font-semibold")}>{ format_number_u64(usage_totals.input_cached_tokens) }</span></span>
+                        <span class={classes!("text-[var(--border)]")}>{ "·" }</span>
+                        <span><span class={classes!("text-[var(--muted)]")}>{ "Out " }</span><span class={classes!("font-semibold")}>{ format_number_u64(usage_totals.output_tokens) }</span></span>
+                        <span class={classes!("text-[var(--border)]")}>{ "·" }</span>
+                        <span><span class={classes!("text-[var(--muted)]")}>{ "Billable " }</span><span class={classes!("font-semibold")}>{ format_number_u64(usage_totals.billable_tokens) }</span></span>
                     </div>
 
                     if !usage_key_query_lower.is_empty() {
@@ -8578,250 +8463,110 @@ pub fn admin_llm_gateway_page() -> Html {
                         </div>
                     }
 
-                    <div class={classes!("mt-3", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
-                        <div class={classes!("text-xs", "text-[var(--muted)]")}>
-                            { "列较多，可用按钮或下方滚动条随时左右查看。" }
-                        </div>
-                        <div class={classes!("flex", "items-center", "gap-2")}>
-                            <button
-                                type="button"
-                                class={classes!("btn-terminal")}
-                                title="向左滚动"
-                                aria-label="向左滚动"
-                                onclick={{
-                                    let scroll_usage_table_by = scroll_usage_table_by.clone();
-                                    Callback::from(move |_| scroll_usage_table_by.emit(-320))
-                                }}
-                            >
-                                <i class={classes!("fas", "fa-arrow-left")} />
-                            </button>
-                            <button
-                                type="button"
-                                class={classes!("btn-terminal")}
-                                title="向右滚动"
-                                aria-label="向右滚动"
-                                onclick={{
-                                    let scroll_usage_table_by = scroll_usage_table_by.clone();
-                                    Callback::from(move |_| scroll_usage_table_by.emit(320))
-                                }}
-                            >
-                                <i class={classes!("fas", "fa-arrow-right")} />
-                            </button>
-                        </div>
-                    </div>
-
-                    <div
-                        ref={usage_scroll_top_ref}
-                        class={classes!("mt-3", "overflow-x-auto", "overflow-y-hidden", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-2", "py-2")}
-                        onscroll={on_usage_scroll_top}
-                    >
-                        <div
-                            class={classes!("h-3", "rounded-full", "bg-[linear-gradient(90deg,rgba(37,99,235,0.18),rgba(16,185,129,0.22))]")}
-                            style={format!("width: {}px;", (*usage_scroll_width).max(1))}
-                        />
-                    </div>
-
-                    <div
-                        ref={usage_scroll_bottom_ref}
-                        class={classes!("mt-4", "overflow-x-auto", "rounded-xl", "border", "border-[var(--border)]")}
-                        onscroll={on_usage_scroll_bottom}
-                    >
-                        <table class={classes!("min-w-[118rem]", "w-full", "text-sm")}>
+                    <div class={classes!("mt-4", "overflow-x-auto", "rounded-xl", "border", "border-[var(--border)]")}>
+                        <table class={classes!("min-w-[64rem]", "w-full", "text-sm")}>
                             <thead>
                                 <tr class={classes!("text-left", "text-[var(--muted)]")}>
-                                    <th class={classes!("py-2", "pr-3")}>{ "时间 / Event ID" }</th>
+                                    <th class={classes!("py-2", "pl-3", "pr-3")}>{ "时间" }</th>
                                     <th class={classes!("py-2", "pr-3")}>{ "Key" }</th>
                                     <th class={classes!("py-2", "pr-3")}>{ "号池" }</th>
-                                    <th class={classes!("py-2", "pr-3")}>{ "URL / Route" }</th>
                                     <th class={classes!("py-2", "pr-3")}>{ "Model" }</th>
                                     <th class={classes!("py-2", "pr-3")}>{ "Status" }</th>
                                     <th class={classes!("py-2", "pr-3")}>{ "Latency" }</th>
-                                <th class={classes!("py-2", "pr-3")}>{ "Stream" }</th>
-                                <th class={classes!("py-2", "pr-3")}>{ "IP / 属地" }</th>
-                                <th class={classes!("py-2", "pr-3")}>{ "Tokens" }</th>
-                                <th class={classes!("py-2", "pr-3")}>{ "Credit" }</th>
-                                <th class={classes!("py-2", "pr-3")}>{ "最后一条内容" }</th>
-                                <th class={classes!("py-2", "pr-3")}>{ "Headers" }</th>
-                            </tr>
-                        </thead>
+                                    <th class={classes!("py-2", "pr-3")}>{ "Tokens" }</th>
+                                    <th class={classes!("py-2", "pr-3")}>{ "" }</th>
+                                </tr>
+                            </thead>
                             <tbody>
                                 if usage_events.is_empty() && !*loading && !*usage_loading && (*usage_error).is_none() {
                                     <tr class={classes!("border-t", "border-[var(--border)]")}>
-                                        <td colspan="13" class={classes!("py-8", "text-center", "text-[var(--muted)]")}>{ "当前筛选下还没有 usage 事件" }</td>
+                                        <td colspan="8" class={classes!("py-8", "text-center", "text-[var(--muted)]")}>{ "当前筛选下还没有 usage 事件" }</td>
                                     </tr>
                                 } else {
                                     { for usage_events.iter().map(|event| {
                                         let event_id_for_detail = event.id.clone();
-                                        let event_id_for_message = event.id.clone();
-                                        let header_preview = "按需加载".to_string();
                                         let account_label = usage_account_label(
                                             &event.account_name,
                                             &event.request_url,
                                             &event.endpoint,
                                         );
-                                        let last_message_preview = usage_last_message_table_preview(event);
-                                        let row_routing_wait_ms = effective_routing_wait_ms(
-                                            event.routing_wait_ms,
-                                            event.routing_diagnostics_json.as_deref(),
-                                        );
-                                        let other_latency_ms = event.other_latency_ms.or_else(|| {
-                                            compute_other_latency_ms(
-                                                event.latency_ms,
-                                                row_routing_wait_ms,
-                                                event.upstream_headers_ms,
-                                                event.post_headers_body_ms,
-                                            )
-                                        });
-                                        let sse_applicable = event.first_sse_write_ms.is_some();
-                                        let stream_state_label = usage_stream_state_label(
-                                            event.stream_completed_cleanly,
-                                            event.downstream_disconnect,
-                                        );
+                                        let latency_ms_val = event.latency_ms;
+                                        let latency_color = if latency_ms_val < 3000 {
+                                            ("border-emerald-500/20", "bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200")
+                                        } else if latency_ms_val < 10000 {
+                                            ("border-amber-500/20", "bg-amber-500/10", "text-amber-700", "dark:text-amber-200")
+                                        } else {
+                                            ("border-red-500/20", "bg-red-500/10", "text-red-700", "dark:text-red-200")
+                                        };
+                                        let status_ok = event.status_code == 200;
                                         html! {
                                             <tr class={classes!("border-t", "border-[var(--border)]", "align-top")}>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[13rem]", "whitespace-nowrap")}>
-                                                    <div>{ format_ms(event.created_at) }</div>
-                                                    <div class={classes!("mt-1", "flex", "items-center", "gap-2")}>
-                                                        <span class={classes!("max-w-[10rem]", "truncate", "font-mono", "text-[11px]", "text-[var(--muted)]")} title={event.id.clone()}>
+                                                <td class={classes!("py-2.5", "pl-3", "pr-3", "whitespace-nowrap")}>
+                                                    <div class={classes!("text-xs")}>{ format_ms(event.created_at) }</div>
+                                                    <div class={classes!("mt-0.5", "flex", "items-center", "gap-1")}>
+                                                        <span class={classes!("max-w-[7rem]", "truncate", "font-mono", "text-[10px]", "text-[var(--muted)]")} title={event.id.clone()}>
                                                             { event.id.clone() }
                                                         </span>
                                                         { copy_icon_button(&event.id, &on_copy) }
                                                     </div>
                                                 </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[13rem]")}>
-                                                    <div class={classes!("font-semibold", "text-[var(--text)]")}>{ event.key_name.clone() }</div>
-                                                    <div class={classes!("mt-1", "font-mono", "text-xs", "text-[var(--muted)]")}>{ event.key_id.clone() }</div>
+                                                <td class={classes!("py-2.5", "pr-3")}>
+                                                    <div class={classes!("text-xs", "font-semibold", "text-[var(--text)]", "truncate", "max-w-[10rem]")} title={event.key_name.clone()}>{ event.key_name.clone() }</div>
+                                                    <div class={classes!("font-mono", "text-[10px]", "text-[var(--muted)]")}>{ event.key_id.clone() }</div>
                                                 </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[10rem]")}>
-                                                    <span class={classes!("inline-flex", "rounded-full", "border", "border-emerald-500/20", "bg-emerald-500/10", "px-2.5", "py-1", "text-xs", "font-semibold", "text-emerald-700", "dark:text-emerald-200")}>
+                                                <td class={classes!("py-2.5", "pr-3")}>
+                                                    <span class={classes!("inline-flex", "rounded-full", "border", "border-emerald-500/20", "bg-emerald-500/10", "px-2", "py-0.5", "text-[11px]", "font-semibold", "text-emerald-700", "dark:text-emerald-200")}>
                                                         { account_label }
                                                     </span>
                                                 </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[22rem]")}>
-                                                    <div class={classes!("flex", "items-start", "gap-2")}>
-                                                        <span class={classes!("inline-flex", "rounded-full", "border", "border-sky-500/20", "bg-sky-500/10", "px-2", "py-1", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.12em]", "text-sky-700", "dark:text-sky-200")}>
-                                                            { event.request_method.clone() }
-                                                        </span>
-                                                        <div class={classes!("min-w-0", "flex-1")}>
-                                                            <div class={classes!("flex", "items-center", "gap-2")}>
-                                                                <span class={classes!("truncate")} title={event.request_url.clone()}>{ event.request_url.clone() }</span>
-                                                                { copy_icon_button(&event.request_url, &on_copy) }
-                                                            </div>
-                                                            <div class={classes!("mt-1", "font-mono", "text-xs", "text-[var(--muted)]")}>
-                                                                { format!("upstream {}", event.endpoint) }
-                                                            </div>
-                                                        </div>
+                                                <td class={classes!("py-2.5", "pr-3")}>
+                                                    <div class={classes!("text-xs", "truncate", "max-w-[10rem]")} title={event.model.clone().unwrap_or_default()}>
+                                                        { event.model.clone().unwrap_or_else(|| "-".to_string()) }
                                                     </div>
-                                                </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[11rem]")}>
-                                                    <div>{ event.model.clone().unwrap_or_else(|| "-".to_string()) }</div>
                                                     if event.usage_missing {
-                                                        <div class={classes!("mt-2", "inline-flex", "rounded-full", "border", "border-amber-500/20", "bg-amber-500/10", "px-2", "py-1", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.12em]", "text-amber-700", "dark:text-amber-200")}>
+                                                        <span class={classes!("inline-flex", "rounded-full", "border", "border-amber-500/20", "bg-amber-500/10", "px-1.5", "py-0.5", "text-[10px]", "font-semibold", "text-amber-700", "dark:text-amber-200")}>
                                                             { token_usage_missing_label() }
-                                                        </div>
+                                                        </span>
                                                     }
                                                 </td>
-                                                <td class={classes!("py-3", "pr-3", "whitespace-nowrap")}>{ event.status_code }</td>
-                                                <td class={classes!("py-3", "pr-3", "whitespace-nowrap")}>
-                                                    <span class={classes!("inline-flex", "rounded-full", "border", "border-violet-500/20", "bg-violet-500/10", "px-2.5", "py-1", "text-xs", "font-semibold", "text-violet-700", "dark:text-violet-200")}>
+                                                <td class={classes!("py-2.5", "pr-3", "whitespace-nowrap")}>
+                                                    <span class={classes!(
+                                                        "inline-flex", "h-5", "w-5", "items-center", "justify-center", "rounded-full", "text-[10px]", "font-bold",
+                                                        if status_ok { "bg-emerald-500/15" } else { "bg-red-500/15" },
+                                                        if status_ok { "text-emerald-700" } else { "text-red-700" },
+                                                        if status_ok { "dark:text-emerald-200" } else { "dark:text-red-200" },
+                                                    )} title={format!("{}", event.status_code)}>
+                                                        { if status_ok { "" } else { "!" } }
+                                                    </span>
+                                                    <span class={classes!("ml-1", "text-xs", "font-mono")}>{ event.status_code }</span>
+                                                </td>
+                                                <td class={classes!("py-2.5", "pr-3", "whitespace-nowrap")}>
+                                                    <span class={classes!("inline-flex", "rounded-full", "border", "px-2", "py-0.5", "text-[11px]", "font-semibold", latency_color.0, latency_color.1, latency_color.2, latency_color.3)}>
                                                         { format_latency_ms(event.latency_ms) }
                                                     </span>
-                                                    <div class={classes!("mt-2", "grid", "gap-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
-                                                        <span>{ format!("route {}", format_optional_latency_ms(row_routing_wait_ms)) }</span>
-                                                        <span>{ format!("upstream headers {}", format_optional_latency_ms(event.upstream_headers_ms)) }</span>
-                                                        <span>{ format!("post-headers body {}", format_optional_latency_ms(event.post_headers_body_ms)) }</span>
-                                                        <span>{ format!("request body {}", format_optional_bytes(event.request_body_bytes)) }</span>
-                                                        <span>{ format!("body read {}", format_optional_latency_ms(event.request_body_read_ms)) }</span>
-                                                        <span>{ format!("json parse {}", format_optional_latency_ms(event.request_json_parse_ms)) }</span>
-                                                        <span>{ format!("pre-handler {}", format_optional_latency_ms(event.pre_handler_ms)) }</span>
-                                                        <span>{ format!("first SSE {}", format_optional_latency_ms_or_na(event.first_sse_write_ms, sse_applicable)) }</span>
-                                                        <span>{ format!("stream finish {}", format_optional_latency_ms(event.stream_finish_ms)) }</span>
-                                                        <span>{ format!("other {}", format_optional_latency_ms(other_latency_ms)) }</span>
-                                                        <span>{ format!("quota failover {}", event.quota_failover_count) }</span>
-                                                    </div>
-                                                </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[14rem]")}>
-                                                    <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                                                        <span class={usage_stream_state_badge_classes(event.stream_completed_cleanly, event.downstream_disconnect)}>
-                                                            { stream_state_label }
-                                                        </span>
-                                                        <span class={classes!("font-mono", "text-[11px]", "text-[var(--muted)]")}>
-                                                            { format!("final {}", event.final_event_type.clone().unwrap_or_else(|| "-".to_string())) }
-                                                        </span>
-                                                    </div>
-                                                    <div class={classes!("mt-2", "grid", "gap-1", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
-                                                        <span>{ format!("bytes {}", format_optional_bytes(event.bytes_streamed)) }</span>
-                                                    </div>
-                                                </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[14rem]")}>
-                                                    <div class={classes!("flex", "items-center", "gap-2")}>
-                                                        <span>{ format!("{}/{}", event.client_ip, event.ip_region) }</span>
-                                                        { copy_icon_button(&format!("{}/{}", event.client_ip, event.ip_region), &on_copy) }
-                                                    </div>
-                                                </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[12rem]")}>
-                                                    <div class={classes!("grid", "gap-1", "text-xs", "text-[var(--muted)]")}>
-                                                        <span>{ format!("Uncached {}", format_number_u64(event.input_uncached_tokens)) }</span>
-                                                        <span>{ format!("Cached {}", format_number_u64(event.input_cached_tokens)) }</span>
-                                                        <span>{ format!("Out {}", format_number_u64(event.output_tokens)) }</span>
-                                                        <span class={classes!("font-semibold", "text-[var(--text)]")}>{ format!("Billable {}", format_number_u64(event.billable_tokens)) }</span>
-                                                    </div>
-                                                </td>
-                                            <td class={classes!("py-3", "pr-3", "min-w-[10rem]")}>
-                                                <div class={classes!("grid", "gap-1", "text-xs", "font-mono")}>
-                                                    <span class={classes!("font-semibold", "text-[var(--text)]")}>
-                                                        { event.credit_usage.map(format_credit4).unwrap_or_else(|| "-".to_string()) }
-                                                    </span>
-                                                    if event.credit_usage_missing {
-                                                        <span class={classes!("text-amber-700", "dark:text-amber-200")}>{ credit_usage_missing_label() }</span>
-                                                    }
-                                                </div>
-                                                </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[18rem]")}>
-                                                <div class={classes!("max-w-[18rem]", "overflow-hidden", "whitespace-normal", "break-words", "text-xs", "leading-5", "text-[var(--muted)]")}>
-                                                    { last_message_preview }
-                                                </div>
-                                                    <button
-                                                        type="button"
-                                                        class={classes!(
-                                                            "mt-2",
-                                                            "inline-flex",
-                                                            "items-center",
-                                                            "gap-2",
-                                                            "rounded-lg",
-                                                            "border",
-                                                            "border-[var(--border)]",
-                                                            "bg-[var(--surface)]",
-                                                            "px-2.5",
-                                                            "py-1.5",
-                                                            "text-[11px]",
-                                                            "font-semibold",
-                                                            "text-[var(--muted)]",
-                                                            "transition-colors",
-                                                            "hover:text-[var(--primary)]",
-                                                            "hover:bg-[var(--surface-alt)]"
-                                                        )}
-                                                        title="查看最后一条内容全文"
-                                                        aria-label="查看最后一条内容全文"
-                                                        onclick={{
-                                                            let open_usage_detail = open_usage_detail.clone();
-                                                            Callback::from(move |_| open_usage_detail.emit(event_id_for_message.clone()))
+                                                    <div class={classes!("mt-0.5", "text-[10px]", "text-[var(--muted)]")}>
+                                                        { if let Some(first_ms) = event.first_sse_write_ms {
+                                                            format!("首字 {}ms", first_ms.max(0))
+                                                        } else {
+                                                            "-".to_string()
                                                         }}
-                                                    >
-                                                        <i class={classes!("fas", "fa-expand")} />
-                                                        <span>{ "查看全文" }</span>
-                                                    </button>
+                                                    </div>
                                                 </td>
-                                                <td class={classes!("py-3", "pr-3")}>
+                                                <td class={classes!("py-2.5", "pr-3", "whitespace-nowrap", "font-mono", "text-[11px]")}>
+                                                    <span class={classes!("text-[var(--muted)]")}>
+                                                        { format!("{}/{}/{}", format_number_u64(event.input_uncached_tokens), format_number_u64(event.input_cached_tokens), format_number_u64(event.output_tokens)) }
+                                                    </span>
+                                                </td>
+                                                <td class={classes!("py-2.5", "pr-3")}>
                                                     <button
                                                         type="button"
                                                         class={classes!(
                                                             "inline-flex",
-                                                            "h-9",
-                                                            "w-9",
+                                                            "h-7",
+                                                            "w-7",
                                                             "items-center",
                                                             "justify-center",
-                                                            "rounded-xl",
+                                                            "rounded-lg",
                                                             "border",
                                                             "border-[var(--border)]",
                                                             "bg-[var(--surface)]",
@@ -8837,11 +8582,8 @@ pub fn admin_llm_gateway_page() -> Html {
                                                             Callback::from(move |_| open_usage_detail.emit(event_id_for_detail.clone()))
                                                         }}
                                                     >
-                                                        <i class={classes!("fas", "fa-bars-staggered")}></i>
+                                                        <i class={classes!("fas", "fa-bars-staggered", "text-xs")}></i>
                                                     </button>
-                                                    <div class={classes!("mt-2", "max-w-[12rem]", "truncate", "font-mono", "text-[11px]", "text-[var(--muted)]")} title={header_preview.clone()}>
-                                                        { header_preview }
-                                                    </div>
                                                 </td>
                                             </tr>
                                         }

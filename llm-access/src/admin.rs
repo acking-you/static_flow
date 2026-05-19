@@ -754,7 +754,7 @@ pub(crate) async fn list_llm_gateway_keys(
     let filter = admin_key_page_query(&query);
     let page = match state
         .admin_key_store
-        .list_admin_keys_filtered_page(Some(PROVIDER_CODEX), &filter, page_request)
+        .list_admin_keys_filtered_page(None, &filter, page_request)
         .await
     {
         Ok(page) => page,
@@ -1247,6 +1247,21 @@ pub(crate) async fn list_llm_gateway_usage_events(
         Err(response) => return response.into_response(),
     };
     proxy_usage_list_query(&state, &uri).await
+}
+
+pub(crate) async fn get_llm_gateway_usage_filter_options(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let _permit = match acquire_admin_usage_query_permit(&state) {
+        Ok(permit) => permit,
+        Err(response) => return response.into_response(),
+    };
+    proxy_usage_query(&state, &uri).await
 }
 
 pub(crate) async fn get_llm_gateway_usage_event(

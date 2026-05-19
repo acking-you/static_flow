@@ -2,7 +2,7 @@
 
 #[cfg(feature = "duckdb-runtime")]
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs,
     io::{Read, Seek, SeekFrom, Write},
     ops::Range,
@@ -26,7 +26,8 @@ use llm_access_core::{
     store::{
         AdminRuntimeConfig, UsageAnalyticsStore, UsageChartPoint, UsageEventPage, UsageEventQuery,
         UsageEventSink, UsageEventSource, UsageEventStatusKind, UsageEventTotals,
-        DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB, DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
+        UsageFilterOptions, DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB,
+        DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
     },
     usage::{UsageEvent, UsageStreamDetails, UsageTiming},
 };
@@ -3165,6 +3166,41 @@ impl UsageAnalyticsStore for DuckDbUsageRepository {
         .await
         .context("duckdb usage chart task failed")?
     }
+
+    async fn list_usage_filter_options(
+        &self,
+        query: UsageEventQuery,
+    ) -> anyhow::Result<UsageFilterOptions> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || match inner.as_ref() {
+            DuckDbUsageRepositoryInner::Single {
+                state, ..
+            } => {
+                let path = {
+                    let state = state
+                        .lock()
+                        .map_err(|_| anyhow!("single duckdb state lock poisoned"))?;
+                    state.path.clone()
+                };
+                list_usage_filter_options_from_path(&path, &query)
+            },
+            DuckDbUsageRepositoryInner::Tiered {
+                config,
+                state,
+                ..
+            } => {
+                let active_path = {
+                    let state = state
+                        .lock()
+                        .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
+                    state.active_path.clone()
+                };
+                list_usage_filter_options_from_tiered(config, &active_path, &query)
+            },
+        })
+        .await
+        .context("duckdb usage filter options task failed")?
+    }
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -3788,6 +3824,192 @@ fn empty_usage_chart_points(
             tokens: 0,
         })
         .collect()
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn list_usage_filter_options_from_path(
+    path: &Path,
+    query: &UsageEventQuery,
+) -> anyhow::Result<UsageFilterOptions> {
+    let conn = DuckDbUsageRepository::open_read_only_conn(path)?;
+    list_usage_filter_options_from_conn(&conn, query)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UsageFilterOptionField {
+    Model,
+    Account,
+    Endpoint,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+impl UsageFilterOptionField {
+    fn column_name(self) -> &'static str {
+        match self {
+            Self::Model => "model",
+            Self::Account => "account_name",
+            Self::Endpoint => "endpoint",
+        }
+    }
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn list_usage_filter_options_from_conn(
+    conn: &duckdb::Connection,
+    query: &UsageEventQuery,
+) -> anyhow::Result<UsageFilterOptions> {
+    Ok(UsageFilterOptions {
+        models: fetch_usage_filter_field_values_from_conn(
+            conn,
+            &usage_filter_options_query_for_field(query, UsageFilterOptionField::Model),
+            UsageFilterOptionField::Model,
+        )?,
+        accounts: fetch_usage_filter_field_values_from_conn(
+            conn,
+            &usage_filter_options_query_for_field(query, UsageFilterOptionField::Account),
+            UsageFilterOptionField::Account,
+        )?,
+        endpoints: fetch_usage_filter_field_values_from_conn(
+            conn,
+            &usage_filter_options_query_for_field(query, UsageFilterOptionField::Endpoint),
+            UsageFilterOptionField::Endpoint,
+        )?,
+    })
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn list_usage_filter_options_from_tiered(
+    config: &TieredDuckDbUsageConfig,
+    active_path: &Path,
+    query: &UsageEventQuery,
+) -> anyhow::Result<UsageFilterOptions> {
+    let archived_paths = if query.source.includes_archive() {
+        archived_segments_with_catalog_counts(config, query)?
+            .into_iter()
+            .map(|(segment, _)| segment.archive_path)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    Ok(UsageFilterOptions {
+        models: collect_usage_filter_field_values_from_tiered(
+            active_path,
+            &archived_paths,
+            query,
+            UsageFilterOptionField::Model,
+        )?,
+        accounts: collect_usage_filter_field_values_from_tiered(
+            active_path,
+            &archived_paths,
+            query,
+            UsageFilterOptionField::Account,
+        )?,
+        endpoints: collect_usage_filter_field_values_from_tiered(
+            active_path,
+            &archived_paths,
+            query,
+            UsageFilterOptionField::Endpoint,
+        )?,
+    })
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn collect_usage_filter_field_values_from_tiered(
+    active_path: &Path,
+    archived_paths: &[PathBuf],
+    query: &UsageEventQuery,
+    field: UsageFilterOptionField,
+) -> anyhow::Result<Vec<String>> {
+    let scoped_query = usage_filter_options_query_for_field(query, field);
+    let mut values = BTreeSet::new();
+    if query.source.includes_hot() {
+        let conn = DuckDbUsageRepository::open_read_only_conn(active_path)?;
+        values.extend(fetch_usage_filter_field_values_from_conn(&conn, &scoped_query, field)?);
+    }
+    for archived_path in archived_paths {
+        let conn = DuckDbUsageRepository::open_read_only_conn(archived_path)?;
+        values.extend(fetch_usage_filter_field_values_from_conn(&conn, &scoped_query, field)?);
+    }
+    Ok(values.into_iter().collect())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn usage_filter_options_query_for_field(
+    query: &UsageEventQuery,
+    field: UsageFilterOptionField,
+) -> UsageEventQuery {
+    let mut scoped = query.clone();
+    match field {
+        UsageFilterOptionField::Model => scoped.model = None,
+        UsageFilterOptionField::Account => scoped.account_name = None,
+        UsageFilterOptionField::Endpoint => scoped.endpoint = None,
+    }
+    scoped.limit = 1;
+    scoped.offset = 0;
+    scoped
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn fetch_usage_filter_field_values_from_conn(
+    conn: &duckdb::Connection,
+    query: &UsageEventQuery,
+    field: UsageFilterOptionField,
+) -> anyhow::Result<Vec<String>> {
+    let columns = duckdb_table_columns(conn, "usage_events")?;
+    if !columns.contains(field.column_name()) {
+        return Ok(Vec::new());
+    }
+    let sql = usage_filter_options_sql(&columns, "e", field);
+    let mut stmt = conn
+        .prepare(&sql)
+        .context("prepare duckdb usage filter options query")?;
+    let rows = stmt
+        .query_map(
+            duckdb::params![
+                query.key_id.as_deref(),
+                query.provider_type.as_deref(),
+                query.start_ms,
+                query.end_ms,
+                query.model.as_deref(),
+                query.account_name.as_deref(),
+                query.endpoint.as_deref(),
+                query.status_code,
+                query.status_kind.map(UsageEventStatusKind::as_query_value)
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .context("query duckdb usage filter options")?;
+    let mut values = Vec::new();
+    for value in rows.flatten() {
+        if !value.is_empty() {
+            values.push(value);
+        }
+    }
+    Ok(values)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn usage_filter_options_sql(
+    columns: &HashSet<String>,
+    table_alias: &str,
+    field: UsageFilterOptionField,
+) -> String {
+    let column_sql = usage_event_filter_column_sql(
+        columns,
+        table_alias,
+        field.column_name(),
+        "CAST(NULL AS VARCHAR)",
+    );
+    let where_sql = usage_event_filter_where_sql(columns, table_alias);
+    format!(
+        "SELECT DISTINCT {column_sql} AS value
+         FROM usage_events {table_alias}
+         {where_sql}
+           AND {column_sql} IS NOT NULL
+           AND length(trim({column_sql})) > 0
+         ORDER BY value"
+    )
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -5194,6 +5416,66 @@ mod tests {
     }
 
     #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn list_usage_filter_options_respects_scope_but_not_self_filter() {
+        let root = std::env::temp_dir().join(format!(
+            "llm-access-duckdb-test-{}-usage-filter-options-scope",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create duckdb test directory");
+        let db_path = root.join("usage.duckdb");
+        let repo = super::DuckDbUsageRepository::open_path(&db_path).expect("open duckdb usage db");
+
+        let mut first = test_usage_event();
+        first.event_id = "filter-options-first".to_string();
+        first.created_at_ms = 1_700_400_000_000;
+        first.key_id = "filter-options-key".to_string();
+        first.model = Some("gpt-5.4".to_string());
+        first.account_name = Some("account-a".to_string());
+        first.endpoint = "/v1/responses".to_string();
+        first.status_code = 200;
+        repo.append_usage_event(&first)
+            .await
+            .expect("append first filter-options event");
+
+        let mut second = first.clone();
+        second.event_id = "filter-options-second".to_string();
+        second.created_at_ms += 1_000;
+        second.model = Some("gpt-5.5".to_string());
+        second.account_name = Some("account-b".to_string());
+        second.endpoint = "/v1/chat/completions".to_string();
+        second.status_code = 524;
+        repo.append_usage_event(&second)
+            .await
+            .expect("append second filter-options event");
+
+        let options = repo
+            .list_usage_filter_options(UsageEventQuery {
+                key_id: Some("filter-options-key".to_string()),
+                provider_type: None,
+                model: Some("gpt-5.4".to_string()),
+                account_name: None,
+                endpoint: None,
+                status_code: None,
+                status_kind: None,
+                source: UsageEventSource::All,
+                start_ms: None,
+                end_ms: None,
+                limit: 20,
+                offset: 0,
+            })
+            .await
+            .expect("list usage filter options");
+
+        assert_eq!(options.models, vec!["gpt-5.4".to_string(), "gpt-5.5".to_string()]);
+        assert_eq!(options.accounts, vec!["account-a".to_string()]);
+        assert_eq!(options.endpoints, vec!["/v1/responses".to_string()]);
+
+        std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
     #[test]
     fn tiered_usage_page_plan_skips_whole_sources_and_fetches_only_page_rows() {
         let plan = super::plan_tiered_usage_page_fetches([50, 80, 80], 55, 20);
@@ -5382,6 +5664,78 @@ mod tests {
         assert_eq!(detail.stream.bytes_streamed, None);
 
         std::fs::remove_dir_all(&root).expect("cleanup legacy archive test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn tiered_usage_filter_options_include_archived_segments() {
+        let root = std::env::temp_dir().join(format!(
+            "llm-access-duckdb-test-{}-tiered-filter-options-archive",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create tiered duckdb test directory");
+        let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            catalog_dir: root.join("catalog"),
+            rollover_bytes: 1,
+            details_dir: Some(details_store_dir(&root)),
+        })
+        .expect("open tiered duckdb usage db");
+
+        let mut first = test_usage_event();
+        first.event_id = "tiered-filter-options-first".to_string();
+        first.created_at_ms = 1_700_500_000_000;
+        first.key_id = "tiered-filter-options-key".to_string();
+        first.model = Some("gpt-5.4".to_string());
+        first.account_name = Some("archived-account-a".to_string());
+        first.endpoint = "/v1/responses".to_string();
+        repo.append_usage_event(&first)
+            .await
+            .expect("append first archived candidate");
+
+        let mut second = first.clone();
+        second.event_id = "tiered-filter-options-second".to_string();
+        second.created_at_ms += 1_000;
+        second.model = Some("gpt-5.5".to_string());
+        second.account_name = Some("archived-account-b".to_string());
+        second.endpoint = "/v1/chat/completions".to_string();
+        repo.append_usage_event(&second)
+            .await
+            .expect("append second archived candidate");
+
+        wait_for_archived_duckdb_file_count(&root.join("archive"), 2).await;
+
+        let options = repo
+            .list_usage_filter_options(UsageEventQuery {
+                key_id: Some("tiered-filter-options-key".to_string()),
+                provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
+                status_kind: None,
+                source: UsageEventSource::Archive,
+                start_ms: None,
+                end_ms: None,
+                limit: 20,
+                offset: 0,
+            })
+            .await
+            .expect("list archived usage filter options");
+
+        assert_eq!(options.models, vec!["gpt-5.4".to_string(), "gpt-5.5".to_string()]);
+        assert_eq!(options.accounts, vec![
+            "archived-account-a".to_string(),
+            "archived-account-b".to_string()
+        ]);
+        assert_eq!(options.endpoints, vec![
+            "/v1/chat/completions".to_string(),
+            "/v1/responses".to_string()
+        ]);
+
+        std::fs::remove_dir_all(&root).expect("cleanup tiered duckdb test directory");
     }
 
     #[cfg(feature = "duckdb-runtime")]

@@ -26,7 +26,7 @@ use crate::{
     process_memory::{read_current_process_memory_stats, ProcessMemoryStats},
     usage_query::{
         get_kiro_usage_event, get_llm_usage_event, list_kiro_usage_events, list_llm_usage_events,
-        usage_chart_points, UsageQueryState,
+        usage_chart_points, usage_filter_options, UsageQueryState,
     },
 };
 
@@ -124,6 +124,7 @@ fn primary_worker_router(worker: &UsageWorker) -> Router {
         .route("/admin/kiro-gateway/usage", get(list_kiro_usage_events))
         .route("/admin/kiro-gateway/usage/:event_id", get(get_kiro_usage_event))
         .route("/admin/llm-access/usage/chart", get(usage_chart_points))
+        .route("/admin/llm-gateway/usage/filter-options", get(usage_filter_options))
         .route("/admin/llm-access/usage-worker/status", get(primary_worker_status))
         .route("/internal/usage-journal/import", post(primary_import_relay_file))
         .with_state(PrimaryWorkerHttpState {
@@ -141,6 +142,7 @@ fn edge_worker_router(worker: &EdgeUsageWorker) -> Router {
         .route("/admin/kiro-gateway/usage", get(edge_proxy_usage_query))
         .route("/admin/kiro-gateway/usage/:event_id", get(edge_proxy_usage_query))
         .route("/admin/llm-access/usage/chart", get(edge_proxy_usage_query))
+        .route("/admin/llm-gateway/usage/filter-options", get(edge_proxy_usage_query))
         .route("/admin/llm-access/usage-worker/status", get(edge_worker_status))
         .route("/internal/usage-journal/import", post(edge_reject_import_relay_file))
         .with_state(EdgeWorkerHttpState {
