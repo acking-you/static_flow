@@ -4197,7 +4197,7 @@ mod tests {
         provider::{ProtocolFamily, ProviderType, RouteStrategy},
         store::{
             UsageAnalyticsStore, UsageEventQuery, UsageEventSink, UsageEventSource,
-            UsageEventStatusKind,
+            UsageEventStatusKind, UsageFilterOptions,
         },
         usage::{UsageEvent, UsageStreamDetails, UsageTiming},
     };
@@ -5706,9 +5706,9 @@ mod tests {
             .expect("append second archived candidate");
 
         wait_for_archived_duckdb_file_count(&root.join("archive"), 2).await;
-
-        let options = repo
-            .list_usage_filter_options(UsageEventQuery {
+        let options = wait_for_usage_filter_options(
+            &repo,
+            UsageEventQuery {
                 key_id: Some("tiered-filter-options-key".to_string()),
                 provider_type: None,
                 model: None,
@@ -5721,9 +5721,14 @@ mod tests {
                 end_ms: None,
                 limit: 20,
                 offset: 0,
-            })
-            .await
-            .expect("list archived usage filter options");
+            },
+            |options| {
+                options.models.len() >= 2
+                    && options.accounts.len() >= 2
+                    && options.endpoints.len() >= 2
+            },
+        )
+        .await;
 
         assert_eq!(options.models, vec!["gpt-5.4".to_string(), "gpt-5.5".to_string()]);
         assert_eq!(options.accounts, vec![
@@ -6535,6 +6540,31 @@ mod tests {
             }
             if std::time::Instant::now() >= deadline {
                 panic!("timed out waiting for archived duckdb segment");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    async fn wait_for_usage_filter_options<F>(
+        repo: &super::DuckDbUsageRepository,
+        query: UsageEventQuery,
+        predicate: F,
+    ) -> UsageFilterOptions
+    where
+        F: Fn(&UsageFilterOptions) -> bool,
+    {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let options = repo
+                .list_usage_filter_options(query.clone())
+                .await
+                .expect("query usage filter options while waiting");
+            if predicate(&options) {
+                return options;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("timed out waiting for usage filter options to converge");
             }
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
