@@ -1479,6 +1479,18 @@ pub fn convert_response_event_to_anthropic_sse_chunks(
                 ));
             }
             if chunk_type == "response.output_item.done" {
+                if item_type == "function_call" {
+                    if let Some(stop_index) = metadata.mark_tool_block_stopped(&lookup_key) {
+                        chunks.push(encode_named_json_sse_chunk(
+                            "content_block_stop",
+                            &json!({
+                                "type": "content_block_stop",
+                                "index": stop_index,
+                            }),
+                        ));
+                    }
+                    return chunks;
+                }
                 let delta_seen = existing.as_ref().is_some_and(|state| state.delta_seen);
                 let start_had_payload = existing
                     .as_ref()
@@ -1531,6 +1543,38 @@ pub fn convert_response_event_to_anthropic_sse_chunks(
                     }
                 }),
             ));
+        },
+        "response.function_call_arguments.done" => {
+            let Some((lookup_key, _call_id)) = stream_tool_call_identity_from_event(&value) else {
+                return Vec::new();
+            };
+            let partial_json = tool_input_delta_text(&value);
+            let Some(existing) = metadata.tool_block_state(&lookup_key).cloned() else {
+                return Vec::new();
+            };
+            if !partial_json.is_empty() && !existing.delta_seen {
+                let index = metadata.mark_tool_block_delta_seen(&lookup_key);
+                chunks.push(encode_named_json_sse_chunk(
+                    "content_block_delta",
+                    &json!({
+                        "type": "content_block_delta",
+                        "index": index,
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": partial_json,
+                        }
+                    }),
+                ));
+            }
+            if let Some(stop_index) = metadata.mark_tool_block_stopped(&lookup_key) {
+                chunks.push(encode_named_json_sse_chunk(
+                    "content_block_stop",
+                    &json!({
+                        "type": "content_block_stop",
+                        "index": stop_index,
+                    }),
+                ));
+            }
         },
         "response.completed" | "response.done" => {
             let response = value.get("response").unwrap_or(&value);
@@ -1691,6 +1735,38 @@ mod tests {
         assert_eq!(deltas.len(), 1);
         assert_eq!(stops.len(), 1);
         assert_eq!(deltas[0]["delta"]["partial_json"], json!("*** Begin Patch"));
+    }
+
+    #[test]
+    fn streamed_function_call_arguments_done_emits_delta_then_stop() {
+        let mut metadata = AnthropicStreamMetadata::default();
+        let added = sse_event(json!({
+            "type": "response.output_item.added",
+            "item": {
+                "type": "function_call",
+                "call_id": "callauto14",
+                "name": "alpha",
+                "arguments": "{}"
+            }
+        }));
+        let done = sse_event(json!({
+            "type": "response.function_call_arguments.done",
+            "call_id": "callauto14",
+            "arguments": "{\"k\":1}"
+        }));
+
+        let start_chunks =
+            convert_response_event_to_anthropic_sse_chunks(&added, None, &mut metadata, None, None);
+        let done_chunks =
+            convert_response_event_to_anthropic_sse_chunks(&done, None, &mut metadata, None, None);
+
+        let starts = parse_named_sse_json(&start_chunks, "content_block_start");
+        let deltas = parse_named_sse_json(&done_chunks, "content_block_delta");
+        let stops = parse_named_sse_json(&done_chunks, "content_block_stop");
+        assert_eq!(starts.len(), 1);
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(stops.len(), 1);
+        assert_eq!(deltas[0]["delta"]["partial_json"], json!("{\"k\":1}"));
     }
 
     #[test]

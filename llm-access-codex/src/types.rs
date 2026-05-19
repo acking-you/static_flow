@@ -156,6 +156,14 @@ impl ChatStreamMetadata {
             .insert(lookup_key.to_string(), true);
     }
 
+    /// Whether one streamed tool call already emitted its start chunk.
+    pub fn tool_call_started(&self, lookup_key: &str) -> bool {
+        self.tool_call_started
+            .get(lookup_key)
+            .copied()
+            .unwrap_or(false)
+    }
+
     /// Whether one streamed tool call already emitted incremental argument
     /// input.
     pub fn tool_call_delta_seen(&self, lookup_key: &str) -> bool {

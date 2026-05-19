@@ -512,7 +512,7 @@ fn convert_response_value_to_chat_chunk(
                 Some(build_openai_chat_text_chunk(value, text.as_str()))
             }
         },
-        "response.output_item.added" | "response.output_item.done" => {
+        "response.output_item.added" => {
             let item = value.get("item").or_else(|| value.get("output_item"))?;
             let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
             if matches!(item_type, "function_call" | "custom_tool_call" | "local_shell_call") {
@@ -527,16 +527,7 @@ fn convert_response_value_to_chat_chunk(
                     .unwrap_or("{}")
                     .to_string();
                 let has_payload = !arguments.is_empty() && arguments != "{}";
-                let should_emit = if chunk_type == "response.output_item.added" {
-                    metadata.mark_tool_call_started(&lookup_key, has_payload)
-                } else {
-                    let first_start = metadata.mark_tool_call_started(&lookup_key, has_payload);
-                    first_start
-                        || (!metadata.tool_call_delta_seen(&lookup_key)
-                            && !metadata.tool_call_start_had_payload(&lookup_key)
-                            && has_payload)
-                };
-                if !should_emit {
+                if !metadata.mark_tool_call_started(&lookup_key, has_payload) {
                     return None;
                 }
                 return Some(json!({
@@ -583,15 +574,106 @@ fn convert_response_value_to_chat_chunk(
             }
             None
         },
-        "response.function_call_arguments.delta"
-        | "response.function_call_arguments.done"
-        | "response.custom_tool_call_input.delta" => {
+        "response.output_item.done" => {
+            let item = value.get("item").or_else(|| value.get("output_item"))?;
+            let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+            if matches!(item_type, "function_call" | "custom_tool_call" | "local_shell_call") {
+                let (lookup_key, call_id) = stream_tool_call_identity_from_item(item)?;
+                let tool_call_index = metadata.tool_call_index(&lookup_key);
+                let tool_call = item.as_object().and_then(|obj| {
+                    chat_tool_call_from_responses_item(obj, item_type, tool_name_restore_map)
+                })?;
+                let name = tool_call["function"]["name"].as_str().unwrap_or("tool");
+                let arguments = tool_call["function"]["arguments"]
+                    .as_str()
+                    .unwrap_or("{}")
+                    .to_string();
+                let has_payload = !arguments.is_empty() && arguments != "{}";
+                let first_start = metadata.mark_tool_call_started(&lookup_key, has_payload);
+                if first_start {
+                    return Some(json!({
+                        "id": stream_event_response_id(value),
+                        "object": "chat.completion.chunk",
+                        "created": stream_event_created(value),
+                        "model": stream_event_model(value),
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "role": "assistant",
+                                "tool_calls": [{
+                                    "index": tool_call_index,
+                                    "id": call_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": name,
+                                        "arguments": arguments
+                                    }
+                                }]
+                            },
+                            "finish_reason": Value::Null
+                        }]
+                    }));
+                }
+                if metadata.tool_call_delta_seen(&lookup_key)
+                    || metadata.tool_call_start_had_payload(&lookup_key)
+                    || !has_payload
+                {
+                    return None;
+                }
+                metadata.mark_tool_call_delta_seen(&lookup_key);
+                return Some(json!({
+                    "id": stream_event_response_id(value),
+                    "object": "chat.completion.chunk",
+                    "created": stream_event_created(value),
+                    "model": stream_event_model(value),
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "role": "assistant",
+                            "tool_calls": [{
+                                "index": tool_call_index,
+                                "id": call_id,
+                                "type": "function",
+                                "function": {
+                                    "arguments": arguments
+                                }
+                            }]
+                        },
+                        "finish_reason": Value::Null
+                    }]
+                }));
+            }
+            if let Some(item_obj) = item.as_object() {
+                if let Some(extension) =
+                    chat_extension_item_from_responses_item(item_obj, item_type)
+                {
+                    return Some(json!({
+                        "id": stream_event_response_id(value),
+                        "object": "chat.completion.chunk",
+                        "created": stream_event_created(value),
+                        "model": stream_event_model(value),
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "codex_output_items": [extension]
+                            },
+                            "finish_reason": Value::Null
+                        }]
+                    }));
+                }
+            }
+            None
+        },
+        "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta" => {
             let (lookup_key, call_id) = stream_tool_call_identity_from_event(value)?;
-            let tool_call_index = metadata.tool_call_index(&lookup_key);
             let arguments = responses_tool_call_event_delta_text(value);
             if arguments.is_empty() {
                 return None;
             }
+            if !metadata.tool_call_started(&lookup_key) {
+                return None;
+            }
+            let tool_call_index = metadata.tool_call_index(&lookup_key);
             metadata.mark_tool_call_delta_seen(&lookup_key);
             Some(json!({
                 "id": stream_event_response_id(value),
@@ -772,6 +854,96 @@ mod tests {
         });
 
         assert!(convert_response_value_to_chat_chunk(&value, None, &mut metadata).is_none());
+    }
+
+    #[test]
+    fn streamed_tool_call_delta_before_start_is_dropped() {
+        let mut metadata = ChatStreamMetadata::default();
+        let delta = json!({
+            "type": "response.function_call_arguments.delta",
+            "call_id": "callauto13",
+            "delta": "{\"k\":1}"
+        });
+
+        assert!(convert_response_value_to_chat_chunk(&delta, None, &mut metadata).is_none());
+    }
+
+    #[test]
+    fn streamed_tool_call_done_after_dropped_delta_emits_full_start_chunk() {
+        let mut metadata = ChatStreamMetadata::default();
+        let delta = json!({
+            "type": "response.function_call_arguments.delta",
+            "call_id": "callauto13",
+            "delta": "{\"k\":1}"
+        });
+        let done = json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "call_id": "callauto13",
+                "name": "alpha",
+                "arguments": "{\"k\":1}"
+            }
+        });
+
+        assert!(convert_response_value_to_chat_chunk(&delta, None, &mut metadata).is_none());
+        let done_chunk =
+            convert_response_value_to_chat_chunk(&done, None, &mut metadata).expect("done");
+
+        assert_eq!(done_chunk["choices"][0]["delta"]["tool_calls"][0]["index"], json!(0));
+        assert_eq!(
+            done_chunk["choices"][0]["delta"]["tool_calls"][0]["function"]["name"],
+            json!("alpha")
+        );
+        assert_eq!(
+            done_chunk["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
+            json!("{\"k\":1}")
+        );
+    }
+
+    #[test]
+    fn streamed_tool_call_done_after_start_backfills_arguments_without_second_start() {
+        let mut metadata = ChatStreamMetadata::default();
+        let added = json!({
+            "type": "response.output_item.added",
+            "item": {
+                "type": "function_call",
+                "call_id": "callauto14",
+                "name": "alpha",
+                "arguments": "{}"
+            }
+        });
+        let done = json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "call_id": "callauto14",
+                "name": "alpha",
+                "arguments": "{\"k\":1}"
+            }
+        });
+
+        let start_chunk =
+            convert_response_value_to_chat_chunk(&added, None, &mut metadata).expect("start");
+        let done_chunk =
+            convert_response_value_to_chat_chunk(&done, None, &mut metadata).expect("done");
+
+        assert_eq!(
+            start_chunk["choices"][0]["delta"]["tool_calls"][0]["function"]["name"],
+            json!("alpha")
+        );
+        assert_eq!(
+            start_chunk["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
+            json!("{}")
+        );
+        assert_eq!(done_chunk["choices"][0]["delta"]["tool_calls"][0]["index"], json!(0));
+        assert!(done_chunk["choices"][0]["delta"]["tool_calls"][0]["function"]
+            .get("name")
+            .is_none());
+        assert_eq!(
+            done_chunk["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
+            json!("{\"k\":1}")
+        );
     }
 
     #[test]
