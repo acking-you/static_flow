@@ -886,12 +886,15 @@ impl UsageEventDetailStore {
         let mut pack_bytes = Vec::new();
         let mut packed = Vec::new();
         let mut seen = BTreeMap::<String, (i64, i64, String)>::new();
-        for (index, row) in rows.iter().enumerate() {
-            if !row.detail_object_payload_present {
-                continue;
-            }
+        for (index, row) in rows.iter_mut().enumerate() {
             let detail = UsageEventDetailRow::from_usage_event_row(row);
-            if !detail.has_external_payloads() {
+            let has_external_payloads = detail.has_external_payloads();
+            row.detail_object_payload_present = has_external_payloads;
+            if !has_external_payloads {
+                row.detail_object_path = None;
+                row.detail_object_offset = None;
+                row.detail_object_length = None;
+                row.detail_object_sha256 = None;
                 continue;
             }
             let blob = UsageEventDetailBlob::from_detail_row(&detail);
@@ -3600,7 +3603,6 @@ fn usage_event_detail_object_ref(
 ) -> anyhow::Result<Option<UsageEventDetailObjectRef>> {
     let columns = duckdb_table_columns(conn, "usage_events")?;
     for column in [
-        "detail_object_payload_present",
         "detail_object_path",
         "detail_object_offset",
         "detail_object_length",
@@ -3615,8 +3617,7 @@ fn usage_event_detail_object_ref(
             "SELECT detail_object_path, detail_object_offset, detail_object_length,
                     detail_object_sha256
              FROM usage_events
-             WHERE event_id = ?1
-               AND COALESCE(detail_object_payload_present, false)",
+             WHERE event_id = ?1",
             duckdb::params![event_id],
             |row| {
                 Ok((
@@ -5016,6 +5017,96 @@ mod tests {
 
     #[cfg(feature = "duckdb-runtime")]
     #[tokio::test]
+    async fn duckdb_repository_uses_detail_ref_even_when_payload_present_flag_is_false() {
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-duckdb-test-{}-false-detail-flag", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create duckdb test directory");
+        let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            catalog_dir: root.join("catalog"),
+            rollover_bytes: u64::MAX,
+            details_dir: Some(details_store_dir(&root)),
+        })
+        .expect("open tiered duckdb usage db");
+        let mut event = test_usage_event();
+        event.event_id = "duckdb-test-false-detail-flag".to_string();
+        event.client_request_body_json = Some(r#"{"client":true}"#.to_string());
+        event.upstream_request_body_json = Some(r#"{"upstream":true}"#.to_string());
+        event.full_request_json = Some(r#"{"full":true}"#.to_string());
+
+        repo.append_usage_event(&event)
+            .await
+            .expect("append packed detail event");
+
+        let db_path = match repo.inner.as_ref() {
+            super::DuckDbUsageRepositoryInner::Tiered {
+                state, ..
+            } => state.lock().expect("lock tiered state").active_path.clone(),
+            _ => panic!("expected tiered repository"),
+        };
+        let conn =
+            duckdb::Connection::open(&db_path).expect("open active duckdb for detail flag update");
+        conn.execute(
+            "UPDATE usage_events
+             SET detail_object_payload_present = false
+             WHERE event_id = ?1",
+            [&event.event_id],
+        )
+        .expect("force false detail payload flag");
+        conn.execute_batch("CHECKPOINT;")
+            .expect("checkpoint active duckdb after detail flag update");
+
+        let detail = repo
+            .get_usage_event(&event.event_id)
+            .await
+            .expect("get detail after false detail payload flag")
+            .expect("event exists");
+        assert_usage_event_detail_payloads(&detail, &event);
+
+        std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[test]
+    fn usage_detail_store_recomputes_payload_present_from_payloads() {
+        let root = std::env::temp_dir().join(format!(
+            "llm-access-duckdb-test-{}-detail-pack-flag-recompute",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create detail pack flag recompute directory");
+        let detail_store = super::UsageEventDetailStore::from_dir(&details_store_dir(&root))
+            .expect("open detail store")
+            .expect("detail store configured");
+        let mut event = test_usage_event();
+        event.event_id = "duckdb-test-detail-pack-flag-recompute".to_string();
+        event.client_request_body_json = Some(r#"{"client":true}"#.to_string());
+        event.upstream_request_body_json = Some(r#"{"upstream":true}"#.to_string());
+        event.full_request_json = Some(r#"{"full":true}"#.to_string());
+        let mut row = super::UsageEventRow::from_usage_event(&event);
+        row.detail_object_payload_present = false;
+
+        let pack = detail_store
+            .prepare_pack(std::slice::from_mut(&mut row))
+            .expect("prepare detail pack")
+            .expect("detail pack should be written");
+
+        assert!(row.detail_object_payload_present);
+        assert_eq!(row.detail_object_path.as_deref(), Some(pack.relative_path.as_str()));
+        assert!(row.detail_object_offset.is_some());
+        assert!(row.detail_object_length.is_some());
+        assert!(row
+            .detail_object_sha256
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()));
+
+        std::fs::remove_dir_all(&root).expect("cleanup detail pack flag recompute directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
     async fn duckdb_repository_summarizes_key_usage_rollups() {
         let root = std::env::temp_dir()
             .join(format!("llm-access-duckdb-test-{}-key-rollups", std::process::id()));
@@ -5587,6 +5678,56 @@ mod tests {
             .expect("archived tiered event exists");
         assert_usage_event_light_detail_round_trips(&archived_detail, &first);
         assert!(!legacy_details_store_object_path(&root, &first).exists());
+
+        std::fs::remove_dir_all(&root).expect("cleanup tiered duckdb test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn duckdb_tiered_repository_preserves_heavy_detail_payloads_after_rollover() {
+        let root = std::env::temp_dir()
+            .join(format!("llm-access-duckdb-test-{}-tiered-heavy-rollover", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create tiered duckdb test directory");
+        let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            catalog_dir: root.join("catalog"),
+            rollover_bytes: 1,
+            details_dir: Some(details_store_dir(&root)),
+        })
+        .expect("open tiered duckdb usage db");
+
+        let mut first = test_usage_event();
+        first.event_id = "tiered-heavy-archived-first".to_string();
+        first.created_at_ms = 1_700_000_000_000;
+        first.client_request_body_json = Some(r#"{"client":1}"#.to_string());
+        first.upstream_request_body_json = Some(r#"{"upstream":1}"#.to_string());
+        first.full_request_json = Some(r#"{"full":1}"#.to_string());
+
+        let mut second = test_usage_event();
+        second.event_id = "tiered-heavy-active-second".to_string();
+        second.created_at_ms = 1_700_000_060_000;
+        second.client_request_body_json = None;
+        second.upstream_request_body_json = None;
+        second.full_request_json = None;
+
+        repo.append_usage_event(&first)
+            .await
+            .expect("append first tiered heavy usage event");
+        repo.append_usage_event(&second)
+            .await
+            .expect("append second tiered usage event after rollover");
+
+        wait_for_archived_duckdb_file_count(&root.join("archive"), 2).await;
+
+        let archived_detail = repo
+            .get_usage_event(&first.event_id)
+            .await
+            .expect("get archived tiered heavy usage event")
+            .expect("archived tiered heavy event exists");
+        assert_usage_event_round_trips(&archived_detail, &first);
+        assert_usage_event_detail_payloads(&archived_detail, &first);
 
         std::fs::remove_dir_all(&root).expect("cleanup tiered duckdb test directory");
     }
