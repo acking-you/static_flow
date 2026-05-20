@@ -2421,20 +2421,88 @@ fn payload_has_kiro_remote_media_sources(payload: &MessagesRequest) -> bool {
     })
 }
 
-fn strip_kiro_remote_media_sources(payload: &mut MessagesRequest) -> usize {
-    let mut removed = 0;
-    for message in &mut payload.messages {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StrippedKiroRemoteMediaSource {
+    message_index: usize,
+    block_index: usize,
+    block_type: String,
+    url_summary: String,
+}
+
+fn strip_kiro_remote_media_sources(
+    payload: &mut MessagesRequest,
+) -> Vec<StrippedKiroRemoteMediaSource> {
+    let mut removed = Vec::new();
+    for (message_index, message) in payload.messages.iter_mut().enumerate() {
         if message.role != "user" {
             continue;
         }
         let Some(items) = message.content.as_array_mut() else {
             continue;
         };
-        let before = items.len();
-        items.retain(|item| !is_kiro_remote_media_source_block(item));
-        removed += before.saturating_sub(items.len());
+        let mut retained = Vec::with_capacity(items.len());
+        for (block_index, item) in std::mem::take(items).into_iter().enumerate() {
+            if let Some(stripped) =
+                stripped_kiro_remote_media_source(&item, message_index, block_index)
+            {
+                removed.push(stripped);
+            } else {
+                retained.push(item);
+            }
+        }
+        *items = retained;
     }
     removed
+}
+
+fn stripped_kiro_remote_media_source(
+    item: &serde_json::Value,
+    message_index: usize,
+    block_index: usize,
+) -> Option<StrippedKiroRemoteMediaSource> {
+    let object = item.as_object()?;
+    let block_type = object
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)?;
+    if !matches!(block_type, "image" | "document") {
+        return None;
+    }
+    let source = object
+        .get("source")
+        .and_then(serde_json::Value::as_object)?;
+    if source
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        != Some("url")
+    {
+        return None;
+    }
+    let url_summary = source
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .map(summarize_kiro_remote_media_url)
+        .unwrap_or_else(|| "(missing url)".to_string());
+    Some(StrippedKiroRemoteMediaSource {
+        message_index,
+        block_index,
+        block_type: block_type.to_string(),
+        url_summary,
+    })
+}
+
+fn summarize_kiro_remote_media_url(raw_url: &str) -> String {
+    let trimmed = raw_url.trim();
+    if trimmed.is_empty() {
+        return "(empty url)".to_string();
+    }
+    if let Ok(mut parsed) = url::Url::parse(trimmed) {
+        parsed.set_query(None);
+        parsed.set_fragment(None);
+        return parsed.to_string();
+    }
+    trimmed.chars().take(160).collect()
 }
 
 fn is_kiro_remote_media_source_block(item: &serde_json::Value) -> bool {
@@ -2899,11 +2967,17 @@ async fn dispatch_kiro_proxy(
             return response;
         }
     } else {
-        let removed = strip_kiro_remote_media_sources(&mut payload);
-        if removed > 0 {
-            tracing::debug!(
-                removed_remote_media_sources = removed,
-                "kiro remote media sources ignored because key remote media resolution is disabled"
+        let removed_sources = strip_kiro_remote_media_sources(&mut payload);
+        if !removed_sources.is_empty() {
+            tracing::warn!(
+                key_id = %key.key_id,
+                key_name = %key.key_name,
+                endpoint = %public_path,
+                request_url = %usage_meta.request_url,
+                model = %effective_model,
+                removed_remote_media_sources = removed_sources.len(),
+                removed_remote_media_details = ?removed_sources,
+                "kiro remote media sources were stripped because key remote media resolution is disabled"
             );
         }
     }
@@ -6807,6 +6881,48 @@ mod tests {
         assert_eq!(source["type"], "text");
         assert_eq!(source["media_type"], "text/markdown");
         assert_eq!(source["data"], "# Heading\n\nbody");
+    }
+
+    #[test]
+    fn strip_kiro_remote_media_sources_returns_sanitized_source_details() {
+        let mut payload =
+            serde_json::from_value::<llm_access_kiro::anthropic::types::MessagesRequest>(json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 128,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "url",
+                                "url": "https://example.test/asset.png?token=secret"
+                            }
+                        },
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "url",
+                                "url": "https://example.test/files/spec.pdf#page=1"
+                            }
+                        },
+                        {"type": "text", "text": "Describe it"}
+                    ]
+                }]
+            }))
+            .expect("request payload");
+
+        let removed = super::strip_kiro_remote_media_sources(&mut payload);
+
+        assert_eq!(removed.len(), 2);
+        assert_eq!(removed[0].message_index, 0);
+        assert_eq!(removed[0].block_index, 0);
+        assert_eq!(removed[0].block_type, "image");
+        assert_eq!(removed[0].url_summary, "https://example.test/asset.png");
+        assert_eq!(removed[1].block_index, 1);
+        assert_eq!(removed[1].block_type, "document");
+        assert_eq!(removed[1].url_summary, "https://example.test/files/spec.pdf");
+        assert_eq!(payload.messages[0].content, json!([{ "type": "text", "text": "Describe it" }]));
     }
 
     #[tokio::test]
