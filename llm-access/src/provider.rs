@@ -1663,6 +1663,7 @@ async fn dispatch_codex_proxy(
             codex_account_cooldowns.mark_account_cooldown(&route.account_name, cooldown);
         }
         if !is_codex_invalid_encrypted_content_response(status, &bytes)
+            && !is_codex_non_retryable_client_error_response(status, &bytes)
             && attempt_count < account_attempt_limit
             && routes.iter().any(|candidate| {
                 !failed_accounts.contains(&candidate.account_name)
@@ -5996,6 +5997,50 @@ fn is_codex_invalid_encrypted_content_response(status: StatusCode, bytes: &Bytes
         .unwrap_or(false)
 }
 
+fn is_codex_non_retryable_client_error_response(status: StatusCode, bytes: &Bytes) -> bool {
+    if status != StatusCode::BAD_REQUEST
+        || is_codex_invalid_encrypted_content_response(status, bytes)
+    {
+        return false;
+    }
+
+    let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
+        return false;
+    };
+    let error = value.get("error").unwrap_or(&value);
+    if json_string_field(error, "code")
+        .as_deref()
+        .is_some_and(codex_error_code_is_request_shape_failure)
+    {
+        return true;
+    }
+
+    extract_error_message_from_json_value(&value)
+        .as_deref()
+        .is_some_and(codex_message_indicates_request_shape_failure)
+}
+
+fn codex_error_code_is_request_shape_failure(code: &str) -> bool {
+    matches!(
+        code,
+        "invalid_value"
+            | "unsupported_value"
+            | "invalid_type"
+            | "missing_required_parameter"
+            | "unknown_parameter"
+            | "unsupported_parameter"
+    )
+}
+
+fn codex_message_indicates_request_shape_failure(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    (normalized.contains("invalid value") && normalized.contains("supported values"))
+        || normalized.contains("invalid type")
+        || normalized.contains("missing required parameter")
+        || normalized.contains("unknown parameter")
+        || normalized.contains("unsupported parameter")
+}
+
 fn codex_error_code_from_bytes(bytes: &Bytes) -> Option<String> {
     serde_json::from_slice::<Value>(bytes)
         .ok()
@@ -8975,6 +9020,36 @@ mod tests {
             .expect("invalid encrypted content response")
     }
 
+    async fn fake_codex_responses_invalid_value(
+        State(captured): State<Arc<CapturedCodexUpstream>>,
+        headers: HeaderMap,
+        request: Request<Body>,
+    ) -> Response {
+        let path = request.uri().path().to_string();
+        let query = request.uri().query().map(ToString::to_string);
+        let body = to_bytes(request.into_body(), usize::MAX)
+            .await
+            .expect("upstream request body");
+        let body = if body.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json")
+        };
+        captured
+            .requests
+            .lock()
+            .expect("captured requests")
+            .push(captured_codex_request(&headers, path, query, body));
+
+        Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"error":{"code":"invalid_value","type":"invalid_request_error","message":"Invalid value: 'tool'. Supported values are: 'assistant', 'system', 'developer', and 'user'."}}"#,
+            ))
+            .expect("invalid value response")
+    }
+
     async fn fake_codex_responses_always_unauthorized(
         State(captured): State<Arc<CapturedCodexUpstream>>,
         headers: HeaderMap,
@@ -10084,6 +10159,60 @@ mod tests {
                     r#"{
                         "model": "gpt-5.3-codex",
                         "prompt_cache_key": "thread-anchor",
+                        "input": "hello",
+                        "stream": false
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let requests = captured.requests.lock().expect("captured requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].authorization.as_deref(), Some("Bearer upstream-token-a"));
+    }
+
+    #[tokio::test]
+    async fn codex_dispatch_does_not_failover_invalid_value_client_error() {
+        let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("codex upstream env lock");
+        let captured = Arc::new(CapturedCodexUpstream::default());
+        let app = Router::new()
+            .route("/v1/responses", post(fake_codex_responses_invalid_value))
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+        let route_store = Arc::new(StaticMultiCodexRouteStore {
+            codex_routes: vec![
+                codex_route_for_account("codex-a", "upstream-token-a"),
+                codex_route_for_account("codex-b", "upstream-token-b"),
+            ],
+            kiro_route: static_kiro_route(),
+        });
+        let state = super::ProviderState::new(Arc::new(TestStore), route_store);
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(header::AUTHORIZATION, "Bearer codex-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "gpt-5.3-codex",
                         "input": "hello",
                         "stream": false
                     }"#,

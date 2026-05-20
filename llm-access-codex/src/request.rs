@@ -37,6 +37,7 @@ const NATIVE_RESPONSES_UPSTREAM_UNSUPPORTED_FIELDS: &[&str] = &[
     "safety_identifier",
     "stream_options",
 ];
+const NATIVE_RESPONSES_MESSAGE_ROLES: &[&str] = &["assistant", "system", "developer", "user"];
 
 /// Normalize an incoming OpenAI-compatible request into the upstream Codex
 /// shape.
@@ -185,6 +186,8 @@ pub fn prepare_gateway_request_from_bytes(
             }
             inject_default_instructions_when_missing(root);
             normalize_native_responses_request(gateway_path, root);
+            repair_native_responses_request(gateway_path, root)?;
+            validate_native_responses_request(gateway_path, root)?;
             if gateway_path == "/v1/responses" && !original_wants_stream {
                 root.insert("stream".to_string(), Value::Bool(true));
                 force_upstream_stream = true;
@@ -708,6 +711,115 @@ fn normalize_native_responses_input_for_upstream(root: &mut Map<String, Value>) 
         },
         _ => {},
     }
+}
+
+fn repair_native_responses_request(
+    path: &str,
+    root: &mut Map<String, Value>,
+) -> CodexGatewayResult<()> {
+    if path != "/v1/responses" {
+        return Ok(());
+    }
+    repair_native_responses_tool_role_messages(root)
+}
+
+fn repair_native_responses_tool_role_messages(
+    root: &mut Map<String, Value>,
+) -> CodexGatewayResult<()> {
+    let Some(Value::Array(items)) = root.get_mut("input") else {
+        return Ok(());
+    };
+
+    for item in items {
+        let Some(item_obj) = item.as_object() else {
+            continue;
+        };
+        if item_obj.get("role").and_then(Value::as_str) != Some("tool") {
+            continue;
+        }
+
+        let call_id = extract_non_empty_string(
+            item_obj
+                .get("call_id")
+                .or_else(|| item_obj.get("tool_call_id"))
+                .or_else(|| item_obj.get("id")),
+        )
+        .map(ToString::to_string);
+
+        let repaired = if let Some(call_id) = call_id {
+            let output = convert_tool_message_content_to_responses_output(
+                item_obj.get("content").or_else(|| item_obj.get("output")),
+            )
+            .map_err(|err| bad_request_with_detail("Invalid tool content", err))?;
+            json!({
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": output
+            })
+        } else {
+            let mut content_items = item_obj
+                .get("content")
+                .or_else(|| item_obj.get("output"))
+                .map(convert_user_message_content_to_responses_items)
+                .unwrap_or_default();
+            if content_items.is_empty() {
+                content_items.push(json!({
+                    "type": "input_text",
+                    "text": "(empty)",
+                }));
+            }
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": content_items
+            })
+        };
+        *item = repaired;
+    }
+
+    Ok(())
+}
+
+fn validate_native_responses_request(
+    path: &str,
+    root: &Map<String, Value>,
+) -> CodexGatewayResult<()> {
+    if path != "/v1/responses" {
+        return Ok(());
+    }
+    validate_native_responses_input_roles(root.get("input"))
+}
+
+fn validate_native_responses_input_roles(input: Option<&Value>) -> CodexGatewayResult<()> {
+    let Some(Value::Array(items)) = input else {
+        return Ok(());
+    };
+
+    for (index, item) in items.iter().enumerate() {
+        let Some(item_obj) = item.as_object() else {
+            continue;
+        };
+        let Some(role) = item_obj.get("role").and_then(Value::as_str) else {
+            continue;
+        };
+        if NATIVE_RESPONSES_MESSAGE_ROLES.contains(&role) {
+            continue;
+        }
+        if role == "tool" {
+            let message = format!(
+                "responses input item {index} uses Chat Completions role `tool`; send tool \
+                 outputs as `function_call_output` items with `call_id` and `output`"
+            );
+            return Err(bad_request(&message));
+        }
+        let message = format!(
+            "responses input item {index} has unsupported role `{role}`; supported roles are \
+             `assistant`, `system`, `developer`, and `user`"
+        );
+        return Err(bad_request(&message));
+    }
+
+    Ok(())
 }
 
 fn strip_input_item_ids(root: &mut Map<String, Value>) -> bool {
@@ -2675,6 +2787,72 @@ mod tests {
 
         assert_eq!(upstream["input"][0]["role"], "system");
         assert_eq!(upstream["input"][1]["role"], "user");
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_repairs_native_responses_tool_role_message() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "input":[
+                    {"role":"user","content":"call lookup"},
+                    {"role":"tool","tool_call_id":"call_1","content":"{\"ok\":true}"}
+                ]
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("native responses tool role should be repaired before upstream dispatch");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+        assert_eq!(upstream["input"][0]["role"], json!("user"));
+        assert_eq!(upstream["input"][1]["type"], json!("function_call_output"));
+        assert_eq!(upstream["input"][1]["call_id"], json!("call_1"));
+        assert_eq!(upstream["input"][1]["output"], json!("{\"ok\":true}"));
+        assert!(upstream["input"][1].get("role").is_none());
+        assert!(upstream["input"][1].get("tool_call_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_rewrites_native_responses_tool_role_without_call_id_to_user_message(
+    ) {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "input":[
+                    {"role":"tool","content":"standalone tool output"}
+                ]
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("native responses tool role without call id should be repaired");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+        assert_eq!(upstream["input"][0]["type"], json!("message"));
+        assert_eq!(upstream["input"][0]["role"], json!("user"));
+        assert_eq!(upstream["input"][0]["content"][0]["text"], json!("standalone tool output"));
+        assert!(upstream["input"][0].get("tool_call_id").is_none());
     }
 
     #[tokio::test]
