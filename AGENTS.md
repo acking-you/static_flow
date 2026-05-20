@@ -89,6 +89,18 @@ Traffic path:
   back for local dev/testing
 
 Key rules:
+- Before any "publish online" / "release to production" action, classify the
+  deployment plane first:
+  - Cloud `llm-access` on GCP for LLM/API paths (`/v1/*`, `/cc/v1/*`,
+    `/api/llm-gateway/*`, `/api/kiro-gateway/*`, `/api/codex-gateway/*`,
+    `/api/llm-access/*`)
+  - Local self-hosted StaticFlow behind Pingora for non-LLM site/backend paths
+- If the change only touches `llm-access*`, `llm-access-kiro`, Kiro/Codex/LLM
+  gateway behavior, default the production release target to the GCP
+  `llm-access` service, not the local `39180` Pingora stack.
+- Do not build or hot-update the local self-hosted backend as part of a cloud
+  `llm-access` release unless the user explicitly asks for the non-LLM/local
+  site path too.
 - Do not restart the local Pingora gateway (`39180`) during routine hot updates.
 - For production frontend builds, **only** use `scripts/build_frontend_selfhosted.sh`
   (compiles `STATICFLOW_API_BASE=/api`). Bare `trunk build --release` falls back
@@ -119,12 +131,14 @@ Key rules:
 For full GCP/Valkey/JuiceFS/systemd details and emergency recovery, see
 `docs/ops-runbook.md`.
 
-Local tmux-supervised runtime (verified 2026-04-29):
+Local tmux-supervised runtime example (slot color is runtime state, not a
+constant; verify `conf/pingora/staticflow-gateway.yaml`, `39180/api/healthz`,
+and active tmux sessions before assuming blue vs green):
 
 | tmux session | Role | Address |
 |---|---|---|
 | `sf-gateway` | Pingora ingress (do not stop) | `127.0.0.1:39180` |
-| `sf-backend-green` | Active backend slot | `127.0.0.1:39081` |
+| `sf-backend-blue` or `sf-backend-green` | Current active/inactive backend slots | `127.0.0.1:39080` / `127.0.0.1:39081` |
 | `gpt2api-rs` | GPT2API image gateway | `127.0.0.1:18787` |
 | `pbmapper-sf-backend` | Registers gateway with cloud relay | configured in private env |
 | `pbmapper-llm-access` | Subscribes cloud llm-access locally | `127.0.0.1:19182` |
