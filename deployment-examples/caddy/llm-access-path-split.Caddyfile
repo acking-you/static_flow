@@ -1,4 +1,4 @@
-ackingliu.top, www.ackingliu.top {
+ackingliu.top, www.ackingliu.top, staticflow.cc, www.staticflow.cc {
         @health path /_caddy_health
         respond @health "ok" 200
 
