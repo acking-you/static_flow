@@ -1956,7 +1956,9 @@ fn table_policy(table_name: &str) -> Option<TablePolicy> {
             storage_options: DEFAULT_STORAGE_OPTIONS,
         }),
         "article_views" => Some(TablePolicy {
-            scalar_indexes: &["id", "article_id", "day_bucket"],
+            // This is a small hot-write table backed by frequent merge-upserts.
+            // Scalar BTree indexes add fragility here without buying enough.
+            scalar_indexes: &[],
             vector_indexes: &[],
             fts_indexes: &[],
             storage_options: DEFAULT_STORAGE_OPTIONS,
@@ -3061,5 +3063,16 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn article_views_policy_keeps_hot_view_table_unindexed() {
+        let policy = table_policy("article_views").expect("article_views policy should exist");
+        assert!(
+            policy.scalar_indexes.is_empty(),
+            "article_views should not auto-manage scalar indexes"
+        );
+        assert!(policy.vector_indexes.is_empty());
+        assert!(policy.fts_indexes.is_empty());
     }
 }
