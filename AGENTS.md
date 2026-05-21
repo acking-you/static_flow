@@ -163,6 +163,11 @@ and active tmux sessions before assuming blue vs green):
   and `deps/lancedb` have their own formatting. Only format files you changed:
   `rustfmt path/to/file.rs` or `cargo fmt -p <crate>`.
 - **NEVER run `cargo fmt` inside `deps/lance` or `deps/lancedb`.**
+- Before running any formatter, enumerate the exact target files or crate.
+  Broad formatting commands are forbidden.
+- If a formatting command dirties `deps/lance` or `deps/lancedb`, stop
+  immediately and restore those submodules before doing anything else:
+  `git -C deps/lance restore .` and `git -C deps/lancedb restore .`.
 
 ## Testing
 ```bash

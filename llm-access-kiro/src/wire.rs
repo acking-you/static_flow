@@ -359,12 +359,8 @@ pub struct ToolResult {
     pub content: Vec<serde_json::Map<String, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing)]
     pub is_error: bool,
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 impl ToolResult {
@@ -787,7 +783,7 @@ impl Event {
 
 #[cfg(test)]
 mod tests {
-    use super::{Event, IdcRefreshResponse};
+    use super::{Event, IdcRefreshResponse, ToolResult};
     use crate::parser::{
         frame::Frame,
         header::{HeaderValue, Headers},
@@ -834,5 +830,15 @@ mod tests {
             !matches!(event, Event::Unknown {}),
             "reasoningContentEvent should not be dropped as unknown"
         );
+    }
+
+    #[test]
+    fn tool_result_error_serialization_omits_is_error_field() {
+        let value = serde_json::to_value(ToolResult::error("tool-1", "boom"))
+            .expect("tool result should serialize");
+
+        assert_eq!(value["toolUseId"], "tool-1");
+        assert_eq!(value["status"], "error");
+        assert!(value.get("isError").is_none());
     }
 }

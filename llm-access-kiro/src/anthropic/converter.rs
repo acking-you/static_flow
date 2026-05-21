@@ -616,10 +616,6 @@ fn normalize_document_block_payload(
              source.media_type `{media_type}`"
         ))
     })?;
-    let normalized_name = normalize_document_name(
-        block.get("name").and_then(serde_json::Value::as_str),
-        normalized_media_type,
-    );
     let normalized_data = match source_type {
         "base64" => source_data.trim().to_string(),
         "text" => {
@@ -638,6 +634,11 @@ fn normalize_document_block_payload(
             )))
         },
     };
+    let normalized_name = normalize_document_name(
+        block.get("name").and_then(serde_json::Value::as_str),
+        normalized_media_type,
+        &normalized_data,
+    );
 
     Ok(serde_json::json!({
         "type": "document",
@@ -688,10 +689,11 @@ fn document_format_from_media_type(media_type: &str) -> Option<&'static str> {
     }
 }
 
-fn normalize_document_name(raw_name: Option<&str>, media_type: &str) -> String {
-    let fallback =
-        format!("document.{}", document_format_from_media_type(media_type).unwrap_or("txt"));
-    sanitize_document_name(raw_name.unwrap_or(&fallback))
+fn normalize_document_name(raw_name: Option<&str>, media_type: &str, data: &str) -> String {
+    match raw_name.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(raw_name) => sanitize_document_name(raw_name),
+        None => generate_document_name(media_type, data),
+    }
 }
 
 fn sanitize_document_name(name: &str) -> String {
@@ -730,6 +732,15 @@ fn sanitize_document_name(name: &str) -> String {
     } else {
         trimmed.chars().take(200).collect()
     }
+}
+
+fn generate_document_name(media_type: &str, data: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(media_type.as_bytes());
+    hasher.update([0]);
+    hasher.update(data.as_bytes());
+    let hash_hex = format!("{:x}", hasher.finalize());
+    format!("document-{}", &hash_hex[..12])
 }
 
 fn normalize_tool_description(name: &str, description: &str) -> Option<String> {
@@ -1734,7 +1745,8 @@ fn process_message_content(
                         },
                         "document" => {
                             if let Some(source) = block.source {
-                                if let Some(document) = kiro_document_from_block(block.name, source)
+                                if let Some(document) =
+                                    kiro_document_from_block(block.name, source)?
                                 {
                                     documents.push(document);
                                 }
@@ -1743,7 +1755,7 @@ fn process_message_content(
                         "tool_result" => {
                             if let Some(tool_use_id) = block.tool_use_id {
                                 let (tool_result_images, tool_result_documents) =
-                                    extract_tool_result_attachments(&block.content);
+                                    extract_tool_result_attachments(&block.content)?;
                                 let has_tool_result_attachments = !tool_result_images.is_empty()
                                     || !tool_result_documents.is_empty();
                                 images.extend(tool_result_images);
@@ -1807,20 +1819,36 @@ fn kiro_document_from_source(
 fn kiro_document_from_block(
     name: Option<String>,
     mut source: super::types::ImageSource,
-) -> Option<KiroDocument> {
-    let normalized_media_type = canonical_document_media_type(&source.media_type)?;
-    let normalized_name = normalize_document_name(name.as_deref(), normalized_media_type);
+) -> Result<Option<KiroDocument>, ConversionError> {
+    let Some(normalized_media_type) = canonical_document_media_type(&source.media_type) else {
+        return Ok(None);
+    };
+    let normalized_data = match source.source_type.as_str() {
+        "base64" => {
+            let normalized_data = source.data.trim().to_string();
+            source.data = normalized_data.clone();
+            normalized_data
+        },
+        "text" if document_media_type_supports_text_source(normalized_media_type) => {
+            let normalized_data = source.data.replace("\r\n", "\n").replace('\r', "\n");
+            source.data = normalized_data.clone();
+            normalized_data
+        },
+        _ => source.data.clone(),
+    };
+    let normalized_name =
+        normalize_document_name(name.as_deref(), normalized_media_type, &normalized_data);
     source.media_type = normalized_media_type.to_string();
-    kiro_document_from_source(normalized_name, source)
+    Ok(kiro_document_from_source(normalized_name, source))
 }
 
 fn extract_tool_result_attachments(
     content: &Option<serde_json::Value>,
-) -> (Vec<KiroImage>, Vec<KiroDocument>) {
+) -> Result<(Vec<KiroImage>, Vec<KiroDocument>), ConversionError> {
     let mut images = Vec::new();
     let mut documents = Vec::new();
     let Some(serde_json::Value::Array(items)) = content else {
-        return (images, documents);
+        return Ok((images, documents));
     };
 
     for item in items {
@@ -1837,7 +1865,7 @@ fn extract_tool_result_attachments(
             },
             "document" => {
                 if let Some(source) = block.source {
-                    if let Some(document) = kiro_document_from_block(block.name, source) {
+                    if let Some(document) = kiro_document_from_block(block.name, source)? {
                         documents.push(document);
                     }
                 }
@@ -1846,7 +1874,7 @@ fn extract_tool_result_attachments(
         }
     }
 
-    (images, documents)
+    Ok((images, documents))
 }
 
 pub fn extract_tool_result_content(content: &Option<serde_json::Value>) -> String {
@@ -3876,6 +3904,39 @@ mod tests {
     }
 
     #[test]
+    fn convert_request_generates_name_for_document_without_name() {
+        let req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!([
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": SAMPLE_PDF_BASE64
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "What text does this PDF contain?"
+                }
+            ]),
+        }]);
+
+        let result = convert_request(&req).expect("missing document name should be synthesized");
+        let current =
+            serde_json::to_value(&result.conversation_state.current_message.user_input_message)
+                .expect("serialize current message");
+
+        assert_eq!(current["documents"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            current["documents"][0]["name"],
+            generate_document_name("application/pdf", SAMPLE_PDF_BASE64)
+        );
+        assert_eq!(current["documents"][0]["format"], "pdf");
+    }
+
+    #[test]
     fn convert_request_preserves_text_documents_as_attachments() {
         let req = base_request(vec![AnthropicMessage {
             role: "user".to_string(),
@@ -4324,6 +4385,59 @@ mod tests {
             current["userInputMessageContext"]["toolResults"][0]["content"][0]["text"],
             "(empty result)"
         );
+    }
+
+    #[test]
+    fn convert_request_generates_name_for_tool_result_document_without_name() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Read the document"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_use",
+                        "id": "tool-1",
+                        "name": "read_document",
+                        "input": {"path": "/tmp/plain.txt"}
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-1",
+                        "content": [
+                            {
+                                "type": "document",
+                                "source": {
+                                    "type": "text",
+                                    "media_type": "text/plain",
+                                    "data": "plain document body"
+                                }
+                            }
+                        ]
+                    }
+                ]),
+            },
+        ]);
+
+        let result =
+            convert_request(&req).expect("missing nested document name should be synthesized");
+        let current =
+            serde_json::to_value(&result.conversation_state.current_message.user_input_message)
+                .expect("serialize current message");
+
+        assert_eq!(current["documents"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            current["documents"][0]["name"],
+            generate_document_name("text/plain", "plain document body")
+        );
+        assert_eq!(current["documents"][0]["format"], "txt");
     }
 
     #[test]
