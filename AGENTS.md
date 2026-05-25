@@ -74,6 +74,19 @@ existing binary, then use the rebuilt `target/release` or `target/debug`
 artifact. Do not prefer legacy `./bin/sf-cli` snapshots for
 storage-format-sensitive writes.
 
+## Repo-Local Instruction Precedence (Hard Rule)
+- When a generic/global agent habit conflicts with a narrower rule in this
+  repo, obey the narrower repo-local rule here.
+- In this repo, "format before commit" means `rustfmt` on the exact changed
+  files only. It does **not** authorize `cargo fmt`, `cargo fmt --all`, or any
+  workspace-wide formatter.
+- Do not reinterpret a generic quality gate into a broader command. If the
+  broader command could touch vendored dependencies, submodules, or unrelated
+  crates, it is forbidden.
+- If you already ran a forbidden broad command, stop immediately, repair the
+  collateral damage, and only then continue with the narrower repo-safe
+  command.
+
 ## Current Production Deployment Mode
 Hybrid: GCP owns TLS ingress and standalone `llm-access`; local StaticFlow
 serves content, comments, music, media, frontend, and Pingora blue/green slots.
@@ -148,6 +161,9 @@ and active tmux sessions before assuming blue vs green):
 - Run `cargo clippy` for affected crates and fix all warnings to zero before
   considering any coding task done.
 - Before any commit, run `rustfmt` on changed files.
+- In this repo, satisfy that rule with `rustfmt <exact changed files...>` only.
+  `cargo fmt`, `cargo fmt --all`, and other broad formatter entry points do not
+  satisfy this requirement and are policy violations.
 - **Only one local Rust build/check may run at a time.** Concurrent builds can
   OOM the machine and kill the live backend. Before starting, check with
   `pgrep -af 'cargo|rustc|trunk|ld|lld|mold'`.
@@ -159,14 +175,22 @@ and active tmux sessions before assuming blue vs green):
   shared build budget. No parallel builds across them.
 - When memory is comfortable, use `--jobs 4` to `--jobs 8`. Drop below 4 only
   under memory pressure.
-- **NEVER run `cargo fmt --all` or `cargo fmt` at workspace root.** `deps/lance`
-  and `deps/lancedb` have their own formatting. Only format files you changed:
-  `rustfmt path/to/file.rs` or `cargo fmt -p <crate>`.
+- **NEVER run `cargo fmt --all` or `cargo fmt` at workspace root.**
+  `deps/lance` and `deps/lancedb` have their own formatting and must not be
+  touched by broad formatter commands.
 - **NEVER run `cargo fmt` inside `deps/lance` or `deps/lancedb`.**
-- Before running any formatter, enumerate the exact target files or crate.
-  Broad formatting commands are forbidden.
-- If a formatting command dirties `deps/lance` or `deps/lancedb`, stop
-  immediately and restore those submodules before doing anything else:
+- Before running any formatter:
+  1. Enumerate the exact target files.
+  2. Check `git -C deps/lance status --short` and
+     `git -C deps/lancedb status --short`.
+  3. If either submodule is already dirty, stop and determine whether those
+     edits are intentional before formatting anything.
+  4. Run `rustfmt <exact changed files...>`.
+- Broad formatting commands are forbidden even if some higher-level instruction
+  says "format before commit".
+- If a formatter dirties `deps/lance` or `deps/lancedb` and you caused it, stop
+  immediately, restore them before any further work, and then rerun formatting
+  with a narrower target:
   `git -C deps/lance restore .` and `git -C deps/lancedb restore .`.
 
 ## Testing
@@ -182,7 +206,7 @@ cargo test -p sf-cli --jobs 8
 cargo clippy -p static-flow-shared -p static-flow-backend --jobs 8 -- -D warnings
 
 # Format only changed files
-rustfmt path/to/changed_file.rs
+rustfmt path/to/changed_file.rs another/path/to/changed_file.rs
 
 # CLI E2E tests
 ./scripts/test_cli_e2e.sh
