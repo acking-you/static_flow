@@ -501,6 +501,16 @@ impl UsageWorker {
             .max(1)
     }
 
+    /// Return the shared retention-days handle used by the worker.
+    pub fn retention_days_handle(&self) -> Arc<RwLock<u64>> {
+        Arc::clone(&self.usage_analytics_retention_days)
+    }
+
+    /// Return the shared DuckDB usage repository used by the worker.
+    pub fn usage_repository(&self) -> Arc<DuckDbUsageRepository> {
+        Arc::clone(&self.duckdb_usage)
+    }
+
     /// Run storage maintenance for the current retention horizon.
     pub async fn run_maintenance(&self, now_ms: i64) -> anyhow::Result<()> {
         let report = self

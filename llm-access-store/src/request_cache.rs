@@ -5,7 +5,7 @@ use llm_access_core::store::{
     AdminKiroBalanceView, AdminKiroCacheView, AdminProxyBinding, AdminProxyConfig,
     CodexRateLimitStatus, ProviderProxyConfig,
 };
-use redis::AsyncCommands;
+use redis::{AsyncCommands, Commands};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -18,6 +18,8 @@ const ACCOUNT_VIEW_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const ACCOUNT_AUTH_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const CODEX_STATUS_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const PROXY_METADATA_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+const USAGE_CATALOG_LOOKUP_TTL: Duration = Duration::from_secs(15 * 60);
+const USAGE_CATALOG_EVENT_LOCATOR_TTL: Duration = Duration::from_secs(30 * 60);
 const NEGATIVE_AUTH_TTL: Duration = Duration::from_secs(5 * 60);
 
 const fn default_true() -> bool {
@@ -33,7 +35,7 @@ pub struct RequestCacheConfig {
     pub key_prefix: String,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct RequestCache {
     client: redis::Client,
     key_prefix: String,
@@ -244,6 +246,26 @@ impl RequestCache {
         format!("{}:gen:dispatch:{provider}", self.key_prefix)
     }
 
+    pub(crate) fn usage_catalog_generation_key(&self) -> String {
+        format!("{}:usage:catalog:gen", self.key_prefix)
+    }
+
+    pub(crate) fn usage_catalog_rollups_key(&self) -> String {
+        format!("{}:usage:catalog:rollups", self.key_prefix)
+    }
+
+    pub(crate) fn usage_catalog_segments_key(&self, query_fingerprint: &str) -> String {
+        format!("{}:usage:catalog:segments:{query_fingerprint}", self.key_prefix)
+    }
+
+    pub(crate) fn usage_catalog_filtered_segments_key(&self, query_fingerprint: &str) -> String {
+        format!("{}:usage:catalog:segments:filtered:{query_fingerprint}", self.key_prefix)
+    }
+
+    pub(crate) fn usage_catalog_event_locator_key(&self, event_id: &str) -> String {
+        format!("{}:usage:catalog:event:{event_id}", self.key_prefix)
+    }
+
     pub(crate) fn auth_ttl(&self, secret_hash: &str) -> Duration {
         deterministic_jitter_ttl(&self.auth_key(secret_hash), AUTH_CACHE_TTL, 0.8, 1.2)
     }
@@ -302,6 +324,42 @@ impl RequestCache {
             ACCOUNT_AUTH_TTL,
             0.75,
             1.25,
+        )
+    }
+
+    pub(crate) fn usage_catalog_rollups_ttl(&self) -> Duration {
+        deterministic_jitter_ttl(
+            &self.usage_catalog_rollups_key(),
+            USAGE_CATALOG_LOOKUP_TTL,
+            0.8,
+            1.2,
+        )
+    }
+
+    pub(crate) fn usage_catalog_segments_ttl(&self, query_fingerprint: &str) -> Duration {
+        deterministic_jitter_ttl(
+            &self.usage_catalog_segments_key(query_fingerprint),
+            USAGE_CATALOG_LOOKUP_TTL,
+            0.8,
+            1.2,
+        )
+    }
+
+    pub(crate) fn usage_catalog_filtered_segments_ttl(&self, query_fingerprint: &str) -> Duration {
+        deterministic_jitter_ttl(
+            &self.usage_catalog_filtered_segments_key(query_fingerprint),
+            USAGE_CATALOG_LOOKUP_TTL,
+            0.8,
+            1.2,
+        )
+    }
+
+    pub(crate) fn usage_catalog_event_locator_ttl(&self, event_id: &str) -> Duration {
+        deterministic_jitter_ttl(
+            &self.usage_catalog_event_locator_key(event_id),
+            USAGE_CATALOG_EVENT_LOCATOR_TTL,
+            0.8,
+            1.2,
         )
     }
 
@@ -409,11 +467,66 @@ impl RequestCache {
             .with_context(|| format!("redis INCR `{key}`"))
     }
 
+    pub(crate) fn get_json_blocking<T>(&self, key: &str) -> anyhow::Result<Option<T>>
+    where
+        T: DeserializeOwned,
+    {
+        let mut conn = self.connection_blocking()?;
+        let value: Option<String> = conn
+            .get(key)
+            .with_context(|| format!("redis GET `{key}`"))?;
+        value
+            .map(|json| serde_json::from_str(&json).context("decode request cache json"))
+            .transpose()
+    }
+
+    pub(crate) fn set_json_blocking<T>(
+        &self,
+        key: &str,
+        value: &T,
+        ttl: Duration,
+    ) -> anyhow::Result<()>
+    where
+        T: Serialize,
+    {
+        let payload = serde_json::to_string(value).context("encode request cache json")?;
+        let ttl_seconds = duration_to_redis_secs(ttl);
+        let mut conn = self.connection_blocking()?;
+        redis::cmd("SET")
+            .arg(key)
+            .arg(payload)
+            .arg("EX")
+            .arg(ttl_seconds)
+            .query::<()>(&mut conn)
+            .with_context(|| format!("redis SET `{key}`"))?;
+        Ok(())
+    }
+
+    pub(crate) fn get_i64_blocking(&self, key: &str) -> anyhow::Result<Option<i64>> {
+        let mut conn = self.connection_blocking()?;
+        let value: Option<i64> = conn
+            .get(key)
+            .with_context(|| format!("redis GET integer `{key}`"))?;
+        Ok(value)
+    }
+
+    pub(crate) fn incr_blocking(&self, key: &str) -> anyhow::Result<i64> {
+        let mut conn = self.connection_blocking()?;
+        conn.incr(key, 1)
+            .with_context(|| format!("redis INCR `{key}`"))
+    }
+
     async fn connection(&self) -> anyhow::Result<redis::aio::MultiplexedConnection> {
         self.client
             .get_multiplexed_async_connection()
             .await
             .context("connect request cache redis")
+    }
+
+    fn connection_blocking(&self) -> anyhow::Result<redis::Connection> {
+        self.client
+            .get_connection()
+            .context("connect blocking request cache redis")
     }
 }
 
@@ -508,6 +621,24 @@ mod tests {
         assert_eq!(
             cache.dispatch_generation_key("kiro"),
             "llma:test:gen:dispatch:kiro".to_string()
+        );
+        assert_eq!(cache.usage_catalog_generation_key(), "llma:test:usage:catalog:gen".to_string());
+        assert_eq!(
+            cache.usage_catalog_rollups_key(),
+            "llma:test:usage:catalog:rollups".to_string()
+        );
+        assert_eq!(
+            cache.usage_catalog_segments_key("start:-:end:-"),
+            "llma:test:usage:catalog:segments:start:-:end:-".to_string()
+        );
+        assert_eq!(
+            cache.usage_catalog_filtered_segments_key("start:-:end:-:key:key-1:provider:codex"),
+            "llma:test:usage:catalog:segments:filtered:start:-:end:-:key:key-1:provider:codex"
+                .to_string()
+        );
+        assert_eq!(
+            cache.usage_catalog_event_locator_key("evt-1"),
+            "llma:test:usage:catalog:event:evt-1".to_string()
         );
         assert_eq!(cache.runtime_config_key(), "llma:test:runtime:config".to_string());
         assert_eq!(cache.codex_status_key(), "llma:test:status:codex".to_string());

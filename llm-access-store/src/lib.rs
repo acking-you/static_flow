@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use anyhow::Context;
+use serde::{Deserialize, Serialize};
 
 /// DuckDB analytics writer helpers.
 pub mod duckdb;
@@ -12,9 +13,11 @@ pub mod postgres;
 pub(crate) mod records;
 /// Valkey-backed request-path cache primitives.
 pub mod request_cache;
+/// Postgres-backed archived usage catalog metadata.
+pub(crate) mod usage_catalog;
 
 /// Aggregated usage counters for one API key from analytics usage events.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KeyUsageRollupSummary {
     /// API key id.
     pub key_id: String,

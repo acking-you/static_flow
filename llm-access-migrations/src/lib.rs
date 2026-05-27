@@ -58,6 +58,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "codex_fast_toggle",
         sql: include_str!("../migrations/postgres/0014_codex_fast_toggle.sql"),
     },
+    SqlMigration {
+        version: 15,
+        name: "usage_catalog",
+        sql: include_str!("../migrations/postgres/0015_usage_catalog.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.
@@ -211,5 +216,25 @@ mod tests {
         assert_eq!(migration.version, 14);
         assert!(migration.sql.contains("codex_fast_enabled"));
         assert!(migration.sql.contains("ADD COLUMN IF NOT EXISTS"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_usage_catalog_tables() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "usage_catalog")
+            .expect("usage catalog migration exists");
+
+        assert_eq!(migration.version, 15);
+        assert!(migration
+            .sql
+            .contains("CREATE TABLE IF NOT EXISTS llm_usage_segments"));
+        assert!(migration
+            .sql
+            .contains("CREATE TABLE IF NOT EXISTS llm_usage_segment_events"));
+        assert!(migration
+            .sql
+            .contains("CREATE TABLE IF NOT EXISTS llm_usage_segment_key_rollups"));
     }
 }
