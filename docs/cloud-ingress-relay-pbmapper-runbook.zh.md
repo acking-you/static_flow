@@ -1,16 +1,20 @@
 # Cloud Ingress、LLM Path Split 与 pb-mapper Runbook
 
-这份 runbook 记录当前 `ackingliu.top` 的现网入口形态。旧架构里云机只做
-Caddy TLS 和 pb-mapper 中继，所有后端流量都回到本地机器。当前架构已经
-改变：GCP 云机同时承载 `llm-access`，LLM 路径在云端直接完成，非 LLM
-StaticFlow 路径才继续通过 pb-mapper 回本地。
+这份 runbook 记录当前云端入口形态。旧架构里云机只做 Caddy TLS 和
+pb-mapper 中继，所有后端流量都回到本地机器。当前架构已经改变：AWS
+Lightsail 云机同时承载 `llm-access`，LLM 路径在云端直接完成，非 LLM
+StaticFlow 路径才继续通过 pb-mapper 回本地。`ackingliu.top` /
+`www.ackingliu.top` 直接解析到 AWS，`staticflow.cc` /
+`www.staticflow.cc` 继续经 Cloudflare 回到同一个 AWS origin。
 
 ## 1. 当前链路
 
 ```text
 public client
   -> https://ackingliu.top / https://www.ackingliu.top
-  -> GCP Caddy :443
+     or https://staticflow.cc / https://www.staticflow.cc
+  -> direct DNS or Cloudflare orange-cloud
+  -> AWS Caddy :443
      ├── LLM paths
      │   -> cloud llm-access 127.0.0.1:19080
      │      -> Neon control plane via /mnt/llm-access/config/neon.env
@@ -30,19 +34,20 @@ public client
 
 | 地址 | 作用 | 是否公网暴露 |
 | --- | --- | --- |
-| GCP `:443` | Caddy TLS 入口 | 是 |
-| GCP `:80` | Caddy HTTP-01/重定向 | 是 |
-| GCP configured relay port | pb-mapper server，供本地注册服务 | 是，需受 key 保护 |
-| GCP `127.0.0.1:19080` | cloud `llm-access` | 否 |
-| GCP `127.0.0.1:39080` | cloud pb-mapper client 暴露的 non-LLM StaticFlow 本地入口 | 否 |
+| AWS `:443` | Caddy TLS 入口 | 是 |
+| AWS `:80` | Caddy HTTP-01/重定向 | 是 |
+| AWS configured relay port | pb-mapper server，供本地注册服务 | 是，需受 key 保护 |
+| AWS `127.0.0.1:19080` | cloud `llm-access` | 否 |
+| AWS `127.0.0.1:39080` | cloud pb-mapper client 暴露的 non-LLM StaticFlow 本地入口 | 否 |
 | local `127.0.0.1:39180` | 本地 Pingora 稳定入口 | 否 |
 | local `127.0.0.1:19182` | 本地订阅 cloud `llm-access` 的 back-link | 否 |
 
-## 2. GCP 主机预检
+## 2. 云主机预检
 
-GCP 公网地址、SSH 用户、SSH key 路径不写入 tracked 文档。它们统一放在
+云主机公网地址、SSH 用户、SSH key 路径不写入 tracked 文档。它们统一放在
 本机 ignored 配置 `.local/llm-access-cloud-release.env`，新 checkout 用
-`conf/llm-access-cloud-release.env.example` 复制后填写。
+`conf/llm-access-cloud-release.env.example` 复制后填写。这个文件当前仍沿用
+历史命名的 `GCP_*` 变量，但现网 active host 已经是 AWS。
 
 ```bash
 set -a
@@ -80,7 +85,7 @@ ssh -i "$GCP_SSH_KEY" -o IdentitiesOnly=yes "$GCP_DEST" \
     }
 }
 
-ackingliu.top, www.ackingliu.top {
+ackingliu.top, www.ackingliu.top, staticflow.cc, www.staticflow.cc {
     @health path /_caddy_health
     handle @health {
         respond "ok" 200
@@ -111,6 +116,10 @@ ackingliu.top, www.ackingliu.top {
     }
 }
 ```
+
+如果 `staticflow.cc` 继续走 Cloudflare orange-cloud，origin 仍然必须在
+同一个 Caddy site block 里包含 `staticflow.cc` 和 `www.staticflow.cc`。
+否则 Cloudflare 回源时会因为 origin 证书/SNI 不匹配返回 `525`。
 
 验证配置：
 
@@ -160,13 +169,17 @@ sudo journalctl -u caddy -n 120 --no-pager -l
 
 当前资源保护基线：
 
-- GCP VM 是 2c8g 级别。
-- 主机有两个 2GiB swap 文件：`/swapfile` 和 `/swapfile-llm-extra`。
+- AWS VM 当前是 `2c4g` 级别，实测内存约 `3.7 GiB`。
+- 主机有一个 `4 GiB` swap 文件：`/swapfile`。
 - `vm.swappiness=10`。
-- `llm-access.service`：`MemoryHigh=3584M`、`MemoryMax=4096M`、
-  `MemorySwapMax=1024M`、`TasksMax=256`、`OOMPolicy=kill`。
-- `juicefs-llm-access.service`：`MemoryHigh=1800M`、`MemoryMax=2560M`、
-  `MemorySwapMax=0`、`TasksMax=256`、`OOMPolicy=kill`。
+- `llm-access.service`：`MemoryHigh=1700M`、`MemoryMax=2048M`、
+  `MemorySwapMax=512M`。
+- `llm-access-usage-worker.service`：`MemoryHigh=1200M`、
+  `MemoryMax=1536M`、`MemorySwapMax=512M`。
+- `juicefs-llm-access.service` 与 `juicefs-llm-access-usage.service`：
+  `MemoryHigh=1800M`、`MemoryMax=2560M`、`MemorySwapMax=0`。
+- 当前 live `llm-access` / worker 使用的是本地最新编译 release 覆盖后的
+  `/usr/local/bin/llm-access` 和 `/usr/local/bin/llm-access-usage-worker`。
 
 只读检查：
 
@@ -186,9 +199,9 @@ curl -sS -o /dev/null -w 'code=%{http_code} total=%{time_total}\n' \
 
 ## 5. pb-mapper 服务边界
 
-GCP 侧仍然需要 pb-mapper，但它现在只负责两类事情：
+AWS 侧仍然需要 pb-mapper，但它现在只负责两类事情：
 
-1. non-LLM StaticFlow 路径从 GCP Caddy 回到本地 Pingora。
+1. non-LLM StaticFlow 路径从 AWS Caddy 回到本地 Pingora。
 2. 把 cloud `llm-access` 注册成 `llm-access` key，供本地机器订阅到
    `127.0.0.1:19182`。
 
@@ -200,7 +213,7 @@ pb-mapper-client-cli@sf-backend.service
 pb-mapper-server-cli@llm-access.service
 ```
 
-pb-mapper message header key 必须在 GCP server、GCP client、local
+pb-mapper message header key 必须在 AWS server、AWS client、local
 server/client 之间一致。实际值只放在对应 ignored/private env 文件里。
 排障时只比较 hash，不打印明文：
 
@@ -215,13 +228,22 @@ sudo sh -c '. /etc/pb-mapper/client-cli/sf-backend.env; printf "%s" "$MSG_HEADER
 | 现象 | 优先判断 |
 | --- | --- |
 | `datalen not valid` | pb-mapper message header key 不一致，尤其是误用了按机器派生 key |
-| GCP `127.0.0.1:39080` 没监听 | 本地 `sf-backend` 没注册，或 key 不一致 |
-| `client key sf-backend has no healthy remote server connections` | GCP client 已启动，但本地服务端还没注册 |
-| `client_key_available` | GCP 已看到本地 `sf-backend`，`39080` 应该开始监听 |
+| AWS `127.0.0.1:39080` 没监听 | 本地 `sf-backend` 没注册，或 key 不一致 |
+| `client key sf-backend has no healthy remote server connections` | AWS client 已启动，但本地服务端还没注册 |
+| `client_key_available` | AWS 已看到本地 `sf-backend`，`39080` 应该开始监听 |
+
+当前本机 active tmux 会话通常是：
+
+- `pbmapper-sf-backend-aws`
+- `pbmapper-home-ubuntu-aws`
+- `pbmapper-codex-remote-aws`
+- `pbmapper-llm-access-aws`
+
+旧 GCP 会话可能还留作回滚，不要把它们误判成现网链路。
 
 ## 6. 验证顺序
 
-先在 GCP 本机区分 LLM 与 non-LLM：
+先在 AWS 本机区分 LLM 与 non-LLM：
 
 ```bash
 # LLM service direct
@@ -249,10 +271,13 @@ env -u https_proxy -u HTTPS_PROXY -u http_proxy -u HTTP_PROXY -u all_proxy -u AL
   curl -o /dev/null -sS \
   -w 'staticflow code=%{http_code} start=%{time_starttransfer} total=%{time_total}\n' \
   https://ackingliu.top/api/healthz
+
+env -u https_proxy -u HTTPS_PROXY -u http_proxy -u HTTP_PROXY -u all_proxy -u ALL_PROXY \
+  curl -I https://staticflow.cc/_caddy_health
 ```
 
 裸 IP HTTPS 失败是正常的；证书按 `ackingliu.top` 和 `www.ackingliu.top`
-签发，不按 IP 签发。
+以及 `staticflow.cc` 和 `www.staticflow.cc` 签发，不按 IP 签发。
 
 ## 7. 恢复策略
 
@@ -272,8 +297,8 @@ sudo systemctl restart pb-mapper-client-cli@sf-backend.service
 ```
 
 如果日志显示 `sf-backend` key 不存在或没有 healthy remote server，问题很
-可能在本地机器没有重新注册 `pbmapper-sf-backend`。这时不要反复重启 GCP
-client；先恢复本地注册，再重启一次 GCP
+可能在本地机器没有重新注册 `pbmapper-sf-backend`。这时不要反复重启 AWS
+client；先恢复本地注册，再重启一次 AWS
 `pb-mapper-client-cli@sf-backend.service` 让它重新订阅。
 
 ### LLM outage or memory pressure
@@ -298,16 +323,24 @@ JuiceFS/R2。
 
 ## 8. DNS 迁移检查
 
-域名解析应以权威 DNS 为准，不要只看公共递归缓存：
+域名迁移时不要只盯着一个公共递归缓存。至少要分别看直连域名和
+Cloudflare 代理域名的实际表现：
 
 ```bash
-for ns in ns1.dnsowl.com ns2.dnsowl.com ns3.dnsowl.com; do
-  echo "--- $ns"
-  dig @$ns +short A ackingliu.top
-  dig @$ns +short A www.ackingliu.top
-done
+dig +short A ackingliu.top
+dig +short A www.ackingliu.top
+dig +short A staticflow.cc
+dig +short A www.staticflow.cc
+
+env -u https_proxy -u HTTPS_PROXY -u http_proxy -u HTTP_PROXY -u all_proxy -u ALL_PROXY \
+  curl -I https://ackingliu.top/_caddy_health
+env -u https_proxy -u HTTPS_PROXY -u http_proxy -u HTTP_PROXY -u all_proxy -u ALL_PROXY \
+  curl -I https://staticflow.cc/_caddy_health
 ```
 
-当前 GCP IP 以 `.local/llm-access-cloud-release.env` 里的 `GCP_HOST` 或
-`GCP_DEST` 为准。如果权威 DNS 全部稳定返回新 IP 后，公共 DNS 仍返回旧
-IP，通常只是递归缓存等待。
+当前 active cloud host 以 `.local/llm-access-cloud-release.env` 里的
+`GCP_HOST` 或 `GCP_DEST` 为准。对 `ackingliu.top` / `www.ackingliu.top`，
+公共 DNS 直接返回 AWS origin 是正常的；对 `staticflow.cc` /
+`www.staticflow.cc`，公共 DNS 返回 Cloudflare Anycast IP 也是正常的，
+因为它们仍然走 orange-cloud。对这组域名，验证重点不是 A 记录是否等于
+AWS，而是 `https://staticflow.cc/_caddy_health` 是否返回 `200`。

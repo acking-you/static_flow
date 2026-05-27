@@ -4,16 +4,26 @@ This document contains production deployment details, infrastructure configurati
 and emergency recovery procedures extracted from the agent guide. For day-to-day
 development and coding guidance, see `CLAUDE.md` (or `AGENTS.md`).
 
-## GCP Production Topology
+Current production now runs on an AWS/Lightsail cloud host. Older GCP-specific
+notes are kept only where they are explicitly labeled historical, or where the
+ignored local env file still uses legacy `GCP_*` variable names.
 
-Current source-of-truth production facts verified on 2026-05-02:
+## Current Cloud Production Topology
+
+Current source-of-truth production facts verified on 2026-05-28:
+- Active public front door and single live `core` run on the AWS/Lightsail
+  cloud host referenced by `.local/llm-access-cloud-release.env`. That ignored
+  file still uses legacy `GCP_*` variable names.
+- `ackingliu.top` and `www.ackingliu.top` resolve directly to the AWS origin.
+- `staticflow.cc` and `www.staticflow.cc` stay behind Cloudflare
+  orange-cloud, but terminate on the same AWS Caddy origin; the origin must
+  therefore present certificates for all four hostnames.
 - Caddy config path: `/etc/caddy/Caddyfile`.
 - Active Caddy site block proxies LLM paths to `127.0.0.1:19080` and all
   other paths to `127.0.0.1:39080`.
 - Active Caddy reverse proxies explicitly use `15m` origin response-header,
   read, and write timeouts. The LLM route also sets `flush_interval -1` so
-  SSE-style traffic flushes immediately once Cloudflare orange-cloud proxying
-  is removed.
+  SSE-style traffic flushes immediately at the origin.
 - Server-side pb-mapper client systemd unit:
   `pb-mapper-client-cli@sf-backend.service`.
 - Server-side pb-mapper client env file:
@@ -33,6 +43,10 @@ Current source-of-truth production facts verified on 2026-05-02:
 - Cloud-to-local back-link unit:
   `pb-mapper-server-cli@llm-access.service`, registering `127.0.0.1:19080` as
   pb-mapper key `llm-access`.
+- Current active node identity:
+  - `LLM_ACCESS_NODE_ID=aws-core-01`
+  - `LLM_ACCESS_NODE_CLASS=core`
+  - `LLM_ACCESS_NODE_REGION=ap-southeast-1`
 
 ## Standard Tier Ingress Trial (Rejected)
 
@@ -46,16 +60,17 @@ Standard Tier ingress trial on 2026-05-03:
   trial endpoint for production or rollback; historical endpoint values belong
   only in private notes, not this repository.
 
-## GCP / Valkey / JuiceFS Configuration
+## Cloud Host / Valkey / JuiceFS Configuration
 
-Current GCP / Valkey / JuiceFS facts verified on 2026-05-02. Concrete host,
-user, key, bucket, account, and metadata endpoint values are stored in ignored
+Current cloud / Valkey / JuiceFS facts verified on 2026-05-28. Concrete host,
+user, key, bucket, account, and metadata endpoint values remain in ignored
 private env files, not in tracked docs.
 
 - Local private cloud-release config is:
   `.local/llm-access-cloud-release.env`. Copy
   `conf/llm-access-cloud-release.env.example` when bootstrapping a new checkout.
-- GCP SSH login from this workstation uses variables from that file:
+- Cloud SSH login from this workstation currently still uses the legacy
+  variable names from that file:
   ```bash
   set -a
   source .local/llm-access-cloud-release.env
@@ -63,7 +78,7 @@ private env files, not in tracked docs.
   ssh -i "$GCP_SSH_KEY" -o IdentitiesOnly=yes "$GCP_DEST"
   ```
   If `GCP_DEST` is unset, build it from `GCP_USER@$GCP_HOST`.
-- The GCP machine has FUSE available (`/dev/fuse`) and `fusermount3`; the
+- The active cloud host has FUSE available (`/dev/fuse`) and `fusermount3`; the
   JuiceFS binary path is deployment-specific and should be read from the
   private host configuration.
 - R2 bucket/account/endpoint values for llm-access JuiceFS storage live in the
@@ -78,7 +93,7 @@ private env files, not in tracked docs.
   source .local/common/juicefs/llm-access.env
   set +a
   ```
-- The same config was copied to the GCP host at
+- The same config was copied to the active cloud host at
   `~/.config/staticflow/llm-access-juicefs.env`, also mode `0600`.
 
 ## Valkey Metadata
@@ -103,11 +118,12 @@ private env files, not in tracked docs.
 - Reserved Valkey DBs for JuiceFS metadata:
   - production DB: configured in the ignored JuiceFS env
   - temporary validation DB: configured in the ignored JuiceFS env when needed
-- GCP validation already proved:
-  - R2 object put/get/head/delete through JuiceFS `objbench` works from GCP.
+- Cloud-host validation already proved:
+  - R2 object put/get/head/delete through JuiceFS `objbench` works from a
+    cloud host.
   - JuiceFS format/mount/write/read/sha256/umount works on the temporary
     validation DB.
-  - Valkey metadata ping from GCP was about 1-2 ms.
+  - Valkey metadata ping from the cloud host was about 1-2 ms.
 - Cloudflare R2 is usable for normal JuiceFS mount read/write, but its S3
   `ListObjects` behavior is not fully ordered. Avoid relying on JuiceFS
   maintenance commands that need complete ordered object listing, especially
@@ -129,7 +145,8 @@ private env files, not in tracked docs.
   set +a
   ```
 - The shared env var name for the Valkey URL is
-  `LLM_ACCESS_REQUEST_CACHE_URL`. The live GCP `/etc/llm-access/llm-access.env`
+  `LLM_ACCESS_REQUEST_CACHE_URL`. The live cloud
+  `/etc/llm-access/llm-access.env`
   should export that variable for both `llm-access.service` and
   `llm-access-usage-worker.service`.
 - When the cloud `llm-access` API or usage worker uses Postgres control-plane
@@ -194,22 +211,29 @@ private env files, not in tracked docs.
     consumption, tiered DuckDB summary writes, packed usage-detail writes,
     worker progress state, and legacy admin/public usage query routes on the
     worker port.
-- Live GCP `llm-access.service` and `llm-access-usage-worker.service` currently
+- Live cloud `llm-access.service` and `llm-access-usage-worker.service`
+  currently
   run as the non-root `ts_user` service user. The critical requirement is not
   the username; it is that the same service user can read the shared JuiceFS
   config, the local journal directory, and both FUSE mounts consistently.
-- Current GCP systemd units verified on 2026-05-16:
+- Current cloud systemd units verified on 2026-05-28:
+  - `caddy.service`: serves the public TLS front door on `:80` / `:443`
+  - `pb-mapper-server.service`: serves the configured relay port
+  - `pb-mapper-client-cli@sf-backend.service`: serves local StaticFlow through
+    `127.0.0.1:39080`
   - `juicefs-llm-access.service`: mounts `/mnt/llm-access`
   - `juicefs-llm-access-usage.service`: mounts `/mnt/llm-access-usage`
   - `llm-access.service`: serves `127.0.0.1:19080`, sources
     `/mnt/llm-access/config/neon.env`, and starts with
     `--postgres-control-database-url-env LLM_ACCESS_CONTROL_DATABASE_URL`
+    plus `--request-cache-url-env LLM_ACCESS_REQUEST_CACHE_URL`
   - `llm-access-usage-worker.service`: serves `127.0.0.1:19081`, sources the
     same Neon env, consumes the local journal root, and writes usage artifacts
-    under `/mnt/llm-access-usage`
+    under `/mnt/llm-access-usage`, also with
+    `--request-cache-url-env LLM_ACCESS_REQUEST_CACHE_URL`
   - `pb-mapper-server-cli@llm-access.service`: registers cloud
     `127.0.0.1:19080` as pb-mapper key `llm-access`
-- Current GCP llm-access logs:
+- Current cloud llm-access logs:
   - systemd journal: `sudo journalctl -u llm-access.service -f`
   - usage worker journal:
     `sudo journalctl -u llm-access-usage-worker.service -f`
@@ -254,28 +278,28 @@ private env files, not in tracked docs.
   Codex "auto refresh" toggle in admin. The per-account toggle only controls
   whether that account may use its `refresh_token` to renew auth when needed;
   it does not replace the global periodic refresher.
-- Current GCP JuiceFS local cache uses:
+- Current cloud JuiceFS local cache uses:
   - control mount cache: `/var/cache/juicefs/llm-access`
   - usage mount cache: `/var/cache/juicefs/llm-access-usage`
   Keep both caches on VM-local ext4 storage, not inside the FUSE mount.
 
-## GCP Memory Guard (2c8g VM)
+## AWS Memory Guard (2c4g VM)
 
-- `/swapfile` and `/swapfile-llm-extra` are each 2 GiB emergency swap files,
-  enabled through `/etc/fstab`; host swap total is 4 GiB.
-- `/etc/sysctl.d/99-staticflow-memory-guard.conf` sets `vm.swappiness=10`.
-- `llm-access.service` has `MemoryHigh=3584M`, `MemoryMax=4096M`,
-  `MemorySwapMax=1024M`, `TasksMax=256`, and `OOMPolicy=kill`.
-- `llm-access-usage-worker.service` should carry the DuckDB memory budget after
-  the split. Start with `MemoryHigh=2200M`, `MemoryMax=3072M`,
-  `MemorySwapMax=1024M`, `TasksMax=128`, and `OOMPolicy=kill`; keep API and
-  worker limits independent so a DuckDB scan cannot kill provider traffic.
-- `juicefs-llm-access.service` has `MemoryHigh=1800M`,
-  `MemoryMax=2560M`, `MemorySwapMax=0`, `TasksMax=256`, and
-  `OOMPolicy=kill`.
+- The active AWS host currently has `3.7 GiB` RAM and one `4 GiB` emergency
+  swap file at `/swapfile`, enabled through `/etc/fstab`; host swap total is
+  `4 GiB`.
+- `/etc/sysctl.d/99-swap.conf` sets `vm.swappiness=10`.
+- `llm-access.service` currently has `MemoryHigh=1700M`,
+  `MemoryMax=2048M`, and `MemorySwapMax=512M`.
+- `llm-access-usage-worker.service` currently has `MemoryHigh=1200M`,
+  `MemoryMax=1536M`, and `MemorySwapMax=512M`. Keep API and worker limits
+  independent so a DuckDB scan cannot kill provider traffic.
+- `juicefs-llm-access.service` and `juicefs-llm-access-usage.service` each
+  currently have `MemoryHigh=1800M`, `MemoryMax=2560M`, and
+  `MemorySwapMax=0`.
 These limits are meant to kill/restart the offending service before the whole
-VM becomes unreachable. Do not raise `MemoryMax` casually on 8 GiB RAM; keep
-extra swap as an emergency buffer, not as normal working memory.
+VM becomes unreachable. Do not raise `MemoryMax` casually on the 4 GiB AWS
+host; keep swap as an emergency buffer, not as normal working memory.
 
 ## llm-access Usage Analytics
 
@@ -321,12 +345,12 @@ extra swap as an emergency buffer, not as normal working memory.
 - Startup must be gated on the JuiceFS mount and expected state files. If
   `llm-access` starts before `/mnt/llm-access` is really mounted, it can
   initialize an empty local directory and make production state appear missing.
-  The GCP service should install `/usr/local/bin/staticflow-wait-llm-access-state`
+  The cloud service should install `/usr/local/bin/staticflow-wait-llm-access-state`
   and run it as `ExecStartPre` for `llm-access.service`; if JuiceFS is managed
   as a plain `.service`, add an `ExecStartPost` mountpoint gate there too so
   systemd does not mark the mount ready before FUSE has actually attached.
 - Do not use systemd path sandboxing directives such as `ProtectSystem=`,
-  `ReadWritePaths=`, or `PrivateTmp=` on the GCP `llm-access.service` while
+  `ReadWritePaths=`, or `PrivateTmp=` on the cloud `llm-access.service` while
   `/mnt/llm-access` is a JuiceFS FUSE mount with `default_permissions`. This
   combination can fail before the service starts with
   `status=226/NAMESPACE` and `Failed to set up mount namespacing:
@@ -348,26 +372,34 @@ extra swap as an emergency buffer, not as normal working memory.
 
 ## Current Runtime Verification Snapshot
 
-- Verified on GCP at `2026-05-16T22:13:00Z`.
+- Verified on the active AWS core at `2026-05-28`.
 - Effective live API unit:
   - service user: `ts_user`
   - bind: `127.0.0.1:19080`
   - current `ExecStart`: API process with
     `--postgres-control-database-url-env LLM_ACCESS_CONTROL_DATABASE_URL`
-    and `--usage-journal-dir /var/lib/staticflow/llm-access/usage-journal`
+    plus `--usage-journal-dir /var/lib/staticflow/llm-access/usage-journal`,
+    `--request-cache-url-env LLM_ACCESS_REQUEST_CACHE_URL`, and
+    `--request-cache-key-prefix llma`
   - `/proc/<api-pid>/environ` contains
-    `LLM_ACCESS_CONTROL_DATABASE_URL=<redacted>`
+    `LLM_ACCESS_CONTROL_DATABASE_URL=<redacted>`,
+    `LLM_ACCESS_REQUEST_CACHE_URL=<redacted>`,
+    `LLM_ACCESS_NODE_ID=aws-core-01`, `LLM_ACCESS_NODE_CLASS=core`, and
+    `LLM_ACCESS_NODE_REGION=ap-southeast-1`
 - Effective live usage-worker unit:
   - service user: `ts_user`
   - bind: `127.0.0.1:19081`
   - current `ExecStart`: worker process with the same Postgres control env,
     local journal root, local active DuckDB dir, dedicated JuiceFS usage
-    archive/catalog dirs, and JuiceFS-packed usage details
+    archive/catalog dirs, JuiceFS-packed usage details, and the same request
+    cache env
   - cgroup guard observed live:
-    `MemoryHigh=2200M`, `MemoryMax=3072M`, `MemorySwapMax=1024M`
+    `MemoryHigh=1200M`, `MemoryMax=1536M`, `MemorySwapMax=512M`
 - Live health checks that should all pass:
   ```bash
   curl -fsS http://127.0.0.1:19080/healthz
+  curl -fsS https://ackingliu.top/_caddy_health
+  curl -fsS https://staticflow.cc/_caddy_health
   curl -fsS https://ackingliu.top/api/llm-gateway/status
   curl -fsS http://127.0.0.1:19081/admin/llm-access/usage-worker/status
   findmnt -T /mnt/llm-access
@@ -379,8 +411,13 @@ extra swap as an emergency buffer, not as normal working memory.
   ```
 - Healthy interpretation:
   - API args must include `--postgres-control-database-url-env`.
-  - worker args must include both `--postgres-control-database-url-env` and
-    `--usage-journal-dir /var/lib/staticflow/llm-access/usage-journal`.
+  - API and worker args must both include
+    `--request-cache-url-env LLM_ACCESS_REQUEST_CACHE_URL`.
+  - worker args must include `--usage-journal-dir /var/lib/staticflow/llm-access/usage-journal`.
+  - `aws-core-01` should be the live `core` node identity.
+  - The service-owned request-cache URL should answer `AUTH` + `PING` with
+    `+PONG`.
+  - Live `lsof` on the API should show `ESTABLISHED` Neon `:5432` sockets.
   - `worker.state == idle` with `last_error == null` and a local journal root
     means the worker is healthy even if there are no sealed files pending.
   - `llm_access_owner` should appear in Neon `pg_stat_activity` when the API
@@ -401,6 +438,9 @@ extra swap as an emergency buffer, not as normal working memory.
 - Keep a local ignored copy of the shared Neon control config at
   `.local/llm-access-neon.env`. It must define
   `LLM_ACCESS_CONTROL_DATABASE_URL=postgresql://...`.
+- The ignored cloud-release env file still uses legacy `GCP_*` variable names
+  even though the active host is AWS. Do not rename those variables without
+  updating the release scripts.
 - `prepare_llm_access_cloud_release.sh` now treats that local file as the
   release source of truth, uploads it into the staged bundle, and
   `activate_llm_access_cloud_release.sh` installs it back onto the live JuiceFS
@@ -416,11 +456,13 @@ extra swap as an emergency buffer, not as normal working memory.
   source .local/llm-access-cloud-release.env
   set +a
   ssh -i "$GCP_SSH_KEY" -o IdentitiesOnly=yes "$GCP_DEST" \
-    '/home/ts_user/staticflow-llm-access-release/activate_llm_access_cloud_release.sh'
+    "$REMOTE_RELEASE_DIR/activate_llm_access_cloud_release.sh"
   ```
 - Required post-release checks:
   ```bash
   curl -fsS http://127.0.0.1:19080/healthz
+  curl -fsS https://ackingliu.top/_caddy_health
+  curl -fsS https://staticflow.cc/_caddy_health
   curl -fsS https://ackingliu.top/api/llm-gateway/status
   curl -fsS http://127.0.0.1:19081/admin/llm-access/usage-worker/status
   findmnt -T /mnt/llm-access
@@ -429,6 +471,7 @@ extra swap as an emergency buffer, not as normal working memory.
   ps -o pid,args= -C llm-access -C llm-access-usage-worker
   tr '\0' '\n' </proc/$(systemctl show -p MainPID --value llm-access.service)/environ | grep '^LLM_ACCESS_CONTROL_DATABASE_URL='
   tr '\0' '\n' </proc/$(systemctl show -p MainPID --value llm-access-usage-worker.service)/environ | grep '^LLM_ACCESS_CONTROL_DATABASE_URL='
+  tr '\0' '\n' </proc/$(systemctl show -p MainPID --value llm-access.service)/environ | grep '^LLM_ACCESS_REQUEST_CACHE_URL='
   sudo journalctl -u llm-access.service -n 80 --no-pager -l
   sudo journalctl -u llm-access-usage-worker.service -n 80 --no-pager -l
   ```

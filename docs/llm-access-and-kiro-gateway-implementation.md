@@ -1,11 +1,13 @@
 # StaticFlow LLM Access 实现机制：Codex 网关、Kiro 网关与上游代理解析
 
 > **Code Version**: 本文最初基于 `2026-04-01` 的本地 backend 内嵌实现写成。
-> **Production Status**: 截至 `2026-05-02`，生产 LLM 流量已经切到 GCP
-> standalone `llm-access`。GCP Caddy 将 `/v1/*`、`/cc/v1/*`、
+> **Production Status**: 截至 `2026-05-28`，生产 LLM 流量已经切到 AWS
+> Lightsail 上的 standalone `llm-access`。AWS Caddy 将 `/v1/*`、`/cc/v1/*`、
 > `/api/llm-gateway/*`、`/api/kiro-gateway/*`、`/api/codex-gateway/*` 和
-> `/api/llm-access/*` 直接路由到 `127.0.0.1:19080`。本文的协议、账号、
-> 代理、调度和 usage 机制仍然适用；引用 `backend/src/...` 的位置请理解为
+> `/api/llm-access/*` 直接路由到 `127.0.0.1:19080`。`ackingliu.top` /
+> `www.ackingliu.top` 直接解析到 AWS，`staticflow.cc` /
+> `www.staticflow.cc` 继续通过 Cloudflare 回同一个 AWS origin。本文的协议、
+> 账号、代理、调度和 usage 机制仍然适用；引用 `backend/src/...` 的位置请理解为
 > 历史来源或本地兼容/proxy 层，当前生产 source of truth 在 `llm-access*`
 > crates 和 cloud `llm-access.service`。
 > **讨论范围**: 覆盖 LLM Access 运行时机制，包括 Codex 网关、Kiro 网关、
@@ -14,7 +16,7 @@
 
 ## 1. 背景与目标
 
-StaticFlow 原本更像一套本地优先的内容系统：文章、图片、评论、音乐、外部内容重发、LanceDB 存储、CLI 写入和自托管部署是 README 里最显眼的部分。当前生产部署仍然保留这种 local-first 内容路径，但 LLM access 已经从本地 backend 热路径中拆出来，成为 GCP 上的单独服务。
+StaticFlow 原本更像一套本地优先的内容系统：文章、图片、评论、音乐、外部内容重发、LanceDB 存储、CLI 写入和自托管部署是 README 里最显眼的部分。当前生产部署仍然保留这种 local-first 内容路径，但 LLM access 已经从本地 backend 热路径中拆出来，成为 AWS 上的单独服务。
 
 但当前仓库实际上已经内建了另一条能力线：
 
@@ -65,11 +67,11 @@ StaticFlow 原本更像一套本地优先的内容系统：文章、图片、评
 
 ### 3.0 当前生产路由边界
 
-现网的第一层边界在 GCP Caddy，而不是本地 backend：
+现网的第一层边界在 AWS Caddy，而不是本地 backend：
 
 ```text
 public client
-  -> GCP Caddy :443
+  -> AWS Caddy :443
      ├── LLM paths -> cloud llm-access 127.0.0.1:19080
      └── non-LLM paths -> cloud pb-mapper 127.0.0.1:39080
          -> local Pingora 127.0.0.1:39180
@@ -79,7 +81,7 @@ public client
 `llm-access` 当前使用 Neon 做 live 控制面，共享连接配置放在
 `/mnt/llm-access/config/neon.env`；旧的
 `/mnt/llm-access/control/llm-access.sqlite3` 只保留作回退快照。usage
-analytics 继续使用 tiered DuckDB：active mutable segment 在 GCP VM 本地块
+analytics 继续使用 tiered DuckDB：active mutable segment 在 AWS VM 本地块
 存储 `/var/lib/staticflow/llm-access/analytics-active`，归档
 segment/catalog/details 在独立的 JuiceFS usage mount
 `/mnt/llm-access-usage`。usage 重明细现在保持 pack 形式，直接落到

@@ -88,28 +88,32 @@ storage-format-sensitive writes.
   command.
 
 ## Current Production Deployment Mode
-Hybrid: GCP owns TLS ingress and standalone `llm-access`; local StaticFlow
-serves content, comments, music, media, frontend, and Pingora blue/green slots.
+Hybrid: the active cloud front door and single live `core` now run on AWS
+Lightsail, while local StaticFlow still serves content, comments, music,
+media, frontend, and Pingora blue/green slots.
 
 Traffic path:
-- `https://ackingliu.top` → GCP Caddy `:443` → route split
+- `https://ackingliu.top` / `https://www.ackingliu.top` → AWS Caddy `:443`
+  → route split
+- `https://staticflow.cc` / `https://www.staticflow.cc` → Cloudflare
+  orange-cloud → the same AWS Caddy origin `:443` → route split
 - LLM paths (`/v1/*`, `/cc/v1/*`, `/api/llm-gateway/*`, `/api/kiro-gateway/*`,
   `/api/codex-gateway/*`, `/api/llm-access/*`) → cloud `llm-access` `127.0.0.1:19080`
 - Non-LLM paths → cloud pb-mapper client `127.0.0.1:39080` → configured cloud
   pb-mapper relay from private env
   → local Pingora `127.0.0.1:39180` → active backend slot
-- Local `pbmapper-llm-access` on `127.0.0.1:19182` subscribes cloud `llm-access`
-  back for local dev/testing
+- Local `pbmapper-llm-access-aws` on `127.0.0.1:19182` subscribes cloud
+  `llm-access` back for local dev/testing
 
 Key rules:
 - Before any "publish online" / "release to production" action, classify the
   deployment plane first:
-  - Cloud `llm-access` on GCP for LLM/API paths (`/v1/*`, `/cc/v1/*`,
+  - Cloud `llm-access` on AWS for LLM/API paths (`/v1/*`, `/cc/v1/*`,
     `/api/llm-gateway/*`, `/api/kiro-gateway/*`, `/api/codex-gateway/*`,
     `/api/llm-access/*`)
   - Local self-hosted StaticFlow behind Pingora for non-LLM site/backend paths
 - If the change only touches `llm-access*`, `llm-access-kiro`, Kiro/Codex/LLM
-  gateway behavior, default the production release target to the GCP
+  gateway behavior, default the production release target to the AWS
   `llm-access` service, not the local `39180` Pingora stack.
 - Do not build or hot-update the local self-hosted backend as part of a cloud
   `llm-access` release unless the user explicitly asks for the non-LLM/local
@@ -120,7 +124,7 @@ Key rules:
   to `localhost:3000/api` and breaks public users.
 - Agents may inherit local proxy env vars; unset them for direct-public checks.
 - `/_caddy_health` only proves Caddy is alive, not the full pb-mapper data path.
-- Live GCP `llm-access.service` and `llm-access-usage-worker.service` run as
+- Live AWS `llm-access.service` and `llm-access-usage-worker.service` run as
   `ts_user`, not `llm-access`; do not change the systemd templates back to a
   non-existent service user unless you also provision that user on the host.
 - Cloud `llm-access` API and usage worker releases must stay independently
@@ -133,7 +137,7 @@ Key rules:
   `/mnt/llm-access/config/neon.env`. Do not reintroduce
   `LLM_ACCESS_USAGE_DETAILS_OBJECT_STORE_URL` or direct R2 detail uploads;
   packed usage details now live under `/mnt/llm-access-usage/details/...`.
-- For GCP `llm-access` memory changes, remember that
+- For cloud `llm-access` memory changes, remember that
   `/etc/systemd/system/llm-access.service.d/resource-guard.conf` can override
   the base unit. Raising the limit in the template alone is not sufficient if a
   later drop-in still pins the old ceiling.
@@ -141,21 +145,25 @@ Key rules:
   `accounts`/`keys`/`groups` inventory on first paint when the tab only needs
   summary/config/cache preview data.
 
-For full GCP/Valkey/JuiceFS/systemd details and emergency recovery, see
+For full cloud/AWS/Valkey/JuiceFS/systemd details and emergency recovery, see
 `docs/ops-runbook.md`.
 
 Local tmux-supervised runtime example (slot color is runtime state, not a
 constant; verify `conf/pingora/staticflow-gateway.yaml`, `39180/api/healthz`,
 and active tmux sessions before assuming blue vs green):
 
+Legacy GCP rollback sessions may still exist locally. Do not assume they are
+the active production path.
+
 | tmux session | Role | Address |
 |---|---|---|
 | `sf-gateway` | Pingora ingress (do not stop) | `127.0.0.1:39180` |
 | `sf-backend-blue` or `sf-backend-green` | Current active/inactive backend slots | `127.0.0.1:39080` / `127.0.0.1:39081` |
 | `gpt2api-rs` | GPT2API image gateway | `127.0.0.1:18787` |
-| `pbmapper-sf-backend` | Registers gateway with cloud relay | configured in private env |
-| `pbmapper-llm-access` | Subscribes cloud llm-access locally | `127.0.0.1:19182` |
-| `pbmapper-home-ubuntu` | Registers local SSH with cloud relay | configured in private env |
+| `pbmapper-sf-backend-aws` | Registers gateway with active AWS cloud relay | configured in private env |
+| `pbmapper-llm-access-aws` | Subscribes active AWS cloud `llm-access` locally | `127.0.0.1:19182` |
+| `pbmapper-home-ubuntu-aws` | Registers local SSH with active AWS cloud relay | configured in private env |
+| `pbmapper-codex-remote-aws` | Registers local Codex remote endpoint with active AWS cloud relay | configured in private env |
 
 ## Mandatory Quality Gates (Hard Rule)
 - Run `cargo clippy` for affected crates and fix all warnings to zero before

@@ -53,8 +53,8 @@ Validation:
 
 ## Cloud llm-access Templates
 
-Current production routes LLM paths on the GCP edge directly to standalone
-`llm-access` on `127.0.0.1:19080`; non-LLM StaticFlow paths still use
+Current production routes LLM paths on the active AWS cloud edge directly to
+standalone `llm-access` on `127.0.0.1:19080`; non-LLM StaticFlow paths still use
 pb-mapper back to the local Pingora gateway. The `llm-access*` templates in
 this directory describe that cloud-side service shape.
 
