@@ -146,13 +146,59 @@ pub struct JournalUsageEventV1 {
     /// Canonical full request body for diagnostic events.
     pub full_request_json: Option<String>,
     /// Best-effort error message surfaced for failed requests.
+    #[serde(default)]
     pub error_message: Option<String>,
     /// Raw error response body surfaced for failed requests.
+    #[serde(default)]
     pub error_body: Option<String>,
     /// Provider timing fields.
     pub timing: UsageTiming,
     /// Downstream stream outcome fields.
     pub stream: UsageStreamDetails,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct LegacyJournalUsageEventV1 {
+    schema_version: u16,
+    event_id: String,
+    created_at_ms: i64,
+    provider_type: ProviderType,
+    protocol_family: ProtocolFamily,
+    key_id: String,
+    key_name: String,
+    account_name: Option<String>,
+    account_group_id_at_event: Option<String>,
+    route_strategy_at_event: Option<RouteStrategy>,
+    request_method: String,
+    request_url: String,
+    endpoint: String,
+    model: Option<String>,
+    mapped_model: Option<String>,
+    status_code: i64,
+    request_body_bytes: Option<i64>,
+    quota_failover_count: u64,
+    routing_diagnostics_json: Option<String>,
+    input_uncached_tokens: i64,
+    input_cached_tokens: i64,
+    output_tokens: i64,
+    billable_tokens: i64,
+    credit_usage: Option<String>,
+    usage_missing: bool,
+    credit_usage_missing: bool,
+    client_ip: String,
+    ip_region: String,
+    request_headers_json: String,
+    last_message_content: Option<String>,
+    client_request_body_json: Option<String>,
+    upstream_request_body_json: Option<String>,
+    full_request_json: Option<String>,
+    timing: UsageTiming,
+    stream: UsageStreamDetails,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct LegacyJournalUsageBatchV1 {
+    events: Vec<LegacyJournalUsageEventV1>,
 }
 
 impl JournalUsageEventV1 {
@@ -242,11 +288,73 @@ impl JournalUsageEventV1 {
     }
 }
 
+impl LegacyJournalUsageEventV1 {
+    fn into_current(self) -> JournalUsageEventV1 {
+        JournalUsageEventV1 {
+            schema_version: self.schema_version,
+            event_id: self.event_id,
+            created_at_ms: self.created_at_ms,
+            provider_type: self.provider_type,
+            protocol_family: self.protocol_family,
+            key_id: self.key_id,
+            key_name: self.key_name,
+            account_name: self.account_name,
+            account_group_id_at_event: self.account_group_id_at_event,
+            route_strategy_at_event: self.route_strategy_at_event,
+            request_method: self.request_method,
+            request_url: self.request_url,
+            endpoint: self.endpoint,
+            model: self.model,
+            mapped_model: self.mapped_model,
+            status_code: self.status_code,
+            request_body_bytes: self.request_body_bytes,
+            quota_failover_count: self.quota_failover_count,
+            routing_diagnostics_json: self.routing_diagnostics_json,
+            input_uncached_tokens: self.input_uncached_tokens,
+            input_cached_tokens: self.input_cached_tokens,
+            output_tokens: self.output_tokens,
+            billable_tokens: self.billable_tokens,
+            credit_usage: self.credit_usage,
+            usage_missing: self.usage_missing,
+            credit_usage_missing: self.credit_usage_missing,
+            client_ip: self.client_ip,
+            ip_region: self.ip_region,
+            request_headers_json: self.request_headers_json,
+            last_message_content: self.last_message_content,
+            client_request_body_json: self.client_request_body_json,
+            upstream_request_body_json: self.upstream_request_body_json,
+            full_request_json: self.full_request_json,
+            error_message: None,
+            error_body: None,
+            timing: self.timing,
+            stream: self.stream,
+        }
+    }
+}
+
 /// One compressed batch payload before compression.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JournalUsageBatchV1 {
     /// Usage events in append order.
     pub events: Vec<JournalUsageEventV1>,
+}
+
+/// Decode one journal batch payload, accepting both current and legacy event
+/// layouts within schema version 1.
+pub fn decode_journal_usage_batch(bytes: &[u8]) -> Result<JournalUsageBatchV1, postcard::Error> {
+    match postcard::from_bytes::<JournalUsageBatchV1>(bytes) {
+        Ok(batch) => Ok(batch),
+        Err(_) => {
+            let legacy = postcard::from_bytes::<LegacyJournalUsageBatchV1>(bytes)?;
+            Ok(JournalUsageBatchV1 {
+                events: legacy
+                    .events
+                    .into_iter()
+                    .map(LegacyJournalUsageEventV1::into_current)
+                    .collect(),
+            })
+        },
+    }
 }
 
 #[cfg(test)]
@@ -256,7 +364,10 @@ mod tests {
         usage::{UsageEvent, UsageStreamDetails, UsageTiming},
     };
 
-    use super::{JournalUsageBatchV1, JournalUsageEventV1};
+    use super::{
+        decode_journal_usage_batch, JournalUsageBatchV1, JournalUsageEventV1,
+        LegacyJournalUsageBatchV1, LegacyJournalUsageEventV1,
+    };
 
     #[test]
     fn usage_event_converts_to_versioned_journal_event() {
@@ -276,6 +387,57 @@ mod tests {
         let bytes = postcard::to_allocvec(&batch).expect("encode batch");
         let decoded: JournalUsageBatchV1 = postcard::from_bytes(&bytes).expect("decode batch");
         assert_eq!(decoded.events[0].event_id, "evt-wire-2");
+    }
+
+    #[test]
+    fn journal_event_decodes_legacy_payload_without_error_fields() {
+        let event = test_usage_event("evt-wire-legacy");
+        let legacy = LegacyJournalUsageEventV1 {
+            schema_version: 1,
+            event_id: event.event_id.clone(),
+            created_at_ms: event.created_at_ms,
+            provider_type: event.provider_type,
+            protocol_family: event.protocol_family,
+            key_id: event.key_id.clone(),
+            key_name: event.key_name.clone(),
+            account_name: event.account_name.clone(),
+            account_group_id_at_event: event.account_group_id_at_event.clone(),
+            route_strategy_at_event: event.route_strategy_at_event,
+            request_method: event.request_method.clone(),
+            request_url: event.request_url.clone(),
+            endpoint: event.endpoint.clone(),
+            model: event.model.clone(),
+            mapped_model: event.mapped_model.clone(),
+            status_code: event.status_code,
+            request_body_bytes: event.request_body_bytes,
+            quota_failover_count: event.quota_failover_count,
+            routing_diagnostics_json: event.routing_diagnostics_json.clone(),
+            input_uncached_tokens: event.input_uncached_tokens,
+            input_cached_tokens: event.input_cached_tokens,
+            output_tokens: event.output_tokens,
+            billable_tokens: event.billable_tokens,
+            credit_usage: event.credit_usage.clone(),
+            usage_missing: event.usage_missing,
+            credit_usage_missing: event.credit_usage_missing,
+            client_ip: event.client_ip.clone(),
+            ip_region: event.ip_region.clone(),
+            request_headers_json: event.request_headers_json.clone(),
+            last_message_content: event.last_message_content.clone(),
+            client_request_body_json: event.client_request_body_json.clone(),
+            upstream_request_body_json: event.upstream_request_body_json.clone(),
+            full_request_json: event.full_request_json.clone(),
+            timing: event.timing.clone(),
+            stream: event.stream.clone(),
+        };
+        let bytes = postcard::to_allocvec(&LegacyJournalUsageBatchV1 {
+            events: vec![legacy],
+        })
+        .expect("encode legacy event");
+        let decoded = decode_journal_usage_batch(&bytes).expect("decode legacy event");
+        assert_eq!(decoded.events[0].event_id, event.event_id);
+        assert_eq!(decoded.events[0].error_message, None);
+        assert_eq!(decoded.events[0].error_body, None);
+        assert_eq!(decoded.events[0].stream, event.stream);
     }
 
     fn test_usage_event(event_id: &str) -> UsageEvent {

@@ -10,7 +10,10 @@ use anyhow::{anyhow, Context, Result};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    wire::{BlockHeaderV1, FileFooterV1, FileHeaderV1, JournalUsageBatchV1, FILE_MAGIC_V1},
+    wire::{
+        decode_journal_usage_batch, BlockHeaderV1, FileFooterV1, FileHeaderV1, JournalUsageBatchV1,
+        FILE_MAGIC_V1,
+    },
     writer::{block_crc32c, BLOCK_TAG, FOOTER_TAG},
 };
 
@@ -164,7 +167,7 @@ impl JournalBatchStream {
                 decoded.len()
             ));
         }
-        let batch: JournalUsageBatchV1 = postcard::from_bytes(&decoded)?;
+        let batch: JournalUsageBatchV1 = decode_journal_usage_batch(&decoded)?;
         Ok(Some(batch))
     }
 

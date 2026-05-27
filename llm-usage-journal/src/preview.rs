@@ -9,7 +9,10 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 
 use crate::{
-    wire::{BlockHeaderV1, FileHeaderV1, JournalUsageBatchV1, JournalUsageEventV1, FILE_MAGIC_V1},
+    wire::{
+        decode_journal_usage_batch, BlockHeaderV1, FileHeaderV1, JournalUsageBatchV1,
+        JournalUsageEventV1, FILE_MAGIC_V1,
+    },
     writer::{block_crc32c, BLOCK_TAG, FOOTER_TAG},
 };
 
@@ -115,7 +118,7 @@ impl JournalPreviewReader {
                             decoded.len()
                         ));
                     }
-                    let batch: JournalUsageBatchV1 = postcard::from_bytes(&decoded)?;
+                    let batch: JournalUsageBatchV1 = decode_journal_usage_batch(&decoded)?;
                     complete_blocks = complete_blocks.saturating_add(1);
                     all_events.extend(batch.events);
                 },
