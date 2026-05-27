@@ -6381,7 +6381,9 @@ dependencies = [
  "llm-access-core",
  "llm-access-kiro",
  "llm-access-migrations",
+ "native-tls",
  "postgres",
+ "postgres-native-tls",
  "redis",
  "rusqlite",
  "serde",
@@ -8232,6 +8234,18 @@ dependencies = [
  "futures-util",
  "log",
  "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
+name = "postgres-native-tls"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fef4de47bb81477e0c3deaf153a1b10ae176484713ff1640969f4cb96b653ebc"
+dependencies = [
+ "native-tls",
+ "tokio",
+ "tokio-native-tls",
  "tokio-postgres",
 ]
 

@@ -3,7 +3,9 @@
 use std::{collections::HashSet, path::PathBuf};
 
 use anyhow::Context;
-use postgres::{Client, NoTls};
+use native_tls::TlsConnector;
+use postgres::Client;
+use postgres_native_tls::MakeTlsConnector;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -612,7 +614,11 @@ impl PostgresUsageCatalog {
         purpose: &str,
         action: impl FnOnce(&mut Client) -> anyhow::Result<T>,
     ) -> anyhow::Result<T> {
-        let mut client = Client::connect(&self.database_url, NoTls)
+        let native_tls = TlsConnector::builder()
+            .build()
+            .context("build native tls connector for usage catalog")?;
+        let tls = MakeTlsConnector::new(native_tls);
+        let mut client = Client::connect(&self.database_url, tls)
             .with_context(|| format!("connect postgres usage catalog for {purpose}"))?;
         action(&mut client)
     }
