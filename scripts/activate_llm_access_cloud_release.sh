@@ -6,6 +6,8 @@ RELEASE_DIR="${LLM_ACCESS_RELEASE_DIR:-$SCRIPT_DIR}"
 SERVICE="${LLM_ACCESS_SERVICE:-llm-access.service}"
 WORKER_SERVICE="${LLM_ACCESS_USAGE_WORKER_SERVICE:-llm-access-usage-worker.service}"
 USAGE_MOUNT_SERVICE="${LLM_ACCESS_USAGE_MOUNT_SERVICE:-juicefs-llm-access-usage.service}"
+SERVICE_USER="${LLM_ACCESS_SERVICE_USER:-ts_user}"
+SERVICE_GROUP="${LLM_ACCESS_SERVICE_GROUP:-$SERVICE_USER}"
 ACTIVATE_TARGET="${LLM_ACCESS_ACTIVATE_TARGET:-both}"
 INSTALL_PATH="${LLM_ACCESS_INSTALL_PATH:-/usr/local/bin/llm-access}"
 WORKER_INSTALL_PATH="${LLM_ACCESS_USAGE_WORKER_INSTALL_PATH:-/usr/local/bin/llm-access-usage-worker}"
@@ -200,7 +202,7 @@ if [[ -e "$STAGED_NEON_ENV" ]]; then
     sudo cp -a "$NEON_ENV_PATH" "$BACKUP_DIR/neon.env.preinstall"
   fi
   log "installing staged Neon config to $NEON_ENV_PATH"
-  sudo install -m 0600 "$STAGED_NEON_ENV" "$NEON_ENV_PATH"
+  sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0600 "$STAGED_NEON_ENV" "$NEON_ENV_PATH"
 fi
 sudo test -r "$NEON_ENV_PATH" || fail "missing shared Neon config: $NEON_ENV_PATH"
 sudo grep -q '^LLM_ACCESS_CONTROL_DATABASE_URL=' "$NEON_ENV_PATH" \
