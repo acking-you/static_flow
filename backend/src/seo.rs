@@ -1,7 +1,7 @@
 use std::env;
 
 use axum::{
-    extract::{Path, State},
+    extract::{OriginalUri, Path, State},
     http::{header, StatusCode},
     response::{Html, IntoResponse, Response},
 };
@@ -516,6 +516,20 @@ pub async fn seo_homepage(State(state): State<AppState>) -> Response {
         }
     }
 
+    Html(html).into_response()
+}
+
+/// Serve the SPA shell for deep links that must be resolved client-side.
+pub async fn seo_spa_shell(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+) -> Response {
+    let path_and_query = uri
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or("/");
+    let template = state.load_index_html_template().await;
+    let html = inject_spa_route_seo(&template, path_and_query);
     Html(html).into_response()
 }
 

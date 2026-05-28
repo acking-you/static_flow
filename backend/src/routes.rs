@@ -1,9 +1,8 @@
 use axum::{
-    extract::{DefaultBodyLimit, OriginalUri},
+    extract::DefaultBodyLimit,
     handler::Handler,
     http::{HeaderValue, Method},
     middleware,
-    response::{Html, IntoResponse},
     routing::{any, get, patch, post, put},
     Router,
 };
@@ -442,6 +441,8 @@ pub fn create_router(state: AppState) -> Router {
     let seo_router = Router::new()
         .route("/", get(seo::seo_homepage))
         .route("/posts/:id", get(seo::seo_article_page))
+        .route("/admin/llm-gateway/*path", get(seo::seo_spa_shell))
+        .route("/static_flow/admin/llm-gateway/*path", get(seo::seo_spa_shell))
         .route("/sitemap.xml", get(seo::sitemap_xml))
         .route("/robots.txt", get(seo::robots_txt))
         .with_state(state);
@@ -458,24 +459,11 @@ pub fn create_router(state: AppState) -> Router {
     let frontend_dist_dir = spa_state.frontend_dist_dir.as_ref().clone();
     let spa_fallback = ServeDir::new(frontend_dist_dir);
 
-    let spa_index_fallback = move |OriginalUri(uri): OriginalUri| {
-        let spa_state = spa_state.clone();
-        async move {
-            let path_and_query = uri
-                .path_and_query()
-                .map(|value| value.as_str())
-                .unwrap_or("/");
-            let template = spa_state.load_index_html_template().await;
-            let html = seo::inject_spa_route_seo(&template, path_and_query);
-            Html(html).into_response()
-        }
-    };
-
     // Merge: API first, then SEO, then static files, then SPA index fallback
     api_router
         .merge(seo_router)
         .merge(gpt2api_frontend_router)
-        .fallback_service(spa_fallback.fallback(get(spa_index_fallback)))
+        .fallback_service(spa_fallback.fallback(get(seo::seo_spa_shell).with_state(spa_state)))
         .layer(middleware::from_fn(request_context::request_context_middleware))
         .layer(middleware::from_fn_with_state(
             behavior_state,
@@ -507,22 +495,27 @@ fn parse_allowed_origins(value: Option<&str>) -> Option<Vec<HeaderValue>> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "local-media")]
-    use axum::{
-        body::Body,
-        http::{header, Request, StatusCode},
-        Router,
-    };
     #[cfg(not(feature = "local-media"))]
     use axum::{
         body::{to_bytes, Body},
+        extract::OriginalUri,
         http::{header, Request, StatusCode},
+        response::Html,
         routing::any,
+        routing::get,
+        Router,
     };
     #[cfg(feature = "local-media")]
+    use axum::{
+        body::{to_bytes, Body},
+        extract::OriginalUri,
+        http::{header, Request, StatusCode},
+        response::Html,
+        routing::get,
+        Router,
+    };
     use tower::Service;
-    #[cfg(not(feature = "local-media"))]
-    use tower::Service;
+    use tower_http::services::ServeDir;
 
     use super::parse_allowed_origins;
 
@@ -601,5 +594,39 @@ mod tests {
             .expect("body");
         let body_text = std::str::from_utf8(&body).expect("utf8 body");
         assert!(body_text.contains("Local media feature is disabled"));
+    }
+
+    #[tokio::test]
+    async fn admin_llm_gateway_monitor_deeplink_prefers_spa_shell() {
+        let fallback = move |OriginalUri(uri): OriginalUri| async move {
+            Html(format!("fallback:{}", uri.path()))
+        };
+        let explicit = move |OriginalUri(uri): OriginalUri| async move {
+            Html(format!("explicit:{}", uri.path()))
+        };
+
+        let mut router = Router::new()
+            .route("/admin/llm-gateway/*path", get(explicit))
+            .fallback_service(ServeDir::new("frontend/dist").fallback(get(fallback)))
+            .into_service();
+
+        let response = router
+            .call(
+                Request::builder()
+                    .uri("/admin/llm-gateway/monitor")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert_eq!(
+            std::str::from_utf8(&body).expect("utf8 body"),
+            "explicit:/admin/llm-gateway/monitor"
+        );
     }
 }
