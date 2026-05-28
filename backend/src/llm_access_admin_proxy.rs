@@ -78,6 +78,32 @@ pub async fn proxy_admin_request(
     Ok(response)
 }
 
+pub async fn proxy_public_request(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+    body: Bytes,
+) -> HandlerResult<Response> {
+    let normalized = normalize_llm_access_admin_path_and_query(
+        uri.path_and_query()
+            .map(|value| value.as_str())
+            .unwrap_or_else(|| uri.path()),
+    );
+    let response = forward_llm_access_admin_request(
+        state.llm_access_admin_proxy.client(),
+        state.llm_access_admin_proxy.base_url(),
+        method,
+        &normalized,
+        &headers,
+        body,
+    )
+    .await
+    .map_err(bad_gateway)?;
+
+    Ok(response)
+}
+
 fn join_proxy_url(base_url: &reqwest::Url, relative: &str) -> Result<reqwest::Url> {
     base_url
         .join(relative)
@@ -129,6 +155,7 @@ async fn forward_llm_access_admin_request(
         .context("upstream returned invalid HTTP status code")?;
     let content_type = upstream.headers().get(header::CONTENT_TYPE).cloned();
     let cache_control = upstream.headers().get(header::CACHE_CONTROL).cloned();
+    let content_disposition = upstream.headers().get(header::CONTENT_DISPOSITION).cloned();
     let bytes = upstream
         .bytes()
         .await
@@ -140,6 +167,9 @@ async fn forward_llm_access_admin_request(
     }
     if let Some(value) = cache_control {
         builder = builder.header(header::CACHE_CONTROL, value);
+    }
+    if let Some(value) = content_disposition {
+        builder = builder.header(header::CONTENT_DISPOSITION, value);
     }
     builder
         .body(Body::from(bytes))

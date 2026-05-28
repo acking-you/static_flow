@@ -435,6 +435,52 @@ pub fn create_router(state: AppState) -> Router {
         .route("/admin/local-media/api/*path", any(handlers::local_media_feature_disabled_api));
 
     let api_router = api_router
+        .route("/api/llm-gateway/access", any(crate::llm_access_admin_proxy::proxy_public_request))
+        .route(
+            "/api/llm-gateway/public-page",
+            any(crate::llm_access_admin_proxy::proxy_public_request),
+        )
+        .route(
+            "/api/llm-gateway/model-catalog.json",
+            any(crate::llm_access_admin_proxy::proxy_public_request),
+        )
+        .route("/api/llm-gateway/status", any(crate::llm_access_admin_proxy::proxy_public_request))
+        .route(
+            "/api/llm-gateway/public-usage/query",
+            any(crate::llm_access_admin_proxy::proxy_public_request),
+        )
+        .route(
+            "/api/llm-gateway/support-config",
+            any(crate::llm_access_admin_proxy::proxy_public_request),
+        )
+        .route(
+            "/api/llm-gateway/account-contributions",
+            any(crate::llm_access_admin_proxy::proxy_public_request),
+        )
+        .route(
+            "/api/llm-gateway/sponsors",
+            any(crate::llm_access_admin_proxy::proxy_public_request),
+        )
+        .route(
+            "/api/llm-gateway/token-requests/submit",
+            any(crate::llm_access_admin_proxy::proxy_public_request),
+        )
+        .route(
+            "/api/llm-gateway/account-contribution-requests/submit",
+            any(crate::llm_access_admin_proxy::proxy_public_request),
+        )
+        .route(
+            "/api/llm-gateway/account-contribution-requests/batch-submit",
+            any(crate::llm_access_admin_proxy::proxy_public_request),
+        )
+        .route(
+            "/api/llm-gateway/sponsor-requests/submit",
+            any(crate::llm_access_admin_proxy::proxy_public_request),
+        )
+        .route(
+            "/api/llm-gateway/support-assets/:file_name",
+            any(crate::llm_access_admin_proxy::proxy_public_request),
+        )
         .route("/admin/llm-gateway", get(seo::seo_spa_shell))
         .route("/admin/llm-gateway/monitor", get(seo::seo_spa_shell))
         .route("/static_flow/admin/llm-gateway", get(seo::seo_spa_shell))
@@ -697,6 +743,44 @@ mod tests {
         assert_eq!(
             std::str::from_utf8(&body).expect("utf8 body"),
             r#"{"proxied":"/admin/llm-gateway/usage/metrics"}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn public_llm_gateway_status_prefers_proxy_route() {
+        let fallback = move |OriginalUri(uri): OriginalUri| async move {
+            Html(format!("fallback:{}", uri.path()))
+        };
+        let proxy = move |OriginalUri(uri): OriginalUri| async move {
+            Json(serde_json::json!({"proxied": uri.path()}))
+        };
+
+        let mut router = Router::new()
+            .route("/api/llm-gateway/status", any(proxy))
+            .fallback_service(ServeDir::new("frontend/dist").fallback(get(fallback)))
+            .into_service();
+
+        let response = router
+            .call(
+                Request::builder()
+                    .uri("/api/llm-gateway/status")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&header::HeaderValue::from_static("application/json"))
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert_eq!(
+            std::str::from_utf8(&body).expect("utf8 body"),
+            r#"{"proxied":"/api/llm-gateway/status"}"#
         );
     }
 }
