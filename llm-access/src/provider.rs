@@ -3756,7 +3756,7 @@ enum KiroRouteFailureKind {
 }
 
 #[derive(Debug)]
-struct KiroRouteFailure {
+pub(crate) struct KiroRouteFailure {
     status: StatusCode,
     content_type: String,
     body: Bytes,
@@ -3802,8 +3802,12 @@ impl KiroRouteFailure {
         self
     }
 
-    fn body_text(&self) -> String {
+    pub(crate) fn body_text(&self) -> String {
         String::from_utf8_lossy(&self.body).into_owned()
+    }
+
+    pub(crate) fn status(&self) -> StatusCode {
+        self.status
     }
 
     fn into_response(self) -> Response {
@@ -3819,7 +3823,7 @@ impl KiroRouteFailure {
     }
 }
 
-async fn call_kiro_generate_for_route(
+pub(crate) async fn call_kiro_generate_for_route(
     route: &ProviderKiroRoute,
     route_store: &dyn ProviderRouteStore,
     upstream_url: String,
@@ -5112,7 +5116,7 @@ fn parse_kiro_billable_model_multipliers_json(
     Ok(map)
 }
 
-fn decode_kiro_events_from_bytes(bytes: &[u8]) -> Result<Vec<Event>, String> {
+pub(crate) fn decode_kiro_events_from_bytes(bytes: &[u8]) -> Result<Vec<Event>, String> {
     let mut decoder = EventStreamDecoder::new();
     let _ = decoder.feed(bytes);
     let mut events = Vec::new();

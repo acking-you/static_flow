@@ -49,7 +49,7 @@ use crate::{
     activity::RequestActivitySnapshot,
     codex_refresh, codex_status, kiro_refresh, kiro_status,
     process_memory::{read_current_process_memory_stats, ProcessMemoryStats},
-    HttpState,
+    provider, HttpState,
 };
 
 const MAX_CODEX_CLIENT_VERSION_LEN: usize = 64;
@@ -101,6 +101,8 @@ const PROXY_FULL_CHAIN_CODEX_KEY_NAME: &str = "admin-key";
 const PROXY_FULL_CHAIN_KIRO_KEY_NAME: &str = "admin";
 const PROXY_FULL_CHAIN_CODEX_MODEL: &str = "gpt-5.5";
 const PROXY_FULL_CHAIN_KIRO_MODEL: &str = "claude-sonnet-4-6";
+const ADMIN_KIRO_MODEL_PROBE_MAX_TOKENS: i32 = 16;
+const ADMIN_KIRO_MODEL_PROBE_PROMPT: &str = "Reply with OK only.";
 const CODEX_ACCESS_TOKEN_VALIDATION_TIMEOUT_SECONDS: u64 = 20;
 const CODEX_WIRE_ORIGINATOR: &str = "codex_cli_rs";
 const BAND_CONTIGUITY_TOLERANCE: f64 = 1e-12;
@@ -215,6 +217,20 @@ struct AdminKiroCacheStatsResponse {
     stats: KiroCacheRuntimeStats,
     process_memory: ProcessMemoryStats,
     generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminKiroModelProbeResponse {
+    ok: bool,
+    account_name: String,
+    model: String,
+    api_region: String,
+    proxy_source: String,
+    proxy_url: Option<String>,
+    upstream_status_code: u16,
+    latency_ms: i64,
+    checked_at: i64,
+    message: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -713,6 +729,45 @@ pub(crate) struct PatchKiroAccountRequest {
     proxy_mode: Option<String>,
     #[serde(default)]
     proxy_config_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ProbeKiroAccountModelRequest {
+    model: String,
+    #[serde(default)]
+    proxy_config_id: Option<String>,
+    #[serde(default)]
+    proxy_url: Option<String>,
+    #[serde(default)]
+    proxy_username: Option<String>,
+    #[serde(default)]
+    proxy_password: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NormalizedProbeKiroAccountModelRequest {
+    model: String,
+    proxy_config_id: Option<String>,
+    inline_proxy: Option<core_store::ProviderProxyConfig>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdminKiroProbeProxySource {
+    Inline,
+    ProxyConfig,
+    Resolved,
+    None,
+}
+
+impl AdminKiroProbeProxySource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Inline => "inline",
+            Self::ProxyConfig => "proxy_config",
+            Self::Resolved => "resolved",
+            Self::None => "none",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -2686,6 +2741,175 @@ pub(crate) async fn refresh_admin_kiro_account_balance(
             )
                 .into_response()
         },
+    }
+}
+
+pub(crate) async fn probe_admin_kiro_account_model(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(request): Json<ProbeKiroAccountModelRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_account_name(&name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    let request = match normalize_probe_kiro_account_model_request(request) {
+        Ok(request) => request,
+        Err(response) => return response.into_response(),
+    };
+    let mut route = match state
+        .admin_kiro_account_store
+        .resolve_admin_kiro_account_route(&name)
+        .await
+    {
+        Ok(Some(route)) => route,
+        Ok(None) => return not_found("Kiro account not found").into_response(),
+        Err(_) => return internal_error("Failed to load Kiro account").into_response(),
+    };
+    let (proxy, proxy_source) = match resolve_admin_kiro_probe_proxy(&state, &route, &request).await
+    {
+        Ok(value) => value,
+        Err(response) => return response.into_response(),
+    };
+    route.proxy = proxy.clone();
+    let probe_payload = build_kiro_model_probe_payload(&request.model);
+    let normalized = match llm_access_kiro::anthropic::converter::normalize_request(&probe_payload)
+    {
+        Ok(normalized) => normalized,
+        Err(err) => return bad_request(&err.to_string()).into_response(),
+    };
+    let resolved_conversation =
+        llm_access_kiro::anthropic::converter::resolve_conversation_id_from_metadata(
+            probe_payload.metadata.as_ref(),
+        );
+    let conversion = match llm_access_kiro::anthropic::converter::convert_normalized_request_with_resolved_session(
+        normalized,
+        route.request_validation_enabled,
+        resolved_conversation,
+    ) {
+        Ok(conversion) => conversion,
+        Err(err) => return bad_request(&err.to_string()).into_response(),
+    };
+    let request_body = match serde_json::to_vec(&llm_access_kiro::wire::KiroRequest {
+        conversation_state: conversion.conversation_state,
+        profile_arn: route.profile_arn.clone(),
+    }) {
+        Ok(body) => body,
+        Err(_) => {
+            return internal_error("Failed to encode Kiro model probe request").into_response();
+        },
+    };
+    let upstream_url = format!(
+        "{}/generateAssistantResponse",
+        kiro_refresh::runtime_upstream_base_url(&route.api_region)
+    );
+    let started_at = Instant::now();
+    match provider::call_kiro_generate_for_route(
+        &route,
+        state.provider_state.route_store().as_ref(),
+        upstream_url,
+        &request_body,
+    )
+    .await
+    {
+        Ok(response) => {
+            let upstream_status_code = response.status().as_u16();
+            let bytes = match response.bytes().await {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(AdminKiroModelProbeResponse {
+                            ok: false,
+                            account_name: name,
+                            model: request.model,
+                            api_region: route.api_region,
+                            proxy_source: proxy_source.as_str().to_string(),
+                            proxy_url: proxy.map(|value| value.proxy_url),
+                            upstream_status_code,
+                            latency_ms: started_at.elapsed().as_millis().min(i64::MAX as u128)
+                                as i64,
+                            checked_at: now_ms(),
+                            message: format!("failed to read Kiro model probe response: {err}"),
+                        }),
+                    )
+                        .into_response();
+                },
+            };
+            let events = match provider::decode_kiro_events_from_bytes(&bytes) {
+                Ok(events) => events,
+                Err(err) => {
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(AdminKiroModelProbeResponse {
+                            ok: false,
+                            account_name: name,
+                            model: request.model,
+                            api_region: route.api_region,
+                            proxy_source: proxy_source.as_str().to_string(),
+                            proxy_url: proxy.map(|value| value.proxy_url),
+                            upstream_status_code,
+                            latency_ms: started_at.elapsed().as_millis().min(i64::MAX as u128)
+                                as i64,
+                            checked_at: now_ms(),
+                            message: err,
+                        }),
+                    )
+                        .into_response();
+                },
+            };
+            if let Some(message) = kiro_probe_eventstream_error_message(&events) {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(AdminKiroModelProbeResponse {
+                        ok: false,
+                        account_name: name,
+                        model: request.model,
+                        api_region: route.api_region,
+                        proxy_source: proxy_source.as_str().to_string(),
+                        proxy_url: proxy.map(|value| value.proxy_url),
+                        upstream_status_code,
+                        latency_ms: started_at.elapsed().as_millis().min(i64::MAX as u128) as i64,
+                        checked_at: now_ms(),
+                        message,
+                    }),
+                )
+                    .into_response();
+            }
+            Json(AdminKiroModelProbeResponse {
+                ok: true,
+                account_name: name,
+                model: request.model,
+                api_region: route.api_region,
+                proxy_source: proxy_source.as_str().to_string(),
+                proxy_url: proxy.map(|value| value.proxy_url),
+                upstream_status_code,
+                latency_ms: started_at.elapsed().as_millis().min(i64::MAX as u128) as i64,
+                checked_at: now_ms(),
+                message: "Kiro model probe succeeded".to_string(),
+            })
+            .into_response()
+        },
+        Err(err) => (
+            err.status(),
+            Json(AdminKiroModelProbeResponse {
+                ok: false,
+                account_name: name,
+                model: request.model,
+                api_region: route.api_region,
+                proxy_source: proxy_source.as_str().to_string(),
+                proxy_url: proxy.map(|value| value.proxy_url),
+                upstream_status_code: err.status().as_u16(),
+                latency_ms: started_at.elapsed().as_millis().min(i64::MAX as u128) as i64,
+                checked_at: now_ms(),
+                message: summarize_upstream_error_body(&err.body_text()),
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -5028,6 +5252,123 @@ fn provider_proxy_config_from_admin(
     }
 }
 
+fn normalize_probe_kiro_account_model_request(
+    request: ProbeKiroAccountModelRequest,
+) -> Result<NormalizedProbeKiroAccountModelRequest, AdminHttpError> {
+    let model = normalize_optional_string(&request.model)
+        .ok_or_else(|| bad_request("model is required"))?;
+    let proxy_url = normalize_optional_string_option(request.proxy_url.as_deref());
+    let proxy_username = normalize_optional_string_option(request.proxy_username.as_deref());
+    let proxy_password = normalize_optional_string_option(request.proxy_password.as_deref());
+    if proxy_url.is_none() && (proxy_username.is_some() || proxy_password.is_some()) {
+        return Err(bad_request(
+            "proxy_url is required when inline proxy credentials are provided",
+        ));
+    }
+    Ok(NormalizedProbeKiroAccountModelRequest {
+        model,
+        proxy_config_id: normalize_optional_string_option(request.proxy_config_id.as_deref()),
+        inline_proxy: proxy_url.map(|proxy_url| core_store::ProviderProxyConfig {
+            proxy_url,
+            proxy_username,
+            proxy_password,
+        }),
+    })
+}
+
+fn select_admin_kiro_probe_proxy(
+    inline_proxy: Option<core_store::ProviderProxyConfig>,
+    proxy_config_proxy: Option<core_store::ProviderProxyConfig>,
+    resolved_proxy: Option<core_store::ProviderProxyConfig>,
+) -> (Option<core_store::ProviderProxyConfig>, AdminKiroProbeProxySource) {
+    if let Some(proxy) = inline_proxy {
+        return (Some(proxy), AdminKiroProbeProxySource::Inline);
+    }
+    if let Some(proxy) = proxy_config_proxy {
+        return (Some(proxy), AdminKiroProbeProxySource::ProxyConfig);
+    }
+    if let Some(proxy) = resolved_proxy {
+        return (Some(proxy), AdminKiroProbeProxySource::Resolved);
+    }
+    (None, AdminKiroProbeProxySource::None)
+}
+
+async fn resolve_admin_kiro_probe_proxy(
+    state: &HttpState,
+    route: &core_store::ProviderKiroRoute,
+    request: &NormalizedProbeKiroAccountModelRequest,
+) -> Result<(Option<core_store::ProviderProxyConfig>, AdminKiroProbeProxySource), AdminHttpError> {
+    let proxy_config_proxy = if let Some(proxy_id) = request.proxy_config_id.as_deref() {
+        let proxy = match state
+            .admin_proxy_store
+            .get_admin_proxy_config(proxy_id)
+            .await
+        {
+            Ok(Some(proxy)) => proxy,
+            Ok(None) => return Err(not_found("LLM gateway proxy config not found")),
+            Err(_) => return Err(internal_error("Failed to load llm gateway proxy config")),
+        };
+        if proxy.status != KEY_STATUS_ACTIVE {
+            return Err(bad_request("proxy config must be active before probing"));
+        }
+        Some(provider_proxy_config_from_admin(&proxy))
+    } else {
+        None
+    };
+    Ok(select_admin_kiro_probe_proxy(
+        request.inline_proxy.clone(),
+        proxy_config_proxy,
+        route.proxy.clone(),
+    ))
+}
+
+fn build_kiro_model_probe_payload(
+    model: &str,
+) -> llm_access_kiro::anthropic::types::MessagesRequest {
+    llm_access_kiro::anthropic::types::MessagesRequest {
+        model: model.to_string(),
+        _max_tokens: ADMIN_KIRO_MODEL_PROBE_MAX_TOKENS,
+        messages: vec![llm_access_kiro::anthropic::types::Message {
+            role: "user".to_string(),
+            content: serde_json::Value::String(ADMIN_KIRO_MODEL_PROBE_PROMPT.to_string()),
+        }],
+        stream: false,
+        system: None,
+        tools: None,
+        _tool_choice: None,
+        thinking: None,
+        output_config: None,
+        metadata: None,
+    }
+}
+
+fn kiro_probe_eventstream_error_message(events: &[llm_access_kiro::wire::Event]) -> Option<String> {
+    for event in events {
+        match event {
+            llm_access_kiro::wire::Event::Error {
+                error_code,
+                error_message,
+            } => {
+                return Some(format!(
+                    "Kiro model probe stream error {error_code}: {}",
+                    summarize_upstream_error_body(error_message)
+                ));
+            },
+            llm_access_kiro::wire::Event::Exception {
+                exception_type,
+                message,
+            } => {
+                return Some(format!(
+                    "Kiro model probe stream exception {exception_type}: {}",
+                    summarize_upstream_error_body(message)
+                ));
+            },
+            _ => {},
+        }
+    }
+    None
+}
+
 fn normalize_proxy_check_mode(
     request: Option<&CheckLlmGatewayProxyConfigRequest>,
 ) -> Result<AdminProxyCheckMode, AdminHttpError> {
@@ -6477,6 +6818,101 @@ mod tests {
             created_at: 1,
             updated_at: 1,
         }
+    }
+
+    fn sample_provider_proxy(url: &str) -> core_store::ProviderProxyConfig {
+        core_store::ProviderProxyConfig {
+            proxy_url: url.to_string(),
+            proxy_username: None,
+            proxy_password: None,
+        }
+    }
+
+    #[test]
+    fn normalize_probe_kiro_account_model_request_accepts_inline_proxy() {
+        let request = ProbeKiroAccountModelRequest {
+            model: " claude-opus-4-8 ".to_string(),
+            proxy_config_id: Some("  proxy-1 ".to_string()),
+            proxy_url: Some(" http://127.0.0.1:7890 ".to_string()),
+            proxy_username: Some(" user ".to_string()),
+            proxy_password: Some(" pass ".to_string()),
+        };
+
+        let normalized =
+            normalize_probe_kiro_account_model_request(request).expect("request should normalize");
+
+        assert_eq!(normalized.model, "claude-opus-4-8");
+        assert_eq!(normalized.proxy_config_id.as_deref(), Some("proxy-1"));
+        assert_eq!(
+            normalized.inline_proxy,
+            Some(core_store::ProviderProxyConfig {
+                proxy_url: "http://127.0.0.1:7890".to_string(),
+                proxy_username: Some("user".to_string()),
+                proxy_password: Some("pass".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn normalize_probe_kiro_account_model_request_rejects_proxy_auth_without_url() {
+        let err = normalize_probe_kiro_account_model_request(ProbeKiroAccountModelRequest {
+            model: "claude-opus-4-8".to_string(),
+            proxy_config_id: None,
+            proxy_url: None,
+            proxy_username: Some("user".to_string()),
+            proxy_password: None,
+        })
+        .expect_err("inline proxy credentials without url must fail");
+
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("proxy_url"));
+    }
+
+    #[test]
+    fn select_admin_kiro_probe_proxy_prefers_inline_then_proxy_config_then_resolved() {
+        let inline_proxy = sample_provider_proxy("http://inline:7890");
+        let proxy_config_proxy = sample_provider_proxy("http://config:7890");
+        let resolved_proxy = sample_provider_proxy("http://resolved:7890");
+
+        let (selected, source) = select_admin_kiro_probe_proxy(
+            Some(inline_proxy.clone()),
+            Some(proxy_config_proxy.clone()),
+            Some(resolved_proxy.clone()),
+        );
+        assert_eq!(selected, Some(inline_proxy));
+        assert_eq!(source, AdminKiroProbeProxySource::Inline);
+
+        let (selected, source) = select_admin_kiro_probe_proxy(
+            None,
+            Some(proxy_config_proxy.clone()),
+            Some(resolved_proxy.clone()),
+        );
+        assert_eq!(selected, Some(proxy_config_proxy));
+        assert_eq!(source, AdminKiroProbeProxySource::ProxyConfig);
+
+        let (selected, source) =
+            select_admin_kiro_probe_proxy(None, None, Some(resolved_proxy.clone()));
+        assert_eq!(selected, Some(resolved_proxy));
+        assert_eq!(source, AdminKiroProbeProxySource::Resolved);
+
+        let (selected, source) = select_admin_kiro_probe_proxy(None, None, None);
+        assert_eq!(selected, None);
+        assert_eq!(source, AdminKiroProbeProxySource::None);
+    }
+
+    #[test]
+    fn kiro_probe_eventstream_error_message_prefers_stream_errors() {
+        let message = kiro_probe_eventstream_error_message(&[
+            llm_access_kiro::wire::Event::Unknown {},
+            llm_access_kiro::wire::Event::Error {
+                error_code: "InvalidModel".to_string(),
+                error_message: r#"{"message":"model is not supported"}"#.to_string(),
+            },
+        ])
+        .expect("stream error should be surfaced");
+
+        assert!(message.contains("InvalidModel"));
+        assert!(message.contains("model is not supported"));
     }
 
     #[test]

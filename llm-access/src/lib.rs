@@ -389,6 +389,10 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
             get(admin::get_admin_kiro_account_balance)
                 .post(admin::refresh_admin_kiro_account_balance),
         )
+        .route(
+            "/admin/kiro-gateway/accounts/:name/probe-model",
+            post(admin::probe_admin_kiro_account_model),
+        )
         .route("/api/llm-gateway/access", get(public::get_llm_gateway_access))
         .route("/api/llm-gateway/public-page", get(public::get_llm_gateway_public_page))
         .route("/api/llm-gateway/model-catalog.json", get(public::get_llm_gateway_model_catalog))

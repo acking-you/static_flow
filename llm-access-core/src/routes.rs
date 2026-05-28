@@ -284,6 +284,10 @@ pub const ADMIN_ROUTES: &[RouteSpec] = &[
         method: "GET|POST",
         path: "/admin/kiro-gateway/accounts/:name/balance",
     },
+    RouteSpec {
+        method: "POST",
+        path: "/admin/kiro-gateway/accounts/:name/probe-model",
+    },
 ];
 
 /// Return whether a path is owned by `llm-access`.
@@ -367,6 +371,7 @@ mod tests {
         assert!(paths.contains(&"/admin/llm-access/usage-journal/status"));
         assert!(paths.contains(&"/admin/kiro-gateway/keys/:key_id"));
         assert!(paths.contains(&"/admin/kiro-gateway/accounts/:name/balance"));
+        assert!(paths.contains(&"/admin/kiro-gateway/accounts/:name/probe-model"));
     }
 
     #[test]
