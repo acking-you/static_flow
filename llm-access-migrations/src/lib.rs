@@ -63,6 +63,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "usage_catalog",
         sql: include_str!("../migrations/postgres/0015_usage_catalog.sql"),
     },
+    SqlMigration {
+        version: 16,
+        name: "usage_catalog_segment_filters",
+        sql: include_str!("../migrations/postgres/0016_usage_catalog_segment_filters.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.

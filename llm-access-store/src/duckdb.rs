@@ -42,8 +42,10 @@ use tokio::task;
 use crate::{
     request_cache::RequestCacheConfig,
     usage_catalog::{
-        PostgresUsageCatalog, UsageCatalogKeyRollupRecord, UsageCatalogRetentionSegment,
-        UsageCatalogSegment, UsageCatalogSegmentRecord,
+        PostgresUsageCatalog, UsageCatalogFieldFilter, UsageCatalogFieldName,
+        UsageCatalogFieldRollupRecord, UsageCatalogKeyRollupRecord, UsageCatalogQuery,
+        UsageCatalogRetentionSegment, UsageCatalogSegment, UsageCatalogSegmentMatch,
+        UsageCatalogSegmentRecord, UsageCatalogSegmentTotals,
     },
     KeyUsageRollupSummary,
 };
@@ -602,6 +604,15 @@ fn duckdb_relation_exists(conn: &duckdb::Connection, relation_name: &str) -> boo
     conn.prepare(&sql)
         .and_then(|mut stmt| stmt.exists([]))
         .is_ok()
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn duckdb_relation_has_rows(conn: &duckdb::Connection, relation_name: &str) -> bool {
+    let sql = format!("SELECT 1 FROM {relation_name} LIMIT 1");
+    conn.query_row(&sql, [], |_row| Ok(()))
+        .optional()
+        .map(|row| row.is_some())
+        .unwrap_or(false)
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1367,7 +1378,6 @@ struct ArchivedUsageSegment {
     archive_path: PathBuf,
     start_ms: Option<i64>,
     end_ms: Option<i64>,
-    row_count: usize,
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1406,6 +1416,23 @@ struct SegmentKeyRollup {
     billable_tokens: i64,
     credit_total: String,
     credit_missing_events: i64,
+    first_used_at_ms: Option<i64>,
+    last_used_at_ms: Option<i64>,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug, Clone)]
+struct SegmentFieldRollup {
+    key_id: Option<String>,
+    provider_type: Option<String>,
+    field_name: UsageCatalogFieldName,
+    field_value: String,
+    row_count: usize,
+    input_uncached_tokens: i64,
+    input_cached_tokens: i64,
+    output_tokens: i64,
+    billable_tokens: i64,
+    first_used_at_ms: Option<i64>,
     last_used_at_ms: Option<i64>,
 }
 
@@ -1416,7 +1443,12 @@ struct SegmentStats {
     end_ms: Option<i64>,
     row_count: usize,
     event_id_count: usize,
+    input_uncached_tokens: i64,
+    input_cached_tokens: i64,
+    output_tokens: i64,
+    billable_tokens: i64,
     rollups: Vec<SegmentKeyRollup>,
+    field_rollups: Vec<SegmentFieldRollup>,
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1447,6 +1479,7 @@ struct TestTieredUsageCatalog {
 struct TestTieredUsageCatalogState {
     segments: BTreeMap<String, UsageCatalogSegmentRecord>,
     segment_rollups: BTreeMap<String, Vec<UsageCatalogKeyRollupRecord>>,
+    segment_field_rollups: BTreeMap<String, Vec<UsageCatalogFieldRollupRecord>>,
     event_locators: BTreeMap<String, String>,
 }
 
@@ -1553,6 +1586,7 @@ impl DuckDbUsageRepository {
             .map(Arc::new);
 
         seed_catalog_from_archives_if_empty(catalog_backend.as_ref(), &config)?;
+        refresh_catalog_from_archives_if_needed(catalog_backend.as_ref())?;
         spawn_existing_pending_sealers(
             config.clone(),
             Arc::clone(&catalog_backend),
@@ -1713,11 +1747,16 @@ impl TieredUsageCatalogBackend {
         &self,
         segment: &UsageCatalogSegmentRecord,
         rollups: &[UsageCatalogKeyRollupRecord],
+        field_rollups: &[UsageCatalogFieldRollupRecord],
         event_ids: &[String],
     ) -> anyhow::Result<()> {
         match self {
-            Self::Postgres(catalog) => catalog.publish_segment(segment, rollups, event_ids),
-            Self::Test(catalog) => catalog.publish_segment(segment, rollups, event_ids),
+            Self::Postgres(catalog) => {
+                catalog.publish_segment(segment, rollups, field_rollups, event_ids)
+            },
+            Self::Test(catalog) => {
+                catalog.publish_segment(segment, rollups, field_rollups, event_ids)
+            },
         }
     }
 
@@ -1745,37 +1784,55 @@ impl TieredUsageCatalogBackend {
         }
     }
 
+    fn archived_paths_missing_field_rollups(&self) -> anyhow::Result<Vec<PathBuf>> {
+        match self {
+            Self::Postgres(catalog) => catalog.archived_paths_missing_field_rollups(),
+            Self::Test(catalog) => catalog.archived_paths_missing_field_rollups(),
+        }
+    }
+
     fn archived_segments_for_query(
         &self,
         query: &UsageEventQuery,
     ) -> anyhow::Result<Vec<ArchivedUsageSegment>> {
+        let catalog_query = catalog_query_from_usage_query(query);
         match self {
             Self::Postgres(catalog) => catalog
-                .archived_segments_for_query(query.start_ms, query.end_ms)
-                .map(|segments| segments.into_iter().map(Into::into).collect()),
-            Self::Test(catalog) => catalog.archived_segments_for_query(query),
-        }
-    }
-
-    fn archived_segments_with_catalog_counts(
-        &self,
-        query: &UsageEventQuery,
-    ) -> anyhow::Result<Vec<(ArchivedUsageSegment, usize)>> {
-        match self {
-            Self::Postgres(catalog) => catalog
-                .archived_segments_with_catalog_counts(
-                    query.start_ms,
-                    query.end_ms,
-                    query.key_id.as_deref(),
-                    query.provider_type.as_deref(),
-                )
+                .archived_segment_matches_for_query(&catalog_query)
                 .map(|segments| {
                     segments
                         .into_iter()
-                        .map(|segment| (segment.segment.into(), segment.matching_row_count))
+                        .map(|segment| segment.segment.into())
                         .collect()
                 }),
-            Self::Test(catalog) => catalog.archived_segments_with_catalog_counts(query),
+            Self::Test(catalog) => catalog.archived_segments_for_query(&catalog_query),
+        }
+    }
+
+    fn archived_segment_matches_for_query(
+        &self,
+        query: &UsageEventQuery,
+    ) -> anyhow::Result<Vec<UsageCatalogSegmentMatch>> {
+        let catalog_query = catalog_query_from_usage_query(query);
+        match self {
+            Self::Postgres(catalog) => catalog.archived_segment_matches_for_query(&catalog_query),
+            Self::Test(catalog) => catalog.archived_segment_matches_for_query(&catalog_query),
+        }
+    }
+
+    fn archived_filter_option_values(
+        &self,
+        query: &UsageEventQuery,
+        field_name: UsageCatalogFieldName,
+    ) -> anyhow::Result<Option<Vec<String>>> {
+        let catalog_query = catalog_filter_options_query_from_usage_query(query, field_name);
+        match self {
+            Self::Postgres(catalog) => {
+                catalog.archived_filter_option_values(&catalog_query, field_name)
+            },
+            Self::Test(catalog) => {
+                catalog.archived_filter_option_values(&catalog_query, field_name)
+            },
         }
     }
 
@@ -1863,6 +1920,7 @@ impl TestTieredUsageCatalog {
         &self,
         segment: &UsageCatalogSegmentRecord,
         rollups: &[UsageCatalogKeyRollupRecord],
+        field_rollups: &[UsageCatalogFieldRollupRecord],
         event_ids: &[String],
     ) -> anyhow::Result<()> {
         let mut state = self.lock()?;
@@ -1872,6 +1930,9 @@ impl TestTieredUsageCatalog {
         state
             .segment_rollups
             .insert(segment.segment_id.clone(), rollups.to_vec());
+        state
+            .segment_field_rollups
+            .insert(segment.segment_id.clone(), field_rollups.to_vec());
         state
             .event_locators
             .retain(|_, current_segment_id| current_segment_id != &segment.segment_id);
@@ -1931,6 +1992,9 @@ impl TestTieredUsageCatalog {
             .segment_rollups
             .retain(|segment_id, _| !deleted_ids.contains(segment_id.as_str()));
         state
+            .segment_field_rollups
+            .retain(|segment_id, _| !deleted_ids.contains(segment_id.as_str()));
+        state
             .event_locators
             .retain(|_, segment_id| !deleted_ids.contains(segment_id.as_str()));
         self.persist(&state)?;
@@ -1946,56 +2010,113 @@ impl TestTieredUsageCatalog {
             .collect())
     }
 
+    fn archived_paths_missing_field_rollups(&self) -> anyhow::Result<Vec<PathBuf>> {
+        let state = self.lock()?;
+        let mut paths = state
+            .segments
+            .iter()
+            .filter(|(segment_id, _)| {
+                state
+                    .segment_field_rollups
+                    .get(*segment_id)
+                    .is_none_or(|rollups| rollups.is_empty())
+            })
+            .map(|(_, segment)| segment.archive_path.clone())
+            .collect::<Vec<_>>();
+        paths.sort();
+        Ok(paths)
+    }
+
     fn archived_segments_for_query(
         &self,
-        query: &UsageEventQuery,
+        query: &UsageCatalogQuery,
     ) -> anyhow::Result<Vec<ArchivedUsageSegment>> {
         let state = self.lock()?;
         let mut segments = state
             .segments
             .values()
             .filter(|segment| segment_matches_time_window(segment, query.start_ms, query.end_ms))
+            .filter(|segment| {
+                test_catalog_segment_matches_query(&state, &segment.segment_id, query)
+            })
             .map(archived_segment_from_record)
             .collect::<Vec<_>>();
         sort_archived_segments(&mut segments);
         Ok(segments)
     }
 
-    fn archived_segments_with_catalog_counts(
+    fn archived_segment_matches_for_query(
         &self,
-        query: &UsageEventQuery,
-    ) -> anyhow::Result<Vec<(ArchivedUsageSegment, usize)>> {
+        query: &UsageCatalogQuery,
+    ) -> anyhow::Result<Vec<UsageCatalogSegmentMatch>> {
         let state = self.lock()?;
         let mut segments = Vec::new();
         for (segment_id, segment) in state.segments.iter().filter(|(_, segment)| {
             segment_matches_time_window(segment, query.start_ms, query.end_ms)
         }) {
-            let matching_row_count = if query.key_id.is_none() && query.provider_type.is_none() {
-                segment.row_count
-            } else {
-                state
-                    .segment_rollups
-                    .get(segment_id)
-                    .into_iter()
-                    .flatten()
-                    .filter(|rollup| {
-                        query
-                            .key_id
-                            .as_deref()
-                            .is_none_or(|key_id| rollup.key_id == key_id)
-                            && query
-                                .provider_type
-                                .as_deref()
-                                .is_none_or(|provider_type| rollup.provider_type == provider_type)
-                    })
-                    .fold(0usize, |total, rollup| total.saturating_add(rollup.row_count))
-            };
-            if matching_row_count > 0 {
-                segments.push((archived_segment_from_record(segment), matching_row_count));
+            if !test_catalog_segment_matches_query(&state, segment_id, query) {
+                continue;
+            }
+            let matching_totals =
+                test_catalog_segment_totals_for_query(&state, segment_id, segment, query);
+            if query.field_filters.len() > 1 || matching_totals.is_some() {
+                segments.push(UsageCatalogSegmentMatch {
+                    segment: UsageCatalogSegment {
+                        archive_path: segment.archive_path.clone(),
+                        start_ms: segment.start_ms,
+                        end_ms: segment.end_ms,
+                        row_count: segment.row_count,
+                    },
+                    matching_totals,
+                });
             }
         }
-        sort_archived_segment_counts(&mut segments);
+        segments.sort_by(|left, right| {
+            right
+                .segment
+                .end_ms
+                .unwrap_or_default()
+                .cmp(&left.segment.end_ms.unwrap_or_default())
+                .then_with(|| right.segment.archive_path.cmp(&left.segment.archive_path))
+        });
         Ok(segments)
+    }
+
+    fn archived_filter_option_values(
+        &self,
+        query: &UsageCatalogQuery,
+        field_name: UsageCatalogFieldName,
+    ) -> anyhow::Result<Option<Vec<String>>> {
+        if !query.field_filters.is_empty() {
+            return Ok(None);
+        }
+        let state = self.lock()?;
+        let mut values = BTreeSet::new();
+        for (segment_id, _segment) in state.segments.iter().filter(|(_, segment)| {
+            segment_matches_time_window(segment, query.start_ms, query.end_ms)
+        }) {
+            let Some(rollups) = state.segment_field_rollups.get(segment_id) else {
+                continue;
+            };
+            for rollup in rollups {
+                if rollup.field_name != field_name {
+                    continue;
+                }
+                if !test_field_rollup_matches_scope(rollup, query) {
+                    continue;
+                }
+                if !test_rollup_matches_time(
+                    rollup.first_used_at_ms,
+                    rollup.last_used_at_ms,
+                    query.start_ms,
+                    query.end_ms,
+                ) {
+                    continue;
+                }
+                values.insert(rollup.field_value.clone());
+            }
+        }
+        Ok(Some(values.into_iter().collect()))
     }
 
     fn locate_archived_segment(
@@ -2020,7 +2141,6 @@ impl From<UsageCatalogSegment> for ArchivedUsageSegment {
             archive_path: value.archive_path,
             start_ms: value.start_ms,
             end_ms: value.end_ms,
-            row_count: value.row_count,
         }
     }
 }
@@ -2031,8 +2151,262 @@ fn archived_segment_from_record(record: &UsageCatalogSegmentRecord) -> ArchivedU
         archive_path: record.archive_path.clone(),
         start_ms: record.start_ms,
         end_ms: record.end_ms,
-        row_count: record.row_count,
     }
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn catalog_query_from_usage_query(query: &UsageEventQuery) -> UsageCatalogQuery {
+    let mut field_filters = Vec::new();
+    if let Some(model) = query.model.as_ref() {
+        field_filters.push(UsageCatalogFieldFilter {
+            field_name: UsageCatalogFieldName::Model,
+            field_value: model.clone(),
+        });
+    }
+    if let Some(account_name) = query.account_name.as_ref() {
+        field_filters.push(UsageCatalogFieldFilter {
+            field_name: UsageCatalogFieldName::AccountName,
+            field_value: account_name.clone(),
+        });
+    }
+    if let Some(endpoint) = query.endpoint.as_ref() {
+        field_filters.push(UsageCatalogFieldFilter {
+            field_name: UsageCatalogFieldName::Endpoint,
+            field_value: endpoint.clone(),
+        });
+    }
+    if let Some(status_code) = query.status_code {
+        field_filters.push(UsageCatalogFieldFilter {
+            field_name: UsageCatalogFieldName::StatusCode,
+            field_value: status_code.to_string(),
+        });
+    }
+    if let Some(status_kind) = query.status_kind {
+        field_filters.push(UsageCatalogFieldFilter {
+            field_name: UsageCatalogFieldName::StatusKind,
+            field_value: status_kind.as_query_value().to_string(),
+        });
+    }
+    UsageCatalogQuery {
+        start_ms: query.start_ms,
+        end_ms: query.end_ms,
+        key_id: query.key_id.clone(),
+        provider_type: query.provider_type.clone(),
+        field_filters,
+    }
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn catalog_filter_options_query_from_usage_query(
+    query: &UsageEventQuery,
+    field_name: UsageCatalogFieldName,
+) -> UsageCatalogQuery {
+    catalog_query_from_usage_query(&usage_filter_options_query_for_catalog_field(query, field_name))
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn usage_filter_options_query_for_catalog_field(
+    query: &UsageEventQuery,
+    field_name: UsageCatalogFieldName,
+) -> UsageEventQuery {
+    let mut scoped = query.clone();
+    match field_name {
+        UsageCatalogFieldName::Model => scoped.model = None,
+        UsageCatalogFieldName::AccountName => scoped.account_name = None,
+        UsageCatalogFieldName::Endpoint => scoped.endpoint = None,
+        UsageCatalogFieldName::StatusCode => scoped.status_code = None,
+        UsageCatalogFieldName::StatusKind => scoped.status_kind = None,
+    }
+    scoped.limit = 1;
+    scoped.offset = 0;
+    scoped
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn catalog_query_has_exact_totals(query: &UsageCatalogQuery) -> bool {
+    query.field_filters.len() <= 1
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn test_catalog_segment_matches_query(
+    state: &TestTieredUsageCatalogState,
+    segment_id: &str,
+    query: &UsageCatalogQuery,
+) -> bool {
+    if query.field_filters.is_empty() {
+        if query.key_id.is_none() && query.provider_type.is_none() {
+            return true;
+        }
+        return state
+            .segment_rollups
+            .get(segment_id)
+            .into_iter()
+            .flatten()
+            .any(|rollup| {
+                test_key_rollup_matches_scope(rollup, query)
+                    && test_rollup_matches_time(
+                        rollup.first_used_at_ms,
+                        rollup.last_used_at_ms,
+                        query.start_ms,
+                        query.end_ms,
+                    )
+            });
+    }
+    let Some(field_rollups) = state.segment_field_rollups.get(segment_id) else {
+        return false;
+    };
+    query.field_filters.iter().all(|filter| {
+        field_rollups.iter().any(|rollup| {
+            rollup.field_name == filter.field_name
+                && rollup.field_value == filter.field_value
+                && test_field_rollup_matches_scope(rollup, query)
+                && test_rollup_matches_time(
+                    rollup.first_used_at_ms,
+                    rollup.last_used_at_ms,
+                    query.start_ms,
+                    query.end_ms,
+                )
+        })
+    })
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn test_catalog_segment_totals_for_query(
+    state: &TestTieredUsageCatalogState,
+    segment_id: &str,
+    segment: &UsageCatalogSegmentRecord,
+    query: &UsageCatalogQuery,
+) -> Option<UsageCatalogSegmentTotals> {
+    if !catalog_query_has_exact_totals(query) {
+        return None;
+    }
+    if query.field_filters.is_empty() {
+        if query.key_id.is_none() && query.provider_type.is_none() {
+            return Some(UsageCatalogSegmentTotals {
+                event_count: segment.row_count,
+                input_uncached_tokens: i64_to_u64(segment.input_uncached_tokens),
+                input_cached_tokens: i64_to_u64(segment.input_cached_tokens),
+                output_tokens: i64_to_u64(segment.output_tokens),
+                billable_tokens: i64_to_u64(segment.billable_tokens),
+            });
+        }
+        let totals = state
+            .segment_rollups
+            .get(segment_id)
+            .into_iter()
+            .flatten()
+            .filter(|rollup| test_key_rollup_matches_scope(rollup, query))
+            .fold(
+                UsageCatalogSegmentTotals {
+                    event_count: 0,
+                    input_uncached_tokens: 0,
+                    input_cached_tokens: 0,
+                    output_tokens: 0,
+                    billable_tokens: 0,
+                },
+                |mut totals, rollup| {
+                    totals.event_count = totals.event_count.saturating_add(rollup.row_count);
+                    totals.input_uncached_tokens = totals
+                        .input_uncached_tokens
+                        .saturating_add(i64_to_u64(rollup.input_uncached_tokens));
+                    totals.input_cached_tokens = totals
+                        .input_cached_tokens
+                        .saturating_add(i64_to_u64(rollup.input_cached_tokens));
+                    totals.output_tokens = totals
+                        .output_tokens
+                        .saturating_add(i64_to_u64(rollup.output_tokens));
+                    totals.billable_tokens = totals
+                        .billable_tokens
+                        .saturating_add(i64_to_u64(rollup.billable_tokens));
+                    totals
+                },
+            );
+        return Some(totals);
+    }
+    let filter = query.field_filters.first()?;
+    let totals = state
+        .segment_field_rollups
+        .get(segment_id)
+        .into_iter()
+        .flatten()
+        .filter(|rollup| {
+            rollup.field_name == filter.field_name
+                && rollup.field_value == filter.field_value
+                && test_field_rollup_matches_scope(rollup, query)
+        })
+        .fold(
+            UsageCatalogSegmentTotals {
+                event_count: 0,
+                input_uncached_tokens: 0,
+                input_cached_tokens: 0,
+                output_tokens: 0,
+                billable_tokens: 0,
+            },
+            |mut totals, rollup| {
+                totals.event_count = totals.event_count.saturating_add(rollup.row_count);
+                totals.input_uncached_tokens = totals
+                    .input_uncached_tokens
+                    .saturating_add(i64_to_u64(rollup.input_uncached_tokens));
+                totals.input_cached_tokens = totals
+                    .input_cached_tokens
+                    .saturating_add(i64_to_u64(rollup.input_cached_tokens));
+                totals.output_tokens = totals
+                    .output_tokens
+                    .saturating_add(i64_to_u64(rollup.output_tokens));
+                totals.billable_tokens = totals
+                    .billable_tokens
+                    .saturating_add(i64_to_u64(rollup.billable_tokens));
+                totals
+            },
+        );
+    Some(totals)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn test_key_rollup_matches_scope(
+    rollup: &UsageCatalogKeyRollupRecord,
+    query: &UsageCatalogQuery,
+) -> bool {
+    query
+        .key_id
+        .as_deref()
+        .is_none_or(|key_id| rollup.key_id == key_id)
+        && query
+            .provider_type
+            .as_deref()
+            .is_none_or(|provider_type| rollup.provider_type == provider_type)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn test_field_rollup_matches_scope(
+    rollup: &UsageCatalogFieldRollupRecord,
+    query: &UsageCatalogQuery,
+) -> bool {
+    match (query.key_id.as_deref(), query.provider_type.as_deref()) {
+        (None, None) => rollup.key_id.is_none() && rollup.provider_type.is_none(),
+        (key_id, provider_type) => {
+            key_id.is_none_or(|key_id| rollup.key_id.as_deref() == Some(key_id))
+                && provider_type.is_none_or(|provider_type| {
+                    rollup.provider_type.as_deref() == Some(provider_type)
+                })
+        },
+    }
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn test_rollup_matches_time(
+    first_used_at_ms: Option<i64>,
+    last_used_at_ms: Option<i64>,
+    start_ms: Option<i64>,
+    end_ms: Option<i64>,
+) -> bool {
+    (start_ms.is_none() || last_used_at_ms.is_none() || last_used_at_ms >= start_ms)
+        && (end_ms.is_none() || first_used_at_ms.is_none() || first_used_at_ms < end_ms)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn i64_to_u64(value: i64) -> u64 {
+    u64::try_from(value.max(0)).unwrap_or(u64::MAX)
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -2056,19 +2430,6 @@ fn sort_archived_segments(segments: &mut [ArchivedUsageSegment]) {
     });
 }
 
-#[cfg(feature = "duckdb-runtime")]
-fn sort_archived_segment_counts(segments: &mut [(ArchivedUsageSegment, usize)]) {
-    segments.sort_by(|left, right| {
-        right
-            .0
-            .end_ms
-            .unwrap_or(0)
-            .cmp(&left.0.end_ms.unwrap_or(0))
-            .then_with(|| right.0.archive_path.cmp(&left.0.archive_path))
-    });
-}
-
-#[cfg(feature = "duckdb-runtime")]
 fn tiered_pending_dir(config: &TieredDuckDbUsageConfig) -> PathBuf {
     config.active_dir.join("pending")
 }
@@ -2607,16 +2968,40 @@ fn finalize_archived_segment(
 #[cfg(feature = "duckdb-runtime")]
 fn collect_segment_stats(path: &Path) -> anyhow::Result<SegmentStats> {
     let conn = DuckDbUsageRepository::open_read_only_conn(path)?;
-    let (row_count, event_id_count, start_ms, end_ms): (i64, i64, Option<i64>, Option<i64>) = conn
+    let (
+        row_count,
+        event_id_count,
+        start_ms,
+        end_ms,
+        input_uncached_tokens,
+        input_cached_tokens,
+        output_tokens,
+        billable_tokens,
+    ): (i64, i64, Option<i64>, Option<i64>, i64, i64, i64, i64) = conn
         .query_row(
             "SELECT
                 CAST(count(*) AS BIGINT),
                 CAST(count(event_id) AS BIGINT),
                 min(created_at_ms),
-                max(created_at_ms)
+                max(created_at_ms),
+                CAST(COALESCE(sum(input_uncached_tokens), 0) AS BIGINT),
+                CAST(COALESCE(sum(input_cached_tokens), 0) AS BIGINT),
+                CAST(COALESCE(sum(output_tokens), 0) AS BIGINT),
+                CAST(COALESCE(sum(billable_tokens), 0) AS BIGINT)
              FROM usage_events",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            },
         )
         .context("query duckdb segment stats")?;
     let mut stmt = conn
@@ -2631,6 +3016,7 @@ fn collect_segment_stats(path: &Path) -> anyhow::Result<SegmentStats> {
                 CAST(COALESCE(sum(billable_tokens), 0) AS BIGINT),
                 CAST(COALESCE(sum(COALESCE(try_cast(credit_usage AS DOUBLE), 0)), 0) AS VARCHAR),
                 CAST(COALESCE(sum(CASE WHEN credit_usage_missing THEN 1 ELSE 0 END), 0) AS BIGINT),
+                min(created_at_ms),
                 max(created_at_ms)
              FROM usage_events
              GROUP BY key_id, provider_type",
@@ -2648,18 +3034,25 @@ fn collect_segment_stats(path: &Path) -> anyhow::Result<SegmentStats> {
                 billable_tokens: row.get(6)?,
                 credit_total: row.get(7)?,
                 credit_missing_events: row.get(8)?,
-                last_used_at_ms: row.get(9)?,
+                first_used_at_ms: row.get(9)?,
+                last_used_at_ms: row.get(10)?,
             })
         })
         .context("query duckdb segment rollups")?
         .collect::<Result<Vec<_>, _>>()
         .context("collect duckdb segment rollups")?;
+    let field_rollups = collect_segment_field_rollups(&conn)?;
     Ok(SegmentStats {
         start_ms,
         end_ms,
         row_count: i64_to_usize(row_count),
         event_id_count: i64_to_usize(event_id_count),
+        input_uncached_tokens,
+        input_cached_tokens,
+        output_tokens,
+        billable_tokens,
         rollups,
+        field_rollups,
     })
 }
 
@@ -2680,6 +3073,116 @@ fn collect_segment_event_ids(path: &Path) -> anyhow::Result<Vec<String>> {
 }
 
 #[cfg(feature = "duckdb-runtime")]
+fn collect_segment_field_rollups(
+    conn: &duckdb::Connection,
+) -> anyhow::Result<Vec<SegmentFieldRollup>> {
+    let mut rollups = Vec::new();
+    rollups.extend(query_segment_field_rollups(conn, UsageCatalogFieldName::Model, "model")?);
+    rollups.extend(query_segment_field_rollups(
+        conn,
+        UsageCatalogFieldName::AccountName,
+        "account_name",
+    )?);
+    rollups.extend(query_segment_field_rollups(conn, UsageCatalogFieldName::Endpoint, "endpoint")?);
+    rollups.extend(query_segment_field_rollups(
+        conn,
+        UsageCatalogFieldName::StatusCode,
+        "CAST(status_code AS VARCHAR)",
+    )?);
+    rollups.extend(query_segment_field_rollups(
+        conn,
+        UsageCatalogFieldName::StatusKind,
+        "CASE WHEN status_code = 200 THEN 'ok' ELSE 'non_ok' END",
+    )?);
+    Ok(rollups)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn query_segment_field_rollups(
+    conn: &duckdb::Connection,
+    field_name: UsageCatalogFieldName,
+    value_sql: &str,
+) -> anyhow::Result<Vec<SegmentFieldRollup>> {
+    let global_sql = format!(
+        "SELECT
+            CAST(NULL AS VARCHAR) AS key_id,
+            CAST(NULL AS VARCHAR) AS provider_type,
+            field_value,
+            CAST(count(*) AS BIGINT),
+            CAST(COALESCE(sum(input_uncached_tokens), 0) AS BIGINT),
+            CAST(COALESCE(sum(input_cached_tokens), 0) AS BIGINT),
+            CAST(COALESCE(sum(output_tokens), 0) AS BIGINT),
+            CAST(COALESCE(sum(billable_tokens), 0) AS BIGINT),
+            min(created_at_ms),
+            max(created_at_ms)
+         FROM (
+            SELECT {value_sql} AS field_value, input_uncached_tokens, input_cached_tokens,
+                   output_tokens, billable_tokens, created_at_ms
+            FROM usage_events
+         ) values_by_field
+         WHERE field_value IS NOT NULL
+           AND length(trim(field_value)) > 0
+         GROUP BY field_value"
+    );
+    let scoped_sql = format!(
+        "SELECT
+            key_id,
+            provider_type,
+            field_value,
+            CAST(count(*) AS BIGINT),
+            CAST(COALESCE(sum(input_uncached_tokens), 0) AS BIGINT),
+            CAST(COALESCE(sum(input_cached_tokens), 0) AS BIGINT),
+            CAST(COALESCE(sum(output_tokens), 0) AS BIGINT),
+            CAST(COALESCE(sum(billable_tokens), 0) AS BIGINT),
+            min(created_at_ms),
+            max(created_at_ms)
+         FROM (
+            SELECT key_id, provider_type, {value_sql} AS field_value,
+                   input_uncached_tokens, input_cached_tokens, output_tokens,
+                   billable_tokens, created_at_ms
+            FROM usage_events
+         ) values_by_field
+         WHERE field_value IS NOT NULL
+           AND length(trim(field_value)) > 0
+         GROUP BY key_id, provider_type, field_value"
+    );
+    let mut rollups = query_segment_field_rollup_sql(conn, field_name, &global_sql, false)?;
+    rollups.extend(query_segment_field_rollup_sql(conn, field_name, &scoped_sql, true)?);
+    Ok(rollups)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn query_segment_field_rollup_sql(
+    conn: &duckdb::Connection,
+    field_name: UsageCatalogFieldName,
+    sql: &str,
+    scoped: bool,
+) -> anyhow::Result<Vec<SegmentFieldRollup>> {
+    let mut stmt = conn
+        .prepare(sql)
+        .with_context(|| format!("prepare duckdb segment field rollup query `{sql}`"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(SegmentFieldRollup {
+                key_id: if scoped { row.get(0)? } else { None },
+                provider_type: if scoped { row.get(1)? } else { None },
+                field_name,
+                field_value: row.get(2)?,
+                row_count: i64_to_usize(row.get(3)?),
+                input_uncached_tokens: row.get(4)?,
+                input_cached_tokens: row.get(5)?,
+                output_tokens: row.get(6)?,
+                billable_tokens: row.get(7)?,
+                first_used_at_ms: row.get(8)?,
+                last_used_at_ms: row.get(9)?,
+            })
+        })
+        .with_context(|| format!("query duckdb segment field rollups `{sql}`"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .context("collect duckdb segment field rollups")
+}
+
+#[cfg(feature = "duckdb-runtime")]
 fn seed_catalog_from_archives_if_empty(
     catalog_backend: &TieredUsageCatalogBackend,
     config: &TieredDuckDbUsageConfig,
@@ -2696,46 +3199,90 @@ fn seed_catalog_from_archives_if_empty(
     });
     archive_files.sort();
     for archive_path in archive_files {
-        let Some(segment_id) = archive_path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .map(ToString::to_string)
-        else {
-            continue;
-        };
-        let stats = collect_segment_stats(&archive_path)?;
-        let event_ids = collect_segment_event_ids(&archive_path)?;
-        let size_bytes = fs::metadata(&archive_path)
-            .with_context(|| format!("stat archived segment `{}`", archive_path.display()))?
-            .len();
-        let record = UsageCatalogSegmentRecord {
-            segment_id: segment_id.clone(),
-            archive_path: archive_path.clone(),
-            start_ms: stats.start_ms,
-            end_ms: stats.end_ms,
-            row_count: stats.row_count,
-            size_bytes,
-            sealed_at_ms: sealed_at_ms_for_segment(&segment_id),
-        };
-        let rollups = stats
-            .rollups
-            .iter()
-            .map(|rollup| UsageCatalogKeyRollupRecord {
-                key_id: rollup.key_id.clone(),
-                provider_type: rollup.provider_type.clone(),
-                row_count: rollup.row_count,
-                input_uncached_tokens: rollup.input_uncached_tokens,
-                input_cached_tokens: rollup.input_cached_tokens,
-                output_tokens: rollup.output_tokens,
-                billable_tokens: rollup.billable_tokens,
-                credit_total: rollup.credit_total.clone(),
-                credit_missing_events: rollup.credit_missing_events,
-                last_used_at_ms: rollup.last_used_at_ms,
-            })
-            .collect::<Vec<_>>();
-        catalog_backend.publish_segment(&record, &rollups, &event_ids)?;
+        publish_archive_path_to_catalog(catalog_backend, &archive_path)?;
     }
     Ok(())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn refresh_catalog_from_archives_if_needed(
+    catalog_backend: &TieredUsageCatalogBackend,
+) -> anyhow::Result<()> {
+    let missing_paths = catalog_backend.archived_paths_missing_field_rollups()?;
+    for archive_path in missing_paths {
+        if !archive_path.exists() {
+            continue;
+        }
+        publish_archive_path_to_catalog(catalog_backend, &archive_path)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn publish_archive_path_to_catalog(
+    catalog_backend: &TieredUsageCatalogBackend,
+    archive_path: &Path,
+) -> anyhow::Result<()> {
+    let Some(segment_id) = archive_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(ToString::to_string)
+    else {
+        return Ok(());
+    };
+    let stats = collect_segment_stats(archive_path)?;
+    let event_ids = collect_segment_event_ids(archive_path)?;
+    let size_bytes = fs::metadata(archive_path)
+        .with_context(|| format!("stat archived segment `{}`", archive_path.display()))?
+        .len();
+    let record = UsageCatalogSegmentRecord {
+        segment_id: segment_id.clone(),
+        archive_path: archive_path.to_path_buf(),
+        start_ms: stats.start_ms,
+        end_ms: stats.end_ms,
+        row_count: stats.row_count,
+        input_uncached_tokens: stats.input_uncached_tokens,
+        input_cached_tokens: stats.input_cached_tokens,
+        output_tokens: stats.output_tokens,
+        billable_tokens: stats.billable_tokens,
+        size_bytes,
+        sealed_at_ms: sealed_at_ms_for_segment(&segment_id),
+    };
+    let rollups = stats
+        .rollups
+        .iter()
+        .map(|rollup| UsageCatalogKeyRollupRecord {
+            key_id: rollup.key_id.clone(),
+            provider_type: rollup.provider_type.clone(),
+            row_count: rollup.row_count,
+            input_uncached_tokens: rollup.input_uncached_tokens,
+            input_cached_tokens: rollup.input_cached_tokens,
+            output_tokens: rollup.output_tokens,
+            billable_tokens: rollup.billable_tokens,
+            credit_total: rollup.credit_total.clone(),
+            credit_missing_events: rollup.credit_missing_events,
+            first_used_at_ms: rollup.first_used_at_ms,
+            last_used_at_ms: rollup.last_used_at_ms,
+        })
+        .collect::<Vec<_>>();
+    let field_rollups = stats
+        .field_rollups
+        .iter()
+        .map(|rollup| UsageCatalogFieldRollupRecord {
+            key_id: rollup.key_id.clone(),
+            provider_type: rollup.provider_type.clone(),
+            field_name: rollup.field_name,
+            field_value: rollup.field_value.clone(),
+            row_count: rollup.row_count,
+            input_uncached_tokens: rollup.input_uncached_tokens,
+            input_cached_tokens: rollup.input_cached_tokens,
+            output_tokens: rollup.output_tokens,
+            billable_tokens: rollup.billable_tokens,
+            first_used_at_ms: rollup.first_used_at_ms,
+            last_used_at_ms: rollup.last_used_at_ms,
+        })
+        .collect::<Vec<_>>();
+    catalog_backend.publish_segment(&record, &rollups, &field_rollups, &event_ids)
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -2856,6 +3403,10 @@ fn publish_segment_catalog(
         start_ms: stats.start_ms,
         end_ms: stats.end_ms,
         row_count: stats.row_count,
+        input_uncached_tokens: stats.input_uncached_tokens,
+        input_cached_tokens: stats.input_cached_tokens,
+        output_tokens: stats.output_tokens,
+        billable_tokens: stats.billable_tokens,
         size_bytes,
         sealed_at_ms: sealed_at_ms_for_segment(segment_id),
     };
@@ -2872,10 +3423,28 @@ fn publish_segment_catalog(
             billable_tokens: rollup.billable_tokens,
             credit_total: rollup.credit_total.clone(),
             credit_missing_events: rollup.credit_missing_events,
+            first_used_at_ms: rollup.first_used_at_ms,
             last_used_at_ms: rollup.last_used_at_ms,
         })
         .collect::<Vec<_>>();
-    catalog_backend.publish_segment(&record, &rollups, &event_ids)
+    let field_rollups = stats
+        .field_rollups
+        .iter()
+        .map(|rollup| UsageCatalogFieldRollupRecord {
+            key_id: rollup.key_id.clone(),
+            provider_type: rollup.provider_type.clone(),
+            field_name: rollup.field_name,
+            field_value: rollup.field_value.clone(),
+            row_count: rollup.row_count,
+            input_uncached_tokens: rollup.input_uncached_tokens,
+            input_cached_tokens: rollup.input_cached_tokens,
+            output_tokens: rollup.output_tokens,
+            billable_tokens: rollup.billable_tokens,
+            first_used_at_ms: rollup.first_used_at_ms,
+            last_used_at_ms: rollup.last_used_at_ms,
+        })
+        .collect::<Vec<_>>();
+    catalog_backend.publish_segment(&record, &rollups, &field_rollups, &event_ids)
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -3845,25 +4414,25 @@ fn archived_usage_partitions_for_query(
     query: &UsageEventQuery,
 ) -> anyhow::Result<Vec<TieredUsagePartition>> {
     let mut partitions = Vec::new();
-    for (segment, catalog_count) in archived_segments_with_catalog_counts(catalog_backend, query)? {
-        let conn = DuckDbUsageRepository::open_read_only_conn(&segment.archive_path)?;
-        let totals = fetch_usage_event_totals_from_conn(&conn, query)?;
+    for segment_match in archived_segment_matches_for_query(catalog_backend, query)? {
+        let segment = ArchivedUsageSegment::from(segment_match.segment.clone());
+        let totals = if segment_fully_inside(&segment, query) {
+            segment_match.matching_totals.clone().map(Into::into)
+        } else {
+            None
+        };
+        let totals = match totals {
+            Some(totals) => totals,
+            None => {
+                let conn = DuckDbUsageRepository::open_read_only_conn(&segment.archive_path)?;
+                fetch_usage_event_totals_from_conn(&conn, query)?
+            },
+        };
         let count = totals.event_count;
         if count > 0 {
-            let effective_count = if segment_fully_inside(&segment, query)
-                && query.model.is_none()
-                && query.account_name.is_none()
-                && query.endpoint.is_none()
-                && query.status_code.is_none()
-                && query.status_kind.is_none()
-            {
-                catalog_count
-            } else {
-                count
-            };
             partitions.push(TieredUsagePartition {
                 path: segment.archive_path,
-                count: effective_count,
+                count,
                 totals,
                 kind: TieredUsagePartitionKind::Archive,
             });
@@ -3873,22 +4442,11 @@ fn archived_usage_partitions_for_query(
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn archived_segments_with_catalog_counts(
+fn archived_segment_matches_for_query(
     catalog_backend: &TieredUsageCatalogBackend,
     query: &UsageEventQuery,
-) -> anyhow::Result<Vec<(ArchivedUsageSegment, usize)>> {
-    if query.key_id.is_none() && query.provider_type.is_none() {
-        return archived_segments_for_query(catalog_backend, query).map(|segments| {
-            segments
-                .into_iter()
-                .map(|segment| {
-                    let count = segment.row_count;
-                    (segment, count)
-                })
-                .collect()
-        });
-    }
-    catalog_backend.archived_segments_with_catalog_counts(query)
+) -> anyhow::Result<Vec<UsageCatalogSegmentMatch>> {
+    catalog_backend.archived_segment_matches_for_query(query)
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -4113,7 +4671,8 @@ fn usage_chart_points_from_tiered(
         limit: USAGE_EVENT_PAGE_MAX_LIMIT,
         offset: 0,
     };
-    for (segment, _) in archived_segments_with_catalog_counts(catalog_backend, &query)? {
+    for segment_match in archived_segment_matches_for_query(catalog_backend, &query)? {
+        let segment = ArchivedUsageSegment::from(segment_match.segment);
         let conn = DuckDbUsageRepository::open_read_only_conn(&segment.archive_path)?;
         add_usage_chart_points_from_conn(&mut points, &conn, key_id, start_ms, bucket_ms)?;
     }
@@ -4170,11 +4729,11 @@ enum UsageFilterOptionField {
 
 #[cfg(feature = "duckdb-runtime")]
 impl UsageFilterOptionField {
-    fn column_name(self) -> &'static str {
+    fn catalog_field_name(self) -> UsageCatalogFieldName {
         match self {
-            Self::Model => "model",
-            Self::Account => "account_name",
-            Self::Endpoint => "endpoint",
+            Self::Model => UsageCatalogFieldName::Model,
+            Self::Account => UsageCatalogFieldName::AccountName,
+            Self::Endpoint => UsageCatalogFieldName::Endpoint,
         }
     }
 }
@@ -4184,23 +4743,7 @@ fn list_usage_filter_options_from_conn(
     conn: &duckdb::Connection,
     query: &UsageEventQuery,
 ) -> anyhow::Result<UsageFilterOptions> {
-    Ok(UsageFilterOptions {
-        models: fetch_usage_filter_field_values_from_conn(
-            conn,
-            &usage_filter_options_query_for_field(query, UsageFilterOptionField::Model),
-            UsageFilterOptionField::Model,
-        )?,
-        accounts: fetch_usage_filter_field_values_from_conn(
-            conn,
-            &usage_filter_options_query_for_field(query, UsageFilterOptionField::Account),
-            UsageFilterOptionField::Account,
-        )?,
-        endpoints: fetch_usage_filter_field_values_from_conn(
-            conn,
-            &usage_filter_options_query_for_field(query, UsageFilterOptionField::Endpoint),
-            UsageFilterOptionField::Endpoint,
-        )?,
-    })
+    fetch_usage_filter_options_from_conn(conn, query)
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -4210,83 +4753,54 @@ fn list_usage_filter_options_from_tiered(
     active_path: &Path,
     query: &UsageEventQuery,
 ) -> anyhow::Result<UsageFilterOptions> {
-    let archived_paths = if query.source.includes_archive() {
-        archived_segments_with_catalog_counts(catalog_backend, query)?
-            .into_iter()
-            .map(|(segment, _)| segment.archive_path)
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    Ok(UsageFilterOptions {
-        models: collect_usage_filter_field_values_from_tiered(
-            active_path,
-            &archived_paths,
-            query,
-            UsageFilterOptionField::Model,
-        )?,
-        accounts: collect_usage_filter_field_values_from_tiered(
-            active_path,
-            &archived_paths,
-            query,
-            UsageFilterOptionField::Account,
-        )?,
-        endpoints: collect_usage_filter_field_values_from_tiered(
-            active_path,
-            &archived_paths,
-            query,
-            UsageFilterOptionField::Endpoint,
-        )?,
-    })
-}
-
-#[cfg(feature = "duckdb-runtime")]
-fn collect_usage_filter_field_values_from_tiered(
-    active_path: &Path,
-    archived_paths: &[PathBuf],
-    query: &UsageEventQuery,
-    field: UsageFilterOptionField,
-) -> anyhow::Result<Vec<String>> {
-    let scoped_query = usage_filter_options_query_for_field(query, field);
-    let mut values = BTreeSet::new();
+    let mut options = UsageFilterOptions::default();
     if query.source.includes_hot() {
         let conn = DuckDbUsageRepository::open_read_only_conn(active_path)?;
-        values.extend(fetch_usage_filter_field_values_from_conn(&conn, &scoped_query, field)?);
+        options = merge_usage_filter_options(
+            options,
+            fetch_usage_filter_options_from_conn(&conn, query)?,
+        );
     }
-    for archived_path in archived_paths {
-        let conn = DuckDbUsageRepository::open_read_only_conn(archived_path)?;
-        values.extend(fetch_usage_filter_field_values_from_conn(&conn, &scoped_query, field)?);
+    if query.source.includes_archive() {
+        let mut archived_options = UsageFilterOptions::default();
+        let mut missing_fields = Vec::new();
+        for field in [
+            UsageFilterOptionField::Model,
+            UsageFilterOptionField::Account,
+            UsageFilterOptionField::Endpoint,
+        ] {
+            match catalog_backend
+                .archived_filter_option_values(query, field.catalog_field_name())?
+            {
+                Some(values) => {
+                    assign_usage_filter_option_values(&mut archived_options, field, values)
+                },
+                None => missing_fields.push(field),
+            }
+        }
+        if !missing_fields.is_empty() {
+            let archived_paths = archived_segments_for_query(catalog_backend, query)?
+                .into_iter()
+                .map(|segment| segment.archive_path)
+                .collect::<Vec<_>>();
+            for archived_path in archived_paths {
+                let conn = DuckDbUsageRepository::open_read_only_conn(&archived_path)?;
+                let scanned = fetch_usage_filter_options_from_conn(&conn, query)?;
+                merge_missing_usage_filter_options(&mut archived_options, scanned, &missing_fields);
+            }
+        }
+        options = merge_usage_filter_options(options, archived_options);
     }
-    Ok(values.into_iter().collect())
+    Ok(options)
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn usage_filter_options_query_for_field(
-    query: &UsageEventQuery,
-    field: UsageFilterOptionField,
-) -> UsageEventQuery {
-    let mut scoped = query.clone();
-    match field {
-        UsageFilterOptionField::Model => scoped.model = None,
-        UsageFilterOptionField::Account => scoped.account_name = None,
-        UsageFilterOptionField::Endpoint => scoped.endpoint = None,
-    }
-    scoped.limit = 1;
-    scoped.offset = 0;
-    scoped
-}
-
-#[cfg(feature = "duckdb-runtime")]
-fn fetch_usage_filter_field_values_from_conn(
+fn fetch_usage_filter_options_from_conn(
     conn: &duckdb::Connection,
     query: &UsageEventQuery,
-    field: UsageFilterOptionField,
-) -> anyhow::Result<Vec<String>> {
+) -> anyhow::Result<UsageFilterOptions> {
     let columns = duckdb_table_columns(conn, "usage_events")?;
-    if !columns.contains(field.column_name()) {
-        return Ok(Vec::new());
-    }
-    let sql = usage_filter_options_sql(&columns, "e", field);
+    let sql = usage_filter_options_sql(&columns, "e");
     let mut stmt = conn
         .prepare(&sql)
         .context("prepare duckdb usage filter options query")?;
@@ -4303,39 +4817,171 @@ fn fetch_usage_filter_field_values_from_conn(
                 query.status_code,
                 query.status_kind.map(UsageEventStatusKind::as_query_value)
             ],
-            |row| row.get::<_, String>(0),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .context("query duckdb usage filter options")?;
-    let mut values = Vec::new();
-    for value in rows.flatten() {
-        if !value.is_empty() {
-            values.push(value);
+    let mut models = BTreeSet::new();
+    let mut accounts = BTreeSet::new();
+    let mut endpoints = BTreeSet::new();
+    for row in rows {
+        let (field_name, value) = row.context("read duckdb usage filter option row")?;
+        if value.is_empty() {
+            continue;
+        }
+        match field_name.as_str() {
+            "model" => {
+                models.insert(value);
+            },
+            "account_name" => {
+                accounts.insert(value);
+            },
+            "endpoint" => {
+                endpoints.insert(value);
+            },
+            _ => {},
         }
     }
-    Ok(values)
+    Ok(UsageFilterOptions {
+        models: models.into_iter().collect(),
+        accounts: accounts.into_iter().collect(),
+        endpoints: endpoints.into_iter().collect(),
+    })
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn usage_filter_options_sql(
-    columns: &HashSet<String>,
-    table_alias: &str,
-    field: UsageFilterOptionField,
-) -> String {
-    let column_sql = usage_event_filter_column_sql(
+fn usage_filter_options_sql(columns: &HashSet<String>, table_alias: &str) -> String {
+    let model_sql =
+        usage_event_filter_column_sql(columns, table_alias, "model", "CAST(NULL AS VARCHAR)");
+    let account_sql = usage_event_filter_column_sql(
         columns,
         table_alias,
-        field.column_name(),
+        "account_name",
         "CAST(NULL AS VARCHAR)",
     );
-    let where_sql = usage_event_filter_where_sql(columns, table_alias);
+    let endpoint_sql =
+        usage_event_filter_column_sql(columns, table_alias, "endpoint", "CAST(NULL AS VARCHAR)");
+    let model_where_sql =
+        usage_filter_options_where_sql(columns, table_alias, UsageFilterOptionField::Model);
+    let account_where_sql =
+        usage_filter_options_where_sql(columns, table_alias, UsageFilterOptionField::Account);
+    let endpoint_where_sql =
+        usage_filter_options_where_sql(columns, table_alias, UsageFilterOptionField::Endpoint);
     format!(
-        "SELECT DISTINCT {column_sql} AS value
-         FROM usage_events {table_alias}
-         {where_sql}
-           AND {column_sql} IS NOT NULL
-           AND length(trim({column_sql})) > 0
-         ORDER BY value"
+        "SELECT field_name, value
+         FROM (
+            SELECT 'model' AS field_name, {model_sql} AS value
+            FROM usage_events {table_alias}
+            {model_where_sql}
+            UNION
+            SELECT 'account_name' AS field_name, {account_sql} AS value
+            FROM usage_events {table_alias}
+            {account_where_sql}
+            UNION
+            SELECT 'endpoint' AS field_name, {endpoint_sql} AS value
+            FROM usage_events {table_alias}
+            {endpoint_where_sql}
+         ) values_by_field
+         WHERE value IS NOT NULL AND length(trim(value)) > 0
+         ORDER BY field_name, value"
     )
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn usage_filter_options_where_sql(
+    columns: &HashSet<String>,
+    table_alias: &str,
+    cleared_field: UsageFilterOptionField,
+) -> String {
+    let model_sql =
+        usage_event_filter_column_sql(columns, table_alias, "model", "CAST(NULL AS VARCHAR)");
+    let account_name_sql = usage_event_filter_column_sql(
+        columns,
+        table_alias,
+        "account_name",
+        "CAST(NULL AS VARCHAR)",
+    );
+    let endpoint_sql =
+        usage_event_filter_column_sql(columns, table_alias, "endpoint", "CAST(NULL AS VARCHAR)");
+    let status_code_sql =
+        usage_event_filter_column_sql(columns, table_alias, "status_code", "CAST(NULL AS INTEGER)");
+    let model_predicate = match cleared_field {
+        UsageFilterOptionField::Model => "TRUE".to_string(),
+        _ => format!("(?5 IS NULL OR {model_sql} = ?5)"),
+    };
+    let account_predicate = match cleared_field {
+        UsageFilterOptionField::Account => "TRUE".to_string(),
+        _ => format!("(?6 IS NULL OR {account_name_sql} = ?6)"),
+    };
+    let endpoint_predicate = match cleared_field {
+        UsageFilterOptionField::Endpoint => "TRUE".to_string(),
+        _ => format!("(?7 IS NULL OR {endpoint_sql} = ?7)"),
+    };
+    format!(
+        "WHERE (?1 IS NULL OR {table_alias}.key_id = ?1)
+      AND (?2 IS NULL OR {table_alias}.provider_type = ?2)
+      AND (?3 IS NULL OR {table_alias}.created_at_ms >= ?3)
+      AND (?4 IS NULL OR {table_alias}.created_at_ms < ?4)
+      AND {model_predicate}
+      AND {account_predicate}
+      AND {endpoint_predicate}
+      AND (?8 IS NULL OR {status_code_sql} = ?8)
+      AND (?9 IS NULL
+           OR (?9 = 'ok' AND {status_code_sql} = 200)
+           OR (?9 = 'non_ok' AND {status_code_sql} <> 200))"
+    )
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn merge_usage_filter_options(
+    mut base: UsageFilterOptions,
+    added: UsageFilterOptions,
+) -> UsageFilterOptions {
+    base.models.extend(added.models);
+    base.accounts.extend(added.accounts);
+    base.endpoints.extend(added.endpoints);
+    base.models.sort();
+    base.models.dedup();
+    base.accounts.sort();
+    base.accounts.dedup();
+    base.endpoints.sort();
+    base.endpoints.dedup();
+    base
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn assign_usage_filter_option_values(
+    options: &mut UsageFilterOptions,
+    field: UsageFilterOptionField,
+    mut values: Vec<String>,
+) {
+    values.sort();
+    values.dedup();
+    match field {
+        UsageFilterOptionField::Model => options.models = values,
+        UsageFilterOptionField::Account => options.accounts = values,
+        UsageFilterOptionField::Endpoint => options.endpoints = values,
+    }
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn merge_missing_usage_filter_options(
+    target: &mut UsageFilterOptions,
+    added: UsageFilterOptions,
+    missing_fields: &[UsageFilterOptionField],
+) {
+    for field in missing_fields {
+        match field {
+            UsageFilterOptionField::Model => target.models.extend(added.models.clone()),
+            UsageFilterOptionField::Account => target.accounts.extend(added.accounts.clone()),
+            UsageFilterOptionField::Endpoint => target.endpoints.extend(added.endpoints.clone()),
+        }
+    }
+    target.models.sort();
+    target.models.dedup();
+    target.accounts.sort();
+    target.accounts.dedup();
+    target.endpoints.sort();
+    target.endpoints.dedup();
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -4359,6 +5005,14 @@ fn add_usage_chart_points_from_conn(
     start_ms: i64,
     bucket_ms: i64,
 ) -> anyhow::Result<()> {
+    if bucket_ms % 3_600_000 == 0
+        && duckdb_relation_exists(conn, "usage_rollups_hourly")
+        && duckdb_relation_has_rows(conn, "usage_rollups_hourly")
+    {
+        return add_usage_chart_points_from_hourly_rollups(
+            points, conn, key_id, start_ms, bucket_ms,
+        );
+    }
     let end_ms = points
         .last()
         .map(|point| point.bucket_start_ms.saturating_add(bucket_ms))
@@ -4376,6 +5030,46 @@ fn add_usage_chart_points_from_conn(
         .query(duckdb::params![key_id, start_ms, bucket_ms, end_ms])
         .context("query duckdb usage chart")?;
     while let Some(row) = rows.next().context("read duckdb usage chart row")? {
+        let bucket_index: i64 = row.get(0)?;
+        let tokens: i64 = row.get(1)?;
+        if let Ok(index) = usize::try_from(bucket_index) {
+            if let Some(point) = points.get_mut(index) {
+                point.tokens = point.tokens.saturating_add(tokens.max(0) as u64);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn add_usage_chart_points_from_hourly_rollups(
+    points: &mut [UsageChartPoint],
+    conn: &duckdb::Connection,
+    key_id: &str,
+    start_ms: i64,
+    bucket_ms: i64,
+) -> anyhow::Result<()> {
+    let end_ms = points
+        .last()
+        .map(|point| point.bucket_start_ms.saturating_add(bucket_ms))
+        .unwrap_or(start_ms);
+    let mut stmt = conn
+        .prepare(
+            "SELECT
+                CAST(floor(((epoch(bucket_hour) * 1000)::BIGINT - ?2) / ?3) AS BIGINT) AS \
+             bucket_index,
+                CAST(sum(input_uncached_tokens + output_tokens) AS BIGINT) AS tokens
+             FROM usage_rollups_hourly
+             WHERE key_id = ?1
+               AND (epoch(bucket_hour) * 1000)::BIGINT >= ?2
+               AND (epoch(bucket_hour) * 1000)::BIGINT < ?4
+             GROUP BY bucket_index",
+        )
+        .context("prepare duckdb hourly usage chart query")?;
+    let mut rows = stmt
+        .query(duckdb::params![key_id, start_ms, bucket_ms, end_ms])
+        .context("query duckdb hourly usage chart")?;
+    while let Some(row) = rows.next().context("read duckdb hourly usage chart row")? {
         let bucket_index: i64 = row.get(0)?;
         let tokens: i64 = row.get(1)?;
         if let Ok(index) = usize::try_from(bucket_index) {
@@ -6340,6 +7034,10 @@ mod tests {
                     start_ms: Some(1_700_000_000_000_i64),
                     end_ms: Some(1_700_000_100_000_i64),
                     row_count: 1,
+                    input_uncached_tokens: 1,
+                    input_cached_tokens: 0,
+                    output_tokens: 1,
+                    billable_tokens: 2,
                     size_bytes: 1,
                     sealed_at_ms: 1_700_000_100_000_i64,
                 },
@@ -6353,8 +7051,10 @@ mod tests {
                     billable_tokens: 2,
                     credit_total: "0".to_string(),
                     credit_missing_events: 0,
+                    first_used_at_ms: Some(1_700_000_050_000_i64),
                     last_used_at_ms: Some(1_700_000_050_000_i64),
                 }],
+                &[],
                 &[],
             )
             .expect("insert nonmatching test catalog segment");
@@ -6383,6 +7083,311 @@ mod tests {
         assert!(page.events.is_empty());
 
         std::fs::remove_dir_all(&root).expect("cleanup skip nonmatching archive test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn tiered_archive_totals_limit_zero_can_come_from_catalog_without_opening_segments() {
+        let root = std::env::temp_dir().join(format!(
+            "llm-access-duckdb-test-{}-tiered-catalog-only-totals",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create tiered catalog-only totals test directory");
+        let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            rollover_bytes: 1,
+            details_dir: None,
+        })
+        .expect("open tiered duckdb usage db");
+
+        let mut first = test_usage_event();
+        first.event_id = "tiered-catalog-only-first".to_string();
+        first.created_at_ms = 1_700_600_000_000;
+        first.model = Some("gpt-5.4".to_string());
+        repo.append_usage_event(&first)
+            .await
+            .expect("append first archived event");
+
+        let mut second = first.clone();
+        second.event_id = "tiered-catalog-only-second".to_string();
+        second.created_at_ms += 1_000;
+        second.model = Some("gpt-5.5".to_string());
+        repo.append_usage_event(&second)
+            .await
+            .expect("append second archived event");
+
+        wait_for_archived_duckdb_file_count(&root.join("archive"), 2).await;
+        remove_archived_duckdb_files(&root.join("archive"));
+
+        let page = repo
+            .list_usage_events(UsageEventQuery {
+                key_id: None,
+                provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
+                status_kind: None,
+                source: UsageEventSource::Archive,
+                start_ms: None,
+                end_ms: None,
+                limit: 0,
+                offset: 0,
+            })
+            .await
+            .expect("list catalog-only archive totals");
+
+        assert_eq!(page.total, 2);
+        assert_eq!(page.totals.event_count, 2);
+        assert_eq!(page.totals.input_uncached_tokens, 20);
+        assert_eq!(page.totals.input_cached_tokens, 40);
+        assert_eq!(page.totals.output_tokens, 60);
+        assert_eq!(page.totals.billable_tokens, 80);
+        assert!(page.events.is_empty());
+
+        std::fs::remove_dir_all(&root).expect("cleanup tiered catalog-only totals test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn tiered_archive_model_filter_limit_zero_can_come_from_catalog_without_opening_segments()
+    {
+        let root = std::env::temp_dir().join(format!(
+            "llm-access-duckdb-test-{}-tiered-catalog-only-model-filter",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root)
+            .expect("create tiered catalog-only model-filter test directory");
+        let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            rollover_bytes: 1,
+            details_dir: None,
+        })
+        .expect("open tiered duckdb usage db");
+
+        let mut first = test_usage_event();
+        first.event_id = "tiered-catalog-model-first".to_string();
+        first.created_at_ms = 1_700_610_000_000;
+        first.key_id = "tiered-catalog-model-key".to_string();
+        first.model = Some("gpt-5.4".to_string());
+        repo.append_usage_event(&first)
+            .await
+            .expect("append first archived model-filter event");
+
+        let mut second = first.clone();
+        second.event_id = "tiered-catalog-model-second".to_string();
+        second.created_at_ms += 1_000;
+        second.model = Some("gpt-5.5".to_string());
+        repo.append_usage_event(&second)
+            .await
+            .expect("append second archived model-filter event");
+
+        wait_for_archived_duckdb_file_count(&root.join("archive"), 2).await;
+        remove_archived_duckdb_files(&root.join("archive"));
+
+        let page = repo
+            .list_usage_events(UsageEventQuery {
+                key_id: Some("tiered-catalog-model-key".to_string()),
+                provider_type: Some("kiro".to_string()),
+                model: Some("gpt-5.4".to_string()),
+                account_name: None,
+                endpoint: None,
+                status_code: None,
+                status_kind: None,
+                source: UsageEventSource::Archive,
+                start_ms: None,
+                end_ms: None,
+                limit: 0,
+                offset: 0,
+            })
+            .await
+            .expect("list catalog-only archive model-filter totals");
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.totals.event_count, 1);
+        assert_eq!(page.totals.input_uncached_tokens, 10);
+        assert_eq!(page.totals.input_cached_tokens, 20);
+        assert_eq!(page.totals.output_tokens, 30);
+        assert_eq!(page.totals.billable_tokens, 40);
+        assert!(page.events.is_empty());
+
+        std::fs::remove_dir_all(&root)
+            .expect("cleanup tiered catalog-only model-filter test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn tiered_usage_filter_options_can_come_from_catalog_without_opening_archives() {
+        let root = std::env::temp_dir().join(format!(
+            "llm-access-duckdb-test-{}-tiered-catalog-only-filter-options",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root)
+            .expect("create tiered catalog-only filter-options test directory");
+        let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            rollover_bytes: 1,
+            details_dir: None,
+        })
+        .expect("open tiered duckdb usage db");
+
+        let mut first = test_usage_event();
+        first.event_id = "tiered-catalog-filter-options-first".to_string();
+        first.created_at_ms = 1_700_620_000_000;
+        first.key_id = "tiered-catalog-filter-options-key".to_string();
+        first.model = Some("gpt-5.4".to_string());
+        first.account_name = Some("catalog-account-a".to_string());
+        first.endpoint = "/v1/responses".to_string();
+        repo.append_usage_event(&first)
+            .await
+            .expect("append first catalog filter-options event");
+
+        let mut second = first.clone();
+        second.event_id = "tiered-catalog-filter-options-second".to_string();
+        second.created_at_ms += 1_000;
+        second.model = Some("gpt-5.5".to_string());
+        second.account_name = Some("catalog-account-b".to_string());
+        second.endpoint = "/v1/chat/completions".to_string();
+        repo.append_usage_event(&second)
+            .await
+            .expect("append second catalog filter-options event");
+
+        wait_for_archived_duckdb_file_count(&root.join("archive"), 2).await;
+        remove_archived_duckdb_files(&root.join("archive"));
+
+        let options = repo
+            .list_usage_filter_options(UsageEventQuery {
+                key_id: Some("tiered-catalog-filter-options-key".to_string()),
+                provider_type: Some("kiro".to_string()),
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
+                status_kind: None,
+                source: UsageEventSource::Archive,
+                start_ms: None,
+                end_ms: None,
+                limit: 20,
+                offset: 0,
+            })
+            .await
+            .expect("list catalog-only filter options");
+
+        assert_eq!(options.models, vec!["gpt-5.4".to_string(), "gpt-5.5".to_string()]);
+        assert_eq!(options.accounts, vec![
+            "catalog-account-a".to_string(),
+            "catalog-account-b".to_string()
+        ]);
+        assert_eq!(options.endpoints, vec![
+            "/v1/chat/completions".to_string(),
+            "/v1/responses".to_string()
+        ]);
+
+        std::fs::remove_dir_all(&root)
+            .expect("cleanup tiered catalog-only filter-options test directory");
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    #[tokio::test]
+    async fn tiered_open_refreshes_missing_catalog_field_rollups() {
+        let root = std::env::temp_dir().join(format!(
+            "llm-access-duckdb-test-{}-tiered-catalog-refresh-rollups",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("archive")).expect("create archive dir");
+        let config = super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            rollover_bytes: 1,
+            details_dir: Some(details_store_dir(&root)),
+        };
+        std::fs::create_dir_all(&config.active_dir).expect("create active dir");
+        super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
+
+        let archive_path = archived_segment_path_for_timestamp(
+            &config,
+            "usage-legacy-refresh-000001",
+            1_700_000_000_000,
+        );
+        create_legacy_usage_archive_without_stream_columns(&archive_path);
+        let stats = super::collect_segment_stats(&archive_path).expect("collect legacy stats");
+        let event_ids =
+            super::collect_segment_event_ids(&archive_path).expect("collect legacy event ids");
+        let size_bytes = std::fs::metadata(&archive_path)
+            .expect("legacy archive metadata")
+            .len();
+        let catalog_backend = test_catalog_backend(&config);
+        catalog_backend
+            .publish_segment(
+                &crate::usage_catalog::UsageCatalogSegmentRecord {
+                    segment_id: "usage-legacy-refresh-000001".to_string(),
+                    archive_path: archive_path.clone(),
+                    start_ms: stats.start_ms,
+                    end_ms: stats.end_ms,
+                    row_count: stats.row_count,
+                    input_uncached_tokens: stats.input_uncached_tokens,
+                    input_cached_tokens: stats.input_cached_tokens,
+                    output_tokens: stats.output_tokens,
+                    billable_tokens: stats.billable_tokens,
+                    size_bytes,
+                    sealed_at_ms: 1_700_000_000_000,
+                },
+                &stats
+                    .rollups
+                    .iter()
+                    .map(|rollup| crate::usage_catalog::UsageCatalogKeyRollupRecord {
+                        key_id: rollup.key_id.clone(),
+                        provider_type: rollup.provider_type.clone(),
+                        row_count: rollup.row_count,
+                        input_uncached_tokens: rollup.input_uncached_tokens,
+                        input_cached_tokens: rollup.input_cached_tokens,
+                        output_tokens: rollup.output_tokens,
+                        billable_tokens: rollup.billable_tokens,
+                        credit_total: rollup.credit_total.clone(),
+                        credit_missing_events: rollup.credit_missing_events,
+                        first_used_at_ms: rollup.first_used_at_ms,
+                        last_used_at_ms: rollup.last_used_at_ms,
+                    })
+                    .collect::<Vec<_>>(),
+                &[],
+                &event_ids,
+            )
+            .expect("publish legacy catalog without field rollups");
+
+        let repo = super::DuckDbUsageRepository::open_tiered(config.clone())
+            .expect("open tiered duckdb usage db");
+        std::fs::remove_file(&archive_path).expect("remove archive after refresh");
+
+        let options = repo
+            .list_usage_filter_options(UsageEventQuery {
+                key_id: None,
+                provider_type: None,
+                model: None,
+                account_name: None,
+                endpoint: None,
+                status_code: None,
+                status_kind: None,
+                source: UsageEventSource::Archive,
+                start_ms: Some(1_699_999_000_000),
+                end_ms: Some(1_700_001_000_000),
+                limit: 20,
+                offset: 0,
+            })
+            .await
+            .expect("list filter options after catalog refresh");
+
+        assert_eq!(options.models, vec!["claude-sonnet-4-5".to_string()]);
+        assert_eq!(options.accounts, vec!["kiro-account".to_string()]);
+        assert_eq!(options.endpoints, vec!["/cc/v1/messages".to_string()]);
+
+        std::fs::remove_dir_all(&root).expect("cleanup tiered catalog refresh test directory");
     }
 
     #[cfg(feature = "duckdb-runtime")]
@@ -7025,10 +8030,11 @@ mod tests {
 
     #[cfg(feature = "duckdb-runtime")]
     async fn wait_for_archived_duckdb_file_count(archive_dir: &std::path::Path, expected: usize) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             let archived = duckdb_file_count(archive_dir);
-            if archived >= expected {
+            let catalog_segments = test_catalog_segment_count(archive_dir);
+            if archived >= expected && catalog_segments >= expected {
                 return;
             }
             if std::time::Instant::now() >= deadline {
@@ -7040,7 +8046,7 @@ mod tests {
 
     #[cfg(feature = "duckdb-runtime")]
     async fn wait_for_usage_event_present(repo: &super::DuckDbUsageRepository, event_id: &str) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             let event = repo
                 .get_usage_event(event_id)
@@ -7093,8 +8099,33 @@ mod tests {
     }
 
     #[cfg(feature = "duckdb-runtime")]
+    fn test_catalog_segment_count(archive_dir: &std::path::Path) -> usize {
+        let state_path = archive_dir.join(".test-usage-catalog.json");
+        let Ok(bytes) = std::fs::read(&state_path) else {
+            return 0;
+        };
+        serde_json::from_slice::<super::TestTieredUsageCatalogState>(&bytes)
+            .map(|state| state.segments.len())
+            .unwrap_or(0)
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    fn remove_archived_duckdb_files(archive_dir: &std::path::Path) {
+        let mut files = Vec::new();
+        super::collect_files_recursive(archive_dir, &mut files)
+            .expect("collect archived duckdb files for removal");
+        for path in files {
+            if path.extension().and_then(|ext| ext.to_str()) == Some("duckdb") {
+                std::fs::remove_file(&path).unwrap_or_else(|err| {
+                    panic!("remove archived duckdb file {}: {err}", path.display())
+                });
+            }
+        }
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
     async fn wait_for_tiered_usage_event(repo: &super::DuckDbUsageRepository, event_id: &str) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             if repo
                 .get_usage_event(event_id)

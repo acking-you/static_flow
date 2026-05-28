@@ -254,16 +254,16 @@ impl RequestCache {
         format!("{}:usage:catalog:rollups", self.key_prefix)
     }
 
-    pub(crate) fn usage_catalog_segments_key(&self, query_fingerprint: &str) -> String {
-        format!("{}:usage:catalog:segments:{query_fingerprint}", self.key_prefix)
-    }
-
     pub(crate) fn usage_catalog_filtered_segments_key(&self, query_fingerprint: &str) -> String {
         format!("{}:usage:catalog:segments:filtered:{query_fingerprint}", self.key_prefix)
     }
 
     pub(crate) fn usage_catalog_event_locator_key(&self, event_id: &str) -> String {
         format!("{}:usage:catalog:event:{event_id}", self.key_prefix)
+    }
+
+    pub(crate) fn usage_catalog_filter_options_key(&self, query_fingerprint: &str) -> String {
+        format!("{}:usage:catalog:filter-options:{query_fingerprint}", self.key_prefix)
     }
 
     pub(crate) fn auth_ttl(&self, secret_hash: &str) -> Duration {
@@ -336,15 +336,6 @@ impl RequestCache {
         )
     }
 
-    pub(crate) fn usage_catalog_segments_ttl(&self, query_fingerprint: &str) -> Duration {
-        deterministic_jitter_ttl(
-            &self.usage_catalog_segments_key(query_fingerprint),
-            USAGE_CATALOG_LOOKUP_TTL,
-            0.8,
-            1.2,
-        )
-    }
-
     pub(crate) fn usage_catalog_filtered_segments_ttl(&self, query_fingerprint: &str) -> Duration {
         deterministic_jitter_ttl(
             &self.usage_catalog_filtered_segments_key(query_fingerprint),
@@ -358,6 +349,15 @@ impl RequestCache {
         deterministic_jitter_ttl(
             &self.usage_catalog_event_locator_key(event_id),
             USAGE_CATALOG_EVENT_LOCATOR_TTL,
+            0.8,
+            1.2,
+        )
+    }
+
+    pub(crate) fn usage_catalog_filter_options_ttl(&self, query_fingerprint: &str) -> Duration {
+        deterministic_jitter_ttl(
+            &self.usage_catalog_filter_options_key(query_fingerprint),
+            USAGE_CATALOG_LOOKUP_TTL,
             0.8,
             1.2,
         )
@@ -626,10 +626,6 @@ mod tests {
         assert_eq!(
             cache.usage_catalog_rollups_key(),
             "llma:test:usage:catalog:rollups".to_string()
-        );
-        assert_eq!(
-            cache.usage_catalog_segments_key("start:-:end:-"),
-            "llma:test:usage:catalog:segments:start:-:end:-".to_string()
         );
         assert_eq!(
             cache.usage_catalog_filtered_segments_key("start:-:end:-:key:key-1:provider:codex"),

@@ -3,8 +3,9 @@
 use std::{collections::HashSet, path::PathBuf};
 
 use anyhow::{anyhow, Context};
+use llm_access_core::store::UsageEventTotals;
 use native_tls::TlsConnector;
-use postgres::Client;
+use postgres::{types::ToSql, Client};
 use postgres_native_tls::MakeTlsConnector;
 use serde::{Deserialize, Serialize};
 
@@ -26,13 +27,87 @@ pub(crate) struct UsageCatalogSegment {
     pub row_count: usize,
 }
 
-/// One archived segment plus its pre-aggregated matching row count.
+/// One catalog-level field filter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct UsageCatalogFieldFilter {
+    /// Indexed field name.
+    pub field_name: UsageCatalogFieldName,
+    /// Exact field value matched by the query.
+    pub field_value: String,
+}
+
+/// One catalog query over archived segments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct UsageCatalogQuery {
+    /// Inclusive lower bound on event time.
+    pub start_ms: Option<i64>,
+    /// Exclusive upper bound on event time.
+    pub end_ms: Option<i64>,
+    /// Optional key scope.
+    pub key_id: Option<String>,
+    /// Optional provider scope.
+    pub provider_type: Option<String>,
+    /// Optional indexed field filters.
+    pub field_filters: Vec<UsageCatalogFieldFilter>,
+}
+
+/// One indexed field supported by the archived usage catalog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(crate) enum UsageCatalogFieldName {
+    Model,
+    AccountName,
+    Endpoint,
+    StatusCode,
+    StatusKind,
+}
+
+impl UsageCatalogFieldName {
+    pub(crate) fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Model => "model",
+            Self::AccountName => "account_name",
+            Self::Endpoint => "endpoint",
+            Self::StatusCode => "status_code",
+            Self::StatusKind => "status_kind",
+        }
+    }
+}
+
+/// One archived segment plus its pre-aggregated matching totals.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct UsageCatalogSegmentCount {
+pub(crate) struct UsageCatalogSegmentMatch {
     /// Archived segment metadata.
     pub segment: UsageCatalogSegment,
-    /// Matching catalog row count for the filter.
-    pub matching_row_count: usize,
+    /// Matching catalog totals for the whole segment when the query shape is
+    /// exactly supported by catalog rollups.
+    pub matching_totals: Option<UsageCatalogSegmentTotals>,
+}
+
+/// Serializable segment totals carried through the catalog cache layer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct UsageCatalogSegmentTotals {
+    /// Matching event count.
+    pub event_count: usize,
+    /// Total uncached input tokens across matching rows.
+    pub input_uncached_tokens: u64,
+    /// Total cached input tokens across matching rows.
+    pub input_cached_tokens: u64,
+    /// Total output tokens across matching rows.
+    pub output_tokens: u64,
+    /// Total billable tokens across matching rows.
+    pub billable_tokens: u64,
+}
+
+impl From<UsageCatalogSegmentTotals> for UsageEventTotals {
+    fn from(value: UsageCatalogSegmentTotals) -> Self {
+        Self {
+            event_count: value.event_count,
+            input_uncached_tokens: value.input_uncached_tokens,
+            input_cached_tokens: value.input_cached_tokens,
+            output_tokens: value.output_tokens,
+            billable_tokens: value.billable_tokens,
+        }
+    }
 }
 
 /// One expired archived segment selected for retention pruning.
@@ -57,6 +132,14 @@ pub(crate) struct UsageCatalogSegmentRecord {
     pub end_ms: Option<i64>,
     /// Archived event count.
     pub row_count: usize,
+    /// Total uncached input tokens across the segment.
+    pub input_uncached_tokens: i64,
+    /// Total cached input tokens across the segment.
+    pub input_cached_tokens: i64,
+    /// Total output tokens across the segment.
+    pub output_tokens: i64,
+    /// Total billable tokens across the segment.
+    pub billable_tokens: i64,
     /// Archived DuckDB size in bytes.
     pub size_bytes: u64,
     /// Segment seal timestamp.
@@ -84,7 +167,36 @@ pub(crate) struct UsageCatalogKeyRollupRecord {
     pub credit_total: String,
     /// Events missing provider credit usage.
     pub credit_missing_events: i64,
+    /// Earliest usage time for this key in the segment.
+    pub first_used_at_ms: Option<i64>,
     /// Latest usage time for this key in the segment.
+    pub last_used_at_ms: Option<i64>,
+}
+
+/// One per-segment rollup for one indexed field value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct UsageCatalogFieldRollupRecord {
+    /// Optional key scope.
+    pub key_id: Option<String>,
+    /// Optional provider scope.
+    pub provider_type: Option<String>,
+    /// Indexed field name.
+    pub field_name: UsageCatalogFieldName,
+    /// Exact field value.
+    pub field_value: String,
+    /// Matching event count in this segment.
+    pub row_count: usize,
+    /// Total uncached input tokens across matching rows.
+    pub input_uncached_tokens: i64,
+    /// Total cached input tokens across matching rows.
+    pub input_cached_tokens: i64,
+    /// Total output tokens across matching rows.
+    pub output_tokens: i64,
+    /// Total billable tokens across matching rows.
+    pub billable_tokens: i64,
+    /// Earliest usage time for this field value in the segment.
+    pub first_used_at_ms: Option<i64>,
+    /// Latest usage time for this field value in the segment.
     pub last_used_at_ms: Option<i64>,
 }
 
@@ -95,21 +207,21 @@ struct CachedUsageCatalogRollupsLookup {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct CachedUsageCatalogSegmentsLookup {
+struct CachedUsageCatalogSegmentMatchesLookup {
     generation: i64,
-    segments: Vec<UsageCatalogSegment>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct CachedUsageCatalogFilteredSegmentsLookup {
-    generation: i64,
-    segments: Vec<UsageCatalogSegmentCount>,
+    segments: Vec<UsageCatalogSegmentMatch>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct CachedUsageCatalogEventLocatorLookup {
     generation: i64,
     segment: Option<UsageCatalogSegment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct CachedUsageCatalogFilterOptionsLookup {
+    generation: i64,
+    options: Vec<String>,
 }
 
 /// Postgres-backed catalog store for archived usage segments.
@@ -184,6 +296,7 @@ impl PostgresUsageCatalog {
         &self,
         segment: &UsageCatalogSegmentRecord,
         rollups: &[UsageCatalogKeyRollupRecord],
+        field_rollups: &[UsageCatalogFieldRollupRecord],
         event_ids: &[String],
     ) -> anyhow::Result<()> {
         self.with_client("segment publication", |client| {
@@ -192,15 +305,20 @@ impl PostgresUsageCatalog {
                 .context("begin usage catalog transaction")?;
             tx.execute(
                 "INSERT INTO llm_usage_segments (
-                    segment_id, archive_path, state, start_ms, end_ms, row_count, size_bytes, \
-                 sealed_at_ms
-                 ) VALUES ($1, $2, 'archived', $3, $4, $5, $6, $7)
+                    segment_id, archive_path, state, start_ms, end_ms, row_count,
+                    input_uncached_tokens, input_cached_tokens, output_tokens,
+                    billable_tokens, size_bytes, sealed_at_ms
+                 ) VALUES ($1, $2, 'archived', $3, $4, $5, $6, $7, $8, $9, $10, $11)
                  ON CONFLICT (segment_id) DO UPDATE
                  SET archive_path = EXCLUDED.archive_path,
                      state = EXCLUDED.state,
                      start_ms = EXCLUDED.start_ms,
                      end_ms = EXCLUDED.end_ms,
                      row_count = EXCLUDED.row_count,
+                     input_uncached_tokens = EXCLUDED.input_uncached_tokens,
+                     input_cached_tokens = EXCLUDED.input_cached_tokens,
+                     output_tokens = EXCLUDED.output_tokens,
+                     billable_tokens = EXCLUDED.billable_tokens,
                      size_bytes = EXCLUDED.size_bytes,
                      sealed_at_ms = EXCLUDED.sealed_at_ms",
                 &[
@@ -209,6 +327,10 @@ impl PostgresUsageCatalog {
                     &segment.start_ms,
                     &segment.end_ms,
                     &usize_to_i64(segment.row_count),
+                    &segment.input_uncached_tokens,
+                    &segment.input_cached_tokens,
+                    &segment.output_tokens,
+                    &segment.billable_tokens,
                     &u64_to_i64(segment.size_bytes),
                     &segment.sealed_at_ms,
                 ],
@@ -222,7 +344,12 @@ impl PostgresUsageCatalog {
                 &segment.segment_id,
             ])
             .context("delete archived segment key rollups")?;
+            tx.execute("DELETE FROM llm_usage_segment_field_rollups WHERE segment_id = $1", &[
+                &segment.segment_id,
+            ])
+            .context("delete archived segment field rollups")?;
             insert_rollups(&mut tx, &segment.segment_id, rollups)?;
+            insert_field_rollups(&mut tx, &segment.segment_id, field_rollups)?;
             insert_event_locators(&mut tx, &segment.segment_id, event_ids)?;
             tx.commit().context("commit usage catalog transaction")?;
             Ok(())
@@ -326,66 +453,40 @@ impl PostgresUsageCatalog {
         })
     }
 
-    /// Return archived segments intersecting the requested time window.
-    pub(crate) fn archived_segments_for_query(
-        &self,
-        start_ms: Option<i64>,
-        end_ms: Option<i64>,
-    ) -> anyhow::Result<Vec<UsageCatalogSegment>> {
-        let generation = self.current_generation();
-        let query_fingerprint =
-            format!("start:{}:end:{}", option_i64_key(start_ms), option_i64_key(end_ms));
-        if let Some(cache) = self.request_cache.as_ref() {
-            let cache_key = cache.usage_catalog_segments_key(&query_fingerprint);
-            match cache.get_json_blocking::<CachedUsageCatalogSegmentsLookup>(&cache_key) {
-                Ok(Some(lookup)) if lookup.generation == generation => return Ok(lookup.segments),
-                Ok(Some(_)) | Ok(None) => {},
-                Err(err) => tracing::warn!(
-                    key = %cache_key,
-                    error = %err,
-                    "request cache archived segment read failed; falling back to postgres"
-                ),
-            }
-            let segments = self.load_archived_segments_for_query(start_ms, end_ms)?;
-            let payload = CachedUsageCatalogSegmentsLookup {
-                generation,
-                segments: segments.clone(),
-            };
-            if let Err(err) = cache.set_json_blocking(
-                &cache_key,
-                &payload,
-                cache.usage_catalog_segments_ttl(&query_fingerprint),
-            ) {
-                tracing::warn!(
-                    key = %cache_key,
-                    error = %err,
-                    "request cache archived segment write failed"
-                );
-            }
-            return Ok(segments);
-        }
-        self.load_archived_segments_for_query(start_ms, end_ms)
+    /// Return archived segment paths still missing field-rollup rows.
+    pub(crate) fn archived_paths_missing_field_rollups(&self) -> anyhow::Result<Vec<PathBuf>> {
+        self.with_client("field rollup backfill lookup", |client| {
+            let rows = client
+                .query(
+                    "SELECT s.archive_path
+                     FROM llm_usage_segments s
+                     LEFT JOIN llm_usage_segment_field_rollups f
+                       ON f.segment_id = s.segment_id
+                     WHERE s.state = 'archived'
+                     GROUP BY s.segment_id, s.archive_path
+                     HAVING COUNT(f.segment_id) = 0
+                     ORDER BY s.segment_id ASC",
+                    &[],
+                )
+                .context("query archived segments missing field rollups")?;
+            Ok(rows
+                .into_iter()
+                .map(|row| PathBuf::from(row.get::<_, String>(0)))
+                .collect())
+        })
     }
 
-    /// Return archived segments plus pre-aggregated matching row counts.
-    pub(crate) fn archived_segments_with_catalog_counts(
+    /// Return archived segments plus exact whole-segment catalog totals when
+    /// the query shape is supported by segment-level rollups.
+    pub(crate) fn archived_segment_matches_for_query(
         &self,
-        start_ms: Option<i64>,
-        end_ms: Option<i64>,
-        key_id: Option<&str>,
-        provider_type: Option<&str>,
-    ) -> anyhow::Result<Vec<UsageCatalogSegmentCount>> {
+        query: &UsageCatalogQuery,
+    ) -> anyhow::Result<Vec<UsageCatalogSegmentMatch>> {
         let generation = self.current_generation();
-        let query_fingerprint = format!(
-            "start:{}:end:{}:key:{}:provider:{}",
-            option_i64_key(start_ms),
-            option_i64_key(end_ms),
-            option_str_key(key_id),
-            option_str_key(provider_type)
-        );
+        let query_fingerprint = usage_catalog_query_fingerprint(query);
         if let Some(cache) = self.request_cache.as_ref() {
             let cache_key = cache.usage_catalog_filtered_segments_key(&query_fingerprint);
-            match cache.get_json_blocking::<CachedUsageCatalogFilteredSegmentsLookup>(&cache_key) {
+            match cache.get_json_blocking::<CachedUsageCatalogSegmentMatchesLookup>(&cache_key) {
                 Ok(Some(lookup)) if lookup.generation == generation => return Ok(lookup.segments),
                 Ok(Some(_)) | Ok(None) => {},
                 Err(err) => tracing::warn!(
@@ -394,13 +495,8 @@ impl PostgresUsageCatalog {
                     "request cache filtered archived segment read failed; falling back to postgres"
                 ),
             }
-            let segments = self.load_archived_segments_with_catalog_counts(
-                start_ms,
-                end_ms,
-                key_id,
-                provider_type,
-            )?;
-            let payload = CachedUsageCatalogFilteredSegmentsLookup {
+            let segments = self.load_archived_segment_matches_for_query(query)?;
+            let payload = CachedUsageCatalogSegmentMatchesLookup {
                 generation,
                 segments: segments.clone(),
             };
@@ -417,7 +513,58 @@ impl PostgresUsageCatalog {
             }
             return Ok(segments);
         }
-        self.load_archived_segments_with_catalog_counts(start_ms, end_ms, key_id, provider_type)
+        self.load_archived_segment_matches_for_query(query)
+    }
+
+    /// Return exact archive filter-option values from the catalog when the
+    /// query has no remaining cross-dimension filters after self-clearing.
+    pub(crate) fn archived_filter_option_values(
+        &self,
+        query: &UsageCatalogQuery,
+        field_name: UsageCatalogFieldName,
+    ) -> anyhow::Result<Option<Vec<String>>> {
+        if !query.field_filters.is_empty() {
+            return Ok(None);
+        }
+        let generation = self.current_generation();
+        let query_fingerprint = format!(
+            "{}:field:{}",
+            usage_catalog_query_fingerprint(query),
+            field_name.as_storage_str()
+        );
+        if let Some(cache) = self.request_cache.as_ref() {
+            let cache_key = cache.usage_catalog_filter_options_key(&query_fingerprint);
+            match cache.get_json_blocking::<CachedUsageCatalogFilterOptionsLookup>(&cache_key) {
+                Ok(Some(lookup)) if lookup.generation == generation => {
+                    return Ok(Some(lookup.options))
+                },
+                Ok(Some(_)) | Ok(None) => {},
+                Err(err) => tracing::warn!(
+                    key = %cache_key,
+                    error = %err,
+                    "request cache archived filter-options read failed; falling back to postgres"
+                ),
+            }
+            let options = self.load_archived_filter_option_values(query, field_name)?;
+            let payload = CachedUsageCatalogFilterOptionsLookup {
+                generation,
+                options: options.clone(),
+            };
+            if let Err(err) = cache.set_json_blocking(
+                &cache_key,
+                &payload,
+                cache.usage_catalog_filter_options_ttl(&query_fingerprint),
+            ) {
+                tracing::warn!(
+                    key = %cache_key,
+                    error = %err,
+                    "request cache archived filter-options write failed"
+                );
+            }
+            return Ok(Some(options));
+        }
+        self.load_archived_filter_option_values(query, field_name)
+            .map(Some)
     }
 
     /// Return the archived segment that contains one event id.
@@ -479,56 +626,63 @@ impl PostgresUsageCatalog {
         })
     }
 
-    fn load_archived_segments_for_query(
+    fn load_archived_segment_matches_for_query(
         &self,
-        start_ms: Option<i64>,
-        end_ms: Option<i64>,
-    ) -> anyhow::Result<Vec<UsageCatalogSegment>> {
-        self.with_client("segment lookup", |client| {
+        query: &UsageCatalogQuery,
+    ) -> anyhow::Result<Vec<UsageCatalogSegmentMatch>> {
+        let sql = match query.field_filters.len() {
+            0 => filtered_archived_segments_sql_for_scope_only(),
+            1 => filtered_archived_segments_sql_for_single_field(),
+            _ => filtered_archived_segments_sql_for_multi_field(query.field_filters.len()),
+        };
+        let query = query.clone();
+        let key_id = query.key_id.as_deref();
+        let provider_type = query.provider_type.as_deref();
+        self.with_client("filtered segment lookup", move |client| {
+            let field_names = query
+                .field_filters
+                .iter()
+                .map(|filter| filter.field_name.as_storage_str())
+                .collect::<Vec<_>>();
+            let field_values = query
+                .field_filters
+                .iter()
+                .map(|filter| filter.field_value.as_str())
+                .collect::<Vec<_>>();
+            let mut params: Vec<&(dyn ToSql + Sync)> =
+                vec![&query.start_ms, &query.end_ms, &key_id, &provider_type];
+            for index in 0..field_names.len() {
+                params.push(&field_names[index]);
+                params.push(&field_values[index]);
+            }
             let rows = client
-                .query(
-                    "SELECT archive_path, start_ms, end_ms, row_count
-                     FROM llm_usage_segments
-                     WHERE state = 'archived'
-                       AND ($1::BIGINT IS NULL OR end_ms IS NULL OR end_ms >= $1)
-                       AND ($2::BIGINT IS NULL OR start_ms IS NULL OR start_ms < $2)
-                     ORDER BY COALESCE(end_ms, 0) DESC, segment_id DESC",
-                    &[&start_ms, &end_ms],
-                )
-                .context("query archived segments")?;
-            rows.into_iter().map(decode_segment_row).collect()
+                .query(&sql, &params)
+                .context("query filtered archived segments")?;
+            rows.into_iter().map(decode_segment_match_row).collect()
         })
     }
 
-    fn load_archived_segments_with_catalog_counts(
+    fn load_archived_filter_option_values(
         &self,
-        start_ms: Option<i64>,
-        end_ms: Option<i64>,
-        key_id: Option<&str>,
-        provider_type: Option<&str>,
-    ) -> anyhow::Result<Vec<UsageCatalogSegmentCount>> {
-        self.with_client("filtered segment lookup", |client| {
+        query: &UsageCatalogQuery,
+        field_name: UsageCatalogFieldName,
+    ) -> anyhow::Result<Vec<String>> {
+        let query = query.clone();
+        self.with_client("archived filter-options lookup", move |client| {
             let rows = client
-                .query(&filtered_archived_segments_sql(), &[
-                    &start_ms,
-                    &end_ms,
-                    &key_id,
-                    &provider_type,
+                .query(&archived_filter_option_values_sql(), &[
+                    &query.start_ms,
+                    &query.end_ms,
+                    &query.key_id.as_deref(),
+                    &query.provider_type.as_deref(),
+                    &field_name.as_storage_str(),
                 ])
-                .context("query filtered archived segments")?;
-            rows.into_iter()
-                .map(|row| {
-                    Ok(UsageCatalogSegmentCount {
-                        segment: UsageCatalogSegment {
-                            archive_path: PathBuf::from(row.get::<_, String>(0)),
-                            start_ms: row.get(1),
-                            end_ms: row.get(2),
-                            row_count: i64_to_usize(row.get(3))?,
-                        },
-                        matching_row_count: i64_to_usize(row.get(4))?,
-                    })
-                })
-                .collect()
+                .context("query archived filter-options values")?;
+            Ok(rows
+                .into_iter()
+                .map(|row| row.get::<_, String>(0))
+                .filter(|value| !value.is_empty())
+                .collect())
         })
     }
 
@@ -618,6 +772,60 @@ fn sum_bigint_sql(expr: &str) -> String {
     format!("COALESCE(SUM({expr}), 0)::BIGINT")
 }
 
+fn usage_catalog_query_fingerprint(query: &UsageCatalogQuery) -> String {
+    let mut filters = query.field_filters.clone();
+    filters.sort_by(|left, right| {
+        left.field_name
+            .as_storage_str()
+            .cmp(right.field_name.as_storage_str())
+            .then_with(|| left.field_value.cmp(&right.field_value))
+    });
+    let filters_key = if filters.is_empty() {
+        "-".to_string()
+    } else {
+        filters
+            .into_iter()
+            .map(|filter| format!("{}={}", filter.field_name.as_storage_str(), filter.field_value))
+            .collect::<Vec<_>>()
+            .join("|")
+    };
+    format!(
+        "start:{}:end:{}:key:{}:provider:{}:filters:{}",
+        option_i64_key(query.start_ms),
+        option_i64_key(query.end_ms),
+        option_str_key(query.key_id.as_deref()),
+        option_str_key(query.provider_type.as_deref()),
+        filters_key,
+    )
+}
+
+fn segment_time_overlap_sql(alias: &str) -> String {
+    format!(
+        "($1::BIGINT IS NULL OR {alias}.end_ms IS NULL OR {alias}.end_ms >= $1)
+         AND ($2::BIGINT IS NULL OR {alias}.start_ms IS NULL OR {alias}.start_ms < $2)"
+    )
+}
+
+fn scoped_time_overlap_sql(alias: &str) -> String {
+    format!(
+        "($1::BIGINT IS NULL OR {alias}.last_used_at_ms IS NULL OR {alias}.last_used_at_ms >= $1)
+         AND ($2::BIGINT IS NULL OR {alias}.first_used_at_ms IS NULL OR {alias}.first_used_at_ms < \
+         $2)"
+    )
+}
+
+fn field_rollup_scope_sql(alias: &str) -> String {
+    format!(
+        "((($3::TEXT IS NULL AND $4::TEXT IS NULL)
+            AND {alias}.key_id = ''
+            AND {alias}.provider_type = '')
+          OR (($3::TEXT IS NOT NULL OR $4::TEXT IS NOT NULL)
+              AND ({alias}.key_id <> '' OR {alias}.provider_type <> '')
+              AND ($3::TEXT IS NULL OR {alias}.key_id = $3)
+              AND ($4::TEXT IS NULL OR {alias}.provider_type = $4)))"
+    )
+}
+
 fn archived_key_usage_rollups_sql() -> String {
     format!(
         "SELECT
@@ -639,25 +847,151 @@ fn archived_key_usage_rollups_sql() -> String {
     )
 }
 
-fn filtered_archived_segments_sql() -> String {
+fn filtered_archived_segments_sql_for_scope_only() -> String {
     let matching_row_count = sum_bigint_sql("r.row_count");
+    let input_uncached_tokens = sum_bigint_sql("r.input_uncached_tokens");
+    let input_cached_tokens = sum_bigint_sql("r.input_cached_tokens");
+    let output_tokens = sum_bigint_sql("r.output_tokens");
+    let billable_tokens = sum_bigint_sql("r.billable_tokens");
     format!(
         "SELECT
             s.archive_path,
             s.start_ms,
             s.end_ms,
             s.row_count,
-            {matching_row_count} AS matching_row_count
+            CASE
+                WHEN $3::TEXT IS NULL AND $4::TEXT IS NULL THEN s.row_count::BIGINT
+                ELSE {matching_row_count}
+            END AS matching_row_count,
+            CASE
+                WHEN $3::TEXT IS NULL AND $4::TEXT IS NULL THEN s.input_uncached_tokens
+                ELSE {input_uncached_tokens}
+            END AS input_uncached_tokens,
+            CASE
+                WHEN $3::TEXT IS NULL AND $4::TEXT IS NULL THEN s.input_cached_tokens
+                ELSE {input_cached_tokens}
+            END AS input_cached_tokens,
+            CASE
+                WHEN $3::TEXT IS NULL AND $4::TEXT IS NULL THEN s.output_tokens
+                ELSE {output_tokens}
+            END AS output_tokens,
+            CASE
+                WHEN $3::TEXT IS NULL AND $4::TEXT IS NULL THEN s.billable_tokens
+                ELSE {billable_tokens}
+            END AS billable_tokens
          FROM llm_usage_segments s
-         JOIN llm_usage_segment_key_rollups r ON r.segment_id = s.segment_id
+         LEFT JOIN llm_usage_segment_key_rollups r
+           ON r.segment_id = s.segment_id
+          AND ($3::TEXT IS NULL OR r.key_id = $3)
+          AND ($4::TEXT IS NULL OR r.provider_type = $4)
+          AND {scoped_time_overlap}
          WHERE s.state = 'archived'
-           AND ($1::BIGINT IS NULL OR s.end_ms IS NULL OR s.end_ms >= $1)
-           AND ($2::BIGINT IS NULL OR s.start_ms IS NULL OR s.start_ms < $2)
-           AND ($3::TEXT IS NULL OR r.key_id = $3)
-           AND ($4::TEXT IS NULL OR r.provider_type = $4)
+           AND {segment_time_overlap}
+         GROUP BY
+            s.segment_id, s.archive_path, s.start_ms, s.end_ms, s.row_count,
+            s.input_uncached_tokens, s.input_cached_tokens, s.output_tokens,
+            s.billable_tokens
+         HAVING ($3::TEXT IS NULL AND $4::TEXT IS NULL) OR {matching_row_count} > 0
+         ORDER BY COALESCE(s.end_ms, 0) DESC, s.segment_id DESC",
+        scoped_time_overlap = scoped_time_overlap_sql("r"),
+        segment_time_overlap = segment_time_overlap_sql("s"),
+    )
+}
+
+fn filtered_archived_segments_sql_for_single_field() -> String {
+    let matching_row_count = sum_bigint_sql("f.row_count");
+    let input_uncached_tokens = sum_bigint_sql("f.input_uncached_tokens");
+    let input_cached_tokens = sum_bigint_sql("f.input_cached_tokens");
+    let output_tokens = sum_bigint_sql("f.output_tokens");
+    let billable_tokens = sum_bigint_sql("f.billable_tokens");
+    format!(
+        "SELECT
+            s.archive_path,
+            s.start_ms,
+            s.end_ms,
+            s.row_count,
+            {matching_row_count} AS matching_row_count,
+            {input_uncached_tokens} AS input_uncached_tokens,
+            {input_cached_tokens} AS input_cached_tokens,
+            {output_tokens} AS output_tokens,
+            {billable_tokens} AS billable_tokens
+         FROM llm_usage_segments s
+         JOIN llm_usage_segment_field_rollups f
+           ON f.segment_id = s.segment_id
+         WHERE s.state = 'archived'
+           AND {segment_time_overlap}
+           AND {field_scope}
+           AND {field_time_overlap}
+           AND f.field_name = $5
+           AND f.field_value = $6
          GROUP BY s.segment_id, s.archive_path, s.start_ms, s.end_ms, s.row_count
          HAVING {matching_row_count} > 0
-         ORDER BY COALESCE(s.end_ms, 0) DESC, s.segment_id DESC"
+         ORDER BY COALESCE(s.end_ms, 0) DESC, s.segment_id DESC",
+        segment_time_overlap = segment_time_overlap_sql("s"),
+        field_scope = field_rollup_scope_sql("f"),
+        field_time_overlap = scoped_time_overlap_sql("f"),
+    )
+}
+
+fn filtered_archived_segments_sql_for_multi_field(filter_count: usize) -> String {
+    let mut exists_sql = Vec::new();
+    for index in 0..filter_count {
+        let alias = format!("f{index}");
+        let field_param = 5 + index * 2;
+        let value_param = field_param + 1;
+        exists_sql.push(format!(
+            "EXISTS (
+                SELECT 1
+                FROM llm_usage_segment_field_rollups {alias}
+                WHERE {alias}.segment_id = s.segment_id
+                  AND {field_scope}
+                  AND {field_time_overlap}
+                  AND {alias}.field_name = ${field_param}
+                  AND {alias}.field_value = ${value_param}
+            )",
+            field_scope = field_rollup_scope_sql(&alias),
+            field_time_overlap = scoped_time_overlap_sql(&alias),
+        ));
+    }
+    let exists_sql = if exists_sql.is_empty() {
+        "TRUE".to_string()
+    } else {
+        exists_sql.join("\n           AND ")
+    };
+    format!(
+        "SELECT
+            s.archive_path,
+            s.start_ms,
+            s.end_ms,
+            s.row_count,
+            NULL::BIGINT AS matching_row_count,
+            NULL::BIGINT AS input_uncached_tokens,
+            NULL::BIGINT AS input_cached_tokens,
+            NULL::BIGINT AS output_tokens,
+            NULL::BIGINT AS billable_tokens
+         FROM llm_usage_segments s
+         WHERE s.state = 'archived'
+           AND {segment_time_overlap}
+           AND {exists_sql}
+         ORDER BY COALESCE(s.end_ms, 0) DESC, s.segment_id DESC",
+        segment_time_overlap = segment_time_overlap_sql("s"),
+    )
+}
+
+fn archived_filter_option_values_sql() -> String {
+    format!(
+        "SELECT DISTINCT f.field_value
+         FROM llm_usage_segment_field_rollups f
+         JOIN llm_usage_segments s ON s.segment_id = f.segment_id
+         WHERE s.state = 'archived'
+           AND {segment_time_overlap}
+           AND {field_scope}
+           AND {field_time_overlap}
+           AND f.field_name = $5
+         ORDER BY f.field_value",
+        segment_time_overlap = segment_time_overlap_sql("s"),
+        field_scope = field_rollup_scope_sql("f"),
+        field_time_overlap = scoped_time_overlap_sql("f"),
     )
 }
 
@@ -705,6 +1039,10 @@ fn insert_rollups(
         .iter()
         .map(|rollup| rollup.credit_missing_events)
         .collect::<Vec<_>>();
+    let first_used_at_ms = rollups
+        .iter()
+        .map(|rollup| rollup.first_used_at_ms)
+        .collect::<Vec<_>>();
     let last_used_at_ms = rollups
         .iter()
         .map(|rollup| rollup.last_used_at_ms)
@@ -713,7 +1051,7 @@ fn insert_rollups(
         "INSERT INTO llm_usage_segment_key_rollups (
             segment_id, key_id, provider_type, row_count, input_uncached_tokens,
             input_cached_tokens, output_tokens, billable_tokens, credit_total,
-            credit_missing_events, last_used_at_ms
+            credit_missing_events, first_used_at_ms, last_used_at_ms
          )
          SELECT
             $1,
@@ -726,6 +1064,7 @@ fn insert_rollups(
             data.billable_tokens,
             data.credit_total,
             data.credit_missing_events,
+            data.first_used_at_ms,
             data.last_used_at_ms
          FROM UNNEST(
             $2::TEXT[],
@@ -737,7 +1076,8 @@ fn insert_rollups(
             $8::BIGINT[],
             $9::TEXT[],
             $10::BIGINT[],
-            $11::BIGINT[]
+            $11::BIGINT[],
+            $12::BIGINT[]
          ) AS data(
             key_id,
             provider_type,
@@ -748,6 +1088,7 @@ fn insert_rollups(
             billable_tokens,
             credit_total,
             credit_missing_events,
+            first_used_at_ms,
             last_used_at_ms
          )
          ON CONFLICT (segment_id, key_id, provider_type) DO UPDATE
@@ -758,6 +1099,7 @@ fn insert_rollups(
              billable_tokens = EXCLUDED.billable_tokens,
              credit_total = EXCLUDED.credit_total,
              credit_missing_events = EXCLUDED.credit_missing_events,
+             first_used_at_ms = EXCLUDED.first_used_at_ms,
              last_used_at_ms = EXCLUDED.last_used_at_ms",
         &[
             &segment_id,
@@ -770,10 +1112,134 @@ fn insert_rollups(
             &billable_tokens,
             &credit_totals,
             &credit_missing_events,
+            &first_used_at_ms,
             &last_used_at_ms,
         ],
     )
     .context("insert archived segment rollups")?;
+    Ok(())
+}
+
+fn insert_field_rollups(
+    tx: &mut postgres::Transaction<'_>,
+    segment_id: &str,
+    field_rollups: &[UsageCatalogFieldRollupRecord],
+) -> anyhow::Result<()> {
+    if field_rollups.is_empty() {
+        return Ok(());
+    }
+    let key_ids = field_rollups
+        .iter()
+        .map(|rollup| rollup.key_id.clone().unwrap_or_default())
+        .collect::<Vec<_>>();
+    let provider_types = field_rollups
+        .iter()
+        .map(|rollup| rollup.provider_type.clone().unwrap_or_default())
+        .collect::<Vec<_>>();
+    let field_names = field_rollups
+        .iter()
+        .map(|rollup| rollup.field_name.as_storage_str())
+        .collect::<Vec<_>>();
+    let field_values = field_rollups
+        .iter()
+        .map(|rollup| rollup.field_value.clone())
+        .collect::<Vec<_>>();
+    let row_counts = field_rollups
+        .iter()
+        .map(|rollup| usize_to_i64(rollup.row_count))
+        .collect::<Vec<_>>();
+    let input_uncached_tokens = field_rollups
+        .iter()
+        .map(|rollup| rollup.input_uncached_tokens)
+        .collect::<Vec<_>>();
+    let input_cached_tokens = field_rollups
+        .iter()
+        .map(|rollup| rollup.input_cached_tokens)
+        .collect::<Vec<_>>();
+    let output_tokens = field_rollups
+        .iter()
+        .map(|rollup| rollup.output_tokens)
+        .collect::<Vec<_>>();
+    let billable_tokens = field_rollups
+        .iter()
+        .map(|rollup| rollup.billable_tokens)
+        .collect::<Vec<_>>();
+    let first_used_at_ms = field_rollups
+        .iter()
+        .map(|rollup| rollup.first_used_at_ms)
+        .collect::<Vec<_>>();
+    let last_used_at_ms = field_rollups
+        .iter()
+        .map(|rollup| rollup.last_used_at_ms)
+        .collect::<Vec<_>>();
+    tx.execute(
+        "INSERT INTO llm_usage_segment_field_rollups (
+            segment_id, key_id, provider_type, field_name, field_value, row_count,
+            input_uncached_tokens, input_cached_tokens, output_tokens,
+            billable_tokens, first_used_at_ms, last_used_at_ms
+         )
+         SELECT
+            $1,
+            data.key_id,
+            data.provider_type,
+            data.field_name,
+            data.field_value,
+            data.row_count,
+            data.input_uncached_tokens,
+            data.input_cached_tokens,
+            data.output_tokens,
+            data.billable_tokens,
+            data.first_used_at_ms,
+            data.last_used_at_ms
+         FROM UNNEST(
+            $2::TEXT[],
+            $3::TEXT[],
+            $4::TEXT[],
+            $5::TEXT[],
+            $6::BIGINT[],
+            $7::BIGINT[],
+            $8::BIGINT[],
+            $9::BIGINT[],
+            $10::BIGINT[],
+            $11::BIGINT[],
+            $12::BIGINT[]
+         ) AS data(
+            key_id,
+            provider_type,
+            field_name,
+            field_value,
+            row_count,
+            input_uncached_tokens,
+            input_cached_tokens,
+            output_tokens,
+            billable_tokens,
+            first_used_at_ms,
+            last_used_at_ms
+         )
+         ON CONFLICT (segment_id, key_id, provider_type, field_name, field_value) DO UPDATE
+         SET row_count = EXCLUDED.row_count,
+             input_uncached_tokens = EXCLUDED.input_uncached_tokens,
+             input_cached_tokens = EXCLUDED.input_cached_tokens,
+             output_tokens = EXCLUDED.output_tokens,
+             billable_tokens = EXCLUDED.billable_tokens,
+             first_used_at_ms = EXCLUDED.first_used_at_ms,
+             last_used_at_ms = EXCLUDED.last_used_at_ms",
+        &[
+            &segment_id,
+            &key_ids,
+            &provider_types,
+            &field_names,
+            &field_values,
+            &row_counts,
+            &input_uncached_tokens,
+            &input_cached_tokens,
+            &output_tokens,
+            &billable_tokens,
+            &first_used_at_ms,
+            &last_used_at_ms,
+        ],
+    )
+    .context("insert archived segment field rollups")?;
     Ok(())
 }
 
@@ -796,6 +1262,33 @@ fn insert_event_locators(
         .context("insert archived segment event locators")?;
     }
     Ok(())
+}
+
+fn decode_segment_match_row(row: postgres::Row) -> anyhow::Result<UsageCatalogSegmentMatch> {
+    let matching_row_count: Option<i64> = row.get(4);
+    let matching_totals = match matching_row_count {
+        Some(event_count) => Some(UsageCatalogSegmentTotals {
+            event_count: i64_to_usize(event_count)?,
+            input_uncached_tokens: u64::try_from(row.get::<_, Option<i64>>(5).unwrap_or(0).max(0))
+                .unwrap_or(u64::MAX),
+            input_cached_tokens: u64::try_from(row.get::<_, Option<i64>>(6).unwrap_or(0).max(0))
+                .unwrap_or(u64::MAX),
+            output_tokens: u64::try_from(row.get::<_, Option<i64>>(7).unwrap_or(0).max(0))
+                .unwrap_or(u64::MAX),
+            billable_tokens: u64::try_from(row.get::<_, Option<i64>>(8).unwrap_or(0).max(0))
+                .unwrap_or(u64::MAX),
+        }),
+        None => None,
+    };
+    Ok(UsageCatalogSegmentMatch {
+        segment: UsageCatalogSegment {
+            archive_path: PathBuf::from(row.get::<_, String>(0)),
+            start_ms: row.get(1),
+            end_ms: row.get(2),
+            row_count: i64_to_usize(row.get(3))?,
+        },
+        matching_totals,
+    })
 }
 
 fn decode_segment_row(row: postgres::Row) -> anyhow::Result<UsageCatalogSegment> {
@@ -856,11 +1349,17 @@ mod tests {
         assert!(rollups_sql.contains("COALESCE(SUM(billable_tokens), 0)::BIGINT"));
         assert!(rollups_sql.contains("COALESCE(SUM(credit_missing_events), 0)::BIGINT"));
 
-        let filtered_sql = super::filtered_archived_segments_sql();
-        assert!(
-            filtered_sql.contains("COALESCE(SUM(r.row_count), 0)::BIGINT AS matching_row_count")
-        );
-        assert!(filtered_sql.contains("HAVING COALESCE(SUM(r.row_count), 0)::BIGINT > 0"));
+        let filtered_sql = super::filtered_archived_segments_sql_for_scope_only();
+        assert!(filtered_sql.contains("COALESCE(SUM(r.row_count), 0)::BIGINT"));
+        assert!(filtered_sql.contains("COALESCE(SUM(r.row_count), 0)::BIGINT > 0"));
+    }
+
+    #[test]
+    fn postgres_usage_catalog_field_rollup_scope_uses_empty_sentinel() {
+        let sql = super::field_rollup_scope_sql("f");
+        assert!(sql.contains("f.key_id = ''"));
+        assert!(sql.contains("f.provider_type = ''"));
+        assert!(sql.contains("(f.key_id <> '' OR f.provider_type <> '')"));
     }
 
     #[test]
