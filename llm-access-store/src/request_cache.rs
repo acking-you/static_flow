@@ -196,6 +196,8 @@ pub(crate) struct CachedAccountAuth {
 }
 
 impl RequestCache {
+    const USAGE_CATALOG_CACHE_NAMESPACE: &str = "usage:catalog:v2";
+
     pub(crate) fn new(config: RequestCacheConfig) -> anyhow::Result<Self> {
         let client = redis::Client::open(config.url.clone())
             .with_context(|| format!("open request cache redis client `{}`", config.url))?;
@@ -247,23 +249,31 @@ impl RequestCache {
     }
 
     pub(crate) fn usage_catalog_generation_key(&self) -> String {
-        format!("{}:usage:catalog:gen", self.key_prefix)
+        format!("{}:{}:gen", self.key_prefix, Self::USAGE_CATALOG_CACHE_NAMESPACE)
     }
 
     pub(crate) fn usage_catalog_rollups_key(&self) -> String {
-        format!("{}:usage:catalog:rollups", self.key_prefix)
+        format!("{}:{}:rollups", self.key_prefix, Self::USAGE_CATALOG_CACHE_NAMESPACE)
     }
 
     pub(crate) fn usage_catalog_filtered_segments_key(&self, query_fingerprint: &str) -> String {
-        format!("{}:usage:catalog:segments:filtered:{query_fingerprint}", self.key_prefix)
+        format!(
+            "{}:{}:segments:filtered:{query_fingerprint}",
+            self.key_prefix,
+            Self::USAGE_CATALOG_CACHE_NAMESPACE
+        )
     }
 
     pub(crate) fn usage_catalog_event_locator_key(&self, event_id: &str) -> String {
-        format!("{}:usage:catalog:event:{event_id}", self.key_prefix)
+        format!("{}:{}:event:{event_id}", self.key_prefix, Self::USAGE_CATALOG_CACHE_NAMESPACE)
     }
 
     pub(crate) fn usage_catalog_filter_options_key(&self, query_fingerprint: &str) -> String {
-        format!("{}:usage:catalog:filter-options:{query_fingerprint}", self.key_prefix)
+        format!(
+            "{}:{}:filter-options:{query_fingerprint}",
+            self.key_prefix,
+            Self::USAGE_CATALOG_CACHE_NAMESPACE
+        )
     }
 
     pub(crate) fn auth_ttl(&self, secret_hash: &str) -> Duration {
@@ -622,19 +632,27 @@ mod tests {
             cache.dispatch_generation_key("kiro"),
             "llma:test:gen:dispatch:kiro".to_string()
         );
-        assert_eq!(cache.usage_catalog_generation_key(), "llma:test:usage:catalog:gen".to_string());
+        assert_eq!(
+            cache.usage_catalog_generation_key(),
+            "llma:test:usage:catalog:v2:gen".to_string()
+        );
         assert_eq!(
             cache.usage_catalog_rollups_key(),
-            "llma:test:usage:catalog:rollups".to_string()
+            "llma:test:usage:catalog:v2:rollups".to_string()
         );
         assert_eq!(
             cache.usage_catalog_filtered_segments_key("start:-:end:-:key:key-1:provider:codex"),
-            "llma:test:usage:catalog:segments:filtered:start:-:end:-:key:key-1:provider:codex"
+            "llma:test:usage:catalog:v2:segments:filtered:start:-:end:-:key:key-1:provider:codex"
                 .to_string()
         );
         assert_eq!(
             cache.usage_catalog_event_locator_key("evt-1"),
-            "llma:test:usage:catalog:event:evt-1".to_string()
+            "llma:test:usage:catalog:v2:event:evt-1".to_string()
+        );
+        assert_eq!(
+            cache.usage_catalog_filter_options_key("start:-:end:-:key:-:provider:-:filters:-"),
+            "llma:test:usage:catalog:v2:filter-options:start:-:end:-:key:-:provider:-:filters:-"
+                .to_string()
         );
         assert_eq!(cache.runtime_config_key(), "llma:test:runtime:config".to_string());
         assert_eq!(cache.codex_status_key(), "llma:test:status:codex".to_string());
