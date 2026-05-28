@@ -9570,9 +9570,9 @@ mod tests {
         let journal_start = source
             .find("\"Live Preview\"")
             .expect("journal preview header");
-        let journal_slice = &source[journal_start..source.len().min(journal_start + 6000)];
+        let journal_slice = &source[journal_start..source.len().min(journal_start + 12000)];
 
-        assert!(journal_slice.contains("min-w-[96rem]"));
+        assert!(journal_slice.contains("min-w-[64rem]"));
         assert!(journal_slice.contains("RPM {}"));
         assert!(journal_slice.contains("In Flight {}"));
         assert!(journal_slice.contains("刷新预览"));

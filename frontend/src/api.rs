@@ -98,6 +98,13 @@ pub const API_BASE: &str = match option_env!("STATICFLOW_API_BASE") {
 #[cfg(any(not(feature = "mock"), test))]
 const LOCAL_MEDIA_API_BASE_OVERRIDE: Option<&str> = option_env!("STATICFLOW_LOCAL_MEDIA_API_BASE");
 
+#[cfg(any(not(feature = "mock"), test))]
+const LLM_ACCESS_ADMIN_BASE_OVERRIDE: Option<&str> =
+    option_env!("STATICFLOW_LLM_ACCESS_ADMIN_BASE");
+
+#[cfg(any(not(feature = "mock"), test))]
+const DEFAULT_LLM_ACCESS_ADMIN_BASE: &str = "http://127.0.0.1:19182";
+
 #[cfg(feature = "mock")]
 pub const API_BASE: &str = "http://localhost:3000/api";
 
@@ -159,6 +166,50 @@ fn local_media_api_base() -> String {
     }
 
     derive_local_media_api_base_from_api_base(API_BASE)
+}
+
+#[cfg(any(not(feature = "mock"), test))]
+fn llm_access_admin_base() -> String {
+    resolve_llm_access_admin_base(LLM_ACCESS_ADMIN_BASE_OVERRIDE, API_BASE)
+}
+
+#[cfg(any(not(feature = "mock"), test))]
+fn resolve_llm_access_admin_base(override_base: Option<&str>, api_base: &str) -> String {
+    if let Some(override_base) = override_base {
+        let trimmed = override_base.trim().trim_end_matches('/');
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    derive_llm_access_admin_base_from_api_base(api_base)
+}
+
+#[cfg(any(not(feature = "mock"), test))]
+fn derive_llm_access_admin_base_from_api_base(api_base: &str) -> String {
+    let trimmed = api_base.trim();
+    if trimmed.is_empty() || trimmed.starts_with('/') {
+        return DEFAULT_LLM_ACCESS_ADMIN_BASE.to_string();
+    }
+
+    let without_trailing = trimmed.trim_end_matches('/');
+    if without_trailing.starts_with("http://127.0.0.1:")
+        || without_trailing.starts_with("https://127.0.0.1:")
+        || without_trailing.starts_with("http://localhost:")
+        || without_trailing.starts_with("https://localhost:")
+    {
+        return DEFAULT_LLM_ACCESS_ADMIN_BASE.to_string();
+    }
+
+    if let Some(prefix) = without_trailing.strip_suffix("/api") {
+        return prefix.to_string();
+    }
+
+    if without_trailing.starts_with("http://") || without_trailing.starts_with("https://") {
+        return without_trailing.to_string();
+    }
+
+    DEFAULT_LLM_ACCESS_ADMIN_BASE.to_string()
 }
 
 #[cfg(any(not(feature = "mock"), test))]
@@ -7691,7 +7742,7 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-gateway/config", admin_base());
+        let url = format!("{}/admin/llm-gateway/config", llm_access_admin_base());
         let response = api_get(&url)
             .send()
             .await
@@ -7718,7 +7769,7 @@ pub async fn update_admin_llm_gateway_config(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-gateway/config", admin_base());
+        let url = format!("{}/admin/llm-gateway/config", llm_access_admin_base());
         let response = api_post(&url)
             .json(config)
             .map_err(|e| format!("Serialize error: {:?}", e))?
@@ -7744,7 +7795,7 @@ pub async fn fetch_admin_usage_journal_status() -> Result<AdminUsageJournalStatu
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-access/usage-journal/status", admin_base());
+        let url = format!("{}/admin/llm-access/usage-journal/status", llm_access_admin_base());
         let response = api_get(&url)
             .send()
             .await
@@ -7782,7 +7833,7 @@ pub async fn fetch_admin_usage_journal_preview(
 
     #[cfg(not(feature = "mock"))]
     {
-        let mut url = format!("{}/admin/llm-access/usage-journal/preview", admin_base());
+        let mut url = format!("{}/admin/llm-access/usage-journal/preview", llm_access_admin_base());
         let mut query = Vec::new();
         if let Some(limit) = limit {
             query.push(format!("limit={limit}"));
@@ -7829,7 +7880,7 @@ pub async fn fetch_admin_llm_gateway_proxy_configs(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-gateway/proxy-configs", admin_base());
+        let url = format!("{}/admin/llm-gateway/proxy-configs", llm_access_admin_base());
         let response = api_get(&url)
             .send()
             .await
@@ -7868,7 +7919,7 @@ pub async fn create_admin_llm_gateway_proxy_config(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-gateway/proxy-configs", admin_base());
+        let url = format!("{}/admin/llm-gateway/proxy-configs", llm_access_admin_base());
         let response = api_post(&url)
             .json(input)
             .map_err(|e| format!("Serialize error: {:?}", e))?
@@ -7916,7 +7967,7 @@ pub async fn patch_admin_llm_gateway_proxy_config(
     {
         let url = format!(
             "{}/admin/llm-gateway/proxy-configs/{}",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(proxy_id)
         );
         let response = api_patch(&url)
@@ -7947,7 +7998,7 @@ pub async fn delete_admin_llm_gateway_proxy_config(proxy_id: &str) -> Result<(),
     {
         let url = format!(
             "{}/admin/llm-gateway/proxy-configs/{}",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(proxy_id)
         );
         let response = api_delete(&url)
@@ -7984,7 +8035,7 @@ pub async fn reset_admin_llm_gateway_proxy_config_override(
     {
         let url = format!(
             "{}/admin/llm-gateway/proxy-configs/{}/override",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(proxy_id)
         );
         let response = api_delete(&url)
@@ -8056,7 +8107,7 @@ async fn check_admin_llm_gateway_proxy_config_with_mode(
     {
         let url = format!(
             "{}/admin/llm-gateway/proxy-configs/{}/check/{}",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(proxy_id),
             urlencoding::encode(provider_type)
         );
@@ -8090,7 +8141,7 @@ pub async fn fetch_admin_llm_gateway_proxy_bindings(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-gateway/proxy-bindings", admin_base());
+        let url = format!("{}/admin/llm-gateway/proxy-bindings", llm_access_admin_base());
         let response = api_get(&url)
             .send()
             .await
@@ -8133,7 +8184,7 @@ pub async fn update_admin_llm_gateway_proxy_binding(
     {
         let url = format!(
             "{}/admin/llm-gateway/proxy-bindings/{}",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(provider_type)
         );
         let response = api_post(&url)
@@ -8162,7 +8213,10 @@ pub async fn import_admin_legacy_kiro_proxy_configs(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-gateway/proxy-configs/import-legacy-kiro", admin_base());
+        let url = format!(
+            "{}/admin/llm-gateway/proxy-configs/import-legacy-kiro",
+            llm_access_admin_base()
+        );
         let response = api_post(&url)
             .send()
             .await
@@ -8269,7 +8323,8 @@ pub async fn fetch_admin_llm_gateway_keys_page_with_query(
         {
             params.push(format!("sort={}", urlencoding::encode(sort)));
         }
-        let url = format!("{}/admin/llm-gateway/keys?{}", admin_base(), params.join("&"));
+        let url =
+            format!("{}/admin/llm-gateway/keys?{}", llm_access_admin_base(), params.join("&"));
         let response = api_get(&url)
             .send()
             .await
@@ -8317,7 +8372,7 @@ pub async fn fetch_admin_llm_gateway_account_groups_page(
     {
         let url = format!(
             "{}/admin/llm-gateway/account-groups?limit={limit}&offset={offset}",
-            admin_base()
+            llm_access_admin_base()
         );
         let response = api_get(&url)
             .send()
@@ -8343,7 +8398,7 @@ pub async fn fetch_admin_llm_gateway_account_group_options(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-gateway/account-group-options", admin_base());
+        let url = format!("{}/admin/llm-gateway/account-group-options", llm_access_admin_base());
         let response = api_get(&url)
             .send()
             .await
@@ -8377,7 +8432,7 @@ pub async fn create_admin_llm_gateway_account_group(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-gateway/account-groups", admin_base());
+        let url = format!("{}/admin/llm-gateway/account-groups", llm_access_admin_base());
         let response = api_post(&url)
             .json(&serde_json::json!({
                 "name": input.name,
@@ -8421,7 +8476,7 @@ pub async fn patch_admin_llm_gateway_account_group(
     {
         let url = format!(
             "{}/admin/llm-gateway/account-groups/{}",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(group_id)
         );
         let mut body = serde_json::Map::new();
@@ -8467,7 +8522,7 @@ pub async fn delete_admin_llm_gateway_account_group(group_id: &str) -> Result<()
     {
         let url = format!(
             "{}/admin/llm-gateway/account-groups/{}",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(group_id)
         );
         let response = api_delete(&url)
@@ -8501,7 +8556,7 @@ pub async fn fetch_admin_llm_gateway_token_requests(
 
     #[cfg(not(feature = "mock"))]
     {
-        let mut url = format!("{}/admin/llm-gateway/token-requests", admin_base());
+        let mut url = format!("{}/admin/llm-gateway/token-requests", llm_access_admin_base());
         let mut params = Vec::new();
         if let Some(status) = query.status.as_deref() {
             params.push(format!("status={}", urlencoding::encode(status)));
@@ -8550,7 +8605,8 @@ pub async fn fetch_admin_llm_gateway_account_contribution_requests(
 
     #[cfg(not(feature = "mock"))]
     {
-        let mut url = format!("{}/admin/llm-gateway/account-contribution-requests", admin_base());
+        let mut url =
+            format!("{}/admin/llm-gateway/account-contribution-requests", llm_access_admin_base());
         let mut params = Vec::new();
         if let Some(status) = query.status.as_deref() {
             params.push(format!("status={}", urlencoding::encode(status)));
@@ -8599,7 +8655,7 @@ pub async fn fetch_admin_llm_gateway_sponsor_requests(
 
     #[cfg(not(feature = "mock"))]
     {
-        let mut url = format!("{}/admin/llm-gateway/sponsor-requests", admin_base());
+        let mut url = format!("{}/admin/llm-gateway/sponsor-requests", llm_access_admin_base());
         let mut params = Vec::new();
         if let Some(status) = query.status.as_deref() {
             params.push(format!("status={}", urlencoding::encode(status)));
@@ -8681,7 +8737,7 @@ pub async fn create_admin_llm_gateway_key(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-gateway/keys", admin_base());
+        let url = format!("{}/admin/llm-gateway/keys", llm_access_admin_base());
         let response = api_post(&url)
             .json(&serde_json::json!({
                 "name": name,
@@ -8766,8 +8822,11 @@ pub async fn patch_admin_llm_gateway_key(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url =
-            format!("{}/admin/llm-gateway/keys/{}", admin_base(), urlencoding::encode(key_id));
+        let url = format!(
+            "{}/admin/llm-gateway/keys/{}",
+            llm_access_admin_base(),
+            urlencoding::encode(key_id)
+        );
         let mut body = serde_json::Map::new();
         if let Some(name) = request
             .name
@@ -8938,7 +8997,7 @@ pub async fn admin_approve_and_issue_llm_gateway_token_request(
     {
         let url = format!(
             "{}/admin/llm-gateway/token-requests/{}/approve-and-issue",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(request_id)
         );
         let response = api_post(&url)
@@ -8973,7 +9032,7 @@ pub async fn admin_reject_llm_gateway_token_request(
     {
         let url = format!(
             "{}/admin/llm-gateway/token-requests/{}/reject",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(request_id)
         );
         let response = api_post(&url)
@@ -9009,7 +9068,7 @@ pub async fn admin_approve_and_issue_llm_gateway_account_contribution_request(
     {
         let url = format!(
             "{}/admin/llm-gateway/account-contribution-requests/{}/approve-and-issue",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(request_id)
         );
         let response = api_post(&url)
@@ -9044,7 +9103,7 @@ pub async fn admin_validate_llm_gateway_account_contribution_request(
     {
         let url = format!(
             "{}/admin/llm-gateway/account-contribution-requests/{}/validate",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(request_id)
         );
         let response = api_post(&url)
@@ -9079,7 +9138,7 @@ pub async fn admin_reject_llm_gateway_account_contribution_request(
     {
         let url = format!(
             "{}/admin/llm-gateway/account-contribution-requests/{}/reject",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(request_id)
         );
         let response = api_post(&url)
@@ -9114,7 +9173,7 @@ pub async fn admin_approve_llm_gateway_sponsor_request(
     {
         let url = format!(
             "{}/admin/llm-gateway/sponsor-requests/{}/approve",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(request_id)
         );
         let response = api_post(&url)
@@ -9146,7 +9205,7 @@ pub async fn delete_admin_llm_gateway_sponsor_request(request_id: &str) -> Resul
     {
         let url = format!(
             "{}/admin/llm-gateway/sponsor-requests/{}",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(request_id)
         );
         let response = api_delete(&url)
@@ -9171,8 +9230,11 @@ pub async fn delete_admin_llm_gateway_key(key_id: &str) -> Result<(), String> {
 
     #[cfg(not(feature = "mock"))]
     {
-        let url =
-            format!("{}/admin/llm-gateway/keys/{}", admin_base(), urlencoding::encode(key_id));
+        let url = format!(
+            "{}/admin/llm-gateway/keys/{}",
+            llm_access_admin_base(),
+            urlencoding::encode(key_id)
+        );
         let response = api_delete(&url)
             .send()
             .await
@@ -9207,7 +9269,7 @@ pub async fn fetch_admin_llm_gateway_usage_events(
 
     #[cfg(not(feature = "mock"))]
     {
-        let mut url = format!("{}/admin/llm-gateway/usage", admin_base());
+        let mut url = format!("{}/admin/llm-gateway/usage", llm_access_admin_base());
         let params = admin_usage_query_params(query);
         if !params.is_empty() {
             url.push('?');
@@ -9308,7 +9370,7 @@ pub async fn fetch_admin_llm_gateway_usage_event_detail(
     #[cfg(not(feature = "mock"))]
     {
         let encoded = urlencoding::encode(event_id);
-        let url = format!("{}/admin/llm-gateway/usage/{}", admin_base(), encoded);
+        let url = format!("{}/admin/llm-gateway/usage/{}", llm_access_admin_base(), encoded);
         let response = api_get(&url)
             .send()
             .await
@@ -9334,7 +9396,7 @@ pub async fn fetch_admin_llm_gateway_usage_filter_options(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-gateway/usage/filter-options", admin_base());
+        let url = format!("{}/admin/llm-gateway/usage/filter-options", llm_access_admin_base());
         let params = admin_usage_query_params(query);
         let request = if params.is_empty() {
             api_get(&url)
@@ -9367,7 +9429,7 @@ pub async fn fetch_admin_llm_gateway_usage_metrics(
 
     #[cfg(not(feature = "mock"))]
     {
-        let mut url = format!("{}/admin/llm-gateway/usage/metrics", admin_base());
+        let mut url = format!("{}/admin/llm-gateway/usage/metrics", llm_access_admin_base());
         let mut params = Vec::new();
         if let Some(provider_type) = query
             .provider_type
@@ -9633,7 +9695,8 @@ pub async fn fetch_admin_llm_gateway_accounts_page_with_query(
         {
             params.push(format!("sort={}", urlencoding::encode(sort)));
         }
-        let url = format!("{}/admin/llm-gateway/accounts?{}", admin_base(), params.join("&"));
+        let url =
+            format!("{}/admin/llm-gateway/accounts?{}", llm_access_admin_base(), params.join("&"));
         let response = api_get(&url)
             .send()
             .await
@@ -9712,7 +9775,7 @@ pub async fn create_admin_llm_gateway_account_import_job(
         if items.is_empty() {
             return Err("批量导入内容不能为空".to_string());
         }
-        let url = format!("{}/admin/llm-gateway/accounts/import-jobs", admin_base());
+        let url = format!("{}/admin/llm-gateway/accounts/import-jobs", llm_access_admin_base());
         let payload = serde_json::json!({
             "provider_type": "codex",
             "source_type": "local_json",
@@ -9747,7 +9810,7 @@ pub async fn fetch_admin_llm_gateway_account_import_jobs(
 
     #[cfg(not(feature = "mock"))]
     {
-        let mut url = format!("{}/admin/llm-gateway/accounts/import-jobs", admin_base());
+        let mut url = format!("{}/admin/llm-gateway/accounts/import-jobs", llm_access_admin_base());
         if let Some(limit) = limit {
             url.push_str(&format!("?limit={limit}"));
         }
@@ -9780,7 +9843,7 @@ pub async fn fetch_admin_llm_gateway_account_import_job(
     {
         let url = format!(
             "{}/admin/llm-gateway/accounts/import-jobs/{}",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(job_id)
         );
         let response = api_get(&url)
@@ -9837,7 +9900,7 @@ pub async fn import_admin_llm_gateway_account(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-gateway/accounts", admin_base());
+        let url = format!("{}/admin/llm-gateway/accounts", llm_access_admin_base());
         let mut payload = serde_json::json!({ "name": name });
         if let Some(raw_auth_json) = auth_json.map(str::trim).filter(|value| !value.is_empty()) {
             payload["auth_json"] = serde_json::from_str(raw_auth_json)
@@ -9893,8 +9956,11 @@ pub async fn delete_admin_llm_gateway_account(name: &str) -> Result<(), String> 
 
     #[cfg(not(feature = "mock"))]
     {
-        let url =
-            format!("{}/admin/llm-gateway/accounts/{}", admin_base(), urlencoding::encode(name));
+        let url = format!(
+            "{}/admin/llm-gateway/accounts/{}",
+            llm_access_admin_base(),
+            urlencoding::encode(name)
+        );
         let response = api_delete(&url)
             .send()
             .await
@@ -9961,8 +10027,11 @@ pub async fn patch_admin_llm_gateway_account(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url =
-            format!("{}/admin/llm-gateway/accounts/{}", admin_base(), urlencoding::encode(name));
+        let url = format!(
+            "{}/admin/llm-gateway/accounts/{}",
+            llm_access_admin_base(),
+            urlencoding::encode(name)
+        );
         let response = api_patch(&url)
             .json(input)
             .map_err(|e| format!("Serialize error: {:?}", e))?
@@ -10013,7 +10082,7 @@ pub async fn refresh_admin_llm_gateway_account(name: &str) -> Result<AccountSumm
     {
         let url = format!(
             "{}/admin/llm-gateway/accounts/{}/refresh-usage",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(name)
         );
         let response = api_post(&url)
@@ -10074,7 +10143,7 @@ pub async fn refresh_admin_llm_gateway_account_auth(
     {
         let url = format!(
             "{}/admin/llm-gateway/accounts/{}/refresh-auth",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(name)
         );
         let response = api_post(&url)
@@ -10114,7 +10183,7 @@ pub async fn probe_admin_llm_gateway_account_models(
     {
         let url = format!(
             "{}/admin/llm-gateway/accounts/{}/probe-models",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(name)
         );
         let response = api_post(&url)
@@ -10325,7 +10394,7 @@ pub struct AdminKiroAccountStatusesQuery {
 
 #[cfg(any(not(feature = "mock"), test))]
 fn build_admin_kiro_account_statuses_url(query: &AdminKiroAccountStatusesQuery) -> String {
-    let mut url = format!("{}/admin/kiro-gateway/accounts/statuses", admin_base());
+    let mut url = format!("{}/admin/kiro-gateway/accounts/statuses", llm_access_admin_base());
     let mut params = Vec::new();
     if let Some(prefix) = query.prefix.as_deref() {
         params.push(format!("prefix={}", urlencoding::encode(prefix)));
@@ -10345,11 +10414,15 @@ fn build_admin_kiro_account_statuses_url(query: &AdminKiroAccountStatusesQuery) 
 
 #[cfg(any(not(feature = "mock"), test))]
 fn build_admin_kiro_cache_stats_url_for_ts(ts: u64) -> String {
-    format!("{}/admin/kiro-gateway/cache-stats?_ts={ts}", admin_base())
+    format!("{}/admin/kiro-gateway/cache-stats?_ts={ts}", llm_access_admin_base())
 }
 
 fn build_admin_kiro_usage_event_detail_url(event_id: &str) -> String {
-    format!("{}/admin/kiro-gateway/usage/{}", admin_base(), urlencoding::encode(event_id))
+    format!(
+        "{}/admin/kiro-gateway/usage/{}",
+        llm_access_admin_base(),
+        urlencoding::encode(event_id)
+    )
 }
 
 pub async fn fetch_kiro_access() -> Result<KiroAccessResponse, String> {
@@ -10455,7 +10528,7 @@ pub async fn fetch_admin_kiro_keys_page(
         let cache_buster = Date::now() as u64;
         let url = format!(
             "{}/admin/kiro-gateway/keys?limit={limit}&offset={offset}&_ts={cache_buster}",
-            admin_base()
+            llm_access_admin_base()
         );
         let response = api_get(&url)
             .header("Cache-Control", "no-cache, no-store, max-age=0")
@@ -10494,7 +10567,7 @@ pub async fn fetch_admin_kiro_account_groups_page(
     {
         let url = format!(
             "{}/admin/kiro-gateway/account-groups?limit={limit}&offset={offset}",
-            admin_base()
+            llm_access_admin_base()
         );
         let response = api_get(&url)
             .send()
@@ -10520,7 +10593,7 @@ pub async fn fetch_admin_kiro_account_group_options(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/kiro-gateway/account-group-options", admin_base());
+        let url = format!("{}/admin/kiro-gateway/account-group-options", llm_access_admin_base());
         let response = api_get(&url)
             .send()
             .await
@@ -10554,7 +10627,7 @@ pub async fn create_admin_kiro_account_group(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/kiro-gateway/account-groups", admin_base());
+        let url = format!("{}/admin/kiro-gateway/account-groups", llm_access_admin_base());
         let response = api_post(&url)
             .json(&serde_json::json!({
                 "name": input.name,
@@ -10598,7 +10671,7 @@ pub async fn patch_admin_kiro_account_group(
     {
         let url = format!(
             "{}/admin/kiro-gateway/account-groups/{}",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(group_id)
         );
         let mut body = serde_json::Map::new();
@@ -10644,7 +10717,7 @@ pub async fn delete_admin_kiro_account_group(group_id: &str) -> Result<(), Strin
     {
         let url = format!(
             "{}/admin/kiro-gateway/account-groups/{}",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(group_id)
         );
         let response = api_delete(&url)
@@ -10707,7 +10780,7 @@ pub async fn create_admin_kiro_key(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/kiro-gateway/keys", admin_base());
+        let url = format!("{}/admin/kiro-gateway/keys", llm_access_admin_base());
         let response = api_post(&url)
             .json(&serde_json::json!({
                 "name": name,
@@ -10762,8 +10835,11 @@ pub async fn patch_admin_kiro_key(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url =
-            format!("{}/admin/kiro-gateway/keys/{}", admin_base(), urlencoding::encode(key_id));
+        let url = format!(
+            "{}/admin/kiro-gateway/keys/{}",
+            llm_access_admin_base(),
+            urlencoding::encode(key_id)
+        );
         let mut body = serde_json::Map::new();
         if let Some(name) = request
             .name
@@ -10898,8 +10974,11 @@ pub async fn delete_admin_kiro_key(key_id: &str) -> Result<(), String> {
 
     #[cfg(not(feature = "mock"))]
     {
-        let url =
-            format!("{}/admin/kiro-gateway/keys/{}", admin_base(), urlencoding::encode(key_id));
+        let url = format!(
+            "{}/admin/kiro-gateway/keys/{}",
+            llm_access_admin_base(),
+            urlencoding::encode(key_id)
+        );
         let response = api_delete(&url)
             .send()
             .await
@@ -10934,7 +11013,7 @@ pub async fn fetch_admin_kiro_usage_events(
 
     #[cfg(not(feature = "mock"))]
     {
-        let mut url = format!("{}/admin/kiro-gateway/usage", admin_base());
+        let mut url = format!("{}/admin/kiro-gateway/usage", llm_access_admin_base());
         let mut params = Vec::new();
         if let Some(key_id) = query
             .key_id
@@ -11099,8 +11178,10 @@ pub async fn fetch_admin_kiro_accounts_page(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url =
-            format!("{}/admin/kiro-gateway/accounts?limit={limit}&offset={offset}", admin_base());
+        let url = format!(
+            "{}/admin/kiro-gateway/accounts?limit={limit}&offset={offset}",
+            llm_access_admin_base()
+        );
         let response = api_get(&url)
             .send()
             .await
@@ -11193,7 +11274,7 @@ pub async fn import_admin_kiro_account(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/kiro-gateway/accounts/import-local", admin_base());
+        let url = format!("{}/admin/kiro-gateway/accounts/import-local", llm_access_admin_base());
         let mut body = serde_json::Map::new();
         if let Some(name) = name.map(str::trim).filter(|value| !value.is_empty()) {
             body.insert("name".to_string(), serde_json::Value::String(name.to_string()));
@@ -11241,7 +11322,7 @@ pub async fn create_admin_kiro_manual_account(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/kiro-gateway/accounts", admin_base());
+        let url = format!("{}/admin/kiro-gateway/accounts", llm_access_admin_base());
         let response = api_post(&url)
             .json(input)
             .map_err(|e| format!("Serialize error: {:?}", e))?
@@ -11271,8 +11352,11 @@ pub async fn patch_admin_kiro_account(
 
     #[cfg(not(feature = "mock"))]
     {
-        let url =
-            format!("{}/admin/kiro-gateway/accounts/{}", admin_base(), urlencoding::encode(name));
+        let url = format!(
+            "{}/admin/kiro-gateway/accounts/{}",
+            llm_access_admin_base(),
+            urlencoding::encode(name)
+        );
         let response = api_patch(&url)
             .json(input)
             .map_err(|e| format!("Serialize error: {:?}", e))?
@@ -11306,7 +11390,7 @@ pub async fn refresh_admin_kiro_account_balance(name: &str) -> Result<KiroBalanc
     {
         let url = format!(
             "{}/admin/kiro-gateway/accounts/{}/balance",
-            admin_base(),
+            llm_access_admin_base(),
             urlencoding::encode(name)
         );
         let response = api_post(&url)
@@ -11333,8 +11417,11 @@ pub async fn delete_admin_kiro_account(name: &str) -> Result<(), String> {
 
     #[cfg(not(feature = "mock"))]
     {
-        let url =
-            format!("{}/admin/kiro-gateway/accounts/{}", admin_base(), urlencoding::encode(name));
+        let url = format!(
+            "{}/admin/kiro-gateway/accounts/{}",
+            llm_access_admin_base(),
+            urlencoding::encode(name)
+        );
         let response = api_delete(&url)
             .send()
             .await
@@ -11548,6 +11635,24 @@ mod tests {
     fn derive_local_media_api_base_from_http_api_base_uses_backend_origin() {
         let base = derive_local_media_api_base_from_api_base("http://127.0.0.1:39080/api");
         assert_eq!(base, "http://127.0.0.1:39080/admin/local-media/api");
+    }
+
+    #[test]
+    fn derive_llm_access_admin_base_from_relative_api_base_uses_local_mirror() {
+        let base = derive_llm_access_admin_base_from_api_base("/api");
+        assert_eq!(base, "http://127.0.0.1:19182");
+    }
+
+    #[test]
+    fn derive_llm_access_admin_base_from_local_http_api_base_uses_local_mirror() {
+        let base = derive_llm_access_admin_base_from_api_base("http://127.0.0.1:39080/api");
+        assert_eq!(base, "http://127.0.0.1:19182");
+    }
+
+    #[test]
+    fn resolve_llm_access_admin_base_prefers_explicit_override() {
+        let base = resolve_llm_access_admin_base(Some("https://llm-admin.example.com/"), "/api");
+        assert_eq!(base, "https://llm-admin.example.com");
     }
 
     #[test]
