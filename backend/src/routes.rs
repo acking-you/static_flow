@@ -1,8 +1,10 @@
 use axum::{
-    extract::DefaultBodyLimit,
+    body::Bytes,
+    extract::{DefaultBodyLimit, OriginalUri, State},
     handler::Handler,
-    http::{HeaderValue, Method},
+    http::{header, HeaderMap, HeaderValue, Method},
     middleware,
+    response::{IntoResponse, Response},
     routing::{any, get, patch, post, put},
     Router,
 };
@@ -24,6 +26,33 @@ where
 {
     put(handler)
         .layer(DefaultBodyLimit::max(static_flow_media_types::LOCAL_MEDIA_UPLOAD_CHUNK_BYTES))
+}
+
+fn request_prefers_html(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.contains("text/html") || value.contains("application/xhtml+xml"))
+        .unwrap_or(false)
+}
+
+async fn admin_kiro_accounts_entry(
+    state: State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    uri: OriginalUri,
+    body: Bytes,
+) -> Response {
+    if method == Method::GET && request_prefers_html(&headers) {
+        return seo::seo_spa_shell(state, uri).await;
+    }
+
+    match crate::llm_access_admin_proxy::proxy_admin_request(state, method, headers, uri, body)
+        .await
+    {
+        Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
 }
 
 /// Build the full application router, including public APIs, admin APIs, and
@@ -490,9 +519,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/static_flow/admin/llm-gateway", get(seo::seo_spa_shell))
         .route("/static_flow/admin/llm-gateway/monitor", get(seo::seo_spa_shell))
         .route("/admin/kiro-gateway", get(seo::seo_spa_shell))
-        .route("/admin/kiro-gateway/accounts", get(seo::seo_spa_shell))
+        .route("/admin/kiro-gateway/accounts", any(admin_kiro_accounts_entry))
         .route("/static_flow/admin/kiro-gateway", get(seo::seo_spa_shell))
-        .route("/static_flow/admin/kiro-gateway/accounts", get(seo::seo_spa_shell))
+        .route("/static_flow/admin/kiro-gateway/accounts", any(admin_kiro_accounts_entry))
         .route("/admin/llm-gateway/*path", any(crate::llm_access_admin_proxy::proxy_admin_request))
         .route(
             "/static_flow/admin/llm-gateway/*path",
@@ -862,5 +891,20 @@ mod tests {
             std::str::from_utf8(&body).expect("utf8 body"),
             r#"{"proxied":"/api/kiro-gateway/v1/models"}"#
         );
+    }
+
+    #[test]
+    fn request_prefers_html_only_for_document_accepts() {
+        let mut html_headers = header::HeaderMap::new();
+        html_headers.insert(header::ACCEPT, header::HeaderValue::from_static("text/html"));
+        assert!(super::request_prefers_html(&html_headers));
+
+        let mut json_headers = header::HeaderMap::new();
+        json_headers.insert(header::ACCEPT, header::HeaderValue::from_static("application/json"));
+        assert!(!super::request_prefers_html(&json_headers));
+
+        let mut wildcard_headers = header::HeaderMap::new();
+        wildcard_headers.insert(header::ACCEPT, header::HeaderValue::from_static("*/*"));
+        assert!(!super::request_prefers_html(&wildcard_headers));
     }
 }
