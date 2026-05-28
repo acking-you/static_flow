@@ -481,6 +481,10 @@ pub fn create_router(state: AppState) -> Router {
             "/api/llm-gateway/support-assets/:file_name",
             any(crate::llm_access_admin_proxy::proxy_public_request),
         )
+        .route("/api/llm-gateway/*path", any(crate::llm_access_admin_proxy::proxy_public_request))
+        .route("/api/kiro-gateway/*path", any(crate::llm_access_admin_proxy::proxy_public_request))
+        .route("/api/codex-gateway/*path", any(crate::llm_access_admin_proxy::proxy_public_request))
+        .route("/api/llm-access/*path", any(crate::llm_access_admin_proxy::proxy_public_request))
         .route("/admin/llm-gateway", get(seo::seo_spa_shell))
         .route("/admin/llm-gateway/monitor", get(seo::seo_spa_shell))
         .route("/static_flow/admin/llm-gateway", get(seo::seo_spa_shell))
@@ -781,6 +785,82 @@ mod tests {
         assert_eq!(
             std::str::from_utf8(&body).expect("utf8 body"),
             r#"{"proxied":"/api/llm-gateway/status"}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn public_kiro_gateway_access_prefers_proxy_route() {
+        let fallback = move |OriginalUri(uri): OriginalUri| async move {
+            Html(format!("fallback:{}", uri.path()))
+        };
+        let proxy = move |OriginalUri(uri): OriginalUri| async move {
+            Json(serde_json::json!({"proxied": uri.path()}))
+        };
+
+        let mut router = Router::new()
+            .route("/api/kiro-gateway/*path", any(proxy))
+            .fallback_service(ServeDir::new("frontend/dist").fallback(get(fallback)))
+            .into_service();
+
+        let response = router
+            .call(
+                Request::builder()
+                    .uri("/api/kiro-gateway/access")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&header::HeaderValue::from_static("application/json"))
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert_eq!(
+            std::str::from_utf8(&body).expect("utf8 body"),
+            r#"{"proxied":"/api/kiro-gateway/access"}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn public_kiro_gateway_models_prefers_proxy_route() {
+        let fallback = move |OriginalUri(uri): OriginalUri| async move {
+            Html(format!("fallback:{}", uri.path()))
+        };
+        let proxy = move |OriginalUri(uri): OriginalUri| async move {
+            Json(serde_json::json!({"proxied": uri.path()}))
+        };
+
+        let mut router = Router::new()
+            .route("/api/kiro-gateway/*path", any(proxy))
+            .fallback_service(ServeDir::new("frontend/dist").fallback(get(fallback)))
+            .into_service();
+
+        let response = router
+            .call(
+                Request::builder()
+                    .uri("/api/kiro-gateway/v1/models")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&header::HeaderValue::from_static("application/json"))
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert_eq!(
+            std::str::from_utf8(&body).expect("utf8 body"),
+            r#"{"proxied":"/api/kiro-gateway/v1/models"}"#
         );
     }
 }
