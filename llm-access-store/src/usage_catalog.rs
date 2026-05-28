@@ -461,20 +461,7 @@ impl PostgresUsageCatalog {
     fn load_archived_key_usage_rollups(&self) -> anyhow::Result<Vec<KeyUsageRollupSummary>> {
         self.with_client("archived key usage rollups", |client| {
             let rows = client
-                .query(
-                    "SELECT
-                        key_id,
-                        COALESCE(SUM(input_uncached_tokens), 0),
-                        COALESCE(SUM(input_cached_tokens), 0),
-                        COALESCE(SUM(output_tokens), 0),
-                        COALESCE(SUM(billable_tokens), 0),
-                        COALESCE(SUM((credit_total)::numeric), 0)::text,
-                        COALESCE(SUM(credit_missing_events), 0),
-                        MAX(last_used_at_ms)
-                     FROM llm_usage_segment_key_rollups
-                     GROUP BY key_id",
-                    &[],
-                )
+                .query(&archived_key_usage_rollups_sql(), &[])
                 .context("query archived key usage rollups")?;
             Ok(rows
                 .into_iter()
@@ -522,25 +509,12 @@ impl PostgresUsageCatalog {
     ) -> anyhow::Result<Vec<UsageCatalogSegmentCount>> {
         self.with_client("filtered segment lookup", |client| {
             let rows = client
-                .query(
-                    "SELECT
-                        s.archive_path,
-                        s.start_ms,
-                        s.end_ms,
-                        s.row_count,
-                        COALESCE(SUM(r.row_count), 0) AS matching_row_count
-                     FROM llm_usage_segments s
-                     JOIN llm_usage_segment_key_rollups r ON r.segment_id = s.segment_id
-                     WHERE s.state = 'archived'
-                       AND ($1::BIGINT IS NULL OR s.end_ms IS NULL OR s.end_ms >= $1)
-                       AND ($2::BIGINT IS NULL OR s.start_ms IS NULL OR s.start_ms < $2)
-                       AND ($3::TEXT IS NULL OR r.key_id = $3)
-                       AND ($4::TEXT IS NULL OR r.provider_type = $4)
-                     GROUP BY s.segment_id, s.archive_path, s.start_ms, s.end_ms, s.row_count
-                     HAVING COALESCE(SUM(r.row_count), 0) > 0
-                     ORDER BY COALESCE(s.end_ms, 0) DESC, s.segment_id DESC",
-                    &[&start_ms, &end_ms, &key_id, &provider_type],
-                )
+                .query(&filtered_archived_segments_sql(), &[
+                    &start_ms,
+                    &end_ms,
+                    &key_id,
+                    &provider_type,
+                ])
                 .context("query filtered archived segments")?;
             rows.into_iter()
                 .map(|row| {
@@ -638,6 +612,53 @@ impl PostgresUsageCatalog {
             }
         })
     }
+}
+
+fn sum_bigint_sql(expr: &str) -> String {
+    format!("COALESCE(SUM({expr}), 0)::BIGINT")
+}
+
+fn archived_key_usage_rollups_sql() -> String {
+    format!(
+        "SELECT
+            key_id,
+            {},
+            {},
+            {},
+            {},
+            COALESCE(SUM((credit_total)::numeric), 0)::text,
+            {},
+            MAX(last_used_at_ms)
+         FROM llm_usage_segment_key_rollups
+         GROUP BY key_id",
+        sum_bigint_sql("input_uncached_tokens"),
+        sum_bigint_sql("input_cached_tokens"),
+        sum_bigint_sql("output_tokens"),
+        sum_bigint_sql("billable_tokens"),
+        sum_bigint_sql("credit_missing_events"),
+    )
+}
+
+fn filtered_archived_segments_sql() -> String {
+    let matching_row_count = sum_bigint_sql("r.row_count");
+    format!(
+        "SELECT
+            s.archive_path,
+            s.start_ms,
+            s.end_ms,
+            s.row_count,
+            {matching_row_count} AS matching_row_count
+         FROM llm_usage_segments s
+         JOIN llm_usage_segment_key_rollups r ON r.segment_id = s.segment_id
+         WHERE s.state = 'archived'
+           AND ($1::BIGINT IS NULL OR s.end_ms IS NULL OR s.end_ms >= $1)
+           AND ($2::BIGINT IS NULL OR s.start_ms IS NULL OR s.start_ms < $2)
+           AND ($3::TEXT IS NULL OR r.key_id = $3)
+           AND ($4::TEXT IS NULL OR r.provider_type = $4)
+         GROUP BY s.segment_id, s.archive_path, s.start_ms, s.end_ms, s.row_count
+         HAVING {matching_row_count} > 0
+         ORDER BY COALESCE(s.end_ms, 0) DESC, s.segment_id DESC"
+    )
 }
 
 fn insert_rollups(
@@ -828,6 +849,20 @@ fn parse_sequence_from_segment_id(segment_id: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn postgres_usage_catalog_sum_queries_cast_back_to_bigint() {
+        let rollups_sql = super::archived_key_usage_rollups_sql();
+        assert!(rollups_sql.contains("COALESCE(SUM(input_uncached_tokens), 0)::BIGINT"));
+        assert!(rollups_sql.contains("COALESCE(SUM(billable_tokens), 0)::BIGINT"));
+        assert!(rollups_sql.contains("COALESCE(SUM(credit_missing_events), 0)::BIGINT"));
+
+        let filtered_sql = super::filtered_archived_segments_sql();
+        assert!(
+            filtered_sql.contains("COALESCE(SUM(r.row_count), 0)::BIGINT AS matching_row_count")
+        );
+        assert!(filtered_sql.contains("HAVING COALESCE(SUM(r.row_count), 0)::BIGINT > 0"));
+    }
+
     #[test]
     fn parse_sequence_from_segment_id_accepts_current_format() {
         assert_eq!(
