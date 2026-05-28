@@ -74,8 +74,6 @@ pub struct TieredDuckDbStorageConfig {
     pub active_dir: PathBuf,
     /// Archived immutable DuckDB segment directory.
     pub archive_dir: PathBuf,
-    /// Segment catalog directory.
-    pub catalog_dir: PathBuf,
     /// Rollover threshold in bytes.
     pub rollover_bytes: u64,
     /// Optional local detail-pack directory for per-event detail payloads.
@@ -164,7 +162,6 @@ where
     let mut duckdb = None;
     let mut duckdb_active_dir = None;
     let mut duckdb_archive_dir = None;
-    let mut duckdb_catalog_dir = None;
     let mut duckdb_rollover_bytes = None;
     let mut usage_details_dir = None;
     let mut usage_journal_dir = None;
@@ -221,12 +218,6 @@ where
                         .ok_or_else(|| anyhow!("--duckdb-archive-dir requires a path"))?,
                 ));
             },
-            "--duckdb-catalog-dir" => {
-                duckdb_catalog_dir = Some(PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| anyhow!("--duckdb-catalog-dir requires a path"))?,
-                ));
-            },
             "--duckdb-rollover-bytes" => {
                 let value = args
                     .next()
@@ -272,14 +263,12 @@ where
     let duckdb_tiered = parse_tiered_duckdb_config(
         duckdb_active_dir,
         duckdb_archive_dir,
-        duckdb_catalog_dir,
         duckdb_rollover_bytes,
         usage_details_dir,
     )?;
     ensure_under_root(&state_root, &duckdb)?;
     if let Some(tiered) = &duckdb_tiered {
         ensure_under_root(&state_root, &tiered.archive_dir)?;
-        ensure_under_root(&state_root, &tiered.catalog_dir)?;
         if let Some(details_dir) = &tiered.details_dir {
             ensure_under_root(&state_root, details_dir)?;
         }
@@ -301,13 +290,11 @@ where
 fn parse_tiered_duckdb_config(
     active_dir: Option<PathBuf>,
     archive_dir: Option<PathBuf>,
-    catalog_dir: Option<PathBuf>,
     rollover_bytes: Option<u64>,
     details_dir: Option<PathBuf>,
 ) -> anyhow::Result<Option<TieredDuckDbStorageConfig>> {
     let any = active_dir.is_some()
         || archive_dir.is_some()
-        || catalog_dir.is_some()
         || rollover_bytes.is_some()
         || details_dir.is_some();
     if !any {
@@ -318,8 +305,6 @@ fn parse_tiered_duckdb_config(
             .ok_or_else(|| anyhow!("--duckdb-active-dir is required for tiered DuckDB storage"))?,
         archive_dir: archive_dir
             .ok_or_else(|| anyhow!("--duckdb-archive-dir is required for tiered DuckDB storage"))?,
-        catalog_dir: catalog_dir
-            .ok_or_else(|| anyhow!("--duckdb-catalog-dir is required for tiered DuckDB storage"))?,
         rollover_bytes: rollover_bytes
             .unwrap_or(DEFAULT_TIERED_DUCKDB_ROLLOVER_BYTES)
             .max(1),
@@ -340,8 +325,8 @@ fn usage_error() -> anyhow::Error {
         "usage: llm-access init --state-root <path> --postgres-control-database-url-env <env> \
          --duckdb <path>\nusage: llm-access serve [--bind <addr>] --state-root <path> \
          --postgres-control-database-url-env <env> [--duckdb <path>] [--usage-journal-dir <path>] \
-         [--duckdb-active-dir <path> --duckdb-archive-dir <path> --duckdb-catalog-dir <path> \
-         --duckdb-rollover-bytes <bytes> --usage-details-dir <path>]"
+         [--duckdb-active-dir <path> --duckdb-archive-dir <path> --duckdb-rollover-bytes <bytes> \
+         --usage-details-dir <path>]"
     )
 }
 
@@ -434,8 +419,6 @@ mod tests {
             "/var/lib/staticflow/llm-access/analytics-active",
             "--duckdb-archive-dir",
             "/mnt/llm-access/analytics/segments",
-            "--duckdb-catalog-dir",
-            "/mnt/llm-access/analytics/catalog",
             "--duckdb-rollover-bytes",
             "536870912",
         ])
@@ -451,7 +434,6 @@ mod tests {
             PathBuf::from("/var/lib/staticflow/llm-access/analytics-active")
         );
         assert_eq!(tiered.archive_dir, PathBuf::from("/mnt/llm-access/analytics/segments"));
-        assert_eq!(tiered.catalog_dir, PathBuf::from("/mnt/llm-access/analytics/catalog"));
         assert_eq!(tiered.rollover_bytes, 536_870_912);
         assert_eq!(tiered.details_dir, None);
     }
@@ -469,8 +451,6 @@ mod tests {
             "/var/lib/staticflow/llm-access/analytics-active",
             "--duckdb-archive-dir",
             "/mnt/llm-access/analytics/segments",
-            "--duckdb-catalog-dir",
-            "/mnt/llm-access/analytics/catalog",
         ])
         .expect("parse tiered serve command");
 
@@ -495,8 +475,6 @@ mod tests {
             "/var/lib/staticflow/llm-access/analytics-active",
             "--duckdb-archive-dir",
             "/mnt/llm-access-usage/analytics/segments",
-            "--duckdb-catalog-dir",
-            "/mnt/llm-access-usage/analytics/catalog",
             "--usage-details-dir",
             "/mnt/llm-access-usage/details",
         ])
@@ -512,7 +490,6 @@ mod tests {
         );
         let tiered = config.storage.duckdb_tiered.expect("tiered config");
         assert_eq!(tiered.archive_dir, PathBuf::from("/mnt/llm-access-usage/analytics/segments"));
-        assert_eq!(tiered.catalog_dir, PathBuf::from("/mnt/llm-access-usage/analytics/catalog"));
         assert_eq!(tiered.details_dir, Some(PathBuf::from("/mnt/llm-access-usage/details")));
     }
 

@@ -66,7 +66,9 @@ Storage model:
 - active mutable DuckDB dir: `/var/lib/staticflow/llm-access/analytics-active`
 - GeoIP MMDB cache: `/var/lib/staticflow/llm-access/geoip/GeoLite2-City.mmdb`
 - archived DuckDB segments: `/mnt/llm-access-usage/analytics/segments`
-- DuckDB segment catalog: `/mnt/llm-access-usage/analytics/catalog`
+- archived segment catalog: Neon Postgres tables
+  `llm_usage_segments`, `llm_usage_segment_events`,
+  `llm_usage_segment_key_rollups`
 - packed usage details: `/mnt/llm-access-usage/details/packs/...`
 - hot usage journal: `/var/lib/staticflow/llm-access/usage-journal`
 - usage query worker bind: `127.0.0.1:19081`

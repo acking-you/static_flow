@@ -32,7 +32,7 @@ use llm_access_core::{
     usage::{UsageEvent, UsageStreamDetails, UsageTiming},
 };
 #[cfg(feature = "duckdb-runtime")]
-use rusqlite::OptionalExtension;
+use serde::{Deserialize, Serialize};
 #[cfg(feature = "duckdb-runtime")]
 use sha2::{Digest, Sha256};
 #[cfg(feature = "duckdb-runtime")]
@@ -1338,8 +1338,6 @@ pub struct TieredDuckDbUsageConfig {
     pub active_dir: PathBuf,
     /// JuiceFS-backed directory for immutable archived DuckDB segments.
     pub archive_dir: PathBuf,
-    /// JuiceFS-backed directory for the segment catalog SQLite database.
-    pub catalog_dir: PathBuf,
     /// Rollover threshold in bytes for the active DuckDB file.
     pub rollover_bytes: u64,
     /// Optional local root directory for packed detail payloads.
@@ -1433,8 +1431,23 @@ struct ArchivedSegmentPaths {
 #[cfg(feature = "duckdb-runtime")]
 #[derive(Debug)]
 enum TieredUsageCatalogBackend {
-    Sqlite { catalog_dir: PathBuf },
     Postgres(Arc<PostgresUsageCatalog>),
+    Test(Arc<TestTieredUsageCatalog>),
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug)]
+struct TestTieredUsageCatalog {
+    path: PathBuf,
+    state: Mutex<TestTieredUsageCatalogState>,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+struct TestTieredUsageCatalogState {
+    segments: BTreeMap<String, UsageCatalogSegmentRecord>,
+    segment_rollups: BTreeMap<String, Vec<UsageCatalogKeyRollupRecord>>,
+    event_locators: BTreeMap<String, String>,
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1487,9 +1500,9 @@ impl DuckDbUsageRepository {
         config: TieredDuckDbUsageConfig,
         connection_config: SharedDuckDbUsageConnectionConfig,
     ) -> anyhow::Result<Self> {
-        let catalog_backend = Arc::new(TieredUsageCatalogBackend::Sqlite {
-            catalog_dir: config.catalog_dir.clone(),
-        });
+        let catalog_backend = Arc::new(TieredUsageCatalogBackend::Test(Arc::new(
+            TestTieredUsageCatalog::open(test_catalog_state_path(&config))?,
+        )));
         Self::open_tiered_with_catalog_backend(config, connection_config, catalog_backend)
     }
 
@@ -1530,14 +1543,6 @@ impl DuckDbUsageRepository {
         fs::create_dir_all(&config.archive_dir).with_context(|| {
             format!("failed to create archive duckdb directory `{}`", config.archive_dir.display())
         })?;
-        if let TieredUsageCatalogBackend::Sqlite {
-            catalog_dir,
-        } = catalog_backend.as_ref()
-        {
-            fs::create_dir_all(catalog_dir).with_context(|| {
-                format!("failed to create duckdb catalog directory `{}`", catalog_dir.display())
-            })?;
-        }
         clear_stale_compacting_files(&config)?;
         let detail_store = config
             .details_dir
@@ -1682,61 +1687,25 @@ impl DuckDbUsageRepository {
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn sqlite_catalog_path(catalog_dir: &Path) -> PathBuf {
-    catalog_dir.join("usage-segments.sqlite3")
-}
-
-#[cfg(feature = "duckdb-runtime")]
-fn open_sqlite_catalog_connection(
-    catalog_dir: &Path,
-    purpose: &str,
-) -> anyhow::Result<rusqlite::Connection> {
-    let conn = rusqlite::Connection::open(sqlite_catalog_path(catalog_dir))
-        .with_context(|| format!("failed to open tiered usage catalog for {purpose}"))?;
-    conn.busy_timeout(Duration::from_secs(30))
-        .with_context(|| format!("configure tiered usage catalog busy timeout for {purpose}"))?;
-    initialize_tiered_catalog_schema(&conn)
-        .with_context(|| format!("failed to initialize tiered usage catalog for {purpose}"))?;
-    Ok(conn)
-}
-
-#[cfg(feature = "duckdb-runtime")]
 impl TieredUsageCatalogBackend {
     fn is_empty(&self) -> anyhow::Result<bool> {
         match self {
-            Self::Sqlite {
-                catalog_dir,
-            } => {
-                let catalog_path = sqlite_catalog_path(catalog_dir);
-                if !catalog_path.exists() {
-                    return Ok(true);
-                }
-                let catalog =
-                    open_sqlite_catalog_connection(catalog_dir, "catalog emptiness check")?;
-                let count: i64 = catalog
-                    .query_row("SELECT COUNT(*) FROM usage_segments", [], |row| row.get(0))
-                    .context("count sqlite usage catalog rows")?;
-                Ok(count == 0)
-            },
             Self::Postgres(catalog) => catalog.is_empty(),
+            Self::Test(catalog) => catalog.is_empty(),
         }
     }
 
     fn next_sequence(&self) -> anyhow::Result<u64> {
         match self {
-            Self::Sqlite {
-                catalog_dir,
-            } => next_sqlite_catalog_sequence(catalog_dir),
             Self::Postgres(catalog) => catalog.next_sequence(),
+            Self::Test(catalog) => catalog.next_sequence(),
         }
     }
 
     fn archive_path_for_segment(&self, segment_id: &str) -> anyhow::Result<Option<PathBuf>> {
         match self {
-            Self::Sqlite {
-                catalog_dir,
-            } => sqlite_archive_path_for_segment(catalog_dir, segment_id),
             Self::Postgres(catalog) => catalog.archive_path_for_segment(segment_id),
+            Self::Test(catalog) => catalog.archive_path_for_segment(segment_id),
         }
     }
 
@@ -1747,19 +1716,15 @@ impl TieredUsageCatalogBackend {
         event_ids: &[String],
     ) -> anyhow::Result<()> {
         match self {
-            Self::Sqlite {
-                catalog_dir,
-            } => publish_segment_catalog_sqlite(catalog_dir, segment, rollups, event_ids),
             Self::Postgres(catalog) => catalog.publish_segment(segment, rollups, event_ids),
+            Self::Test(catalog) => catalog.publish_segment(segment, rollups, event_ids),
         }
     }
 
     fn archived_key_usage_rollups(&self) -> anyhow::Result<Vec<KeyUsageRollupSummary>> {
         match self {
-            Self::Sqlite {
-                catalog_dir,
-            } => archived_key_usage_rollups_sqlite(catalog_dir),
             Self::Postgres(catalog) => catalog.archived_key_usage_rollups(),
+            Self::Test(catalog) => catalog.archived_key_usage_rollups(),
         }
     }
 
@@ -1768,19 +1733,15 @@ impl TieredUsageCatalogBackend {
         cutoff_ms: i64,
     ) -> anyhow::Result<Vec<UsageCatalogRetentionSegment>> {
         match self {
-            Self::Sqlite {
-                catalog_dir,
-            } => delete_expired_segments_from_sqlite_catalog(catalog_dir, cutoff_ms),
             Self::Postgres(catalog) => catalog.delete_expired_segments(cutoff_ms),
+            Self::Test(catalog) => catalog.delete_expired_segments(cutoff_ms),
         }
     }
 
     fn archived_paths(&self) -> anyhow::Result<HashSet<PathBuf>> {
         match self {
-            Self::Sqlite {
-                catalog_dir,
-            } => sqlite_catalog_archived_duckdb_paths(catalog_dir),
             Self::Postgres(catalog) => catalog.archived_paths(),
+            Self::Test(catalog) => catalog.archived_paths(),
         }
     }
 
@@ -1789,12 +1750,10 @@ impl TieredUsageCatalogBackend {
         query: &UsageEventQuery,
     ) -> anyhow::Result<Vec<ArchivedUsageSegment>> {
         match self {
-            Self::Sqlite {
-                catalog_dir,
-            } => sqlite_archived_segments_for_query(catalog_dir, query),
             Self::Postgres(catalog) => catalog
                 .archived_segments_for_query(query.start_ms, query.end_ms)
                 .map(|segments| segments.into_iter().map(Into::into).collect()),
+            Self::Test(catalog) => catalog.archived_segments_for_query(query),
         }
     }
 
@@ -1803,9 +1762,6 @@ impl TieredUsageCatalogBackend {
         query: &UsageEventQuery,
     ) -> anyhow::Result<Vec<(ArchivedUsageSegment, usize)>> {
         match self {
-            Self::Sqlite {
-                catalog_dir,
-            } => sqlite_archived_segments_with_catalog_counts(catalog_dir, query),
             Self::Postgres(catalog) => catalog
                 .archived_segments_with_catalog_counts(
                     query.start_ms,
@@ -1819,6 +1775,7 @@ impl TieredUsageCatalogBackend {
                         .map(|segment| (segment.segment.into(), segment.matching_row_count))
                         .collect()
                 }),
+            Self::Test(catalog) => catalog.archived_segments_with_catalog_counts(query),
         }
     }
 
@@ -1827,13 +1784,232 @@ impl TieredUsageCatalogBackend {
         event_id: &str,
     ) -> anyhow::Result<Option<ArchivedUsageSegment>> {
         match self {
-            Self::Sqlite {
-                catalog_dir,
-            } => sqlite_locate_archived_segment(catalog_dir, event_id),
             Self::Postgres(catalog) => catalog
                 .locate_archived_segment(event_id)
                 .map(|segment| segment.map(Into::into)),
+            Self::Test(catalog) => catalog.locate_archived_segment(event_id),
         }
+    }
+}
+
+#[cfg(feature = "duckdb-runtime")]
+impl TestTieredUsageCatalog {
+    fn open(path: PathBuf) -> anyhow::Result<Self> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "failed to create test usage catalog parent directory `{}`",
+                    parent.display()
+                )
+            })?;
+        }
+        let state = if path.exists() {
+            let bytes = fs::read(&path).with_context(|| {
+                format!("failed to read test usage catalog state `{}`", path.display())
+            })?;
+            serde_json::from_slice::<TestTieredUsageCatalogState>(&bytes).with_context(|| {
+                format!("failed to deserialize test usage catalog state `{}`", path.display())
+            })?
+        } else {
+            TestTieredUsageCatalogState::default()
+        };
+        Ok(Self {
+            path,
+            state: Mutex::new(state),
+        })
+    }
+
+    fn lock(&self) -> anyhow::Result<std::sync::MutexGuard<'_, TestTieredUsageCatalogState>> {
+        self.state
+            .lock()
+            .map_err(|_| anyhow!("test tiered usage catalog lock poisoned"))
+    }
+
+    fn persist(&self, state: &TestTieredUsageCatalogState) -> anyhow::Result<()> {
+        let bytes = serde_json::to_vec(state).context("serialize test usage catalog state")?;
+        let temp_path = self.path.with_extension("json.tmp");
+        fs::write(&temp_path, bytes).with_context(|| {
+            format!("failed to write test usage catalog temp state `{}`", temp_path.display())
+        })?;
+        fs::rename(&temp_path, &self.path).with_context(|| {
+            format!("failed to replace test usage catalog state `{}`", self.path.display())
+        })?;
+        Ok(())
+    }
+
+    fn is_empty(&self) -> anyhow::Result<bool> {
+        Ok(self.lock()?.segments.is_empty())
+    }
+
+    fn next_sequence(&self) -> anyhow::Result<u64> {
+        Ok(self
+            .lock()?
+            .segments
+            .keys()
+            .filter_map(|segment_id| parse_sequence_from_segment_id(segment_id))
+            .max()
+            .unwrap_or(0))
+    }
+
+    fn archive_path_for_segment(&self, segment_id: &str) -> anyhow::Result<Option<PathBuf>> {
+        Ok(self
+            .lock()?
+            .segments
+            .get(segment_id)
+            .map(|segment| segment.archive_path.clone()))
+    }
+
+    fn publish_segment(
+        &self,
+        segment: &UsageCatalogSegmentRecord,
+        rollups: &[UsageCatalogKeyRollupRecord],
+        event_ids: &[String],
+    ) -> anyhow::Result<()> {
+        let mut state = self.lock()?;
+        state
+            .segments
+            .insert(segment.segment_id.clone(), segment.clone());
+        state
+            .segment_rollups
+            .insert(segment.segment_id.clone(), rollups.to_vec());
+        state
+            .event_locators
+            .retain(|_, current_segment_id| current_segment_id != &segment.segment_id);
+        for event_id in event_ids {
+            state
+                .event_locators
+                .insert(event_id.clone(), segment.segment_id.clone());
+        }
+        self.persist(&state)?;
+        Ok(())
+    }
+
+    fn archived_key_usage_rollups(&self) -> anyhow::Result<Vec<KeyUsageRollupSummary>> {
+        let state = self.lock()?;
+        let mut combined = BTreeMap::<String, KeyUsageRollupSummary>::new();
+        for rollup in state.segment_rollups.values().flatten() {
+            merge_key_rollup(&mut combined, KeyUsageRollupSummary {
+                key_id: rollup.key_id.clone(),
+                input_uncached_tokens: rollup.input_uncached_tokens,
+                input_cached_tokens: rollup.input_cached_tokens,
+                output_tokens: rollup.output_tokens,
+                billable_tokens: rollup.billable_tokens,
+                credit_total: rollup.credit_total.clone(),
+                credit_missing_events: rollup.credit_missing_events,
+                last_used_at_ms: rollup.last_used_at_ms,
+            });
+        }
+        Ok(combined.into_values().collect())
+    }
+
+    fn delete_expired_segments(
+        &self,
+        cutoff_ms: i64,
+    ) -> anyhow::Result<Vec<UsageCatalogRetentionSegment>> {
+        let mut state = self.lock()?;
+        let mut deleted = state
+            .segments
+            .iter()
+            .filter(|(_, segment)| segment.end_ms.is_some_and(|end_ms| end_ms < cutoff_ms))
+            .map(|(segment_id, segment)| UsageCatalogRetentionSegment {
+                segment_id: segment_id.clone(),
+                archive_path: segment.archive_path.clone(),
+            })
+            .collect::<Vec<_>>();
+        deleted.sort_by(|left, right| left.segment_id.cmp(&right.segment_id));
+        if deleted.is_empty() {
+            return Ok(deleted);
+        }
+        let deleted_ids = deleted
+            .iter()
+            .map(|segment| segment.segment_id.as_str())
+            .collect::<HashSet<_>>();
+        state
+            .segments
+            .retain(|segment_id, _| !deleted_ids.contains(segment_id.as_str()));
+        state
+            .segment_rollups
+            .retain(|segment_id, _| !deleted_ids.contains(segment_id.as_str()));
+        state
+            .event_locators
+            .retain(|_, segment_id| !deleted_ids.contains(segment_id.as_str()));
+        self.persist(&state)?;
+        Ok(deleted)
+    }
+
+    fn archived_paths(&self) -> anyhow::Result<HashSet<PathBuf>> {
+        Ok(self
+            .lock()?
+            .segments
+            .values()
+            .map(|segment| segment.archive_path.clone())
+            .collect())
+    }
+
+    fn archived_segments_for_query(
+        &self,
+        query: &UsageEventQuery,
+    ) -> anyhow::Result<Vec<ArchivedUsageSegment>> {
+        let state = self.lock()?;
+        let mut segments = state
+            .segments
+            .values()
+            .filter(|segment| segment_matches_time_window(segment, query.start_ms, query.end_ms))
+            .map(archived_segment_from_record)
+            .collect::<Vec<_>>();
+        sort_archived_segments(&mut segments);
+        Ok(segments)
+    }
+
+    fn archived_segments_with_catalog_counts(
+        &self,
+        query: &UsageEventQuery,
+    ) -> anyhow::Result<Vec<(ArchivedUsageSegment, usize)>> {
+        let state = self.lock()?;
+        let mut segments = Vec::new();
+        for (segment_id, segment) in state.segments.iter().filter(|(_, segment)| {
+            segment_matches_time_window(segment, query.start_ms, query.end_ms)
+        }) {
+            let matching_row_count = if query.key_id.is_none() && query.provider_type.is_none() {
+                segment.row_count
+            } else {
+                state
+                    .segment_rollups
+                    .get(segment_id)
+                    .into_iter()
+                    .flatten()
+                    .filter(|rollup| {
+                        query
+                            .key_id
+                            .as_deref()
+                            .is_none_or(|key_id| rollup.key_id == key_id)
+                            && query
+                                .provider_type
+                                .as_deref()
+                                .is_none_or(|provider_type| rollup.provider_type == provider_type)
+                    })
+                    .fold(0usize, |total, rollup| total.saturating_add(rollup.row_count))
+            };
+            if matching_row_count > 0 {
+                segments.push((archived_segment_from_record(segment), matching_row_count));
+            }
+        }
+        sort_archived_segment_counts(&mut segments);
+        Ok(segments)
+    }
+
+    fn locate_archived_segment(
+        &self,
+        event_id: &str,
+    ) -> anyhow::Result<Option<ArchivedUsageSegment>> {
+        let state = self.lock()?;
+        let Some(segment_id) = state.event_locators.get(event_id) else {
+            return Ok(None);
+        };
+        Ok(state
+            .segments
+            .get(segment_id)
+            .map(archived_segment_from_record))
     }
 }
 
@@ -1850,6 +2026,49 @@ impl From<UsageCatalogSegment> for ArchivedUsageSegment {
 }
 
 #[cfg(feature = "duckdb-runtime")]
+fn archived_segment_from_record(record: &UsageCatalogSegmentRecord) -> ArchivedUsageSegment {
+    ArchivedUsageSegment {
+        archive_path: record.archive_path.clone(),
+        start_ms: record.start_ms,
+        end_ms: record.end_ms,
+        row_count: record.row_count,
+    }
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn segment_matches_time_window(
+    segment: &UsageCatalogSegmentRecord,
+    start_ms: Option<i64>,
+    end_ms: Option<i64>,
+) -> bool {
+    (start_ms.is_none() || segment.end_ms.is_none() || segment.end_ms >= start_ms)
+        && (end_ms.is_none() || segment.start_ms.is_none() || segment.start_ms < end_ms)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn sort_archived_segments(segments: &mut [ArchivedUsageSegment]) {
+    segments.sort_by(|left, right| {
+        right
+            .end_ms
+            .unwrap_or(0)
+            .cmp(&left.end_ms.unwrap_or(0))
+            .then_with(|| right.archive_path.cmp(&left.archive_path))
+    });
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn sort_archived_segment_counts(segments: &mut [(ArchivedUsageSegment, usize)]) {
+    segments.sort_by(|left, right| {
+        right
+            .0
+            .end_ms
+            .unwrap_or(0)
+            .cmp(&left.0.end_ms.unwrap_or(0))
+            .then_with(|| right.0.archive_path.cmp(&left.0.archive_path))
+    });
+}
+
+#[cfg(feature = "duckdb-runtime")]
 fn tiered_pending_dir(config: &TieredDuckDbUsageConfig) -> PathBuf {
     config.active_dir.join("pending")
 }
@@ -1857,6 +2076,11 @@ fn tiered_pending_dir(config: &TieredDuckDbUsageConfig) -> PathBuf {
 #[cfg(feature = "duckdb-runtime")]
 fn tiered_compacting_dir(config: &TieredDuckDbUsageConfig) -> PathBuf {
     config.active_dir.join("compacting")
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn test_catalog_state_path(config: &TieredDuckDbUsageConfig) -> PathBuf {
+    config.archive_dir.join(".test-usage-catalog.json")
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -1898,23 +2122,6 @@ fn uploading_archive_segment_path_from_archive_path(archive_path: &Path) -> Path
         .map(|name| format!("{name}.uploading.duckdb"))
         .unwrap_or_else(|| format!("{file_name}.uploading"));
     archive_path.with_file_name(uploading_name)
-}
-
-#[cfg(feature = "duckdb-runtime")]
-fn sqlite_archive_path_for_segment(
-    catalog_dir: &Path,
-    segment_id: &str,
-) -> anyhow::Result<Option<PathBuf>> {
-    let catalog = open_sqlite_catalog_connection(catalog_dir, "segment archive lookup")?;
-    catalog
-        .query_row(
-            "SELECT archive_path FROM usage_segments WHERE segment_id = ?1 LIMIT 1",
-            rusqlite::params![segment_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .context("query tiered usage catalog archive path")
-        .map(|path| path.map(PathBuf::from))
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -2159,57 +2366,12 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(all(test, feature = "duckdb-runtime"))]
 fn initialize_tiered_catalog(config: &TieredDuckDbUsageConfig) -> anyhow::Result<()> {
-    let path = sqlite_catalog_path(&config.catalog_dir);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!("failed to create tiered catalog directory `{}`", parent.display())
-        })?;
-    }
-    let _conn = open_sqlite_catalog_connection(&config.catalog_dir, "initialization")
-        .with_context(|| format!("tiered usage catalog path `{}`", path.display()))?;
-    Ok(())
-}
-
-#[cfg(feature = "duckdb-runtime")]
-fn initialize_tiered_catalog_schema(conn: &rusqlite::Connection) -> anyhow::Result<()> {
-    conn.execute_batch(
-        "
-        PRAGMA journal_mode=DELETE;
-        CREATE TABLE IF NOT EXISTS usage_segments (
-            segment_id TEXT PRIMARY KEY,
-            archive_path TEXT NOT NULL,
-            state TEXT NOT NULL CHECK (state IN ('archived')),
-            start_ms INTEGER,
-            end_ms INTEGER,
-            row_count INTEGER NOT NULL,
-            size_bytes INTEGER NOT NULL,
-            sealed_at_ms INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS usage_segment_events (
-            event_id TEXT PRIMARY KEY,
-            segment_id TEXT NOT NULL REFERENCES usage_segments(segment_id) ON DELETE CASCADE
-        );
-        CREATE TABLE IF NOT EXISTS usage_segment_key_rollups (
-            segment_id TEXT NOT NULL REFERENCES usage_segments(segment_id) ON DELETE CASCADE,
-            key_id TEXT NOT NULL,
-            provider_type TEXT NOT NULL,
-            row_count INTEGER NOT NULL,
-            input_uncached_tokens INTEGER NOT NULL,
-            input_cached_tokens INTEGER NOT NULL,
-            output_tokens INTEGER NOT NULL,
-            billable_tokens INTEGER NOT NULL,
-            credit_total TEXT NOT NULL,
-            credit_missing_events INTEGER NOT NULL,
-            last_used_at_ms INTEGER,
-            PRIMARY KEY (segment_id, key_id, provider_type)
-        );
-        CREATE INDEX IF NOT EXISTS idx_usage_segments_time
-            ON usage_segments(end_ms, start_ms);
-        CREATE INDEX IF NOT EXISTS idx_usage_segment_key_rollups_key
-            ON usage_segment_key_rollups(key_id, provider_type);
-        ",
-    )
-    .context("failed to initialize tiered usage catalog schema")?;
+    fs::create_dir_all(&config.active_dir).with_context(|| {
+        format!("failed to create tiered active directory `{}`", config.active_dir.display())
+    })?;
+    fs::create_dir_all(&config.archive_dir).with_context(|| {
+        format!("failed to create tiered archive directory `{}`", config.archive_dir.display())
+    })?;
     Ok(())
 }
 
@@ -2241,26 +2403,6 @@ fn choose_active_segment(
 
     let next_sequence = catalog_backend.next_sequence()?.saturating_add(1);
     Ok((active_segment_path(config, next_sequence), next_sequence.saturating_add(1)))
-}
-
-#[cfg(feature = "duckdb-runtime")]
-fn next_sqlite_catalog_sequence(catalog_dir: &Path) -> anyhow::Result<u64> {
-    let catalog = open_sqlite_catalog_connection(catalog_dir, "sequence lookup")?;
-    let max_segment_id: Option<String> = catalog
-        .query_row(
-            "SELECT segment_id
-             FROM usage_segments
-             ORDER BY sealed_at_ms DESC, segment_id DESC
-             LIMIT 1",
-            [],
-            |row| row.get(0),
-        )
-        .optional()
-        .context("failed to read latest usage segment id")?;
-    Ok(max_segment_id
-        .as_deref()
-        .and_then(parse_sequence_from_segment_id)
-        .unwrap_or(0))
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -2737,85 +2879,6 @@ fn publish_segment_catalog(
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn publish_segment_catalog_sqlite(
-    catalog_dir: &Path,
-    segment: &UsageCatalogSegmentRecord,
-    rollups: &[UsageCatalogKeyRollupRecord],
-    event_ids: &[String],
-) -> anyhow::Result<()> {
-    let mut catalog = open_sqlite_catalog_connection(catalog_dir, "publication")?;
-    let tx = catalog
-        .transaction()
-        .context("begin tiered catalog transaction")?;
-    tx.execute(
-        "INSERT OR REPLACE INTO usage_segments (
-            segment_id, archive_path, state, start_ms, end_ms, row_count, size_bytes, sealed_at_ms
-         ) VALUES (?1, ?2, 'archived', ?3, ?4, ?5, ?6, ?7)",
-        rusqlite::params![
-            segment.segment_id,
-            segment.archive_path.to_string_lossy().as_ref(),
-            segment.start_ms,
-            segment.end_ms,
-            usize_to_i64(segment.row_count),
-            u64_to_i64(segment.size_bytes),
-            segment.sealed_at_ms,
-        ],
-    )
-    .context("insert tiered usage segment catalog row")?;
-    tx.execute("DELETE FROM usage_segment_events WHERE segment_id = ?1", rusqlite::params![
-        segment.segment_id.as_str()
-    ])
-    .context("clear existing segment event locators")?;
-    tx.execute("DELETE FROM usage_segment_key_rollups WHERE segment_id = ?1", rusqlite::params![
-        segment.segment_id.as_str()
-    ])
-    .context("clear existing segment rollups")?;
-    {
-        let mut stmt = tx
-            .prepare(
-                "INSERT OR REPLACE INTO usage_segment_key_rollups (
-                    segment_id, key_id, provider_type, row_count, input_uncached_tokens,
-                    input_cached_tokens, output_tokens, billable_tokens, credit_total,
-                    credit_missing_events, last_used_at_ms
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            )
-            .context("prepare tiered rollup insert")?;
-        for rollup in rollups {
-            stmt.execute(rusqlite::params![
-                segment.segment_id.as_str(),
-                rollup.key_id.as_str(),
-                rollup.provider_type.as_str(),
-                usize_to_i64(rollup.row_count),
-                rollup.input_uncached_tokens,
-                rollup.input_cached_tokens,
-                rollup.output_tokens,
-                rollup.billable_tokens,
-                rollup.credit_total.as_str(),
-                rollup.credit_missing_events,
-                rollup.last_used_at_ms,
-            ])
-            .context("insert tiered segment rollup")?;
-        }
-    }
-    {
-        let mut insert_event = tx
-            .prepare(
-                "INSERT OR REPLACE INTO usage_segment_events (event_id, segment_id)
-                 VALUES (?1, ?2)",
-            )
-            .context("prepare event locator insert")?;
-        for event_id in event_ids {
-            insert_event
-                .execute(rusqlite::params![event_id, segment.segment_id.as_str()])
-                .context("insert event locator")?;
-        }
-    }
-    tx.commit()
-        .context("commit tiered usage catalog transaction")?;
-    Ok(())
-}
-
-#[cfg(feature = "duckdb-runtime")]
 fn key_usage_rollups_from_path(path: &Path) -> anyhow::Result<Vec<KeyUsageRollupSummary>> {
     let conn = DuckDbUsageRepository::open_read_only_conn(path)?;
     key_usage_rollups_from_conn(&conn)
@@ -2916,45 +2979,6 @@ fn merge_key_rollup(
         (None, Some(right)) => Some(right),
         (left, None) => left,
     };
-}
-
-#[cfg(feature = "duckdb-runtime")]
-fn archived_key_usage_rollups_sqlite(
-    catalog_dir: &Path,
-) -> anyhow::Result<Vec<KeyUsageRollupSummary>> {
-    let catalog = open_sqlite_catalog_connection(catalog_dir, "archived rollups")?;
-    let mut stmt = catalog
-        .prepare(
-            "SELECT
-                key_id,
-                COALESCE(sum(input_uncached_tokens), 0),
-                COALESCE(sum(input_cached_tokens), 0),
-                COALESCE(sum(output_tokens), 0),
-                COALESCE(sum(billable_tokens), 0),
-                COALESCE(sum(CAST(credit_total AS REAL)), 0),
-                COALESCE(sum(credit_missing_events), 0),
-                max(last_used_at_ms)
-             FROM usage_segment_key_rollups
-             GROUP BY key_id",
-        )
-        .context("prepare archived key usage rollup query")?;
-    let rows = stmt
-        .query_map([], |row| {
-            let credit_total: f64 = row.get(5)?;
-            Ok(KeyUsageRollupSummary {
-                key_id: row.get(0)?,
-                input_uncached_tokens: row.get(1)?,
-                input_cached_tokens: row.get(2)?,
-                output_tokens: row.get(3)?,
-                billable_tokens: row.get(4)?,
-                credit_total: credit_total.to_string(),
-                credit_missing_events: row.get(6)?,
-                last_used_at_ms: row.get(7)?,
-            })
-        })
-        .context("query archived key usage rollups")?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .context("collect archived key usage rollups")
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -3156,60 +3180,6 @@ fn delete_expired_segments_from_catalog(
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn delete_expired_segments_from_sqlite_catalog(
-    catalog_dir: &Path,
-    cutoff_ms: i64,
-) -> anyhow::Result<Vec<UsageCatalogRetentionSegment>> {
-    let mut catalog = open_sqlite_catalog_connection(catalog_dir, "retention prune")?;
-    let candidates = {
-        let mut stmt = catalog
-            .prepare(
-                "SELECT segment_id, archive_path
-                 FROM usage_segments
-                 WHERE state = 'archived'
-                   AND end_ms IS NOT NULL
-                   AND end_ms < ?1
-                 ORDER BY end_ms ASC, segment_id ASC",
-            )
-            .context("prepare expired usage segment lookup")?;
-        let rows = stmt
-            .query_map([cutoff_ms], |row| {
-                Ok(UsageCatalogRetentionSegment {
-                    segment_id: row.get(0)?,
-                    archive_path: PathBuf::from(row.get::<_, String>(1)?),
-                })
-            })
-            .context("query expired usage segments")?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .context("collect expired usage segments")?
-    };
-    if candidates.is_empty() {
-        return Ok(candidates);
-    }
-    let tx = catalog
-        .transaction()
-        .context("begin usage retention catalog transaction")?;
-    for candidate in &candidates {
-        tx.execute("DELETE FROM usage_segment_events WHERE segment_id = ?1", rusqlite::params![
-            candidate.segment_id.as_str()
-        ])
-        .context("delete expired segment event locators")?;
-        tx.execute(
-            "DELETE FROM usage_segment_key_rollups WHERE segment_id = ?1",
-            rusqlite::params![candidate.segment_id.as_str()],
-        )
-        .context("delete expired segment rollups")?;
-        tx.execute("DELETE FROM usage_segments WHERE segment_id = ?1", rusqlite::params![
-            candidate.segment_id.as_str()
-        ])
-        .context("delete expired usage segment")?;
-    }
-    tx.commit()
-        .context("commit usage retention catalog transaction")?;
-    Ok(candidates)
-}
-
-#[cfg(feature = "duckdb-runtime")]
 fn remove_duckdb_segment_files(path: &Path) -> anyhow::Result<usize> {
     let existed = path.exists();
     remove_file_if_exists(path)?;
@@ -3249,19 +3219,6 @@ fn catalog_archived_duckdb_paths(
     catalog_backend: &TieredUsageCatalogBackend,
 ) -> anyhow::Result<HashSet<PathBuf>> {
     catalog_backend.archived_paths()
-}
-
-#[cfg(feature = "duckdb-runtime")]
-fn sqlite_catalog_archived_duckdb_paths(catalog_dir: &Path) -> anyhow::Result<HashSet<PathBuf>> {
-    let catalog = open_sqlite_catalog_connection(catalog_dir, "orphan prune")?;
-    let mut stmt = catalog
-        .prepare("SELECT archive_path FROM usage_segments WHERE state = 'archived'")
-        .context("prepare archived path lookup")?;
-    let rows = stmt
-        .query_map([], |row| Ok(PathBuf::from(row.get::<_, String>(0)?)))
-        .context("query archived paths")?;
-    rows.collect::<Result<HashSet<_>, _>>()
-        .context("collect archived paths")
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -3935,91 +3892,11 @@ fn archived_segments_with_catalog_counts(
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn sqlite_archived_segments_with_catalog_counts(
-    catalog_dir: &Path,
-    query: &UsageEventQuery,
-) -> anyhow::Result<Vec<(ArchivedUsageSegment, usize)>> {
-    let catalog = open_sqlite_catalog_connection(catalog_dir, "filtered segment lookup")?;
-    let mut stmt = catalog
-        .prepare(
-            "SELECT
-                s.archive_path,
-                s.start_ms,
-                s.end_ms,
-                s.row_count,
-                COALESCE(sum(r.row_count), 0) AS matching_row_count
-             FROM usage_segments s
-             JOIN usage_segment_key_rollups r ON r.segment_id = s.segment_id
-             WHERE s.state = 'archived'
-               AND (?1 IS NULL OR s.end_ms IS NULL OR s.end_ms >= ?1)
-               AND (?2 IS NULL OR s.start_ms IS NULL OR s.start_ms < ?2)
-               AND (?3 IS NULL OR r.key_id = ?3)
-               AND (?4 IS NULL OR r.provider_type = ?4)
-             GROUP BY s.segment_id, s.archive_path, s.start_ms, s.end_ms, s.row_count
-             HAVING matching_row_count > 0
-             ORDER BY COALESCE(s.end_ms, 0) DESC, s.segment_id DESC",
-        )
-        .context("prepare filtered archived segment lookup")?;
-    let rows = stmt
-        .query_map(
-            rusqlite::params![
-                query.start_ms,
-                query.end_ms,
-                query.key_id.as_deref(),
-                query.provider_type.as_deref()
-            ],
-            |row| {
-                let segment = ArchivedUsageSegment {
-                    archive_path: PathBuf::from(row.get::<_, String>(0)?),
-                    start_ms: row.get(1)?,
-                    end_ms: row.get(2)?,
-                    row_count: i64_to_usize(row.get(3)?),
-                };
-                let count = i64_to_usize(row.get(4)?);
-                Ok((segment, count))
-            },
-        )
-        .context("query filtered archived segments")?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .context("collect filtered archived segments")
-}
-
-#[cfg(feature = "duckdb-runtime")]
 fn archived_segments_for_query(
     catalog_backend: &TieredUsageCatalogBackend,
     query: &UsageEventQuery,
 ) -> anyhow::Result<Vec<ArchivedUsageSegment>> {
     catalog_backend.archived_segments_for_query(query)
-}
-
-#[cfg(feature = "duckdb-runtime")]
-fn sqlite_archived_segments_for_query(
-    catalog_dir: &Path,
-    query: &UsageEventQuery,
-) -> anyhow::Result<Vec<ArchivedUsageSegment>> {
-    let catalog = open_sqlite_catalog_connection(catalog_dir, "segment lookup")?;
-    let mut stmt = catalog
-        .prepare(
-            "SELECT archive_path, start_ms, end_ms, row_count
-             FROM usage_segments
-             WHERE state = 'archived'
-               AND (?1 IS NULL OR end_ms IS NULL OR end_ms >= ?1)
-               AND (?2 IS NULL OR start_ms IS NULL OR start_ms < ?2)
-             ORDER BY COALESCE(end_ms, 0) DESC, segment_id DESC",
-        )
-        .context("prepare archived segment lookup")?;
-    let rows = stmt
-        .query_map(rusqlite::params![query.start_ms, query.end_ms], |row| {
-            Ok(ArchivedUsageSegment {
-                archive_path: PathBuf::from(row.get::<_, String>(0)?),
-                start_ms: row.get(1)?,
-                end_ms: row.get(2)?,
-                row_count: i64_to_usize(row.get(3)?),
-            })
-        })
-        .context("query archived segments")?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .context("collect archived segments")
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -4199,33 +4076,6 @@ fn locate_archived_segment(
     event_id: &str,
 ) -> anyhow::Result<Option<ArchivedUsageSegment>> {
     catalog_backend.locate_archived_segment(event_id)
-}
-
-#[cfg(feature = "duckdb-runtime")]
-fn sqlite_locate_archived_segment(
-    catalog_dir: &Path,
-    event_id: &str,
-) -> anyhow::Result<Option<ArchivedUsageSegment>> {
-    let catalog = open_sqlite_catalog_connection(catalog_dir, "event locator")?;
-    let row = catalog
-        .query_row(
-            "SELECT s.archive_path, s.start_ms, s.end_ms, s.row_count
-             FROM usage_segment_events e
-             JOIN usage_segments s ON s.segment_id = e.segment_id
-             WHERE e.event_id = ?1 AND s.state = 'archived'",
-            rusqlite::params![event_id],
-            |row| {
-                Ok(ArchivedUsageSegment {
-                    archive_path: PathBuf::from(row.get::<_, String>(0)?),
-                    start_ms: row.get(1)?,
-                    end_ms: row.get(2)?,
-                    row_count: i64_to_usize(row.get(3)?),
-                })
-            },
-        )
-        .optional()
-        .context("query archived event locator")?;
-    Ok(row)
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -4548,11 +4398,6 @@ fn usize_to_i64(value: usize) -> i64 {
 }
 
 #[cfg(feature = "duckdb-runtime")]
-fn u64_to_i64(value: u64) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
-}
-
-#[cfg(feature = "duckdb-runtime")]
 fn decode_usage_event_summary_row(row: &duckdb::Row<'_>) -> duckdb::Result<UsageEvent> {
     decode_usage_event_row(row, false)
 }
@@ -4818,6 +4663,16 @@ mod tests {
         timestamp_ms: i64,
     ) -> std::path::PathBuf {
         super::archive_segment_path_for_timestamp(config, segment_id, timestamp_ms)
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    fn test_catalog_backend(
+        config: &super::TieredDuckDbUsageConfig,
+    ) -> super::TieredUsageCatalogBackend {
+        super::TieredUsageCatalogBackend::Test(std::sync::Arc::new(
+            super::TestTieredUsageCatalog::open(super::test_catalog_state_path(config))
+                .expect("open test usage catalog"),
+        ))
     }
 
     #[cfg(feature = "duckdb-runtime")]
@@ -5121,63 +4976,12 @@ mod tests {
         let err = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
             active_dir: std::env::temp_dir().join("llm-access-active-reject-remote"),
             archive_dir: std::env::temp_dir().join("llm-access-archive-reject-remote"),
-            catalog_dir: std::env::temp_dir().join("llm-access-catalog-reject-remote"),
             rollover_bytes: u64::MAX,
             details_dir: Some(std::path::PathBuf::from("s3://should-not-work")),
         })
         .expect_err("non-local details dir must fail");
 
         assert!(err.to_string().contains("local filesystem path"));
-    }
-
-    #[cfg(feature = "duckdb-runtime")]
-    #[test]
-    fn tiered_repository_startup_skips_catalog_open_when_active_segment_exists() {
-        use std::{os::unix::fs::PermissionsExt, sync::Arc};
-
-        let root = std::env::temp_dir()
-            .join(format!("llm-access-duckdb-test-{}-startup-catalog-skip", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("create startup skip test directory");
-        let config = super::TieredDuckDbUsageConfig {
-            active_dir: root.join("active"),
-            archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
-            rollover_bytes: u64::MAX,
-            details_dir: Some(details_store_dir(&root)),
-        };
-        std::fs::create_dir_all(&config.catalog_dir).expect("create catalog dir");
-        let active_path = super::active_segment_path(&config, 273);
-        super::initialize_duckdb_target_path_with_connection_config(
-            &active_path,
-            super::DuckDbUsageConnectionConfig::default(),
-        )
-        .expect("initialize local active segment");
-
-        let original_permissions = std::fs::metadata(&config.catalog_dir)
-            .expect("catalog dir metadata")
-            .permissions();
-        let mut blocked_permissions = original_permissions.clone();
-        blocked_permissions.set_mode(0o000);
-        std::fs::set_permissions(&config.catalog_dir, blocked_permissions)
-            .expect("block catalog dir access");
-
-        let repo = super::DuckDbUsageRepository::open_tiered_with_connection_config(
-            config.clone(),
-            Arc::new(std::sync::RwLock::new(super::DuckDbUsageConnectionConfig::default())),
-        );
-
-        std::fs::set_permissions(&config.catalog_dir, original_permissions)
-            .expect("restore catalog dir permissions");
-
-        assert!(
-            repo.is_ok(),
-            "startup should succeed without touching shared catalog when a local active segment \
-             exists"
-        );
-
-        drop(repo);
-        std::fs::remove_dir_all(&root).expect("cleanup startup skip test directory");
     }
 
     #[cfg(feature = "duckdb-runtime")]
@@ -5192,7 +4996,6 @@ mod tests {
         let config = super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
             details_dir: Some(details_store_dir(&root)),
         };
@@ -5333,7 +5136,6 @@ mod tests {
         let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
             details_dir: Some(details_store_dir(&root)),
         })
@@ -5427,7 +5229,6 @@ mod tests {
         let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
             details_dir: Some(details_store_dir(&root)),
         })
@@ -5524,7 +5325,6 @@ mod tests {
         let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
             details_dir: Some(details_store_dir(&root)),
         })
@@ -5560,7 +5360,6 @@ mod tests {
         let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
             details_dir: Some(details_store_dir(&root)),
         })
@@ -5613,7 +5412,6 @@ mod tests {
         let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
             details_dir: Some(details_store_dir(&root)),
         })
@@ -6179,7 +5977,6 @@ mod tests {
         let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
             details_dir: Some(details_store_dir(&root)),
         })
@@ -6269,7 +6066,6 @@ mod tests {
         let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
             details_dir: Some(details_store_dir(&root)),
         })
@@ -6319,7 +6115,6 @@ mod tests {
         let config = super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
             details_dir: Some(details_store_dir(&root)),
         };
@@ -6335,9 +6130,7 @@ mod tests {
         let size_bytes = std::fs::metadata(&archive_path)
             .expect("legacy archive metadata")
             .len();
-        let catalog_backend = super::TieredUsageCatalogBackend::Sqlite {
-            catalog_dir: config.catalog_dir.clone(),
-        };
+        let catalog_backend = test_catalog_backend(&config);
         super::publish_segment_catalog(
             &catalog_backend,
             "usage-legacy-archive-000001",
@@ -6399,7 +6192,6 @@ mod tests {
         let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
             details_dir: Some(details_store_dir(&root)),
         })
@@ -6474,7 +6266,6 @@ mod tests {
         let config = super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
             details_dir: None,
         };
@@ -6490,9 +6281,7 @@ mod tests {
         let size_bytes = std::fs::metadata(&archive_path)
             .expect("legacy archive metadata")
             .len();
-        let catalog_backend = super::TieredUsageCatalogBackend::Sqlite {
-            catalog_dir: config.catalog_dir.clone(),
-        };
+        let catalog_backend = test_catalog_backend(&config);
         super::publish_segment_catalog(
             &catalog_backend,
             "usage-legacy-detail-000001",
@@ -6537,57 +6326,38 @@ mod tests {
         let config = super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
             details_dir: None,
         };
         std::fs::create_dir_all(&config.active_dir).expect("create active dir");
         super::initialize_tiered_catalog(&config).expect("initialize tiered catalog");
-        let catalog = rusqlite::Connection::open(super::sqlite_catalog_path(&config.catalog_dir))
-            .expect("open tiered catalog");
-        catalog
-            .execute(
-                "INSERT INTO usage_segments (
-                    segment_id, archive_path, state, start_ms, end_ms, row_count,
-                    size_bytes, sealed_at_ms
-                 ) VALUES (?1, ?2, 'archived', ?3, ?4, ?5, ?6, ?7)",
-                rusqlite::params![
-                    "usage-nonmatching-000001",
-                    config
-                        .archive_dir
-                        .join("missing-nonmatching.duckdb")
-                        .to_string_lossy()
-                        .as_ref(),
-                    1_700_000_000_000_i64,
-                    1_700_000_100_000_i64,
-                    1_i64,
-                    1_i64,
-                    1_700_000_100_000_i64,
-                ],
+        let catalog_backend = test_catalog_backend(&config);
+        catalog_backend
+            .publish_segment(
+                &crate::usage_catalog::UsageCatalogSegmentRecord {
+                    segment_id: "usage-nonmatching-000001".to_string(),
+                    archive_path: config.archive_dir.join("missing-nonmatching.duckdb"),
+                    start_ms: Some(1_700_000_000_000_i64),
+                    end_ms: Some(1_700_000_100_000_i64),
+                    row_count: 1,
+                    size_bytes: 1,
+                    sealed_at_ms: 1_700_000_100_000_i64,
+                },
+                &[crate::usage_catalog::UsageCatalogKeyRollupRecord {
+                    key_id: "other-key".to_string(),
+                    provider_type: "kiro".to_string(),
+                    row_count: 1,
+                    input_uncached_tokens: 1,
+                    input_cached_tokens: 0,
+                    output_tokens: 1,
+                    billable_tokens: 2,
+                    credit_total: "0".to_string(),
+                    credit_missing_events: 0,
+                    last_used_at_ms: Some(1_700_000_050_000_i64),
+                }],
+                &[],
             )
-            .expect("insert segment catalog row");
-        catalog
-            .execute(
-                "INSERT INTO usage_segment_key_rollups (
-                    segment_id, key_id, provider_type, row_count, input_uncached_tokens,
-                    input_cached_tokens, output_tokens, billable_tokens, credit_total,
-                    credit_missing_events, last_used_at_ms
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                rusqlite::params![
-                    "usage-nonmatching-000001",
-                    "other-key",
-                    "kiro",
-                    1_i64,
-                    1_i64,
-                    0_i64,
-                    1_i64,
-                    2_i64,
-                    "0",
-                    0_i64,
-                    1_700_000_050_000_i64,
-                ],
-            )
-            .expect("insert segment rollup");
+            .expect("insert nonmatching test catalog segment");
 
         let repo =
             super::DuckDbUsageRepository::open_tiered(config).expect("open tiered duckdb usage db");
@@ -6625,7 +6395,6 @@ mod tests {
         let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
             details_dir: None,
         })
@@ -6689,7 +6458,6 @@ mod tests {
         let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
             details_dir: None,
         })
@@ -6710,6 +6478,7 @@ mod tests {
             .await
             .expect("append retained event");
         wait_for_archived_duckdb_file_count(&root.join("archive"), 2).await;
+        wait_for_usage_event_present(&repo, &retained.event_id).await;
 
         let report = repo
             .prune_usage_analytics(now_ms, 7)
@@ -6743,7 +6512,6 @@ mod tests {
         let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
             details_dir: None,
         })
@@ -6792,7 +6560,6 @@ mod tests {
         let config = super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
             details_dir: None,
         };
@@ -6862,7 +6629,6 @@ mod tests {
         let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: u64::MAX,
             details_dir: None,
         })
@@ -6932,7 +6698,6 @@ mod tests {
         let repo = super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
             details_dir: None,
         })
@@ -6996,7 +6761,6 @@ mod tests {
         let config = super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
             details_dir: None,
         };
@@ -7026,9 +6790,7 @@ mod tests {
             .expect("create legacy source index");
         }
 
-        let catalog_backend = super::TieredUsageCatalogBackend::Sqlite {
-            catalog_dir: config.catalog_dir.clone(),
-        };
+        let catalog_backend = test_catalog_backend(&config);
         super::publish_pending_segment_async(
             &config,
             &catalog_backend,
@@ -7108,7 +6870,6 @@ mod tests {
         let config = super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
             details_dir: None,
         };
@@ -7155,9 +6916,7 @@ mod tests {
             .expect("reorder pending source usage_events columns");
         }
 
-        let catalog_backend = super::TieredUsageCatalogBackend::Sqlite {
-            catalog_dir: config.catalog_dir.clone(),
-        };
+        let catalog_backend = test_catalog_backend(&config);
         super::publish_pending_segment_async(
             &config,
             &catalog_backend,
@@ -7200,7 +6959,6 @@ mod tests {
         let config = super::TieredDuckDbUsageConfig {
             active_dir: root.join("active"),
             archive_dir: root.join("archive"),
-            catalog_dir: root.join("catalog"),
             rollover_bytes: 1,
             details_dir: Some(details_store_dir(&root)),
         };
@@ -7209,9 +6967,7 @@ mod tests {
         let pending_path = root.join("pending-legacy-wide.duckdb");
         create_legacy_usage_archive_without_stream_columns(&pending_path);
 
-        let catalog_backend = super::TieredUsageCatalogBackend::Sqlite {
-            catalog_dir: config.catalog_dir.clone(),
-        };
+        let catalog_backend = test_catalog_backend(&config);
         super::publish_pending_segment_async(
             &config,
             &catalog_backend,
@@ -7277,6 +7033,24 @@ mod tests {
             }
             if std::time::Instant::now() >= deadline {
                 panic!("timed out waiting for archived duckdb segment");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    #[cfg(feature = "duckdb-runtime")]
+    async fn wait_for_usage_event_present(repo: &super::DuckDbUsageRepository, event_id: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let event = repo
+                .get_usage_event(event_id)
+                .await
+                .expect("query usage event while waiting");
+            if event.is_some() {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("timed out waiting for usage event `{event_id}`");
             }
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }

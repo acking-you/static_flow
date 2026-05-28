@@ -31,8 +31,11 @@ service:
 - local hot journal under `/var/lib/staticflow/llm-access/usage-journal`
 - tiered DuckDB analytics with an active local VM segment under
   `/var/lib/staticflow/llm-access/analytics-active`
-- archived immutable DuckDB segments plus the low-frequency segment catalog on
-  JuiceFS under `/mnt/llm-access-usage/analytics`
+- archived immutable DuckDB segments on JuiceFS under
+  `/mnt/llm-access-usage/analytics/segments`
+- narrow archived-segment catalog in Neon Postgres (`llm_usage_segments`,
+  `llm_usage_segment_events`, `llm_usage_segment_key_rollups`), optionally
+  fronted by Valkey request-cache keys
 - per-event heavy usage detail payloads as compressed pack files under
   `/mnt/llm-access-usage/details/packs/...`
 

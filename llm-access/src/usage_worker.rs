@@ -1146,7 +1146,6 @@ mod tests {
                 DuckDbUsageRepository::open_tiered(TieredDuckDbUsageConfig {
                     active_dir: temp_dir.path().join("duckdb-active"),
                     archive_dir: temp_dir.path().join("duckdb-archive"),
-                    catalog_dir: temp_dir.path().join("duckdb-catalog"),
                     rollover_bytes: 1024 * 1024 * 1024,
                     details_dir: None,
                 })

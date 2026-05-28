@@ -436,7 +436,7 @@ Kiro 的 access token 管理是文件持久化的。默认目录是 `~/.static-f
 | `/var/lib/staticflow/llm-access/usage-journal` | compact local usage journal produced by API and consumed by the usage worker |
 | `/var/lib/staticflow/llm-access/analytics-active` | current mutable DuckDB usage segment |
 | `/mnt/llm-access-usage/analytics/segments` | immutable archived DuckDB usage segments |
-| `/mnt/llm-access-usage/analytics/catalog` | low-frequency DuckDB segment catalog |
+| `llm_usage_segments` / `llm_usage_segment_events` / `llm_usage_segment_key_rollups` in Neon Postgres | narrow archived-segment catalog used for pruning and event locator lookup |
 | `/mnt/llm-access-usage/details/packs/...` | compressed per-event packed usage detail payloads |
 
 因此，生产排障时不要把 local LanceDB `llm_gateway_usage_events` 当成当前

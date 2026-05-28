@@ -45,7 +45,7 @@ pub(crate) struct UsageCatalogRetentionSegment {
 }
 
 /// Immutable segment row written into the catalog.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct UsageCatalogSegmentRecord {
     /// Stable segment identifier.
     pub segment_id: String,
@@ -64,7 +64,7 @@ pub(crate) struct UsageCatalogSegmentRecord {
 }
 
 /// Per-key rollup row written into the catalog.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct UsageCatalogKeyRollupRecord {
     /// API key id.
     pub key_id: String,

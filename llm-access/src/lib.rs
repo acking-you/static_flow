@@ -34,7 +34,10 @@ pub mod usage_query;
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 pub mod usage_worker;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 
 use anyhow::Context;
 use axum::{
@@ -136,14 +139,23 @@ pub fn bootstrap_storage(config: &StorageConfig) -> anyhow::Result<()> {
     bootstrap_api_storage(config)?;
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     if let Some(tiered) = &config.duckdb_tiered {
-        llm_access_store::duckdb::DuckDbUsageRepository::open_tiered(
+        let database_url =
+            std::env::var(&config.control_store.database_url_env).with_context(|| {
+                format!("missing control database env `{}`", config.control_store.database_url_env)
+            })?;
+        let request_cache_config = crate::config::resolve_request_cache_config(config)?;
+        llm_access_store::duckdb::DuckDbUsageRepository::open_tiered_with_postgres_catalog_with_connection_config(
             llm_access_store::duckdb::TieredDuckDbUsageConfig {
                 active_dir: tiered.active_dir.clone(),
                 archive_dir: tiered.archive_dir.clone(),
-                catalog_dir: tiered.catalog_dir.clone(),
                 rollover_bytes: tiered.rollover_bytes,
                 details_dir: tiered.details_dir.clone(),
             },
+            Arc::new(RwLock::new(
+                llm_access_store::duckdb::DuckDbUsageConnectionConfig::default(),
+            )),
+            &database_url,
+            request_cache_config,
         )?;
     } else {
         llm_access_store::initialize_duckdb_target_path(&config.duckdb)?;
@@ -154,7 +166,10 @@ pub fn bootstrap_storage(config: &StorageConfig) -> anyhow::Result<()> {
 
 fn duckdb_schema_output_path(config: &StorageConfig) -> PathBuf {
     if let Some(tiered) = &config.duckdb_tiered {
-        return tiered.catalog_dir.join("usage.schema.sql");
+        if let Some(parent) = tiered.archive_dir.parent() {
+            return parent.join("usage.schema.sql");
+        }
+        return tiered.archive_dir.join("usage.schema.sql");
     }
     config.duckdb.with_extension("schema.sql")
 }

@@ -6,13 +6,18 @@
 > 的当前形态。
 >
 > **讨论范围**: 本文只讨论 `llm-access` usage event 的生产、journal、
-> worker 消费、DuckDB summary segment 下沉、detail pack 存储、SQLite
+> worker 消费、DuckDB summary segment 下沉、detail pack 存储、segment
 > catalog 和基于 catalog 的查询加速。
 > Codex/Kiro 协议转换、账号刷新、代理解析、前端视觉交互不在本文展开。
 >
 > **控制面现状**: 截至 `2026-05-16`，live control plane 已切到 Neon；
 > `/mnt/llm-access/control/llm-access.sqlite3` 只保留作回退快照。本文的
 > journal / DuckDB / usage query 机制不变。
+>
+> **Catalog 现状**: 截至 `2026-05-28`，live archive segment catalog 已迁到
+> Neon Postgres（`llm_usage_segments`、`llm_usage_segment_events`、
+> `llm_usage_segment_key_rollups`）。本文中残留的 SQLite catalog 细节应视为
+> 历史设计背景；当前生产运行时以 PG 窄 catalog 为准。
 >
 > **职责边界**: `llm-access` API 进程只承担请求服务、usage event 生产、
 > 控制面必要 quota/rollup 更新和 worker API 转发。usage 明细查询、chart
@@ -101,7 +106,7 @@ flowchart TD
     Worker --> Active["Active DuckDB summary segment<br/>local VM disk"]
     Worker --> Archive["Archived DuckDB summary segments<br/>JuiceFS usage mount"]
     Worker --> Details["Compressed detail packs<br/>JuiceFS usage mount"]
-    Worker --> Catalog["SQLite catalog<br/>usage-segments.sqlite3"]
+    Worker --> Catalog["Neon PG segment catalog<br/>+ optional Valkey cache"]
 
     Forward --> Worker
     Worker --> PublicUsage["list/detail/chart JSON"]
@@ -119,7 +124,7 @@ API 公开 usage 页面请求的实际路径是：
   -> llm-access API 校验 query key / secret
   -> API 读取 usage_query_base_url
   -> API 转发到 worker /admin/llm-gateway/usage
-  -> worker 查询 DuckDB/catalog
+  -> worker 查询 DuckDB/PG catalog
   -> API 返回裁剪后的 public response
 ```
 
@@ -144,15 +149,15 @@ local VM disk:
 dedicated JuiceFS usage mount:
 └── /mnt/llm-access-usage/
     ├── analytics/
-    │   ├── segments/<yyyy>/<mm>/<dd>/<segment>.duckdb
-    │   └── catalog/usage-segments.sqlite3
+    │   └── segments/<yyyy>/<mm>/<dd>/<segment>.duckdb
     └── details/
         └── packs/<provider>/<yyyy>/<mm>/<dd>/<event>.detailpack-v1
 ```
 
-生产配置里 active segment 放在 VM 本地盘，archive/catalog/details 放在独立
-的 usage JuiceFS mount `/mnt/llm-access-usage`。这样写入热路径优先使用本地
-块存储，历史 usage 明细与归档由 JuiceFS 自己的读写缓存承接。
+生产配置里 active segment 放在 VM 本地盘，archive/details 放在独立的
+usage JuiceFS mount `/mnt/llm-access-usage`，而 segment catalog 放在 Neon
+Postgres。这样写入热路径优先使用本地块存储，历史 usage 明细与归档由
+JuiceFS 自己的读写缓存承接，catalog 只承担窄元数据剪枝和 event locator。
 
 ### 3.3 数据形态变化
 

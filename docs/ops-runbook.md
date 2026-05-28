@@ -190,7 +190,9 @@ private env files, not in tracked docs.
   - local active DuckDB dir: `/var/lib/staticflow/llm-access/analytics-active`
   - archived immutable DuckDB segments:
     `/mnt/llm-access-usage/analytics/segments`
-  - DuckDB segment catalog: `/mnt/llm-access-usage/analytics/catalog`
+  - archived segment catalog tables in Neon Postgres:
+    `llm_usage_segments`, `llm_usage_segment_events`,
+    `llm_usage_segment_key_rollups`
   - packed per-event heavy usage details:
     `/mnt/llm-access-usage/details/packs/<provider>/<yyyy>/<mm>/<dd>/...`
   - email credentials: `/mnt/llm-access/config/email_accounts.json`
@@ -305,9 +307,11 @@ host; keep swap as an emergency buffer, not as normal working memory.
 
 - Current llm-access usage analytics should run in tiered DuckDB mode: only the
   active mutable DuckDB file lives on local VM block storage; JuiceFS/R2 stores
-  immutable archived segment files plus the low-frequency segment catalog. Do
-  not point a live writer at `/mnt/llm-access/analytics/usage.duckdb` as a
-  mutable all-history DuckDB file.
+  immutable archived segment files, while Neon Postgres stores the narrow
+  segment catalog (`llm_usage_segments`, `llm_usage_segment_events`,
+  `llm_usage_segment_key_rollups`). Do not point a live writer at
+  `/mnt/llm-access/analytics/usage.duckdb` as a mutable all-history DuckDB
+  file.
 - Heavy per-event detail payloads are not part of the hot DuckDB write path
   anymore. The worker writes summary facts into tiered DuckDB, but writes
   detail payloads as packed files under `/mnt/llm-access-usage/details`. This

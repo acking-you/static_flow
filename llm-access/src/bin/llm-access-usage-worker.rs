@@ -84,7 +84,6 @@ fn run() -> anyhow::Result<()> {
                     TieredDuckDbUsageConfig {
                         active_dir: tiered.active_dir,
                         archive_dir: tiered.archive_dir,
-                        catalog_dir: tiered.catalog_dir,
                         rollover_bytes: tiered.rollover_bytes,
                         details_dir: tiered.details_dir,
                     },
