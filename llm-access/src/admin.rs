@@ -101,7 +101,6 @@ const PROXY_FULL_CHAIN_CODEX_KEY_NAME: &str = "admin-key";
 const PROXY_FULL_CHAIN_KIRO_KEY_NAME: &str = "admin";
 const PROXY_FULL_CHAIN_CODEX_MODEL: &str = "gpt-5.5";
 const PROXY_FULL_CHAIN_KIRO_MODEL: &str = "claude-sonnet-4-6";
-const ADMIN_KIRO_MODEL_PROBE_MAX_TOKENS: i32 = 16;
 const ADMIN_KIRO_MODEL_PROBE_PROMPT: &str = "Reply with OK only.";
 const CODEX_ACCESS_TOKEN_VALIDATION_TIMEOUT_SECONDS: u64 = 20;
 const CODEX_WIRE_ORIGINATOR: &str = "codex_cli_rs";
@@ -2776,28 +2775,9 @@ pub(crate) async fn probe_admin_kiro_account_model(
         Err(response) => return response.into_response(),
     };
     route.proxy = proxy.clone();
-    let probe_payload = build_kiro_model_probe_payload(&request.model);
-    let normalized = match llm_access_kiro::anthropic::converter::normalize_request(&probe_payload)
-    {
-        Ok(normalized) => normalized,
-        Err(err) => return bad_request(&err.to_string()).into_response(),
-    };
-    let resolved_conversation =
-        llm_access_kiro::anthropic::converter::resolve_conversation_id_from_metadata(
-            probe_payload.metadata.as_ref(),
-        );
-    let conversion = match llm_access_kiro::anthropic::converter::convert_normalized_request_with_resolved_session(
-        normalized,
-        route.request_validation_enabled,
-        resolved_conversation,
-    ) {
-        Ok(conversion) => conversion,
-        Err(err) => return bad_request(&err.to_string()).into_response(),
-    };
-    let request_body = match serde_json::to_vec(&llm_access_kiro::wire::KiroRequest {
-        conversation_state: conversion.conversation_state,
-        profile_arn: route.profile_arn.clone(),
-    }) {
+    let upstream_request =
+        build_direct_kiro_model_probe_request(&request.model, route.profile_arn.clone());
+    let request_body = match serde_json::to_vec(&upstream_request) {
         Ok(body) => body,
         Err(_) => {
             return internal_error("Failed to encode Kiro model probe request").into_response();
@@ -5322,23 +5302,18 @@ async fn resolve_admin_kiro_probe_proxy(
     ))
 }
 
-fn build_kiro_model_probe_payload(
+fn build_direct_kiro_model_probe_request(
     model: &str,
-) -> llm_access_kiro::anthropic::types::MessagesRequest {
-    llm_access_kiro::anthropic::types::MessagesRequest {
-        model: model.to_string(),
-        _max_tokens: ADMIN_KIRO_MODEL_PROBE_MAX_TOKENS,
-        messages: vec![llm_access_kiro::anthropic::types::Message {
-            role: "user".to_string(),
-            content: serde_json::Value::String(ADMIN_KIRO_MODEL_PROBE_PROMPT.to_string()),
-        }],
-        stream: false,
-        system: None,
-        tools: None,
-        _tool_choice: None,
-        thinking: None,
-        output_config: None,
-        metadata: None,
+    profile_arn: Option<String>,
+) -> llm_access_kiro::wire::KiroRequest {
+    let conversation_id = format!("admin-model-probe-{}", uuid::Uuid::new_v4().simple());
+    let current_message = llm_access_kiro::wire::CurrentMessage::new(
+        llm_access_kiro::wire::UserInputMessage::new(ADMIN_KIRO_MODEL_PROBE_PROMPT, model),
+    );
+    llm_access_kiro::wire::KiroRequest {
+        conversation_state: llm_access_kiro::wire::ConversationState::new(conversation_id)
+            .with_current_message(current_message),
+        profile_arn,
     }
 }
 
@@ -6866,6 +6841,36 @@ mod tests {
 
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(err.message.contains("proxy_url"));
+    }
+
+    #[test]
+    fn build_direct_kiro_model_probe_request_preserves_requested_model_id() {
+        let request = build_direct_kiro_model_probe_request(
+            "claude-opus-4-8",
+            Some("arn:aws:codewhisperer:us-east-1:123456789012:profile/test".to_string()),
+        );
+
+        assert_eq!(
+            request
+                .conversation_state
+                .current_message
+                .user_input_message
+                .model_id,
+            "claude-opus-4-8"
+        );
+        assert_eq!(
+            request
+                .conversation_state
+                .current_message
+                .user_input_message
+                .content,
+            ADMIN_KIRO_MODEL_PROBE_PROMPT
+        );
+        assert!(request.conversation_state.history.is_empty());
+        assert_eq!(
+            request.profile_arn.as_deref(),
+            Some("arn:aws:codewhisperer:us-east-1:123456789012:profile/test")
+        );
     }
 
     #[test]
