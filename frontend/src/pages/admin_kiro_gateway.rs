@@ -2010,6 +2010,13 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             .collect::<Vec<_>>()
             .join(" · ")
     };
+    let on_latency_routing_change = {
+        let kiro_latency_routing_enabled = kiro_latency_routing_enabled.clone();
+        Callback::from(move |event: Event| {
+            let input: HtmlInputElement = event.target_unchecked_into();
+            kiro_latency_routing_enabled.set(input.checked());
+        })
+    };
 
     html! {
         <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
@@ -2035,6 +2042,17 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>
                         { format!("created {} · used {}", format_ms(props.key_item.created_at), format_timestamp_opt(props.key_item.last_used_at)) }
                     </span>
+                    <label class={classes!("flex", "cursor-pointer", "items-center", "gap-2", "rounded-full", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-1.5", "text-xs", "font-mono", "text-[var(--text)]")}>
+                        <input
+                            type="checkbox"
+                            checked={*kiro_latency_routing_enabled}
+                            onchange={on_latency_routing_change.clone()}
+                        />
+                        <span>{ "动态权重调度" }</span>
+                        <span class={classes!("text-[var(--muted)]")}>
+                            { if *kiro_latency_routing_enabled { "on" } else { "off" } }
+                        </span>
+                    </label>
                     <button
                         type="button"
                         class={classes!("btn-terminal", "text-xs")}
@@ -2169,14 +2187,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     <input
                         type="checkbox"
                         checked={*kiro_latency_routing_enabled}
-                        onchange={{
-                            let kiro_latency_routing_enabled =
-                                kiro_latency_routing_enabled.clone();
-                            Callback::from(move |event: Event| {
-                                let input: HtmlInputElement = event.target_unchecked_into();
-                                kiro_latency_routing_enabled.set(input.checked());
-                            })
-                        }}
+                        onchange={on_latency_routing_change.clone()}
                     />
                     <span>
                         <strong>{ "首字延迟自适应选号" }</strong>
