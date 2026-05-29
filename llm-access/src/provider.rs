@@ -58,8 +58,8 @@ use llm_access_kiro::{
         converter::{
             convert_normalized_request_with_resolved_session, current_user_message_range,
             extract_tool_result_content, normalize_request, preview_session_value,
-            resolve_conversation_id_from_metadata, ResolvedConversationId, SessionFallbackReason,
-            SessionIdSource, SessionTracking,
+            resolve_conversation_id_from_metadata, ResolvedConversationId, ResponseModelIdentity,
+            SessionFallbackReason, SessionIdSource, SessionTracking,
         },
         stream::{anthropic_usage_json, resolve_input_tokens, StreamContext},
         supported_models_response,
@@ -3477,6 +3477,7 @@ async fn dispatch_kiro_proxy(
                 thinking_enabled,
                 tool_name_map: conversion.tool_name_map.clone(),
                 structured_output_tool_name: conversion.structured_output_tool_name.clone(),
+                response_identity: conversion.response_identity.clone(),
                 cache_ctx,
                 control_store,
                 kiro_cache_simulator,
@@ -3497,6 +3498,7 @@ async fn dispatch_kiro_proxy(
             thinking_enabled,
             tool_name_map: conversion.tool_name_map.clone(),
             structured_output_tool_name: conversion.structured_output_tool_name.clone(),
+            response_identity: conversion.response_identity.clone(),
             cache_ctx,
             control_store,
             kiro_cache_simulator,
@@ -3519,6 +3521,7 @@ struct KiroResponseContext {
     thinking_enabled: bool,
     tool_name_map: std::collections::HashMap<String, String>,
     structured_output_tool_name: Option<String>,
+    response_identity: Option<ResponseModelIdentity>,
     cache_ctx: KiroCacheContext,
     control_store: Arc<dyn ControlStore>,
     kiro_cache_simulator: Arc<KiroCacheSimulator>,
@@ -4465,6 +4468,7 @@ fn stream_kiro_upstream_response(response: KiroPeekedStream, ctx: KiroResponseCo
             thinking_enabled,
             tool_name_map,
             structured_output_tool_name,
+            response_identity,
             cache_ctx,
             control_store,
             kiro_cache_simulator,
@@ -4488,7 +4492,8 @@ fn stream_kiro_upstream_response(response: KiroPeekedStream, ctx: KiroResponseCo
                 thinking_enabled,
                 tool_name_map,
                 structured_output_tool_name,
-            ),
+            )
+            .with_response_identity(response_identity),
             state: StreamRecordState::Pending,
             record_committed: false,
         };
@@ -4618,7 +4623,8 @@ async fn non_stream_kiro_response(
         ctx.thinking_enabled,
         ctx.tool_name_map,
         ctx.structured_output_tool_name.clone(),
-    );
+    )
+    .with_response_identity(ctx.response_identity.clone());
     for event in &events {
         let _ = stream_ctx.process_kiro_event(event);
     }
@@ -12204,7 +12210,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn kiro_dispatch_streaming_messages_preserve_upstream_reasoning_signature() {
+    async fn kiro_dispatch_streaming_messages_normalize_reasoning_signature() {
         let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
             .lock()
             .expect("kiro upstream env lock");
@@ -12243,13 +12249,13 @@ mod tests {
         assert!(body.contains(r#""type":"thinking_delta""#));
         assert!(body.contains(r#""thinking":"先想一步""#));
         assert!(body.contains(r#""type":"signature_delta""#));
-        assert!(body.contains(r#""signature":"upstream-signature-47""#));
+        assert!(!body.contains(r#""signature":"upstream-signature-47""#));
         assert!(body.contains(r#""type":"text_delta""#));
         assert!(body.contains(r#""text":"最终答案""#));
     }
 
     #[tokio::test]
-    async fn kiro_dispatch_non_stream_messages_preserve_upstream_reasoning_signature() {
+    async fn kiro_dispatch_non_stream_messages_normalize_reasoning_signature() {
         let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
             .lock()
             .expect("kiro upstream env lock");
@@ -12287,7 +12293,10 @@ mod tests {
         let body = serde_json::from_slice::<serde_json::Value>(&body).expect("json response");
         assert_eq!(body["content"][0]["type"], "thinking");
         assert_eq!(body["content"][0]["thinking"], "先想一步");
-        assert_eq!(body["content"][0]["signature"], "upstream-signature-47");
+        assert_ne!(body["content"][0]["signature"], "upstream-signature-47");
+        assert!(body["content"][0]["signature"]
+            .as_str()
+            .is_some_and(|signature| signature.len() >= 900));
         assert_eq!(body["content"][1]["type"], "text");
         assert_eq!(body["content"][1]["text"], "最终答案");
     }

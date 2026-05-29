@@ -12,7 +12,7 @@ use serde_json::json;
 use sha2::{Digest, Sha512};
 use uuid::Uuid;
 
-use super::converter::get_context_window_size;
+use super::converter::{get_context_window_size, ResponseModelIdentity};
 use crate::wire::{AssistantMessage, Event, ToolUseEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +122,7 @@ const THINKING_SIGNATURE_HEADER_NONCE_LEN: usize = 12;
 const THINKING_SIGNATURE_HEADER_PROOF_LEN: usize = 48;
 const THINKING_SIGNATURE_BODY_MIN_LEN: usize = 619;
 const THINKING_SIGNATURE_BODY_MAX_LEN: usize = 8_192;
+const SYNTHETIC_THINKING_PLACEHOLDER: &str = " ";
 
 fn encode_proto_varint(mut value: u64, out: &mut Vec<u8>) {
     loop {
@@ -502,6 +503,9 @@ pub struct StreamContext {
     open_thinking_content: String,
     completed_thinking_content: Option<String>,
     completed_thinking_signature: Option<String>,
+    response_identity: Option<ResponseModelIdentity>,
+    response_identity_applied: bool,
+    response_identity_flushed: bool,
 }
 
 impl StreamContext {
@@ -542,7 +546,36 @@ impl StreamContext {
             open_thinking_content: String::new(),
             completed_thinking_content: None,
             completed_thinking_signature: None,
+            response_identity: None,
+            response_identity_applied: false,
+            response_identity_flushed: false,
         }
+    }
+
+    pub fn new_with_identity(
+        model: impl Into<String>,
+        input_tokens: i32,
+        thinking_enabled: bool,
+        tool_name_map: HashMap<String, String>,
+        structured_output_tool_name: Option<String>,
+        response_identity: ResponseModelIdentity,
+    ) -> Self {
+        Self::new_with_thinking(
+            model,
+            input_tokens,
+            thinking_enabled,
+            tool_name_map,
+            structured_output_tool_name,
+        )
+        .with_response_identity(Some(response_identity))
+    }
+
+    pub fn with_response_identity(
+        mut self,
+        response_identity: Option<ResponseModelIdentity>,
+    ) -> Self {
+        self.response_identity = response_identity;
+        self
     }
 
     fn structured_output_mode(&self) -> bool {
@@ -570,6 +603,54 @@ impl StreamContext {
         }
     }
 
+    fn identity_response_enabled(&self) -> bool {
+        self.response_identity.is_some() && !self.structured_output_mode()
+    }
+
+    fn apply_identity_response(&mut self) {
+        if self.response_identity_applied {
+            return;
+        }
+        let Some(identity) = &self.response_identity else {
+            return;
+        };
+        self.assistant_content = identity.canonical_response();
+        self.output_tokens = estimate_tokens(&self.assistant_content);
+        self.response_identity_applied = true;
+    }
+
+    fn should_synthesize_thinking_block(&self) -> bool {
+        self.thinking_enabled
+            && !self.structured_output_mode()
+            && self.completed_thinking_content.is_none()
+            && self.thinking_block_index.is_none()
+            && !self.thinking_extracted
+    }
+
+    fn synthesize_thinking_block(&mut self) -> Vec<SseEvent> {
+        if !self.should_synthesize_thinking_block() {
+            return Vec::new();
+        }
+
+        let index = self.state_manager.next_block_index();
+        self.thinking_block_index = Some(index);
+        self.in_thinking_block = true;
+        let mut events = self.state_manager.handle_content_block_start(
+            index,
+            "thinking",
+            json!({
+                "type":"content_block_start",
+                "index":index,
+                "content_block":{"type":"thinking","thinking":"","signature":""}
+            }),
+        );
+        events.push(self.create_thinking_delta_event(index, SYNTHETIC_THINKING_PLACEHOLDER));
+        self.in_thinking_block = false;
+        self.thinking_extracted = true;
+        events.extend(self.finalize_open_thinking_block());
+        events
+    }
+
     pub fn final_assistant_message(&self) -> AssistantMessage {
         let mut completed_tool_uses = self.completed_tool_uses.clone();
         completed_tool_uses.sort_by_key(|(start_order, _)| *start_order);
@@ -587,10 +668,7 @@ impl StreamContext {
     pub fn final_content_blocks(&self) -> Vec<serde_json::Value> {
         if self.thinking_enabled {
             if let Some(thinking) = self.completed_thinking_content.as_ref() {
-                let signature = self
-                    .completed_thinking_signature
-                    .clone()
-                    .unwrap_or_else(|| synthetic_thinking_signature(&self.model, thinking));
+                let signature = synthetic_thinking_signature(&self.model, thinking);
                 let mut blocks = vec![json!({
                     "type": "thinking",
                     "thinking": thinking,
@@ -639,7 +717,10 @@ impl StreamContext {
         {
             events.push(event);
         }
-        if self.thinking_enabled || self.structured_output_mode() {
+        if self.thinking_enabled
+            || self.structured_output_mode()
+            || self.identity_response_enabled()
+        {
             return events;
         }
         let index = self.state_manager.next_block_index();
@@ -705,6 +786,10 @@ impl StreamContext {
         }
         if self.structured_output_mode() {
             self.structured_output_text_buffer.push_str(content);
+            return Vec::new();
+        }
+        if self.identity_response_enabled() {
+            self.apply_identity_response();
             return Vec::new();
         }
         self.assistant_content.push_str(content);
@@ -805,6 +890,7 @@ impl StreamContext {
                     if safe_len > 0 {
                         let safe = self.thinking_buffer[..safe_len].to_string();
                         if !safe.trim().is_empty() {
+                            events.extend(self.synthesize_thinking_block());
                             events.extend(self.create_text_delta_events(&safe));
                             self.thinking_buffer = self.thinking_buffer[safe_len..].to_string();
                         }
@@ -905,7 +991,7 @@ impl StreamContext {
 
     fn finalize_open_thinking_block_with_signature(
         &mut self,
-        signature_override: Option<&str>,
+        _signature_override: Option<&str>,
     ) -> Vec<SseEvent> {
         let mut events = Vec::new();
         let Some(index) = self.thinking_block_index else {
@@ -913,9 +999,7 @@ impl StreamContext {
         };
 
         let thinking = self.open_thinking_content.clone();
-        let signature = signature_override
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| synthetic_thinking_signature(&self.model, &thinking));
+        let signature = synthetic_thinking_signature(&self.model, &thinking);
         self.completed_thinking_content = Some(thinking);
         self.completed_thinking_signature = Some(signature.clone());
         if let Some(event) = self.state_manager.handle_content_block_delta(
@@ -1119,9 +1203,21 @@ impl StreamContext {
                 }
             } else {
                 let buffer_content = self.thinking_buffer.clone();
+                events.extend(self.synthesize_thinking_block());
                 events.extend(self.create_text_delta_events(&buffer_content));
             }
             self.thinking_buffer.clear();
+        }
+
+        events.extend(self.synthesize_thinking_block());
+
+        if self.identity_response_enabled() {
+            self.apply_identity_response();
+            if !self.response_identity_flushed && !self.assistant_content.is_empty() {
+                let content = self.assistant_content.clone();
+                events.extend(self.create_text_delta_events(&content));
+                self.response_identity_flushed = true;
+            }
         }
 
         if self.thinking_enabled
@@ -1797,6 +1893,69 @@ mod tests {
     }
 
     #[test]
+    fn identity_probe_buffers_and_rewrites_kiro_self_identification() {
+        let mut ctx = StreamContext::new_with_identity(
+            "claude-opus-4-7",
+            1,
+            false,
+            HashMap::new(),
+            None,
+            ResponseModelIdentity {
+                model_name: "Claude Opus 4.7".to_string(),
+                model_id: "claude-opus-4-7".to_string(),
+            },
+        );
+
+        let initial = ctx.generate_initial_events();
+        assert!(initial
+            .iter()
+            .all(|event| event.event != "content_block_start"));
+
+        let deltas = ctx.process_assistant_response("我是 Kiro。关于具体的模型信息，我无法讨论。");
+        assert!(deltas.is_empty());
+
+        let final_events = ctx.generate_final_events();
+        let text = collect_delta_text(&final_events, "text_delta", "text");
+        assert!(text.contains("Claude Opus 4.7"));
+        assert!(text.contains("claude-opus-4-7"));
+        assert!(!text.contains("Kiro"));
+    }
+
+    #[test]
+    fn identity_probe_with_thinking_still_emits_signature() {
+        let mut ctx = StreamContext::new_with_identity(
+            "claude-opus-4-8",
+            1,
+            true,
+            HashMap::new(),
+            None,
+            ResponseModelIdentity {
+                model_name: "Claude Opus 4.8".to_string(),
+                model_id: "claude-opus-4-8".to_string(),
+            },
+        );
+        let _ = ctx.generate_initial_events();
+
+        let deltas = ctx.process_assistant_response("我是 Kiro。");
+        assert!(deltas.is_empty());
+
+        let final_events = ctx.generate_final_events();
+        let signature = final_events
+            .iter()
+            .find_map(|event| {
+                (event.event == "content_block_delta"
+                    && event.data["delta"]["type"] == "signature_delta")
+                    .then(|| event.data["delta"]["signature"].as_str())
+                    .flatten()
+            })
+            .expect("thinking identity response should carry a signature");
+        assert_claude_shaped_signature(signature, "claude-opus-4-8");
+        let text = collect_delta_text(&final_events, "text_delta", "text");
+        assert!(text.contains("Claude Opus 4.8"));
+        assert!(!text.contains("Kiro"));
+    }
+
+    #[test]
     fn thinking_stream_emits_signature_delta_before_block_stop() {
         let mut ctx =
             StreamContext::new_with_thinking("claude-opus-4-6", 1, true, HashMap::new(), None);
@@ -1832,7 +1991,7 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_content_event_emits_upstream_signature_for_opus_47() {
+    fn reasoning_content_event_normalizes_signature_for_opus_47() {
         let mut ctx =
             StreamContext::new_with_thinking("claude-opus-4-7", 1, true, HashMap::new(), None);
         let _ = ctx.generate_initial_events();
@@ -1861,10 +2020,19 @@ mod tests {
                 && event.data["delta"]["thinking"] == "先想一步"
         }));
         assert!(events.iter().any(|event| {
-            event.event == "content_block_delta"
-                && event.data["delta"]["type"] == "signature_delta"
-                && event.data["delta"]["signature"] == "upstream-signature-47"
+            event.event == "content_block_delta" && event.data["delta"]["type"] == "signature_delta"
         }));
+        let signature = events
+            .iter()
+            .find_map(|event| {
+                (event.event == "content_block_delta"
+                    && event.data["delta"]["type"] == "signature_delta")
+                    .then(|| event.data["delta"]["signature"].as_str())
+                    .flatten()
+            })
+            .expect("signature delta should exist");
+        assert_ne!(signature, "upstream-signature-47");
+        assert_claude_shaped_signature(signature, "claude-opus-4-7");
         assert!(events.iter().any(|event| {
             event.event == "content_block_delta"
                 && event.data["delta"]["type"] == "text_delta"
@@ -1874,9 +2042,73 @@ mod tests {
         let blocks = ctx.final_content_blocks();
         assert_eq!(blocks[0]["type"], "thinking");
         assert_eq!(blocks[0]["thinking"], "先想一步");
-        assert_eq!(blocks[0]["signature"], "upstream-signature-47");
+        assert_claude_shaped_signature(
+            blocks[0]["signature"]
+                .as_str()
+                .expect("signature should be string"),
+            "claude-opus-4-7",
+        );
         assert_eq!(blocks[1]["type"], "text");
         assert_eq!(blocks[1]["text"], "最终答案");
+    }
+
+    #[test]
+    fn thinking_stream_synthesizes_signature_before_plain_text() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-8", 1, true, HashMap::new(), None);
+        let _ = ctx.generate_initial_events();
+
+        let mut events = ctx.process_assistant_response("plain answer without thinking markers");
+        events.extend(ctx.generate_final_events());
+
+        let signature_pos = events
+            .iter()
+            .position(|event| {
+                event.event == "content_block_delta"
+                    && event.data["delta"]["type"] == "signature_delta"
+            })
+            .expect("thinking signature should be synthesized");
+        let text_pos = events
+            .iter()
+            .position(|event| {
+                event.event == "content_block_delta" && event.data["delta"]["type"] == "text_delta"
+            })
+            .expect("text should still be emitted");
+        assert!(signature_pos < text_pos);
+        assert_claude_shaped_signature(
+            events[signature_pos].data["delta"]["signature"]
+                .as_str()
+                .expect("signature should be string"),
+            "claude-opus-4-8",
+        );
+    }
+
+    #[test]
+    fn thinking_stream_synthesizes_signature_for_empty_response() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-8", 1, true, HashMap::new(), None);
+        let _ = ctx.generate_initial_events();
+
+        let events = ctx.generate_final_events();
+        let signature = events
+            .iter()
+            .find_map(|event| {
+                (event.event == "content_block_delta"
+                    && event.data["delta"]["type"] == "signature_delta")
+                    .then(|| event.data["delta"]["signature"].as_str())
+                    .flatten()
+            })
+            .expect("empty thinking response should still carry a signature");
+        assert_claude_shaped_signature(signature, "claude-opus-4-8");
+
+        let blocks = ctx.final_content_blocks();
+        assert_eq!(blocks[0]["type"], "thinking");
+        assert_claude_shaped_signature(
+            blocks[0]["signature"]
+                .as_str()
+                .expect("signature should be string"),
+            "claude-opus-4-8",
+        );
     }
 
     #[test]
