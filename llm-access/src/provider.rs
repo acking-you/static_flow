@@ -3421,6 +3421,61 @@ async fn dispatch_kiro_proxy(
             {
                 Ok(stream_response) => stream_response,
                 Err(failure) => {
+                    let should_try_next = match failure.kind {
+                        KiroRouteFailureKind::QuotaExhausted => {
+                            let error_message = failure.body_text();
+                            for account_name in account_names_for_kiro_routing_identity(
+                                &routes,
+                                &route.routing_identity,
+                            ) {
+                                failed_accounts.insert(account_name.clone());
+                                let _ = route_store
+                                    .mark_kiro_account_quota_exhausted(
+                                        &account_name,
+                                        &error_message,
+                                        now_millis(),
+                                    )
+                                    .await;
+                            }
+                            true
+                        },
+                        KiroRouteFailureKind::RateLimited {
+                            cooldown,
+                            mark_proxy,
+                        } => {
+                            kiro_request_scheduler.mark_account_cooldown(
+                                &route.routing_identity,
+                                cooldown,
+                                failure.body_text(),
+                            );
+                            if mark_proxy {
+                                if let Some(proxy_key) = proxy_cooldown_key_for_route(&route) {
+                                    kiro_request_scheduler.mark_proxy_cooldown(
+                                        &proxy_key,
+                                        cooldown,
+                                        failure.body_text(),
+                                    );
+                                }
+                            }
+                            usage_meta.mark_failover();
+                            continue;
+                        },
+                        KiroRouteFailureKind::RetryNext => {
+                            failed_accounts.insert(route.account_name.clone());
+                            true
+                        },
+                        KiroRouteFailureKind::Fatal => false,
+                    };
+                    if should_try_next
+                        && has_remaining_kiro_candidate(
+                            &routes,
+                            &failed_accounts,
+                            &route.account_name,
+                        )
+                    {
+                        usage_meta.mark_failover();
+                        continue;
+                    }
                     let status = failure.status;
                     capture_client_request_body_json(&mut usage_meta, &body);
                     capture_upstream_request_body_json(&mut usage_meta, &request_body);
@@ -3962,19 +4017,29 @@ async fn prepare_kiro_stream_response_for_route(
                 .await?;
             },
             Err(KiroStreamPeekError::Empty) => {
+                tracing::error!(
+                    model = %model,
+                    attempts = KIRO_EMPTY_STREAM_MAX_RETRIES + 1,
+                    "Kiro returned an empty generateAssistantResponse stream after retries"
+                );
                 return Err(KiroRouteFailure::synthetic(
                     StatusCode::BAD_GATEWAY,
                     "kiro upstream returned empty generateAssistantResponse stream after retries"
                         .to_string(),
-                    KiroRouteFailureKind::Fatal,
-                ))
+                    KiroRouteFailureKind::RetryNext,
+                ));
             },
             Err(KiroStreamPeekError::Read(err)) => {
+                tracing::error!(
+                    model = %model,
+                    error = %err,
+                    "Failed to read Kiro upstream stream before sending any response bytes"
+                );
                 return Err(KiroRouteFailure::synthetic(
                     StatusCode::BAD_GATEWAY,
                     format!("failed to read kiro upstream stream: {err}"),
-                    KiroRouteFailureKind::Fatal,
-                ))
+                    KiroRouteFailureKind::RetryNext,
+                ));
             },
         }
     }
@@ -7562,6 +7627,72 @@ mod tests {
     }
 
     #[derive(Clone)]
+    struct StaticMultiKiroRouteStore {
+        codex_route: ProviderCodexRoute,
+        kiro_routes: Vec<ProviderKiroRoute>,
+    }
+
+    #[async_trait]
+    impl ProviderRouteStore for StaticMultiKiroRouteStore {
+        async fn resolve_codex_route(
+            &self,
+            _key: &AuthenticatedKey,
+        ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+            Ok(Some(self.codex_route.clone()))
+        }
+
+        async fn resolve_codex_account_route(
+            &self,
+            account_name: &str,
+        ) -> anyhow::Result<Option<ProviderCodexRoute>> {
+            if self.codex_route.account_name == account_name {
+                Ok(Some(self.codex_route.clone()))
+            } else {
+                Ok(None)
+            }
+        }
+
+        async fn resolve_kiro_route(
+            &self,
+            _key: &AuthenticatedKey,
+        ) -> anyhow::Result<Option<ProviderKiroRoute>> {
+            Ok(self.kiro_routes.first().cloned())
+        }
+
+        async fn resolve_kiro_route_candidates(
+            &self,
+            _key: &AuthenticatedKey,
+        ) -> anyhow::Result<Vec<ProviderKiroRoute>> {
+            Ok(self.kiro_routes.clone())
+        }
+
+        async fn resolve_kiro_account_route(
+            &self,
+            account_name: &str,
+        ) -> anyhow::Result<Option<ProviderKiroRoute>> {
+            Ok(self
+                .kiro_routes
+                .iter()
+                .find(|route| route.account_name == account_name)
+                .cloned())
+        }
+
+        async fn save_kiro_auth_update(
+            &self,
+            _update: ProviderKiroAuthUpdate,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn save_codex_auth_update(
+            &self,
+            _update: llm_access_core::store::ProviderCodexAuthUpdate,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
     struct RefreshingCodexRouteStore {
         candidate_routes: Vec<ProviderCodexRoute>,
         latest_routes: Arc<Mutex<HashMap<String, ProviderCodexRoute>>>,
@@ -7918,6 +8049,23 @@ mod tests {
             }}"#,
             "a".repeat(64)
         );
+        route
+    }
+
+    fn kiro_route_for_account(account_name: &str, access_token: &str) -> ProviderKiroRoute {
+        let mut route = static_kiro_route();
+        route.account_name = account_name.to_string();
+        route.routing_identity = account_name.to_string();
+        route.auth_json = format!(
+            r#"{{
+                "accessToken":"{access_token}",
+                "machineId":"{}"
+            }}"#,
+            "a".repeat(64)
+        );
+        if let Some(balance) = route.cached_balance.as_mut() {
+            balance.user_id = Some(account_name.to_string());
+        }
         route
     }
 
@@ -9445,6 +9593,63 @@ mod tests {
             .expect("upstream response")
     }
 
+    async fn fake_kiro_generate_empty_route_then_success(
+        State(captured): State<Arc<CapturedKiroUpstream>>,
+        headers: HeaderMap,
+        request: Request<Body>,
+    ) -> Response {
+        let path = request.uri().path().to_string();
+        let body = to_bytes(request.into_body(), usize::MAX)
+            .await
+            .expect("upstream request body");
+        let body = serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json");
+        let authorization = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(ToString::to_string);
+        captured
+            .requests
+            .lock()
+            .expect("captured requests")
+            .push(CapturedKiroRequest {
+                path,
+                authorization: authorization.clone(),
+                user_agent: super::header_value(&headers, header::USER_AGENT.as_str()),
+                x_amz_user_agent: super::header_value(&headers, "x-amz-user-agent"),
+                host: super::header_value(&headers, "host"),
+                token_type: super::header_value(&headers, "TokenType"),
+                redirect_for_internal: super::header_value(&headers, "redirect-for-internal"),
+                agent_mode: super::header_value(&headers, "x-amzn-kiro-agent-mode"),
+                opt_out: super::header_value(&headers, "x-amzn-codewhisperer-optout"),
+                body,
+            });
+        match authorization.as_deref() {
+            Some("Bearer kiro-empty-token") => Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/vnd.amazon.eventstream")
+                .body(Body::empty())
+                .expect("empty upstream response"),
+            Some("Bearer kiro-success-token") => {
+                let body = kiro_eventstream_body(vec![
+                    kiro_event_frame("assistantResponseEvent", &json!({"content":"hello "})),
+                    kiro_event_frame("assistantResponseEvent", &json!({"content":"back"})),
+                    kiro_event_frame("contextUsageEvent", &json!({"contextUsagePercentage":0.01})),
+                    kiro_event_frame("meteringEvent", &json!({"unit":"credit","usage":0.25})),
+                ]);
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "application/vnd.amazon.eventstream")
+                    .body(Body::from(body))
+                    .expect("upstream response")
+            },
+            _ => Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"error":{"message":"unexpected upstream authorization"}}"#))
+                .expect("unexpected upstream response"),
+        }
+    }
+
     async fn fake_kiro_generate_reasoning(
         State(captured): State<Arc<CapturedKiroUpstream>>,
         headers: HeaderMap,
@@ -9660,6 +9865,26 @@ mod tests {
     async fn spawn_fake_kiro_empty_once_upstream(captured: Arc<CapturedKiroUpstream>) -> String {
         let app = Router::new()
             .route("/generateAssistantResponse", post(fake_kiro_generate_empty_once))
+            .route("/mcp", post(fake_kiro_mcp))
+            .route("/getUsageLimits", get(fake_kiro_usage_limits))
+            .with_state(captured);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        upstream_base
+    }
+
+    async fn spawn_fake_kiro_empty_route_then_success_upstream(
+        captured: Arc<CapturedKiroUpstream>,
+    ) -> String {
+        let app = Router::new()
+            .route("/generateAssistantResponse", post(fake_kiro_generate_empty_route_then_success))
             .route("/mcp", post(fake_kiro_mcp))
             .route("/getUsageLimits", get(fake_kiro_usage_limits))
             .with_state(captured);
@@ -12758,6 +12983,73 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].path, "/generateAssistantResponse");
         assert_eq!(requests[1].path, "/generateAssistantResponse");
+    }
+
+    #[tokio::test]
+    async fn kiro_dispatch_fails_over_after_empty_stream_retries_exhausted() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("kiro upstream env lock");
+        let captured = Arc::new(CapturedKiroUpstream::default());
+        let upstream_base =
+            spawn_fake_kiro_empty_route_then_success_upstream(captured.clone()).await;
+        std::env::set_var("KIRO_UPSTREAM_BASE_URL", upstream_base);
+
+        let store = Arc::new(RecordingControlStore::default());
+        let route_store = Arc::new(StaticMultiKiroRouteStore {
+            codex_route: codex_route_for_account("codex-a", "upstream-token"),
+            kiro_routes: vec![
+                kiro_route_for_account("kiro-empty", "kiro-empty-token"),
+                kiro_route_for_account("kiro-success", "kiro-success-token"),
+            ],
+        });
+        let state = super::ProviderState::new(store.clone(), route_store);
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/kiro-gateway/v1/messages")
+                .header("x-api-key", "valid-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "claude-opus-4-8",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": true
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 response");
+        assert!(body.contains("hello "));
+        assert!(body.contains("back"));
+        assert!(body.contains("event: message_stop"));
+
+        let requests = captured.requests.lock().expect("captured requests");
+        let auths = requests
+            .iter()
+            .filter_map(|request| request.authorization.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(auths, vec![
+            "Bearer kiro-empty-token".to_string(),
+            "Bearer kiro-empty-token".to_string(),
+            "Bearer kiro-empty-token".to_string(),
+            "Bearer kiro-success-token".to_string(),
+        ]);
+
+        let events = store.usage_events.lock().expect("usage events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status_code, 200);
+        assert_eq!(events[0].endpoint, "/v1/messages");
     }
 
     #[tokio::test]
