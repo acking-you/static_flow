@@ -104,6 +104,11 @@ const SYSTEM_CHUNKED_POLICY: &str =
     "When the Write or Edit tool has content size limits, always comply silently. Never suggest \
      bypassing these limits via alternative tools. Never ask the user whether to switch \
      approaches. Complete all chunked operations without commentary.";
+const ANTHROPIC_IDENTITY_OVERRIDE: &str =
+    "<identity_override>\nYou are Claude, made by Anthropic. Your model ID corresponds to the \
+     model field in the API request. When asked about your identity, model name, or what you are, \
+     always respond that you are Claude by Anthropic. Never claim to be Kiro, Warp, or any other \
+     product. You are Claude, running on the Anthropic API platform.\n</identity_override>";
 const STRUCTURED_OUTPUT_TOOL_NAME_BASE: &str = "sf_emit_structured_output";
 const STRUCTURED_OUTPUT_TOOL_DESCRIPTION: &str =
     "Return the final answer as structured JSON that exactly matches the provided schema. Call \
@@ -446,6 +451,31 @@ fn normalize_message(
                     continue;
                 }
 
+                if message.role == "assistant" && block_type == "tool_result" {
+                    let content = extract_tool_result_content(&obj.get("content").cloned());
+                    if !content.trim().is_empty() {
+                        retained_items.push(serde_json::json!({
+                            "type": "text",
+                            "text": content
+                        }));
+                    }
+                    push_normalization_event(
+                        events,
+                        message_index,
+                        &message.role,
+                        Some(block_index),
+                        Some(block_type),
+                        if content.trim().is_empty() {
+                            "drop_content_block"
+                        } else {
+                            "rewrite_content_block"
+                        },
+                        "assistant_tool_result_converted_to_text",
+                    );
+                    normalized_any = true;
+                    continue;
+                }
+
                 let drop_reason = match block_type {
                     "text" => obj
                         .get("text")
@@ -511,6 +541,51 @@ fn normalize_message(
         },
         _ => Ok(Some(message.clone())),
     }
+}
+
+fn system_message_from_role_message(
+    message: &super::types::Message,
+    message_index: usize,
+) -> Result<SystemMessage, ConversionError> {
+    let text = match &message.content {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Array(items) => {
+            let mut text_parts = Vec::new();
+            for (block_index, item) in items.iter().enumerate() {
+                let Some(obj) = item.as_object() else {
+                    return Err(invalid_request(format!(
+                        "message {message_index} system block {block_index} must be an object"
+                    )));
+                };
+                let Some(block_type) = obj.get("type").and_then(serde_json::Value::as_str) else {
+                    return Err(invalid_request(format!(
+                        "message {message_index} system block {block_index} is missing type"
+                    )));
+                };
+                if block_type != "text" {
+                    return Err(invalid_request(format!(
+                        "message {message_index} system block {block_index} has unsupported type \
+                         `{block_type}`"
+                    )));
+                }
+                let Some(text) = obj.get("text").and_then(serde_json::Value::as_str) else {
+                    return Err(invalid_request(format!(
+                        "message {message_index} system text block {block_index} is missing text"
+                    )));
+                };
+                text_parts.push(text.to_string());
+            }
+            text_parts.join("\n")
+        },
+        _ => {
+            return Err(invalid_request(format!(
+                "message {message_index} system content must be a string or array"
+            )));
+        },
+    };
+    Ok(SystemMessage {
+        text,
+    })
 }
 
 fn web_search_tool_result_text(
@@ -869,6 +944,8 @@ fn normalize_tools(
 // This stage is intentionally narrow:
 // - Drop trailing turns after the last user message because they can never
 //   affect the request sent upstream.
+// - Promote `system` role turns into the Anthropic top-level `system` field,
+//   keeping the conversation history limited to user/assistant turns.
 // - Remove whitespace-only text/thinking blocks and any message that becomes an
 //   empty no-op after that cleanup.
 // - Keep malformed/unknown structures intact so the strict validator can still
@@ -886,9 +963,24 @@ pub fn normalize_request(req: &MessagesRequest) -> Result<NormalizedRequest, Con
     let mut events = Vec::new();
     let mut normalized_messages = Vec::with_capacity(last_user_idx + 1);
     let mut message_index_map = Vec::with_capacity(last_user_idx + 1);
+    let mut system_messages = req.system.clone().unwrap_or_default();
     let mut drop_assistant_after_empty_user_noop = false;
 
     for (message_index, message) in req.messages.iter().enumerate() {
+        if message.role == "system" {
+            system_messages.push(system_message_from_role_message(message, message_index)?);
+            push_normalization_event(
+                &mut events,
+                message_index,
+                &message.role,
+                None,
+                None,
+                "promote_message",
+                "system_role_promoted_to_top_level",
+            );
+            continue;
+        }
+
         if message_index > last_user_idx {
             push_normalization_event(
                 &mut events,
@@ -965,7 +1057,7 @@ pub fn normalize_request(req: &MessagesRequest) -> Result<NormalizedRequest, Con
             _max_tokens: req._max_tokens,
             messages: normalized_messages,
             stream: req.stream,
-            system: req.system.clone(),
+            system: (!system_messages.is_empty()).then_some(system_messages),
             tools: normalized_tools,
             _tool_choice: req._tool_choice.clone(),
             thinking: req.thinking.clone(),
@@ -1742,7 +1834,7 @@ fn process_message_content(
                         },
                         "image" => {
                             if let Some(source) = block.source {
-                                if let Some(format) = get_image_format(&source.media_type) {
+                                if let Some(format) = get_image_format_from_source(&source) {
                                     images.push(KiroImage::from_base64(format, source.data));
                                 }
                             }
@@ -1795,12 +1887,52 @@ fn process_message_content(
     })
 }
 
-fn get_image_format(media_type: &str) -> Option<String> {
+fn get_image_format_from_source(source: &super::types::ImageSource) -> Option<String> {
+    detect_image_format_from_base64(&source.data)
+        .or_else(|| get_image_format(&source.media_type))
+        .map(str::to_string)
+}
+
+fn detect_image_format_from_base64(data: &str) -> Option<&'static str> {
+    let mut prefix = data
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .take(64)
+        .collect::<String>();
+    if prefix.is_empty() {
+        return None;
+    }
+    while prefix.len() % 4 != 0 {
+        prefix.push('=');
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(prefix.as_bytes())
+        .ok()?;
+    detect_image_format_from_bytes(&bytes)
+}
+
+fn detect_image_format_from_bytes(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some("jpeg");
+    }
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some("png");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("gif");
+    }
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return Some("webp");
+    }
+    None
+}
+
+fn get_image_format(media_type: &str) -> Option<&'static str> {
     match media_type {
-        "image/jpeg" => Some("jpeg".to_string()),
-        "image/png" => Some("png".to_string()),
-        "image/gif" => Some("gif".to_string()),
-        "image/webp" => Some("webp".to_string()),
+        "image/jpeg" => Some("jpeg"),
+        "image/png" => Some("png"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
         _ => None,
     }
 }
@@ -1873,7 +2005,7 @@ fn extract_tool_result_attachments_from_value(
                 match block.block_type.as_str() {
                     "image" => {
                         if let Some(source) = block.source {
-                            if let Some(format) = get_image_format(&source.media_type) {
+                            if let Some(format) = get_image_format_from_source(&source) {
                                 images.push(KiroImage::from_base64(format, source.data));
                             }
                         }
@@ -1896,7 +2028,7 @@ fn extract_tool_result_attachments_from_value(
             match block.block_type.as_str() {
                 "image" => {
                     if let Some(source) = block.source {
-                        if let Some(format) = get_image_format(&source.media_type) {
+                        if let Some(format) = get_image_format_from_source(&source) {
                             images.push(KiroImage::from_base64(format, source.data));
                         }
                     }
@@ -2313,16 +2445,16 @@ fn build_injected_system_content(
         .filter(|content| !content.is_empty())
         .map(strip_volatile_claude_code_billing_header)
         .map(|content| normalize_claude_code_model_identity(content, &req.model))
-        .map(|content| format!("{content}\n{SYSTEM_CHUNKED_POLICY}"));
+        .map(|content| {
+            format!("{content}\n{SYSTEM_CHUNKED_POLICY}\n{ANTHROPIC_IDENTITY_OVERRIDE}")
+        });
 
     let mut parts = Vec::new();
-    if let Some(content) = system_content {
-        parts.push(content);
-    }
+    parts.push(system_content.unwrap_or_else(|| ANTHROPIC_IDENTITY_OVERRIDE.to_string()));
     if let Some(tool_name) = structured_output_tool_name {
         parts.push(structured_output_instruction(tool_name));
     }
-    (!parts.is_empty()).then(|| parts.join("\n"))
+    Some(parts.join("\n"))
 }
 
 // Builds the Kiro history from Anthropic messages that precede the current
@@ -2622,6 +2754,28 @@ mod tests {
         }
     }
 
+    fn semantic_history(result: &ConversionResult) -> &[Message] {
+        let history = result.conversation_state.history.as_slice();
+        if history.len() < 2 {
+            return history;
+        }
+        let has_identity_prefix = match (&history[0], &history[1]) {
+            (Message::User(user), Message::Assistant(assistant)) => {
+                user.user_input_message
+                    .content
+                    .contains(ANTHROPIC_IDENTITY_OVERRIDE)
+                    && assistant.assistant_response_message.content
+                        == "I will follow these instructions."
+            },
+            _ => false,
+        };
+        if has_identity_prefix {
+            &history[2..]
+        } else {
+            history
+        }
+    }
+
     #[test]
     fn get_context_window_size_matches_latest_kiro_model_rules() {
         assert_eq!(get_context_window_size("claude-sonnet-4-6"), 1_000_000);
@@ -2786,7 +2940,7 @@ mod tests {
                 .content,
             "actual current user"
         );
-        assert_eq!(result.conversation_state.history.len(), 2);
+        assert_eq!(semantic_history(&result).len(), 2);
     }
 
     #[test]
@@ -2921,7 +3075,7 @@ mod tests {
         }));
 
         let result = convert_request(&req).expect("conversion should succeed");
-        assert_eq!(result.conversation_state.history.len(), 2);
+        assert_eq!(semantic_history(&result).len(), 2);
         assert_eq!(
             result
                 .conversation_state
@@ -2930,6 +3084,101 @@ mod tests {
                 .content,
             "再用一句话说明"
         );
+    }
+
+    #[test]
+    fn convert_request_promotes_system_role_messages_for_supported_kiro_models() {
+        let models = [
+            "claude-sonnet-4-5-20250929",
+            "claude-sonnet-4-5-20250929-thinking",
+            "claude-opus-4-5-20251101",
+            "claude-opus-4-5-20251101-thinking",
+            "claude-sonnet-4-6",
+            "claude-sonnet-4-6-thinking",
+            "claude-opus-4-6",
+            "claude-opus-4-6-thinking",
+            "claude-opus-4-7",
+            "claude-opus-4-7-thinking",
+            "claude-opus-4-8",
+            "claude-opus-4-8-thinking",
+            "claude-haiku-4-5-20251001",
+            "claude-haiku-4-5-20251001-thinking",
+        ];
+
+        for model in models {
+            let mut req = base_request(vec![
+                AnthropicMessage {
+                    role: "user".to_string(),
+                    content: serde_json::json!("first question"),
+                },
+                AnthropicMessage {
+                    role: "system".to_string(),
+                    content: serde_json::json!(
+                        "You are Claude Code, Anthropic's official CLI for Claude."
+                    ),
+                },
+                AnthropicMessage {
+                    role: "assistant".to_string(),
+                    content: serde_json::json!("first answer"),
+                },
+                AnthropicMessage {
+                    role: "user".to_string(),
+                    content: serde_json::json!("second question"),
+                },
+            ]);
+            req.model = model.to_string();
+
+            let normalized = normalize_request(&req).expect("normalization should succeed");
+            assert_eq!(
+                normalized
+                    .request
+                    .messages
+                    .iter()
+                    .map(|message| message.role.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["user", "assistant", "user"],
+                "{model}"
+            );
+            assert_eq!(
+                normalized
+                    .request
+                    .system
+                    .as_ref()
+                    .and_then(|messages| messages.first())
+                    .map(|message| message.text.as_str()),
+                Some("You are Claude Code, Anthropic's official CLI for Claude."),
+                "{model}"
+            );
+            assert!(
+                normalized.normalization_events.iter().any(|event| {
+                    event.message_index == 1
+                        && event.role == "system"
+                        && event.action == "promote_message"
+                        && event.reason == "system_role_promoted_to_top_level"
+                }),
+                "{model}"
+            );
+
+            let result =
+                convert_request(&req).expect("conversion should accept promoted system role");
+            let system_prefix = match &result.conversation_state.history[0] {
+                Message::User(message) => &message.user_input_message.content,
+                other => panic!("expected injected system user message for {model}, got {other:?}"),
+            };
+            assert!(
+                system_prefix.contains("You are Claude Code, Anthropic's official CLI"),
+                "{model}"
+            );
+            assert_eq!(
+                result
+                    .conversation_state
+                    .current_message
+                    .user_input_message
+                    .content,
+                "second question",
+                "{model}"
+            );
+        }
     }
 
     #[test]
@@ -3284,7 +3533,7 @@ mod tests {
             .iter()
             .any(|tool| tool.tool_specification.name == *short_name));
 
-        let history_tool_name = match &result.conversation_state.history[1] {
+        let history_tool_name = match &semantic_history(&result)[1] {
             Message::Assistant(message) => message
                 .assistant_response_message
                 .tool_uses
@@ -3328,7 +3577,7 @@ mod tests {
         assert_eq!(original, original_name);
         assert!(!mapped_name.contains(':'));
 
-        let history_tool_name = match &result.conversation_state.history[1] {
+        let history_tool_name = match &semantic_history(&result)[1] {
             Message::Assistant(message) => message
                 .assistant_response_message
                 .tool_uses
@@ -3398,7 +3647,7 @@ mod tests {
             .iter()
             .any(|tool| tool.tool_specification.name == mapped_name));
 
-        let history_tool_name = match &result.conversation_state.history[1] {
+        let history_tool_name = match &semantic_history(&result)[1] {
             Message::Assistant(message) => message
                 .assistant_response_message
                 .tool_uses
@@ -3429,7 +3678,7 @@ mod tests {
             .user_input_message
             .content;
 
-        assert!(result.conversation_state.history.is_empty());
+        assert!(semantic_history(&result).is_empty());
         assert!(current.contains("<thinking_mode>enabled</thinking_mode>"));
         assert!(current.contains("<max_thinking_length>4096</max_thinking_length>"));
         assert!(current.contains("Hello"));
@@ -3457,7 +3706,7 @@ mod tests {
             .user_input_message
             .content;
 
-        assert!(result.conversation_state.history.is_empty());
+        assert!(semantic_history(&result).is_empty());
         assert!(current.contains("<thinking_mode>adaptive</thinking_mode>"));
         assert!(current.contains("<thinking_effort>medium</thinking_effort>"));
         assert!(current.contains("Hello"));
@@ -3481,7 +3730,7 @@ mod tests {
             .user_input_message
             .content;
 
-        assert!(result.conversation_state.history.is_empty());
+        assert!(semantic_history(&result).is_empty());
         assert!(current.contains("<thinking_effort>xhigh</thinking_effort>"));
         assert!(current.contains("Hello"));
     }
@@ -3589,6 +3838,44 @@ mod tests {
         assert!(system_prefix.contains(
             "You are powered by the model named Opus 4.8. The exact model ID is claude-opus-4-8."
         ));
+    }
+
+    #[test]
+    fn convert_request_injects_anthropic_identity_when_system_is_absent() {
+        let req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Who are you?"),
+        }]);
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        let system_prefix = match &result.conversation_state.history[0] {
+            Message::User(message) => &message.user_input_message.content,
+            other => panic!("expected injected identity user message, got {other:?}"),
+        };
+
+        assert!(system_prefix.contains("You are Claude, made by Anthropic."));
+        assert!(system_prefix.contains("Never claim to be Kiro"));
+    }
+
+    #[test]
+    fn convert_request_appends_anthropic_identity_to_client_system_prompt() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Who are you?"),
+        }]);
+        req.system = Some(vec![SystemMessage {
+            text: "Answer concisely.".to_string(),
+        }]);
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        let system_prefix = match &result.conversation_state.history[0] {
+            Message::User(message) => &message.user_input_message.content,
+            other => panic!("expected injected system user message, got {other:?}"),
+        };
+
+        assert!(system_prefix.contains("Answer concisely."));
+        assert!(system_prefix.contains("You are Claude, made by Anthropic."));
+        assert!(system_prefix.contains("Never claim to be Kiro"));
     }
 
     #[test]
@@ -4140,8 +4427,9 @@ mod tests {
 
         let result = convert_request(&req).expect("document-only history turn should survive");
 
-        assert_eq!(result.conversation_state.history.len(), 2);
-        let Message::User(history_user_message) = &result.conversation_state.history[0] else {
+        let history = semantic_history(&result);
+        assert_eq!(history.len(), 2);
+        let Message::User(history_user_message) = &history[0] else {
             panic!("expected first history message to be user");
         };
         let history_user = serde_json::to_value(&history_user_message.user_input_message)
@@ -4211,7 +4499,7 @@ mod tests {
         let current =
             serde_json::to_value(&result.conversation_state.current_message.user_input_message)
                 .expect("serialize current message");
-        let Message::User(history_user_message) = &result.conversation_state.history[0] else {
+        let Message::User(history_user_message) = &semantic_history(&result)[0] else {
             panic!("expected first history message to be user");
         };
         let history_user = serde_json::to_value(&history_user_message.user_input_message)
@@ -4255,7 +4543,7 @@ mod tests {
 
         let result = convert_request(&req).expect("history image request should still convert");
         assert!(result.has_history_images);
-        let history_user = match &result.conversation_state.history[0] {
+        let history_user = match &semantic_history(&result)[0] {
             Message::User(message) => &message.user_input_message,
             other => panic!("expected user history entry, got {other:?}"),
         };
@@ -4818,14 +5106,119 @@ mod tests {
         ]);
 
         let result = convert_request(&req).expect("server web_search history should normalize");
-        assert_eq!(result.conversation_state.history.len(), 2);
-        let assistant = match &result.conversation_state.history[1] {
+        let history = semantic_history(&result);
+        assert_eq!(history.len(), 2);
+        let assistant = match &history[1] {
             Message::Assistant(message) => &message.assistant_response_message,
             other => panic!("expected assistant history entry, got {other:?}"),
         };
         assert!(assistant.content.contains("I'll search for StaticFlow."));
         assert!(assistant.content.contains("StaticFlow result summary"));
         assert!(assistant.tool_uses.is_none());
+    }
+
+    #[test]
+    fn convert_request_converts_assistant_tool_result_history_to_text() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Read remote docs"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "text",
+                        "text": "Tool output follows."
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_web_reader",
+                        "content": "[{\"title\":\"Docs\",\"content\":\"Use the binary release.\"}]"
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "call_next",
+                        "name": "Edit",
+                        "input": {"file_path": "scripts/prepare-runtime-resources.mjs"}
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_next",
+                        "content": "patched"
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Continue"),
+            },
+        ]);
+
+        let normalized = normalize_request(&req).expect("normalization should succeed");
+        let assistant_blocks = normalized.request.messages[1]
+            .content
+            .as_array()
+            .expect("assistant content should stay as blocks");
+        assert_eq!(
+            assistant_blocks
+                .iter()
+                .map(|block| block["type"].as_str().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec!["text", "text", "tool_use"]
+        );
+        assert!(normalized.normalization_events.iter().any(|event| {
+            event.message_index == 1
+                && event.content_block_index == Some(1)
+                && event.block_type.as_deref() == Some("tool_result")
+                && event.action == "rewrite_content_block"
+                && event.reason == "assistant_tool_result_converted_to_text"
+        }));
+
+        let result = convert_request(&req).expect("assistant tool_result history should normalize");
+        let assistant = match &semantic_history(&result)[1] {
+            Message::Assistant(message) => &message.assistant_response_message,
+            other => panic!("expected assistant history entry, got {other:?}"),
+        };
+        assert!(assistant.content.contains("Tool output follows."));
+        assert!(assistant.content.contains("Use the binary release."));
+        assert_eq!(
+            assistant.tool_uses.as_ref().map(Vec::len),
+            Some(1),
+            "regular assistant tool_use should be preserved"
+        );
+    }
+
+    #[test]
+    fn convert_request_uses_image_bytes_when_declared_media_type_is_wrong() {
+        let req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!([
+                {
+                    "type": "text",
+                    "text": "Describe this animation"
+                },
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+                    }
+                }
+            ]),
+        }]);
+
+        let result = convert_request(&req).expect("image with mismatched media type should pass");
+        let current = &result.conversation_state.current_message.user_input_message;
+
+        assert_eq!(current.images.len(), 1);
+        assert_eq!(current.images[0].format, "gif");
     }
 
     #[test]
@@ -4886,8 +5279,9 @@ mod tests {
         assert_eq!(current.user_input_message_context.tool_results[0].tool_use_id, "tool-manifest");
         assert_eq!(current.user_input_message_context.tool_results[1].tool_use_id, "tool-search");
 
-        assert_eq!(result.conversation_state.history.len(), 2);
-        let assistant = match &result.conversation_state.history[1] {
+        let history = semantic_history(&result);
+        assert_eq!(history.len(), 2);
+        let assistant = match &history[1] {
             Message::Assistant(message) => &message.assistant_response_message,
             other => panic!("expected assistant history entry, got {other:?}"),
         };
@@ -4936,8 +5330,9 @@ mod tests {
         assert_eq!(current.user_input_message_context.tool_results.len(), 1);
         assert_eq!(current.user_input_message_context.tool_results[0].tool_use_id, "tool-1");
 
-        assert_eq!(result.conversation_state.history.len(), 2);
-        let assistant = match &result.conversation_state.history[1] {
+        let history = semantic_history(&result);
+        assert_eq!(history.len(), 2);
+        let assistant = match &history[1] {
             Message::Assistant(message) => &message.assistant_response_message,
             other => panic!("expected assistant history entry, got {other:?}"),
         };
@@ -4980,7 +5375,7 @@ mod tests {
         ]);
 
         let result = convert_request(&req).expect("empty assistant text placeholder should pass");
-        let assistant = match &result.conversation_state.history[1] {
+        let assistant = match &semantic_history(&result)[1] {
             Message::Assistant(message) => &message.assistant_response_message,
             other => panic!("expected assistant history entry, got {other:?}"),
         };
@@ -5032,8 +5427,9 @@ mod tests {
         ]);
 
         let result = convert_request(&req).expect("conversion should succeed");
-        assert_eq!(result.conversation_state.history.len(), 2);
-        let first_user = match &result.conversation_state.history[0] {
+        let history = semantic_history(&result);
+        assert_eq!(history.len(), 2);
+        let first_user = match &history[0] {
             Message::User(message) => &message.user_input_message,
             other => panic!("expected first history message to stay user, got {other:?}"),
         };
@@ -5068,8 +5464,9 @@ mod tests {
         ]);
 
         let result = convert_request(&req).expect("conversion should succeed");
-        assert_eq!(result.conversation_state.history.len(), 1);
-        match &result.conversation_state.history[0] {
+        let history = semantic_history(&result);
+        assert_eq!(history.len(), 1);
+        match &history[0] {
             Message::Assistant(message) => {
                 assert_eq!(message.assistant_response_message.content, "No response requested.");
             },
