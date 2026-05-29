@@ -3743,6 +3743,7 @@ mod tests {
         }]);
         req.thinking = Some(crate::anthropic::types::Thinking {
             thinking_type: "enabled".to_string(),
+            display: None,
             budget_tokens: 4096,
         });
 
@@ -3767,6 +3768,7 @@ mod tests {
         }]);
         req.thinking = Some(crate::anthropic::types::Thinking {
             thinking_type: "adaptive".to_string(),
+            display: None,
             budget_tokens: 20_000,
         });
         req.output_config = Some(crate::anthropic::types::OutputConfig {
@@ -3795,6 +3797,7 @@ mod tests {
         }]);
         req.thinking = Some(crate::anthropic::types::Thinking {
             thinking_type: "adaptive".to_string(),
+            display: None,
             budget_tokens: 20_000,
         });
 
@@ -3822,6 +3825,7 @@ mod tests {
         }]);
         req.thinking = Some(crate::anthropic::types::Thinking {
             thinking_type: "adaptive".to_string(),
+            display: None,
             budget_tokens: 20_000,
         });
         req.output_config = Some(crate::anthropic::types::OutputConfig {
@@ -3994,6 +3998,7 @@ mod tests {
         req.model = "claude-opus-4-6".to_string();
         req.thinking = Some(crate::anthropic::types::Thinking {
             thinking_type: "adaptive".to_string(),
+            display: None,
             budget_tokens: 20_000,
         });
         req.output_config = Some(crate::anthropic::types::OutputConfig {

@@ -503,6 +503,7 @@ pub struct StreamContext {
     open_thinking_content: String,
     completed_thinking_content: Option<String>,
     completed_thinking_signature: Option<String>,
+    hidden_thinking_enabled: bool,
     response_identity: Option<ResponseModelIdentity>,
     response_identity_applied: bool,
     response_identity_flushed: bool,
@@ -546,10 +547,30 @@ impl StreamContext {
             open_thinking_content: String::new(),
             completed_thinking_content: None,
             completed_thinking_signature: None,
+            hidden_thinking_enabled: false,
             response_identity: None,
             response_identity_applied: false,
             response_identity_flushed: false,
         }
+    }
+
+    pub fn new_with_thinking_visibility(
+        model: impl Into<String>,
+        input_tokens: i32,
+        thinking_enabled: bool,
+        hidden_thinking_enabled: bool,
+        tool_name_map: HashMap<String, String>,
+        structured_output_tool_name: Option<String>,
+    ) -> Self {
+        let mut context = Self::new_with_thinking(
+            model,
+            input_tokens,
+            thinking_enabled,
+            tool_name_map,
+            structured_output_tool_name,
+        );
+        context.hidden_thinking_enabled = hidden_thinking_enabled;
+        context
     }
 
     pub fn new_with_identity(
@@ -580,6 +601,18 @@ impl StreamContext {
 
     fn structured_output_mode(&self) -> bool {
         self.structured_output_tool_name.is_some() && !self.thinking_enabled
+    }
+
+    fn thinking_parser_enabled(&self) -> bool {
+        self.thinking_enabled || self.hidden_thinking_enabled
+    }
+
+    fn final_assistant_text(&self) -> String {
+        if self.hidden_thinking_enabled {
+            strip_inline_thinking_content(&self.assistant_content)
+        } else {
+            self.assistant_content.clone()
+        }
     }
 
     pub fn final_usage(&self) -> (i32, i32) {
@@ -654,7 +687,7 @@ impl StreamContext {
     pub fn final_assistant_message(&self) -> AssistantMessage {
         let mut completed_tool_uses = self.completed_tool_uses.clone();
         completed_tool_uses.sort_by_key(|(start_order, _)| *start_order);
-        let mut assistant = AssistantMessage::new(self.assistant_content.clone());
+        let mut assistant = AssistantMessage::new(self.final_assistant_text());
         let tool_uses = completed_tool_uses
             .into_iter()
             .map(|(_, tool_use)| tool_use)
@@ -666,6 +699,7 @@ impl StreamContext {
     }
 
     pub fn final_content_blocks(&self) -> Vec<serde_json::Value> {
+        let assistant_content = self.final_assistant_text();
         if self.thinking_enabled {
             if let Some(thinking) = self.completed_thinking_content.as_ref() {
                 let signature = synthetic_thinking_signature(&self.model, thinking);
@@ -674,21 +708,17 @@ impl StreamContext {
                     "thinking": thinking,
                     "signature": signature,
                 })];
-                if !self.assistant_content.is_empty() {
+                if !assistant_content.is_empty() {
                     blocks.push(json!({
                         "type": "text",
-                        "text": self.assistant_content,
+                        "text": assistant_content,
                     }));
                 }
                 return blocks;
             }
         }
 
-        build_inline_thinking_content_blocks(
-            &self.assistant_content,
-            &self.model,
-            self.thinking_enabled,
-        )
+        build_inline_thinking_content_blocks(&assistant_content, &self.model, self.thinking_enabled)
     }
 
     pub fn create_message_start_event(&self) -> serde_json::Value {
@@ -794,10 +824,10 @@ impl StreamContext {
         }
         self.assistant_content.push_str(content);
         self.output_tokens += estimate_tokens(content);
-        if self.thinking_enabled {
+        if self.thinking_parser_enabled() {
             if self.reasoning_content_events_observed {
                 let mut events = Vec::new();
-                if self.in_thinking_block {
+                if self.thinking_enabled && self.in_thinking_block {
                     self.in_thinking_block = false;
                     self.thinking_extracted = true;
                     events.extend(self.finalize_open_thinking_block());
@@ -815,11 +845,14 @@ impl StreamContext {
         text: Option<&str>,
         signature: Option<&str>,
     ) -> Vec<SseEvent> {
-        if !self.thinking_enabled {
+        if !self.thinking_parser_enabled() {
             return Vec::new();
         }
 
         self.reasoning_content_events_observed = true;
+        if !self.thinking_enabled {
+            return Vec::new();
+        }
         let mut events = Vec::new();
 
         if !self.in_thinking_block && !self.thinking_extracted {
@@ -870,17 +903,19 @@ impl StreamContext {
                     self.strip_thinking_leading_newline = true;
                     self.thinking_buffer =
                         self.thinking_buffer[start_pos + "<thinking>".len()..].to_string();
-                    let index = self.state_manager.next_block_index();
-                    self.thinking_block_index = Some(index);
-                    events.extend(self.state_manager.handle_content_block_start(
-                        index,
-                        "thinking",
-                        json!({
-                            "type":"content_block_start",
-                            "index":index,
-                            "content_block":{"type":"thinking","thinking":"","signature":""}
-                        }),
-                    ));
+                    if self.thinking_enabled {
+                        let index = self.state_manager.next_block_index();
+                        self.thinking_block_index = Some(index);
+                        events.extend(self.state_manager.handle_content_block_start(
+                            index,
+                            "thinking",
+                            json!({
+                                "type":"content_block_start",
+                                "index":index,
+                                "content_block":{"type":"thinking","thinking":"","signature":""}
+                            }),
+                        ));
+                    }
                 } else {
                     let target_len = self
                         .thinking_buffer
@@ -890,7 +925,9 @@ impl StreamContext {
                     if safe_len > 0 {
                         let safe = self.thinking_buffer[..safe_len].to_string();
                         if !safe.trim().is_empty() {
-                            events.extend(self.synthesize_thinking_block());
+                            if self.thinking_enabled {
+                                events.extend(self.synthesize_thinking_block());
+                            }
                             events.extend(self.create_text_delta_events(&safe));
                             self.thinking_buffer = self.thinking_buffer[safe_len..].to_string();
                         }
@@ -908,14 +945,16 @@ impl StreamContext {
                 }
                 if let Some(end_pos) = find_real_thinking_end_tag(&self.thinking_buffer) {
                     let thinking = self.thinking_buffer[..end_pos].to_string();
-                    if !thinking.is_empty() {
+                    if self.thinking_enabled && !thinking.is_empty() {
                         if let Some(index) = self.thinking_block_index {
                             events.push(self.create_thinking_delta_event(index, &thinking));
                         }
                     }
                     self.in_thinking_block = false;
                     self.thinking_extracted = true;
-                    events.extend(self.finalize_open_thinking_block());
+                    if self.thinking_enabled {
+                        events.extend(self.finalize_open_thinking_block());
+                    }
                     self.thinking_buffer =
                         self.thinking_buffer[end_pos + "</thinking>\n\n".len()..].to_string();
                 } else {
@@ -926,7 +965,7 @@ impl StreamContext {
                     let safe_len = find_char_boundary(&self.thinking_buffer, target_len);
                     if safe_len > 0 {
                         let safe = self.thinking_buffer[..safe_len].to_string();
-                        if !safe.is_empty() {
+                        if self.thinking_enabled && !safe.is_empty() {
                             if let Some(index) = self.thinking_block_index {
                                 events.push(self.create_thinking_delta_event(index, &safe));
                             }
@@ -1045,17 +1084,21 @@ impl StreamContext {
         }
         self.state_manager.set_has_tool_use(true);
 
-        if self.thinking_enabled && self.reasoning_content_events_observed && self.in_thinking_block
+        if self.thinking_parser_enabled()
+            && self.reasoning_content_events_observed
+            && self.in_thinking_block
         {
             self.in_thinking_block = false;
             self.thinking_extracted = true;
-            events.extend(self.finalize_open_thinking_block());
+            if self.thinking_enabled {
+                events.extend(self.finalize_open_thinking_block());
+            }
         }
 
-        if self.thinking_enabled && self.in_thinking_block {
+        if self.thinking_parser_enabled() && self.in_thinking_block {
             if let Some(end_pos) = find_real_thinking_end_tag_at_buffer_end(&self.thinking_buffer) {
                 let thinking = self.thinking_buffer[..end_pos].to_string();
-                if !thinking.is_empty() {
+                if self.thinking_enabled && !thinking.is_empty() {
                     if let Some(index) = self.thinking_block_index {
                         events.push(self.create_thinking_delta_event(index, &thinking));
                     }
@@ -1064,7 +1107,9 @@ impl StreamContext {
                 self.in_thinking_block = false;
                 self.thinking_extracted = true;
 
-                events.extend(self.finalize_open_thinking_block());
+                if self.thinking_enabled {
+                    events.extend(self.finalize_open_thinking_block());
+                }
 
                 let after_pos = end_pos + "</thinking>".len();
                 let remaining = self.thinking_buffer[after_pos..].trim_start().to_string();
@@ -1075,7 +1120,7 @@ impl StreamContext {
             }
         }
 
-        if self.thinking_enabled
+        if self.thinking_parser_enabled()
             && !self.in_thinking_block
             && !self.thinking_extracted
             && !self.thinking_buffer.is_empty()
@@ -1166,25 +1211,31 @@ impl StreamContext {
                 events.extend(self.create_text_delta_events(&buffered));
             }
         }
-        if self.thinking_enabled && self.reasoning_content_events_observed && self.in_thinking_block
+        if self.thinking_parser_enabled()
+            && self.reasoning_content_events_observed
+            && self.in_thinking_block
         {
             self.in_thinking_block = false;
             self.thinking_extracted = true;
-            events.extend(self.finalize_open_thinking_block());
+            if self.thinking_enabled {
+                events.extend(self.finalize_open_thinking_block());
+            }
         }
-        if self.thinking_enabled && !self.thinking_buffer.is_empty() {
+        if self.thinking_parser_enabled() && !self.thinking_buffer.is_empty() {
             if self.in_thinking_block {
                 if let Some(end_pos) =
                     find_real_thinking_end_tag_at_buffer_end(&self.thinking_buffer)
                 {
                     let thinking = self.thinking_buffer[..end_pos].to_string();
-                    if !thinking.is_empty() {
+                    if self.thinking_enabled && !thinking.is_empty() {
                         if let Some(index) = self.thinking_block_index {
                             events.push(self.create_thinking_delta_event(index, &thinking));
                         }
                     }
 
-                    events.extend(self.finalize_open_thinking_block());
+                    if self.thinking_enabled {
+                        events.extend(self.finalize_open_thinking_block());
+                    }
 
                     let after_pos = end_pos + "</thinking>".len();
                     let remaining = self.thinking_buffer[after_pos..].trim_start().to_string();
@@ -1194,7 +1245,7 @@ impl StreamContext {
                     if !remaining.is_empty() {
                         events.extend(self.create_text_delta_events(&remaining));
                     }
-                } else {
+                } else if self.thinking_enabled {
                     if let Some(index) = self.thinking_block_index {
                         let buffered_thinking = self.thinking_buffer.clone();
                         events.push(self.create_thinking_delta_event(index, &buffered_thinking));
@@ -1203,7 +1254,9 @@ impl StreamContext {
                 }
             } else {
                 let buffer_content = self.thinking_buffer.clone();
-                events.extend(self.synthesize_thinking_block());
+                if self.thinking_enabled {
+                    events.extend(self.synthesize_thinking_block());
+                }
                 events.extend(self.create_text_delta_events(&buffer_content));
             }
             self.thinking_buffer.clear();
@@ -1502,6 +1555,17 @@ pub(super) fn split_inline_thinking_content(
     }
 
     blocks
+}
+
+fn strip_inline_thinking_content(content: &str) -> String {
+    split_inline_thinking_content(content, true)
+        .into_iter()
+        .filter_map(|block| match block {
+            InlineThinkingBlock::Text(text) => Some(text),
+            InlineThinkingBlock::Thinking(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 #[cfg(test)]
@@ -2081,6 +2145,40 @@ mod tests {
                 .expect("signature should be string"),
             "claude-opus-4-8",
         );
+    }
+
+    #[test]
+    fn hidden_thinking_strips_inline_thinking_without_signature() {
+        let mut ctx = StreamContext::new_with_thinking_visibility(
+            "claude-opus-4-8",
+            1,
+            false,
+            true,
+            HashMap::new(),
+            None,
+        );
+        let _ = ctx.generate_initial_events();
+
+        let mut events = ctx.process_assistant_response("<thinking>\nsecret</thinking>\n\nfinal");
+        events.extend(ctx.generate_final_events());
+
+        assert!(!events.iter().any(|event| {
+            event.event == "content_block_delta" && event.data["delta"]["type"] == "thinking_delta"
+        }));
+        assert!(!events.iter().any(|event| {
+            event.event == "content_block_delta" && event.data["delta"]["type"] == "signature_delta"
+        }));
+        assert!(events.iter().any(|event| {
+            event.event == "content_block_delta"
+                && event.data["delta"]["type"] == "text_delta"
+                && event.data["delta"]["text"] == "final"
+        }));
+
+        let blocks = ctx.final_content_blocks();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[0]["text"], "final");
+        assert_eq!(ctx.final_assistant_message().content, "final");
     }
 
     #[test]

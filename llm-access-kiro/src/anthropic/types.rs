@@ -65,6 +65,8 @@ const MAX_BUDGET_TOKENS: i32 = 24_576;
 pub struct Thinking {
     #[serde(rename = "type")]
     pub thinking_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
     #[serde(default = "default_budget_tokens", deserialize_with = "deserialize_budget_tokens")]
     pub budget_tokens: i32,
 }
@@ -72,6 +74,17 @@ pub struct Thinking {
 impl Thinking {
     pub fn is_enabled(&self) -> bool {
         self.thinking_type == "enabled" || self.thinking_type == "adaptive"
+    }
+
+    pub fn exposes_anthropic_thinking(&self, output_config: Option<&OutputConfig>) -> bool {
+        match self.thinking_type.as_str() {
+            "enabled" => true,
+            "adaptive" => {
+                self.display.as_deref() == Some("summarized")
+                    || output_config.is_some_and(|config| config.effort.is_some())
+            },
+            _ => false,
+        }
     }
 }
 
@@ -331,7 +344,7 @@ pub struct CountTokensResponse {
 mod tests {
     use serde_json::json;
 
-    use super::OutputConfig;
+    use super::{OutputConfig, Thinking};
 
     #[test]
     fn output_config_preserves_json_schema_format_without_default_effort() {
@@ -357,5 +370,49 @@ mod tests {
                 .expect("json_schema format should be preserved")["required"],
             json!(["result"])
         );
+    }
+
+    #[test]
+    fn adaptive_bare_thinking_does_not_expose_anthropic_thinking() {
+        let thinking: Thinking = serde_json::from_value(json!({
+            "type": "adaptive"
+        }))
+        .expect("thinking should deserialize");
+
+        assert!(thinking.is_enabled());
+        assert!(!thinking.exposes_anthropic_thinking(None));
+
+        let format_only_config: OutputConfig = serde_json::from_value(json!({
+            "format": {
+                "type": "json_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "result": { "type": "integer" }
+                    },
+                    "required": ["result"],
+                    "additionalProperties": false
+                }
+            }
+        }))
+        .expect("output config should deserialize");
+        assert!(!thinking.exposes_anthropic_thinking(Some(&format_only_config)));
+    }
+
+    #[test]
+    fn summarized_adaptive_thinking_exposes_anthropic_thinking() {
+        let thinking: Thinking = serde_json::from_value(json!({
+            "type": "adaptive",
+            "display": "summarized"
+        }))
+        .expect("thinking should deserialize");
+
+        assert!(thinking.exposes_anthropic_thinking(None));
+
+        let effort_config: OutputConfig = serde_json::from_value(json!({
+            "effort": "medium"
+        }))
+        .expect("output config should deserialize");
+        assert!(thinking.exposes_anthropic_thinking(Some(&effort_config)));
     }
 }

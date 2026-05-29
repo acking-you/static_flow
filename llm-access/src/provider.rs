@@ -3192,10 +3192,13 @@ async fn dispatch_kiro_proxy(
             return response;
         },
     };
-    let thinking_enabled = payload
-        .thinking
-        .as_ref()
-        .is_some_and(|thinking| thinking.is_enabled());
+    let thinking_enabled = payload.thinking.as_ref().is_some_and(|thinking| {
+        thinking.exposes_anthropic_thinking(payload.output_config.as_ref())
+    });
+    let hidden_thinking_enabled = payload.thinking.as_ref().is_some_and(|thinking| {
+        thinking.is_enabled()
+            && !thinking.exposes_anthropic_thinking(payload.output_config.as_ref())
+    });
     let base_conversation_state = conversion.conversation_state.clone();
     let key_permit = match try_acquire_key_permit(
         &request_limiter,
@@ -3475,6 +3478,7 @@ async fn dispatch_kiro_proxy(
                 model: effective_model,
                 request_input_tokens,
                 thinking_enabled,
+                hidden_thinking_enabled,
                 tool_name_map: conversion.tool_name_map.clone(),
                 structured_output_tool_name: conversion.structured_output_tool_name.clone(),
                 response_identity: conversion.response_identity.clone(),
@@ -3496,6 +3500,7 @@ async fn dispatch_kiro_proxy(
             model: effective_model,
             request_input_tokens,
             thinking_enabled,
+            hidden_thinking_enabled,
             tool_name_map: conversion.tool_name_map.clone(),
             structured_output_tool_name: conversion.structured_output_tool_name.clone(),
             response_identity: conversion.response_identity.clone(),
@@ -3519,6 +3524,7 @@ struct KiroResponseContext {
     model: String,
     request_input_tokens: i32,
     thinking_enabled: bool,
+    hidden_thinking_enabled: bool,
     tool_name_map: std::collections::HashMap<String, String>,
     structured_output_tool_name: Option<String>,
     response_identity: Option<ResponseModelIdentity>,
@@ -4466,6 +4472,7 @@ fn stream_kiro_upstream_response(response: KiroPeekedStream, ctx: KiroResponseCo
             model,
             request_input_tokens,
             thinking_enabled,
+            hidden_thinking_enabled,
             tool_name_map,
             structured_output_tool_name,
             response_identity,
@@ -4486,10 +4493,11 @@ fn stream_kiro_upstream_response(response: KiroPeekedStream, ctx: KiroResponseCo
             status,
             cache_ctx,
             usage_meta,
-            stream_ctx: StreamContext::new_with_thinking(
+            stream_ctx: StreamContext::new_with_thinking_visibility(
                 &stream_model,
                 request_input_tokens,
                 thinking_enabled,
+                hidden_thinking_enabled,
                 tool_name_map,
                 structured_output_tool_name,
             )
@@ -4617,10 +4625,11 @@ async fn non_stream_kiro_response(
         Ok(events) => events,
         Err(err) => return kiro_json_error(StatusCode::BAD_GATEWAY, "api_error", &err),
     };
-    let mut stream_ctx = StreamContext::new_with_thinking(
+    let mut stream_ctx = StreamContext::new_with_thinking_visibility(
         &ctx.model,
         ctx.request_input_tokens,
         ctx.thinking_enabled,
+        ctx.hidden_thinking_enabled,
         ctx.tool_name_map,
         ctx.structured_output_tool_name.clone(),
     )
@@ -5088,6 +5097,7 @@ fn override_kiro_thinking_from_model_name(payload: &mut MessagesRequest) {
         } else {
             "enabled".to_string()
         },
+        display: None,
         budget_tokens: 20_000,
     });
     if is_high_reasoning_opus {
@@ -12232,7 +12242,8 @@ mod tests {
                         "max_tokens": 128,
                         "messages": [{"role": "user", "content": "hello"}],
                         "stream": true,
-                        "thinking": {"type": "adaptive"}
+                        "thinking": {"type": "adaptive", "display": "summarized"},
+                        "output_config": {"effort": "medium"}
                     }"#,
                 ))
                 .expect("request"),
@@ -12252,6 +12263,57 @@ mod tests {
         assert!(!body.contains(r#""signature":"upstream-signature-47""#));
         assert!(body.contains(r#""type":"text_delta""#));
         assert!(body.contains(r#""text":"最终答案""#));
+    }
+
+    #[tokio::test]
+    async fn kiro_dispatch_streaming_messages_hides_adaptive_bare_reasoning() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("kiro upstream env lock");
+        let captured = Arc::new(CapturedKiroUpstream::default());
+        let upstream_base = spawn_fake_kiro_reasoning_upstream(captured.clone()).await;
+        std::env::set_var("KIRO_UPSTREAM_BASE_URL", upstream_base);
+
+        let state = super::ProviderState::new(Arc::new(TestStore), static_kiro_route_store());
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/kiro-gateway/v1/messages")
+                .header("x-api-key", "valid-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "claude-opus-4-8",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": true,
+                        "thinking": {"type": "adaptive"}
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let body = String::from_utf8(body.to_vec()).expect("utf8 response");
+        assert!(!body.contains(r#""type":"thinking_delta""#));
+        assert!(!body.contains(r#""type":"signature_delta""#));
+        assert!(body.contains(r#""type":"text_delta""#));
+        assert!(body.contains(r#""text":"最终答案""#));
+
+        let requests = captured.requests.lock().expect("captured requests");
+        let current_content = requests[0].body["conversationState"]["currentMessage"]
+            ["userInputMessage"]["content"]
+            .as_str()
+            .expect("current content");
+        assert!(current_content.contains("<thinking_mode>adaptive</thinking_mode>"));
+        assert!(current_content.contains("<thinking_effort>xhigh</thinking_effort>"));
     }
 
     #[tokio::test]
@@ -12277,7 +12339,8 @@ mod tests {
                         "max_tokens": 128,
                         "messages": [{"role": "user", "content": "hello"}],
                         "stream": false,
-                        "thinking": {"type": "adaptive"}
+                        "thinking": {"type": "adaptive", "display": "summarized"},
+                        "output_config": {"effort": "medium"}
                     }"#,
                 ))
                 .expect("request"),
