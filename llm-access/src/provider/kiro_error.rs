@@ -4,7 +4,7 @@ use axum::{body::Bytes, http::StatusCode, response::Response};
 use llm_access_kiro::anthropic::converter::ConversionError;
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum KiroRouteFailureKind {
+pub(crate) enum KiroRouteFailureKind {
     RetryNext,
     Fatal,
     QuotaExhausted,
@@ -125,7 +125,7 @@ fn kiro_user_visible_message(status: StatusCode, message: &str) -> String {
     trimmed.to_string()
 }
 
-pub(super) fn kiro_json_error(status: StatusCode, error_type: &str, message: &str) -> Response {
+pub(crate) fn kiro_json_error(status: StatusCode, error_type: &str, message: &str) -> Response {
     let _ = error_type;
     super::anthropic_json_error(
         status,
@@ -134,7 +134,7 @@ pub(super) fn kiro_json_error(status: StatusCode, error_type: &str, message: &st
     )
 }
 
-pub(super) fn kiro_upstream_error_response(
+pub(crate) fn kiro_upstream_error_response(
     status: StatusCode,
     _content_type: &str,
     bytes: Bytes,
@@ -143,7 +143,7 @@ pub(super) fn kiro_upstream_error_response(
     kiro_json_error(status, kiro_error_type_for_status(status), &message)
 }
 
-pub(super) fn kiro_conversion_error_response(err: ConversionError) -> Response {
+pub(crate) fn kiro_conversion_error_response(err: ConversionError) -> Response {
     match err {
         ConversionError::UnsupportedModel(model) => kiro_json_error(
             StatusCode::BAD_REQUEST,
