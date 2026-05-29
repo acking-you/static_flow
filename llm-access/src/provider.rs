@@ -2760,7 +2760,7 @@ fn build_kiro_remote_document_source(
         .or_else(|| document_media_type_from_url(url))
         .ok_or_else(|| {
             KiroRemoteMediaResolutionError::new(
-                "URL document source must resolve to a supported Kiro document type",
+                "URL document source must resolve to a supported document type",
             )
         })?;
     match media_type {
@@ -2973,7 +2973,11 @@ async fn dispatch_kiro_proxy(
         if request.method() == Method::GET {
             return axum::Json(supported_models_response()).into_response();
         }
-        return (StatusCode::METHOD_NOT_ALLOWED, "unsupported kiro method").into_response();
+        return kiro_json_error(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "invalid_request_error",
+            "unsupported method",
+        );
     }
     let mut usage_meta = ProviderUsageMetadata::from_request_parts(
         request.method(),
@@ -2985,22 +2989,36 @@ async fn dispatch_kiro_proxy(
     let routes = match route_store.resolve_kiro_route_candidates(&key).await {
         Ok(routes) if !routes.is_empty() => routes,
         Ok(_) => {
-            return (StatusCode::SERVICE_UNAVAILABLE, "kiro route is not configured")
-                .into_response()
+            return kiro_json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "api_error",
+                "route is not configured",
+            )
         },
         Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "kiro route resolution failed")
-                .into_response()
+            return kiro_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "api_error",
+                "route resolution failed",
+            )
         },
     };
     let Some(public_path) = normalized_kiro_messages_path(request.uri().path()) else {
-        return (StatusCode::NOT_FOUND, "unsupported kiro gateway endpoint").into_response();
+        return kiro_json_error(
+            StatusCode::NOT_FOUND,
+            "invalid_request_error",
+            "unsupported endpoint",
+        );
     };
     usage_meta.request_url = external_origin(request.headers())
         .map(|origin| format!("{origin}/api/kiro-gateway{public_path}"))
         .unwrap_or_else(|| format!("/api/kiro-gateway{public_path}"));
     if request.method() != Method::POST {
-        return (StatusCode::METHOD_NOT_ALLOWED, "unsupported kiro method").into_response();
+        return kiro_json_error(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "invalid_request_error",
+            "unsupported method",
+        );
     }
     let request_headers = request.headers().clone();
     let body_read_started = Instant::now();
@@ -3353,11 +3371,15 @@ async fn dispatch_kiro_proxy(
                 })
                 .await
                 {
-                    return (
+                    tracing::error!(
+                        error = %err,
+                        "Failed to record gateway usage for route establishment failure"
+                    );
+                    return kiro_json_error(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("failed to record kiro usage: {err}"),
-                    )
-                        .into_response();
+                        "api_error",
+                        "failed to record usage",
+                    );
                 }
                 return error_response;
             },
@@ -3400,11 +3422,15 @@ async fn dispatch_kiro_proxy(
             })
             .await
             {
-                return (
+                tracing::error!(
+                    error = %err,
+                    "Failed to record gateway usage for upstream error response"
+                );
+                return kiro_json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("failed to record kiro usage: {err}"),
-                )
-                    .into_response();
+                    "api_error",
+                    "failed to record usage",
+                );
             }
             return kiro_upstream_error_response(status, &content_type, bytes);
         }
@@ -3506,11 +3532,15 @@ async fn dispatch_kiro_proxy(
                     })
                     .await
                     {
-                        return (
+                        tracing::error!(
+                            error = %err,
+                            "Failed to record gateway usage for buffered stream failure"
+                        );
+                        return kiro_json_error(
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("failed to record kiro usage: {err}"),
-                        )
-                            .into_response();
+                            "api_error",
+                            "failed to record usage",
+                        );
                     }
                     return failure.into_response();
                 },
@@ -3816,8 +3846,12 @@ async fn build_kiro_websearch_response(input: WebsearchResponseInput) -> Respons
     })
     .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to record kiro usage: {err}"))
-            .into_response();
+        tracing::error!(error = %err, "Failed to record gateway usage for web search response");
+        return kiro_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "api_error",
+            "failed to record usage",
+        );
     }
 
     if input.payload.stream {
@@ -3840,8 +3874,11 @@ async fn build_kiro_websearch_response(input: WebsearchResponseInput) -> Respons
             .header(header::CONNECTION, "keep-alive")
             .body(Body::from(body))
             .unwrap_or_else(|_| {
-                (StatusCode::BAD_GATEWAY, "kiro web_search stream response build failed")
-                    .into_response()
+                kiro_json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "api_error",
+                    "failed to build stream response",
+                )
             });
     }
 
@@ -3866,7 +3903,11 @@ async fn build_kiro_websearch_response(input: WebsearchResponseInput) -> Respons
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(body.to_string()))
         .unwrap_or_else(|_| {
-            (StatusCode::BAD_GATEWAY, "kiro web_search json response build failed").into_response()
+            kiro_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "api_error",
+                "failed to build response",
+            )
         })
 }
 
@@ -3881,7 +3922,6 @@ enum KiroRouteFailureKind {
 #[derive(Debug)]
 pub(crate) struct KiroRouteFailure {
     status: StatusCode,
-    content_type: String,
     body: Bytes,
     kind: KiroRouteFailureKind,
 }
@@ -3897,7 +3937,6 @@ impl KiroRouteFailure {
         .to_string();
         Self {
             status,
-            content_type: "application/json".to_string(),
             body: Bytes::from(body),
             kind,
         }
@@ -3905,16 +3944,9 @@ impl KiroRouteFailure {
 
     async fn from_response(response: reqwest::Response, kind: KiroRouteFailureKind) -> Self {
         let status = response.status();
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("application/json")
-            .to_string();
         let body = response.bytes().await.unwrap_or_else(|_| Bytes::new());
         Self {
             status,
-            content_type,
             body,
             kind,
         }
@@ -3934,15 +3966,8 @@ impl KiroRouteFailure {
     }
 
     fn into_response(self) -> Response {
-        Response::builder()
-            .status(self.status)
-            .header(header::CONTENT_TYPE, self.content_type)
-            .header(header::CACHE_CONTROL, "no-store")
-            .body(Body::from(self.body))
-            .unwrap_or_else(|_| {
-                (StatusCode::BAD_GATEWAY, "kiro upstream error response build failed")
-                    .into_response()
-            })
+        let message = summarize_error_bytes(&self.body);
+        kiro_json_error(self.status, kiro_error_type_for_status(self.status), &message)
     }
 }
 
@@ -4695,7 +4720,11 @@ fn stream_kiro_upstream_response(response: KiroPeekedStream, ctx: KiroResponseCo
         .header(header::CONNECTION, "keep-alive")
         .body(Body::from_stream(body_stream))
         .unwrap_or_else(|_| {
-            (StatusCode::BAD_GATEWAY, "kiro stream response build failed").into_response()
+            kiro_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "api_error",
+                "failed to build stream response",
+            )
         })
 }
 
@@ -4781,8 +4810,12 @@ async fn non_stream_kiro_response(
     })
     .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to record kiro usage: {err}"))
-            .into_response();
+        tracing::error!(error = %err, "Failed to record gateway usage for non-stream response");
+        return kiro_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "api_error",
+            "failed to record usage",
+        );
     }
     let body = serde_json::json!({
         "id": format!("msg_{}", uuid::Uuid::new_v4().simple()),
@@ -4800,19 +4833,17 @@ async fn non_stream_kiro_response(
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(body.to_string()))
         .unwrap_or_else(|_| {
-            (StatusCode::BAD_GATEWAY, "kiro json response build failed").into_response()
+            kiro_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "api_error",
+                "failed to build response",
+            )
         })
 }
 
-fn kiro_upstream_error_response(status: StatusCode, content_type: &str, bytes: Bytes) -> Response {
-    Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, content_type)
-        .header(header::CACHE_CONTROL, "no-store")
-        .body(Body::from(bytes))
-        .unwrap_or_else(|_| {
-            (StatusCode::BAD_GATEWAY, "kiro upstream error response build failed").into_response()
-        })
+fn kiro_upstream_error_response(status: StatusCode, _content_type: &str, bytes: Bytes) -> Response {
+    let message = summarize_error_bytes(&bytes);
+    kiro_json_error(status, kiro_error_type_for_status(status), &message)
 }
 
 const KIRO_REQUEST_SESSION_ID_HEADERS: [&str; 8] = [
@@ -5066,8 +5097,68 @@ fn anthropic_json_error(status: StatusCode, error_type: &str, message: &str) -> 
         })
 }
 
+fn kiro_error_type_for_status(status: StatusCode) -> &'static str {
+    match status {
+        StatusCode::PAYMENT_REQUIRED | StatusCode::TOO_MANY_REQUESTS => "rate_limit_error",
+        StatusCode::UNAUTHORIZED => "authentication_error",
+        StatusCode::FORBIDDEN => "permission_error",
+        StatusCode::NOT_FOUND => "not_found_error",
+        _ if status.is_client_error() => "invalid_request_error",
+        _ => "api_error",
+    }
+}
+
+fn kiro_default_user_error_message(status: StatusCode) -> &'static str {
+    match status {
+        StatusCode::BAD_REQUEST => "Request is invalid.",
+        StatusCode::UNAUTHORIZED => "Authentication failed.",
+        StatusCode::FORBIDDEN => "Permission denied.",
+        StatusCode::NOT_FOUND => "Endpoint not found.",
+        StatusCode::METHOD_NOT_ALLOWED => "Method not allowed.",
+        StatusCode::PAYMENT_REQUIRED => "Quota exceeded.",
+        StatusCode::TOO_MANY_REQUESTS => "Rate limit exceeded.",
+        StatusCode::SERVICE_UNAVAILABLE => "Service unavailable.",
+        StatusCode::INTERNAL_SERVER_ERROR => "Internal server error.",
+        _ if status.is_server_error() => "Upstream service unavailable.",
+        _ => "Request failed.",
+    }
+}
+
+fn kiro_user_visible_message(status: StatusCode, message: &str) -> String {
+    let trimmed = message.trim();
+    let fallback = kiro_default_user_error_message(status);
+    if trimmed.is_empty() {
+        return fallback.to_string();
+    }
+    if matches!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::PAYMENT_REQUIRED
+            | StatusCode::METHOD_NOT_ALLOWED
+            | StatusCode::NOT_FOUND
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::INTERNAL_SERVER_ERROR
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::GATEWAY_TIMEOUT
+    ) {
+        return fallback.to_string();
+    }
+    if status.is_server_error() {
+        return fallback.to_string();
+    }
+    if trimmed.to_ascii_lowercase().contains("kiro") {
+        return fallback.to_string();
+    }
+    trimmed.to_string()
+}
+
 fn kiro_json_error(status: StatusCode, error_type: &str, message: &str) -> Response {
-    anthropic_json_error(status, error_type, message)
+    let _ = error_type;
+    anthropic_json_error(
+        status,
+        kiro_error_type_for_status(status),
+        &kiro_user_visible_message(status, message),
+    )
 }
 
 fn codex_error_type_for_status(status: StatusCode) -> &'static str {
@@ -5834,7 +5925,7 @@ fn is_quota_exhausted(key: &AuthenticatedKey) -> bool {
 
 fn quota_exhausted_response(key: &AuthenticatedKey) -> Response {
     if ProviderType::from_storage_str(&key.provider_type) == Some(ProviderType::Kiro) {
-        (StatusCode::PAYMENT_REQUIRED, "Kiro key quota exhausted").into_response()
+        kiro_json_error(StatusCode::PAYMENT_REQUIRED, "rate_limit_error", "key quota exhausted")
     } else {
         (StatusCode::TOO_MANY_REQUESTS, "quota_exceeded").into_response()
     }
@@ -12842,6 +12933,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn kiro_dispatch_returns_json_service_unavailable_when_no_route_exists() {
+        let state = super::ProviderState::new(Arc::new(TestStore), empty_route_store());
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/kiro-gateway/v1/messages")
+                .header("x-api-key", "valid-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "claude-sonnet-4-6",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}]
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let raw = String::from_utf8(body.to_vec()).expect("utf8 response");
+        let body = serde_json::from_str::<serde_json::Value>(&raw).expect("json response");
+        assert_eq!(body["error"]["type"], "api_error");
+        assert_eq!(body["error"]["message"], "Service unavailable.");
+        assert!(!raw.to_ascii_lowercase().contains("kiro"));
+    }
+
+    #[tokio::test]
     async fn kiro_dispatch_passthroughs_upstream_content_length_errors() {
         let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
             .lock()
@@ -12876,9 +13006,12 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("response body");
-        let body = String::from_utf8(body.to_vec()).expect("utf8 response");
-        assert!(body.contains("CONTENT_LENGTH_EXCEEDS_THRESHOLD"));
-        assert!(body.contains("Input is too long."));
+        let raw = String::from_utf8(body.to_vec()).expect("utf8 response");
+        let body = serde_json::from_str::<serde_json::Value>(&raw).expect("json response");
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["message"], "Input is too long.");
+        assert!(!raw.contains("CONTENT_LENGTH_EXCEEDS_THRESHOLD"));
+        assert!(!raw.to_ascii_lowercase().contains("kiro"));
         assert!(captured.requests.lock().expect("captured requests").len() == 1);
     }
 
@@ -13050,6 +13183,62 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].status_code, 200);
         assert_eq!(events[0].endpoint, "/v1/messages");
+    }
+
+    #[tokio::test]
+    async fn kiro_dispatch_hides_provider_details_when_empty_stream_retries_exhausted() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("kiro upstream env lock");
+        let captured = Arc::new(CapturedKiroUpstream::default());
+        let upstream_base =
+            spawn_fake_kiro_empty_route_then_success_upstream(captured.clone()).await;
+        std::env::set_var("KIRO_UPSTREAM_BASE_URL", upstream_base);
+
+        let state = super::ProviderState::new(
+            Arc::new(TestStore),
+            Arc::new(StaticRouteStore {
+                codex_route: codex_route_for_account("codex-a", "upstream-token"),
+                kiro_route: kiro_route_for_account("kiro-empty", "kiro-empty-token"),
+            }),
+        );
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/kiro-gateway/v1/messages")
+                .header("x-api-key", "valid-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "claude-opus-4-8",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": true
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let raw = String::from_utf8(body.to_vec()).expect("utf8 response");
+        let body = serde_json::from_str::<serde_json::Value>(&raw).expect("json response");
+        assert_eq!(body["error"]["type"], "api_error");
+        assert_eq!(body["error"]["message"], "Upstream service unavailable.");
+        assert!(!raw.to_ascii_lowercase().contains("kiro"));
     }
 
     #[tokio::test]
