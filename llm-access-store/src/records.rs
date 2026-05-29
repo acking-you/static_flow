@@ -188,6 +188,9 @@ pub struct RuntimeConfigRecord {
     pub kiro_billable_model_multipliers_json: String,
     /// Kiro cache policy JSON.
     pub kiro_cache_policy_json: String,
+    /// Minimum request-side input tokens before trusting Kiro contextUsage.
+    #[serde(default = "default_kiro_context_usage_min_request_tokens_i64")]
+    pub kiro_context_usage_min_request_tokens: i64,
     /// Kiro prefix cache mode.
     pub kiro_prefix_cache_mode: String,
     /// Kiro prefix cache max tokens.
@@ -267,6 +270,10 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+fn default_kiro_context_usage_min_request_tokens_i64() -> i64 {
+    core_store::DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS as i64
+}
+
 impl Default for RuntimeConfigRecord {
     fn default() -> Self {
         Self {
@@ -329,6 +336,8 @@ impl Default for RuntimeConfigRecord {
             kiro_billable_model_multipliers_json:
                 core_store::default_kiro_billable_model_multipliers_json(),
             kiro_cache_policy_json: core_store::default_kiro_cache_policy_json(),
+            kiro_context_usage_min_request_tokens:
+                default_kiro_context_usage_min_request_tokens_i64(),
             kiro_prefix_cache_mode: core_store::DEFAULT_KIRO_PREFIX_CACHE_MODE.to_string(),
             kiro_prefix_cache_max_tokens: core_store::DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS as i64,
             kiro_prefix_cache_entry_ttl_seconds:
@@ -392,6 +401,8 @@ impl RuntimeConfigRecord {
             kiro_cache_kmodels_json: self.kiro_cache_kmodels_json.clone(),
             kiro_billable_model_multipliers_json: self.kiro_billable_model_multipliers_json.clone(),
             kiro_cache_policy_json: self.kiro_cache_policy_json.clone(),
+            kiro_context_usage_min_request_tokens: self.kiro_context_usage_min_request_tokens
+                as u64,
             kiro_prefix_cache_mode: self.kiro_prefix_cache_mode.clone(),
             kiro_prefix_cache_max_tokens: self.kiro_prefix_cache_max_tokens as u64,
             kiro_prefix_cache_entry_ttl_seconds: self.kiro_prefix_cache_entry_ttl_seconds as u64,
@@ -447,6 +458,8 @@ impl RuntimeConfigRecord {
         self.kiro_billable_model_multipliers_json =
             config.kiro_billable_model_multipliers_json.clone();
         self.kiro_cache_policy_json = config.kiro_cache_policy_json.clone();
+        self.kiro_context_usage_min_request_tokens =
+            config.kiro_context_usage_min_request_tokens as i64;
         self.kiro_prefix_cache_mode = config.kiro_prefix_cache_mode.clone();
         self.kiro_prefix_cache_max_tokens = config.kiro_prefix_cache_max_tokens as i64;
         self.kiro_prefix_cache_entry_ttl_seconds =

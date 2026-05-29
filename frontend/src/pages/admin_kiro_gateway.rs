@@ -2915,6 +2915,7 @@ pub fn admin_kiro_gateway_page() -> Html {
     let kiro_billable_model_multipliers_json = use_state(String::new);
     let persisted_kiro_billable_model_multipliers_json = use_state(String::new);
     let saving_kmodel_config = use_state(|| false);
+    let kiro_context_usage_min_request_tokens = use_state(String::new);
     let kiro_prefix_cache_mode = use_state(String::new);
     let kiro_prefix_cache_max_tokens = use_state(String::new);
     let kiro_prefix_cache_entry_ttl_seconds = use_state(String::new);
@@ -3067,6 +3068,7 @@ pub fn admin_kiro_gateway_page() -> Html {
         let kiro_billable_model_multipliers_json = kiro_billable_model_multipliers_json.clone();
         let persisted_kiro_billable_model_multipliers_json =
             persisted_kiro_billable_model_multipliers_json.clone();
+        let kiro_context_usage_min_request_tokens = kiro_context_usage_min_request_tokens.clone();
         let kiro_prefix_cache_mode = kiro_prefix_cache_mode.clone();
         let kiro_prefix_cache_max_tokens = kiro_prefix_cache_max_tokens.clone();
         let kiro_prefix_cache_entry_ttl_seconds = kiro_prefix_cache_entry_ttl_seconds.clone();
@@ -3088,6 +3090,8 @@ pub fn admin_kiro_gateway_page() -> Html {
             let kiro_billable_model_multipliers_json = kiro_billable_model_multipliers_json.clone();
             let persisted_kiro_billable_model_multipliers_json =
                 persisted_kiro_billable_model_multipliers_json.clone();
+            let kiro_context_usage_min_request_tokens =
+                kiro_context_usage_min_request_tokens.clone();
             let kiro_prefix_cache_mode = kiro_prefix_cache_mode.clone();
             let kiro_prefix_cache_max_tokens = kiro_prefix_cache_max_tokens.clone();
             let kiro_prefix_cache_entry_ttl_seconds = kiro_prefix_cache_entry_ttl_seconds.clone();
@@ -3155,6 +3159,11 @@ pub fn admin_kiro_gateway_page() -> Html {
                             format_json_for_textarea(
                                 &config_resp.kiro_billable_model_multipliers_json,
                             ),
+                        );
+                        kiro_context_usage_min_request_tokens.set(
+                            config_resp
+                                .kiro_context_usage_min_request_tokens
+                                .to_string(),
                         );
                         kiro_prefix_cache_mode.set(config_resp.kiro_prefix_cache_mode.clone());
                         kiro_prefix_cache_max_tokens
@@ -3423,6 +3432,8 @@ pub fn admin_kiro_gateway_page() -> Html {
         let kiro_billable_model_multipliers_json = kiro_billable_model_multipliers_json.clone();
         let persisted_kiro_billable_model_multipliers_json_input =
             persisted_kiro_billable_model_multipliers_json.clone();
+        let kiro_context_usage_min_request_tokens_input =
+            kiro_context_usage_min_request_tokens.clone();
         let kiro_prefix_cache_mode_input = kiro_prefix_cache_mode.clone();
         let kiro_prefix_cache_max_tokens_input = kiro_prefix_cache_max_tokens.clone();
         let kiro_prefix_cache_entry_ttl_seconds_input = kiro_prefix_cache_entry_ttl_seconds.clone();
@@ -3448,6 +3459,8 @@ pub fn admin_kiro_gateway_page() -> Html {
                 kiro_billable_model_multipliers_json_input.clone();
             let persisted_kiro_billable_model_multipliers_json_input =
                 persisted_kiro_billable_model_multipliers_json_input.clone();
+            let kiro_context_usage_min_request_tokens_value =
+                (*kiro_context_usage_min_request_tokens_input).clone();
             let kiro_prefix_cache_mode_value = (*kiro_prefix_cache_mode_input).clone();
             let kiro_prefix_cache_max_tokens_value = (*kiro_prefix_cache_max_tokens_input).clone();
             let kiro_prefix_cache_entry_ttl_seconds_value =
@@ -3457,6 +3470,8 @@ pub fn admin_kiro_gateway_page() -> Html {
             let kiro_conversation_anchor_ttl_seconds_value =
                 (*kiro_conversation_anchor_ttl_seconds_input).clone();
             let kiro_prefix_cache_mode_input = kiro_prefix_cache_mode_input.clone();
+            let kiro_context_usage_min_request_tokens_input =
+                kiro_context_usage_min_request_tokens_input.clone();
             let kiro_prefix_cache_max_tokens_input = kiro_prefix_cache_max_tokens_input.clone();
             let kiro_prefix_cache_entry_ttl_seconds_input =
                 kiro_prefix_cache_entry_ttl_seconds_input.clone();
@@ -3479,6 +3494,24 @@ pub fn admin_kiro_gateway_page() -> Html {
                 if mode != "formula" && mode != "prefix_tree" {
                     let message =
                         "Kiro prefix cache mode must be `formula` or `prefix_tree`.".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                }
+                let Ok(context_usage_min_request_tokens) =
+                    kiro_context_usage_min_request_tokens_value
+                        .trim()
+                        .parse::<u64>()
+                else {
+                    let message =
+                        "Kiro contextUsage min request tokens must be a valid integer.".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                };
+                if context_usage_min_request_tokens == 0 {
+                    let message =
+                        "Kiro contextUsage min request tokens must be positive.".to_string();
                     error.set(Some(message.clone()));
                     notify.emit((message, true));
                     return;
@@ -3537,6 +3570,8 @@ pub fn admin_kiro_gateway_page() -> Html {
                 next_config.kiro_billable_model_multipliers_json =
                     kiro_billable_model_multipliers_json;
                 next_config.kiro_cache_policy_json = kiro_cache_policy_json;
+                next_config.kiro_context_usage_min_request_tokens =
+                    context_usage_min_request_tokens;
                 next_config.kiro_prefix_cache_mode = mode.to_string();
                 next_config.kiro_prefix_cache_max_tokens = prefix_cache_max_tokens;
                 next_config.kiro_prefix_cache_entry_ttl_seconds = prefix_cache_entry_ttl_seconds;
@@ -3567,6 +3602,8 @@ pub fn admin_kiro_gateway_page() -> Html {
                         persisted_kiro_billable_model_multipliers_json_input.set(
                             format_json_for_textarea(&saved.kiro_billable_model_multipliers_json),
                         );
+                        kiro_context_usage_min_request_tokens_input
+                            .set(saved.kiro_context_usage_min_request_tokens.to_string());
                         kiro_prefix_cache_mode_input.set(saved.kiro_prefix_cache_mode.clone());
                         kiro_prefix_cache_max_tokens_input
                             .set(saved.kiro_prefix_cache_max_tokens.to_string());
@@ -4185,6 +4222,21 @@ pub fn admin_kiro_gateway_page() -> Html {
                         <KiroCachePolicyEditor form={kiro_cache_policy_form.clone()} />
                     </div>
                     <label class={classes!("block", "text-sm")}>
+                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "contextUsage Min Request Tokens" }</div>
+                        <input
+                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                            value={(*kiro_context_usage_min_request_tokens).clone()}
+                            oninput={{
+                                let kiro_context_usage_min_request_tokens =
+                                    kiro_context_usage_min_request_tokens.clone();
+                                Callback::from(move |event: InputEvent| {
+                                    let input: HtmlInputElement = event.target_unchecked_into();
+                                    kiro_context_usage_min_request_tokens.set(input.value());
+                                })
+                            }}
+                        />
+                    </label>
+                    <label class={classes!("block", "text-sm")}>
                         <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Simulation Mode" }</div>
                         <select
                             class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm")}
@@ -4302,7 +4354,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                             { format!("current policy bytes: {}", config.kiro_cache_policy_json.len()) }
                         </div>
                         <div>
-                            { format!("mode={}, prefix_tree_max_tokens={}, prefix_tree_ttl_seconds={}, anchor_max_entries={}, anchor_ttl_seconds={}", config.kiro_prefix_cache_mode, config.kiro_prefix_cache_max_tokens, config.kiro_prefix_cache_entry_ttl_seconds, config.kiro_conversation_anchor_max_entries, config.kiro_conversation_anchor_ttl_seconds) }
+                            { format!("context_usage_min_request_tokens={}, mode={}, prefix_tree_max_tokens={}, prefix_tree_ttl_seconds={}, anchor_max_entries={}, anchor_ttl_seconds={}", config.kiro_context_usage_min_request_tokens, config.kiro_prefix_cache_mode, config.kiro_prefix_cache_max_tokens, config.kiro_prefix_cache_entry_ttl_seconds, config.kiro_conversation_anchor_max_entries, config.kiro_conversation_anchor_ttl_seconds) }
                         </div>
                         <div>
                             { "prefix_tree 模式使用修正后的 stable-prefix 做共享前缀匹配；formula 模式继续保留旧的保守下界反推。" }

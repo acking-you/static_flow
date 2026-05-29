@@ -87,6 +87,10 @@ fn default_usage_query_base_url() -> String {
     "http://127.0.0.1:19081".to_string()
 }
 
+fn default_kiro_context_usage_min_request_tokens() -> u64 {
+    15_000
+}
+
 // API base URL. Read at compile time from STATICFLOW_API_BASE and fall back
 // to the local development backend when the variable is absent.
 #[cfg(not(feature = "mock"))]
@@ -6918,6 +6922,8 @@ pub struct LlmGatewayRuntimeConfig {
     pub kiro_billable_model_multipliers_json: String,
     #[serde(default = "default_kiro_cache_policy_json")]
     pub kiro_cache_policy_json: String,
+    #[serde(default = "default_kiro_context_usage_min_request_tokens")]
+    pub kiro_context_usage_min_request_tokens: u64,
     pub kiro_prefix_cache_mode: String,
     pub kiro_prefix_cache_max_tokens: u64,
     pub kiro_prefix_cache_entry_ttl_seconds: u64,
@@ -7723,6 +7729,7 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             kiro_cache_kmodels_json: r#"{"claude-haiku-4-5-20251001":2.3681034438052206e-06,"claude-opus-4-6":8.061927916785985e-06,"claude-sonnet-4-6":5.055065250835128e-06}"#.to_string(),
             kiro_billable_model_multipliers_json: default_kiro_billable_model_multipliers_json(),
             kiro_cache_policy_json: r#"{"small_input_high_credit_boost":{"target_input_tokens":100000,"credit_start":1.0,"credit_end":1.8},"prefix_tree_credit_ratio_bands":[{"credit_start":0.3,"credit_end":1.0,"cache_ratio_start":0.7,"cache_ratio_end":0.2},{"credit_start":1.0,"credit_end":2.5,"cache_ratio_start":0.2,"cache_ratio_end":0.0}],"high_credit_diagnostic_threshold":2.0}"#.to_string(),
+            kiro_context_usage_min_request_tokens: default_kiro_context_usage_min_request_tokens(),
             kiro_prefix_cache_mode: "prefix_tree".to_string(),
             kiro_prefix_cache_max_tokens: 4_000_000,
             kiro_prefix_cache_entry_ttl_seconds: 21_600,
@@ -11788,6 +11795,7 @@ mod tests {
         assert_eq!(config.usage_journal_zstd_level, 3);
         assert_eq!(config.usage_journal_consumer_lease_ms, 300_000);
         assert!(!config.usage_journal_delete_bad_files);
+        assert_eq!(config.kiro_context_usage_min_request_tokens, 15_000);
         assert_eq!(config.usage_query_bind_addr, "127.0.0.1:19081");
         assert_eq!(config.usage_query_base_url, "http://127.0.0.1:19081");
         assert_eq!(config.usage_analytics_retention_days, 14);

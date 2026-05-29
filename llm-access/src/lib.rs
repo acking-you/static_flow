@@ -1147,6 +1147,7 @@ mod tests {
         assert_eq!(value["max_request_body_bytes"], 8 * 1024 * 1024);
         assert_eq!(value["codex_client_version"], "0.124.0");
         assert_eq!(value["kiro_prefix_cache_mode"], "prefix_tree");
+        assert_eq!(value["kiro_context_usage_min_request_tokens"], 15_000);
     }
 
     #[tokio::test]
@@ -1214,7 +1215,8 @@ mod tests {
                             "auth_cache_ttl_seconds": 120,
                             "max_request_body_bytes": 2097152,
                             "codex_client_version": " 0.125.0 ",
-                            "kiro_prefix_cache_mode": "formula"
+                            "kiro_prefix_cache_mode": "formula",
+                            "kiro_context_usage_min_request_tokens": 12345
                         }"#,
                     ))
                     .expect("request"),
@@ -1231,6 +1233,7 @@ mod tests {
         assert_eq!(value["max_request_body_bytes"], 2 * 1024 * 1024);
         assert_eq!(value["codex_client_version"], "0.125.0");
         assert_eq!(value["kiro_prefix_cache_mode"], "formula");
+        assert_eq!(value["kiro_context_usage_min_request_tokens"], 12_345);
     }
 
     #[tokio::test]

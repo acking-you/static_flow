@@ -61,7 +61,7 @@ use llm_access_kiro::{
             resolve_conversation_id_from_metadata, ResolvedConversationId, ResponseModelIdentity,
             SessionFallbackReason, SessionIdSource, SessionTracking,
         },
-        stream::{anthropic_usage_json, resolve_input_tokens, StreamContext},
+        stream::{anthropic_usage_json, resolve_input_tokens_with_threshold, StreamContext},
         supported_models_response,
         types::{MessagesRequest, OutputConfig, Thinking},
         websearch::{self, McpResponse},
@@ -3319,6 +3319,7 @@ async fn dispatch_kiro_proxy(
                     KiroUsageInputs {
                         request_input_tokens,
                         context_input_tokens: None,
+                        context_usage_min_request_tokens: route.context_usage_min_request_tokens,
                         output_tokens: 0,
                         credit_usage: None,
                         credit_usage_missing: true,
@@ -3370,6 +3371,7 @@ async fn dispatch_kiro_proxy(
                 KiroUsageInputs {
                     request_input_tokens,
                     context_input_tokens: None,
+                    context_usage_min_request_tokens: route.context_usage_min_request_tokens,
                     output_tokens: 0,
                     credit_usage: None,
                     credit_usage_missing: true,
@@ -3438,6 +3440,8 @@ async fn dispatch_kiro_proxy(
                         KiroUsageInputs {
                             request_input_tokens,
                             context_input_tokens: None,
+                            context_usage_min_request_tokens: route
+                                .context_usage_min_request_tokens,
                             output_tokens: 0,
                             credit_usage: None,
                             credit_usage_missing: true,
@@ -4383,6 +4387,7 @@ impl KiroStreamRecordGuard {
             KiroUsageInputs {
                 request_input_tokens: self.stream_ctx.request_input_tokens(),
                 context_input_tokens: self.stream_ctx.context_input_tokens(),
+                context_usage_min_request_tokens: self.route.context_usage_min_request_tokens,
                 output_tokens,
                 credit_usage,
                 credit_usage_missing,
@@ -4484,6 +4489,7 @@ fn stream_kiro_upstream_response(response: KiroPeekedStream, ctx: KiroResponseCo
             _account_permit,
         } = ctx;
         let stream_model = model.clone();
+        let context_usage_min_request_tokens = route.context_usage_min_request_tokens;
         let mut guard = KiroStreamRecordGuard {
             control_store,
             key,
@@ -4501,6 +4507,7 @@ fn stream_kiro_upstream_response(response: KiroPeekedStream, ctx: KiroResponseCo
                 tool_name_map,
                 structured_output_tool_name,
             )
+            .with_context_usage_min_request_tokens(context_usage_min_request_tokens)
             .with_response_identity(response_identity),
             state: StreamRecordState::Pending,
             record_committed: false,
@@ -4556,6 +4563,7 @@ fn stream_kiro_upstream_response(response: KiroPeekedStream, ctx: KiroResponseCo
             KiroUsageInputs {
                 request_input_tokens,
                 context_input_tokens: guard.stream_ctx.context_input_tokens(),
+                context_usage_min_request_tokens: guard.route.context_usage_min_request_tokens,
                 output_tokens,
                 credit_usage,
                 credit_usage_missing,
@@ -4633,6 +4641,7 @@ async fn non_stream_kiro_response(
         ctx.tool_name_map,
         ctx.structured_output_tool_name.clone(),
     )
+    .with_context_usage_min_request_tokens(ctx.route.context_usage_min_request_tokens)
     .with_response_identity(ctx.response_identity.clone());
     for event in &events {
         let _ = stream_ctx.process_kiro_event(event);
@@ -4645,6 +4654,7 @@ async fn non_stream_kiro_response(
         KiroUsageInputs {
             request_input_tokens: ctx.request_input_tokens,
             context_input_tokens: stream_ctx.context_input_tokens(),
+            context_usage_min_request_tokens: ctx.route.context_usage_min_request_tokens,
             output_tokens,
             credit_usage,
             credit_usage_missing,
@@ -4742,6 +4752,7 @@ struct KiroUsageSummary {
 struct KiroUsageInputs {
     request_input_tokens: i32,
     context_input_tokens: Option<i32>,
+    context_usage_min_request_tokens: u64,
     output_tokens: i32,
     credit_usage: Option<f64>,
     credit_usage_missing: bool,
@@ -5242,8 +5253,11 @@ fn build_kiro_usage_summary(
     usage: KiroUsageInputs,
     cache_ctx: &KiroCacheContext,
 ) -> KiroUsageSummary {
-    let (resolved_input_tokens, _) =
-        resolve_input_tokens(usage.request_input_tokens, usage.context_input_tokens);
+    let (resolved_input_tokens, _) = resolve_input_tokens_with_threshold(
+        usage.request_input_tokens,
+        usage.context_input_tokens,
+        usage.context_usage_min_request_tokens,
+    );
     if !usage.cache_estimation_enabled {
         return KiroUsageSummary {
             input_uncached_tokens: resolved_input_tokens,
@@ -7909,6 +7923,8 @@ mod tests {
             model_name_map_json: "{}".to_string(),
             cache_kmodels_json: llm_access_core::store::default_kiro_cache_kmodels_json(),
             cache_policy_json: llm_access_core::store::default_kiro_cache_policy_json(),
+            context_usage_min_request_tokens:
+                llm_access_core::store::DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
             prefix_cache_mode: "formula".to_string(),
             prefix_cache_max_tokens: 100_000,
             prefix_cache_entry_ttl_seconds: 3600,

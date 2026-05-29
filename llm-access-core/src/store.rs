@@ -82,6 +82,8 @@ pub const DEFAULT_USAGE_EVENT_MAINTENANCE_ENABLED: bool = true;
 pub const DEFAULT_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS: u64 = 60 * 60;
 /// Default detailed usage retention.
 pub const DEFAULT_USAGE_EVENT_DETAIL_RETENTION_DAYS: i64 = 7;
+/// Default request-token threshold below which Kiro contextUsage is ignored.
+pub const DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS: u64 = 15_000;
 /// Default Kiro prefix cache mode.
 pub const DEFAULT_KIRO_PREFIX_CACHE_MODE: &str = "prefix_tree";
 /// Alternate Kiro prefix cache mode retained for admin compatibility.
@@ -193,6 +195,8 @@ pub struct AdminRuntimeConfig {
     pub kiro_billable_model_multipliers_json: String,
     /// Kiro cache policy JSON.
     pub kiro_cache_policy_json: String,
+    /// Minimum request-side input tokens before trusting Kiro contextUsage.
+    pub kiro_context_usage_min_request_tokens: u64,
     /// Kiro prefix cache mode.
     pub kiro_prefix_cache_mode: String,
     /// Kiro prefix cache token budget.
@@ -249,6 +253,7 @@ impl Default for AdminRuntimeConfig {
             kiro_cache_kmodels_json: default_kiro_cache_kmodels_json(),
             kiro_billable_model_multipliers_json: default_kiro_billable_model_multipliers_json(),
             kiro_cache_policy_json: default_kiro_cache_policy_json(),
+            kiro_context_usage_min_request_tokens: DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
             kiro_prefix_cache_mode: DEFAULT_KIRO_PREFIX_CACHE_MODE.to_string(),
             kiro_prefix_cache_max_tokens: DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS,
             kiro_prefix_cache_entry_ttl_seconds: DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS,
@@ -366,6 +371,9 @@ pub struct UpdateAdminRuntimeConfig {
     /// Kiro cache policy JSON.
     #[serde(default)]
     pub kiro_cache_policy_json: Option<String>,
+    /// Minimum request-side input tokens before trusting Kiro contextUsage.
+    #[serde(default)]
+    pub kiro_context_usage_min_request_tokens: Option<u64>,
     /// Kiro prefix cache mode.
     #[serde(default)]
     pub kiro_prefix_cache_mode: Option<String>,
@@ -1785,6 +1793,8 @@ pub struct ProviderKiroRoute {
     pub cache_kmodels_json: String,
     /// Effective Kiro cache policy JSON for this key.
     pub cache_policy_json: String,
+    /// Minimum request-side input tokens before trusting Kiro contextUsage.
+    pub context_usage_min_request_tokens: u64,
     /// Prefix-cache simulation mode.
     pub prefix_cache_mode: String,
     /// Prefix-cache maximum token budget.
@@ -4434,6 +4444,7 @@ mod tests {
         assert_eq!(config.kiro_prefix_cache_entry_ttl_seconds, 2 * 60 * 60);
         assert_eq!(config.kiro_conversation_anchor_max_entries, 4_096);
         assert_eq!(config.kiro_conversation_anchor_ttl_seconds, 6 * 60 * 60);
+        assert_eq!(config.kiro_context_usage_min_request_tokens, 15_000);
     }
 
     #[test]

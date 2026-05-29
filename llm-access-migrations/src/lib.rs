@@ -73,6 +73,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "kiro_latency_routing_toggle",
         sql: include_str!("../migrations/postgres/0017_kiro_latency_routing_toggle.sql"),
     },
+    SqlMigration {
+        version: 18,
+        name: "kiro_context_usage_threshold",
+        sql: include_str!("../migrations/postgres/0018_kiro_context_usage_threshold.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.
@@ -259,5 +264,20 @@ mod tests {
         assert_eq!(migration.version, 17);
         assert!(migration.sql.contains("kiro_latency_routing_enabled"));
         assert!(migration.sql.contains("DEFAULT TRUE"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_kiro_context_usage_threshold() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "kiro_context_usage_threshold")
+            .expect("kiro context usage threshold migration exists");
+
+        assert_eq!(migration.version, 18);
+        assert!(migration
+            .sql
+            .contains("kiro_context_usage_min_request_tokens"));
+        assert!(migration.sql.contains("DEFAULT 15000"));
     }
 }

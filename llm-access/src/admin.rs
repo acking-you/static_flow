@@ -86,6 +86,7 @@ const MAX_RUNTIME_USAGE_JOURNAL_FSYNC_INTERVAL_MS: u64 = 60_000;
 const MAX_RUNTIME_USAGE_JOURNAL_ZSTD_LEVEL: i64 = 22;
 const MIN_RUNTIME_USAGE_JOURNAL_CONSUMER_LEASE_MS: u64 = 1_000;
 const MAX_RUNTIME_USAGE_JOURNAL_CONSUMER_LEASE_MS: u64 = 60 * 60 * 1000;
+const MAX_RUNTIME_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS: u64 = 1_000_000;
 const MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY: u64 = 1_024;
 const MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS: u64 = 300_000;
 const DEFAULT_ADMIN_REVIEW_QUEUE_LIMIT: usize = 50;
@@ -3925,6 +3926,16 @@ fn apply_runtime_config_update(
     parse_kiro_cache_policy_json(&kiro_cache_policy_json)
         .map_err(|_| bad_request("kiro_cache_policy_json is invalid"))?;
 
+    let kiro_context_usage_min_request_tokens = request
+        .kiro_context_usage_min_request_tokens
+        .unwrap_or(current.kiro_context_usage_min_request_tokens);
+    validate_range(
+        "kiro_context_usage_min_request_tokens",
+        kiro_context_usage_min_request_tokens,
+        1,
+        MAX_RUNTIME_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
+    )?;
+
     let kiro_prefix_cache_mode = request
         .kiro_prefix_cache_mode
         .unwrap_or(current.kiro_prefix_cache_mode);
@@ -3989,6 +4000,7 @@ fn apply_runtime_config_update(
         kiro_cache_kmodels_json,
         kiro_billable_model_multipliers_json,
         kiro_cache_policy_json,
+        kiro_context_usage_min_request_tokens,
         kiro_prefix_cache_mode,
         kiro_prefix_cache_max_tokens,
         kiro_prefix_cache_entry_ttl_seconds,
@@ -7089,6 +7101,33 @@ mod tests {
 
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(err.message.contains("usage_analytics_retention_days"));
+    }
+
+    #[test]
+    fn runtime_config_update_accepts_kiro_context_usage_threshold() {
+        let updated =
+            apply_runtime_config_update(AdminRuntimeConfig::default(), UpdateAdminRuntimeConfig {
+                kiro_context_usage_min_request_tokens: Some(12_345),
+                ..UpdateAdminRuntimeConfig::default()
+            })
+            .expect("kiro context usage threshold should be valid");
+
+        assert_eq!(updated.kiro_context_usage_min_request_tokens, 12_345);
+    }
+
+    #[test]
+    fn runtime_config_update_rejects_zero_kiro_context_usage_threshold() {
+        let err =
+            apply_runtime_config_update(AdminRuntimeConfig::default(), UpdateAdminRuntimeConfig {
+                kiro_context_usage_min_request_tokens: Some(0),
+                ..UpdateAdminRuntimeConfig::default()
+            })
+            .expect_err("zero threshold should be rejected");
+
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err
+            .message
+            .contains("kiro_context_usage_min_request_tokens"));
     }
 
     #[test]

@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::Context;
 use llm_access_core::store::{
     AdminKiroBalanceView, AdminKiroCacheView, AdminProxyBinding, AdminProxyConfig,
-    CodexRateLimitStatus, ProviderProxyConfig,
+    CodexRateLimitStatus, ProviderProxyConfig, DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
 };
 use redis::{AsyncCommands, Commands};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -25,6 +25,10 @@ const NEGATIVE_AUTH_TTL: Duration = Duration::from_secs(5 * 60);
 
 const fn default_true() -> bool {
     true
+}
+
+const fn default_kiro_context_usage_min_request_tokens() -> u64 {
+    DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS
 }
 
 /// Shared Valkey configuration for the request-path cache layer.
@@ -138,6 +142,8 @@ pub(crate) struct CachedKiroRequestSnapshot {
     pub model_name_map_json: String,
     pub cache_kmodels_json: String,
     pub cache_policy_json: String,
+    #[serde(default = "default_kiro_context_usage_min_request_tokens")]
+    pub context_usage_min_request_tokens: u64,
     pub prefix_cache_mode: String,
     pub prefix_cache_max_tokens: u64,
     pub prefix_cache_entry_ttl_seconds: u64,

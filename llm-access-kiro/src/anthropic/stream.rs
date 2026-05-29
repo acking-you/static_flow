@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use llm_access_core::store::DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS;
 use serde_json::json;
 use sha2::{Digest, Sha512};
 use uuid::Uuid;
@@ -21,10 +22,11 @@ pub enum KiroInputTokenSource {
     LocalRequestEstimateFallback,
 }
 
-/// Kiro reports its injected Claude prompt inside contextUsage; hide that
-/// stable baseline from user-visible low-token requests.
-pub const KIRO_HIDDEN_PROMPT_BASELINE_TOKENS: i32 = 4_100;
-pub const KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS: i32 = 50_000;
+/// Kiro reports bridge/system prompt scaffolding inside contextUsage. For
+/// small client requests the request-side estimate is the user-visible source
+/// of truth; contextUsage remains useful for large context-window requests.
+pub const KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS: u64 =
+    DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS;
 
 pub fn anthropic_usage_json(
     input_tokens_total: i32,
@@ -49,18 +51,26 @@ pub fn resolve_input_tokens(
     request_input_tokens: i32,
     context_input_tokens: Option<i32>,
 ) -> (i32, KiroInputTokenSource) {
+    resolve_input_tokens_with_threshold(
+        request_input_tokens,
+        context_input_tokens,
+        KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
+    )
+}
+
+pub fn resolve_input_tokens_with_threshold(
+    request_input_tokens: i32,
+    context_input_tokens: Option<i32>,
+    context_usage_min_request_tokens: u64,
+) -> (i32, KiroInputTokenSource) {
     let request_input = request_input_tokens.max(0);
+    if request_input as u64 <= context_usage_min_request_tokens {
+        return (request_input, KiroInputTokenSource::LocalRequestEstimateFallback);
+    }
+
     let context_input = context_input_tokens.unwrap_or_default().max(0);
     if context_input > 0 {
-        let resolved_context_input =
-            if request_input <= KIRO_HIDDEN_PROMPT_DISCOUNT_MAX_REQUEST_TOKENS {
-                context_input
-                    .saturating_sub(KIRO_HIDDEN_PROMPT_BASELINE_TOKENS)
-                    .max(request_input)
-            } else {
-                context_input
-            };
-        (resolved_context_input, KiroInputTokenSource::UpstreamContextUsage)
+        (context_input, KiroInputTokenSource::UpstreamContextUsage)
     } else {
         (request_input, KiroInputTokenSource::LocalRequestEstimateFallback)
     }
@@ -479,6 +489,7 @@ pub struct StreamContext {
     pub message_id: String,
     pub input_tokens: i32,
     pub context_input_tokens: Option<i32>,
+    context_usage_min_request_tokens: u64,
     pub output_tokens: i32,
     pub credit_usage: f64,
     pub credit_usage_observed: bool,
@@ -523,6 +534,7 @@ impl StreamContext {
             message_id: format!("msg_{}", Uuid::new_v4().simple()),
             input_tokens,
             context_input_tokens: None,
+            context_usage_min_request_tokens: KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
             output_tokens: 0,
             credit_usage: 0.0,
             credit_usage_observed: false,
@@ -599,6 +611,11 @@ impl StreamContext {
         self
     }
 
+    pub fn with_context_usage_min_request_tokens(mut self, threshold: u64) -> Self {
+        self.context_usage_min_request_tokens = threshold;
+        self
+    }
+
     fn structured_output_mode(&self) -> bool {
         self.structured_output_tool_name.is_some() && !self.thinking_enabled
     }
@@ -616,7 +633,11 @@ impl StreamContext {
     }
 
     pub fn final_usage(&self) -> (i32, i32) {
-        let (input_tokens, _) = resolve_input_tokens(self.input_tokens, self.context_input_tokens);
+        let (input_tokens, _) = resolve_input_tokens_with_threshold(
+            self.input_tokens,
+            self.context_input_tokens,
+            self.context_usage_min_request_tokens,
+        );
         (input_tokens, self.output_tokens.max(1))
     }
 
@@ -1374,6 +1395,11 @@ impl BufferedStreamContext {
         }
     }
 
+    pub fn with_context_usage_min_request_tokens(mut self, threshold: u64) -> Self {
+        self.inner = self.inner.with_context_usage_min_request_tokens(threshold);
+        self
+    }
+
     /// Buffers a single Kiro event (lazily generates initial events on first
     /// call).
     pub fn process_and_buffer(&mut self, event: &Event) {
@@ -1631,23 +1657,45 @@ mod tests {
     };
 
     #[test]
-    fn resolve_input_tokens_discounts_kiro_hidden_prompt_for_small_requests() {
-        let request_input_tokens = 18;
-        let upstream_context_tokens = KIRO_HIDDEN_PROMPT_BASELINE_TOKENS + request_input_tokens;
-        let (input_tokens, source) =
-            resolve_input_tokens(request_input_tokens, Some(upstream_context_tokens));
+    fn resolve_input_tokens_prefers_request_estimate_for_small_requests() {
+        let (input_tokens, source) = resolve_input_tokens(18, Some(4_118));
 
         assert_eq!(input_tokens, 18);
+        assert_eq!(source, KiroInputTokenSource::LocalRequestEstimateFallback);
+    }
+
+    #[test]
+    fn resolve_input_tokens_prefers_request_estimate_for_inflated_small_context_usage() {
+        let (input_tokens, source) = resolve_input_tokens(148, Some(8_008));
+
+        assert_eq!(input_tokens, 148);
+        assert_eq!(source, KiroInputTokenSource::LocalRequestEstimateFallback);
+    }
+
+    #[test]
+    fn resolve_input_tokens_prefers_request_estimate_for_small_request_when_context_exceeds_local()
+    {
+        let (input_tokens, source) = resolve_input_tokens(1_000, Some(6_000));
+
+        assert_eq!(input_tokens, 1_000);
+        assert_eq!(source, KiroInputTokenSource::LocalRequestEstimateFallback);
+    }
+
+    #[test]
+    fn resolve_input_tokens_uses_context_usage_above_default_threshold() {
+        let (input_tokens, source) = resolve_input_tokens(16_000, Some(20_000));
+
+        assert_eq!(input_tokens, 20_000);
         assert_eq!(source, KiroInputTokenSource::UpstreamContextUsage);
     }
 
     #[test]
-    fn resolve_input_tokens_keeps_corrected_context_when_it_exceeds_local_request() {
+    fn resolve_input_tokens_respects_configured_threshold() {
         let (input_tokens, source) =
-            resolve_input_tokens(1_000, Some(KIRO_HIDDEN_PROMPT_BASELINE_TOKENS + 1_900));
+            resolve_input_tokens_with_threshold(16_000, Some(20_000), 50_000);
 
-        assert_eq!(input_tokens, 1_900);
-        assert_eq!(source, KiroInputTokenSource::UpstreamContextUsage);
+        assert_eq!(input_tokens, 16_000);
+        assert_eq!(source, KiroInputTokenSource::LocalRequestEstimateFallback);
     }
 
     #[test]
@@ -2387,9 +2435,10 @@ mod tests {
     }
 
     #[test]
-    fn buffered_stream_context_rewrites_message_start_input_tokens_from_upstream_context_usage() {
+    fn buffered_stream_context_rewrites_large_message_start_input_tokens_from_upstream_context_usage(
+    ) {
         let mut ctx =
-            BufferedStreamContext::new("claude-sonnet-4-6", 123, false, HashMap::new(), None);
+            BufferedStreamContext::new("claude-sonnet-4-6", 60_000, false, HashMap::new(), None);
         ctx.process_and_buffer(&Event::ContextUsage(ContextUsageEvent {
             context_usage_percentage: 12.5,
         }));
@@ -2401,7 +2450,7 @@ mod tests {
             .expect("should have message_start");
         assert_eq!(
             message_start.data["message"]["usage"]["input_tokens"],
-            serde_json::json!(125000 - KIRO_HIDDEN_PROMPT_BASELINE_TOKENS)
+            serde_json::json!(125000)
         );
     }
 

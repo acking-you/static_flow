@@ -3646,6 +3646,10 @@ pub fn admin_llm_gateway_page() -> Html {
                         .as_ref()
                         .map(|current| current.kiro_cache_policy_json.clone())
                         .unwrap_or_default(),
+                    kiro_context_usage_min_request_tokens: config
+                        .as_ref()
+                        .map(|current| current.kiro_context_usage_min_request_tokens)
+                        .unwrap_or(15_000),
                     kiro_prefix_cache_mode: config
                         .as_ref()
                         .map(|current| current.kiro_prefix_cache_mode.clone())

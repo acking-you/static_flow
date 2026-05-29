@@ -585,6 +585,7 @@ impl PostgresControlRepository {
                     kiro_billable_model_multipliers_json::text
                         AS kiro_billable_model_multipliers_json,
                     kiro_cache_policy_json::text AS kiro_cache_policy_json,
+                    kiro_context_usage_min_request_tokens,
                     kiro_prefix_cache_mode,
                     kiro_prefix_cache_max_tokens,
                     kiro_prefix_cache_entry_ttl_seconds,
@@ -1403,6 +1404,9 @@ impl PostgresControlRepository {
                 .unwrap_or_else(|| "{}".to_string()),
             cache_kmodels_json: runtime_config.kiro_cache_kmodels_json.clone(),
             cache_policy_json,
+            context_usage_min_request_tokens: runtime_config
+                .kiro_context_usage_min_request_tokens
+                .max(0) as u64,
             prefix_cache_mode: runtime_config.kiro_prefix_cache_mode.clone(),
             prefix_cache_max_tokens: runtime_config.kiro_prefix_cache_max_tokens.max(0) as u64,
             prefix_cache_entry_ttl_seconds: runtime_config
@@ -5031,6 +5035,7 @@ impl PostgresControlRepository {
                     usage_event_maintenance_interval_seconds,
                     usage_event_detail_retention_days, kiro_cache_kmodels_json,
                     kiro_billable_model_multipliers_json, kiro_cache_policy_json,
+                    kiro_context_usage_min_request_tokens,
                     kiro_prefix_cache_mode, kiro_prefix_cache_max_tokens,
                     kiro_prefix_cache_entry_ttl_seconds,
                     kiro_conversation_anchor_max_entries,
@@ -5040,7 +5045,7 @@ impl PostgresControlRepository {
                     $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
                     $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35,
                     $36, $37, $38, $39::jsonb, $40::jsonb, $41::jsonb, $42,
-                    $43, $44, $45, $46, $47
+                    $43, $44, $45, $46, $47, $48
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     auth_cache_ttl_seconds = EXCLUDED.auth_cache_ttl_seconds,
@@ -5104,6 +5109,8 @@ impl PostgresControlRepository {
                     kiro_billable_model_multipliers_json =
                         EXCLUDED.kiro_billable_model_multipliers_json,
                     kiro_cache_policy_json = EXCLUDED.kiro_cache_policy_json,
+                    kiro_context_usage_min_request_tokens =
+                        EXCLUDED.kiro_context_usage_min_request_tokens,
                     kiro_prefix_cache_mode = EXCLUDED.kiro_prefix_cache_mode,
                     kiro_prefix_cache_max_tokens = EXCLUDED.kiro_prefix_cache_max_tokens,
                     kiro_prefix_cache_entry_ttl_seconds =
@@ -5155,6 +5162,7 @@ impl PostgresControlRepository {
                     &record.kiro_cache_kmodels_json,
                     &record.kiro_billable_model_multipliers_json,
                     &record.kiro_cache_policy_json,
+                    &record.kiro_context_usage_min_request_tokens,
                     &record.kiro_prefix_cache_mode,
                     &record.kiro_prefix_cache_max_tokens,
                     &record.kiro_prefix_cache_entry_ttl_seconds,
@@ -5369,12 +5377,13 @@ fn decode_runtime_config_row(row: PgRow) -> anyhow::Result<RuntimeConfigRecord> 
         kiro_cache_kmodels_json: row.get(38),
         kiro_billable_model_multipliers_json: row.get(39),
         kiro_cache_policy_json: row.get(40),
-        kiro_prefix_cache_mode: row.get(41),
-        kiro_prefix_cache_max_tokens: row.get(42),
-        kiro_prefix_cache_entry_ttl_seconds: row.get(43),
-        kiro_conversation_anchor_max_entries: row.get(44),
-        kiro_conversation_anchor_ttl_seconds: row.get(45),
-        updated_at_ms: row.get(46),
+        kiro_context_usage_min_request_tokens: row.get(41),
+        kiro_prefix_cache_mode: row.get(42),
+        kiro_prefix_cache_max_tokens: row.get(43),
+        kiro_prefix_cache_entry_ttl_seconds: row.get(44),
+        kiro_conversation_anchor_max_entries: row.get(45),
+        kiro_conversation_anchor_ttl_seconds: row.get(46),
+        updated_at_ms: row.get(47),
     })
 }
 
@@ -8031,6 +8040,9 @@ impl AdminKiroAccountStore for PostgresControlRepository {
             model_name_map_json: "{}".to_string(),
             cache_kmodels_json: runtime_config.kiro_cache_kmodels_json,
             cache_policy_json: runtime_config.kiro_cache_policy_json,
+            context_usage_min_request_tokens: runtime_config
+                .kiro_context_usage_min_request_tokens
+                .max(0) as u64,
             prefix_cache_mode: runtime_config.kiro_prefix_cache_mode,
             prefix_cache_max_tokens: runtime_config.kiro_prefix_cache_max_tokens.max(0) as u64,
             prefix_cache_entry_ttl_seconds: runtime_config
@@ -8322,6 +8334,7 @@ impl ProviderRouteStore for PostgresControlRepository {
                 model_name_map_json: snapshot.model_name_map_json.clone(),
                 cache_kmodels_json: snapshot.cache_kmodels_json.clone(),
                 cache_policy_json: snapshot.cache_policy_json.clone(),
+                context_usage_min_request_tokens: snapshot.context_usage_min_request_tokens,
                 prefix_cache_mode: snapshot.prefix_cache_mode.clone(),
                 prefix_cache_max_tokens: snapshot.prefix_cache_max_tokens,
                 prefix_cache_entry_ttl_seconds: snapshot.prefix_cache_entry_ttl_seconds,
@@ -8388,6 +8401,9 @@ impl ProviderRouteStore for PostgresControlRepository {
             model_name_map_json: "{}".to_string(),
             cache_kmodels_json: runtime_config.kiro_cache_kmodels_json,
             cache_policy_json: runtime_config.kiro_cache_policy_json,
+            context_usage_min_request_tokens: runtime_config
+                .kiro_context_usage_min_request_tokens
+                .max(0) as u64,
             prefix_cache_mode: runtime_config.kiro_prefix_cache_mode,
             prefix_cache_max_tokens: runtime_config.kiro_prefix_cache_max_tokens.max(0) as u64,
             prefix_cache_entry_ttl_seconds: runtime_config
