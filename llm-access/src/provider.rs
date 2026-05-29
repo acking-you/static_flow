@@ -1,5 +1,7 @@
 //! Provider-facing HTTP entrypoints for `llm-access`.
 
+mod kiro_error;
+
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -56,8 +58,8 @@ use llm_access_kiro::{
         converter::{
             convert_normalized_request_with_resolved_session, current_user_message_range,
             extract_tool_result_content, normalize_request, preview_session_value,
-            resolve_conversation_id_from_metadata, ConversionError, ResolvedConversationId,
-            SessionFallbackReason, SessionIdSource, SessionTracking,
+            resolve_conversation_id_from_metadata, ResolvedConversationId, SessionFallbackReason,
+            SessionIdSource, SessionTracking,
         },
         stream::{anthropic_usage_json, resolve_input_tokens, StreamContext},
         supported_models_response,
@@ -83,6 +85,10 @@ use lru::LruCache;
 use rand::Rng;
 use serde_json::{json, Value};
 
+use self::kiro_error::{
+    kiro_conversion_error_response, kiro_json_error, kiro_upstream_error_response,
+    KiroRouteFailure, KiroRouteFailureKind,
+};
 use crate::{
     activity::RequestActivityTracker, codex_refresh, geoip::GeoIpResolver, kiro_headers,
     kiro_latency::KiroLatencyRanker, kiro_refresh,
@@ -3286,56 +3292,15 @@ async fn dispatch_kiro_proxy(
                 response
             },
             Err(failure) => {
-                let should_try_next = match failure.kind {
-                    KiroRouteFailureKind::QuotaExhausted => {
-                        let error_message = failure.body_text();
-                        for account_name in account_names_for_kiro_routing_identity(
-                            &routes,
-                            &route.routing_identity,
-                        ) {
-                            failed_accounts.insert(account_name.clone());
-                            let _ = route_store
-                                .mark_kiro_account_quota_exhausted(
-                                    &account_name,
-                                    &error_message,
-                                    now_millis(),
-                                )
-                                .await;
-                        }
-                        true
-                    },
-                    KiroRouteFailureKind::RateLimited {
-                        cooldown,
-                        mark_proxy,
-                    } => {
-                        kiro_request_scheduler.mark_account_cooldown(
-                            &route.routing_identity,
-                            cooldown,
-                            failure.body_text(),
-                        );
-                        if mark_proxy {
-                            if let Some(proxy_key) = proxy_cooldown_key_for_route(&route) {
-                                kiro_request_scheduler.mark_proxy_cooldown(
-                                    &proxy_key,
-                                    cooldown,
-                                    failure.body_text(),
-                                );
-                            }
-                        }
-                        usage_meta.mark_failover();
-                        continue;
-                    },
-                    KiroRouteFailureKind::RetryNext => {
-                        failed_accounts.insert(route.account_name.clone());
-                        true
-                    },
-                    KiroRouteFailureKind::Fatal => false,
-                };
-                if should_try_next
-                    && routes.iter().any(|candidate| {
-                        !failed_accounts.contains(&candidate.account_name)
-                            && candidate.account_name != route.account_name
-                    })
+                if should_failover_after_kiro_route_failure(
+                    &failure,
+                    &route,
+                    &routes,
+                    &mut failed_accounts,
+                    route_store.as_ref(),
+                    &kiro_request_scheduler,
+                )
+                .await
                 {
                     usage_meta.mark_failover();
                     continue;
@@ -3447,57 +3412,15 @@ async fn dispatch_kiro_proxy(
             {
                 Ok(stream_response) => stream_response,
                 Err(failure) => {
-                    let should_try_next = match failure.kind {
-                        KiroRouteFailureKind::QuotaExhausted => {
-                            let error_message = failure.body_text();
-                            for account_name in account_names_for_kiro_routing_identity(
-                                &routes,
-                                &route.routing_identity,
-                            ) {
-                                failed_accounts.insert(account_name.clone());
-                                let _ = route_store
-                                    .mark_kiro_account_quota_exhausted(
-                                        &account_name,
-                                        &error_message,
-                                        now_millis(),
-                                    )
-                                    .await;
-                            }
-                            true
-                        },
-                        KiroRouteFailureKind::RateLimited {
-                            cooldown,
-                            mark_proxy,
-                        } => {
-                            kiro_request_scheduler.mark_account_cooldown(
-                                &route.routing_identity,
-                                cooldown,
-                                failure.body_text(),
-                            );
-                            if mark_proxy {
-                                if let Some(proxy_key) = proxy_cooldown_key_for_route(&route) {
-                                    kiro_request_scheduler.mark_proxy_cooldown(
-                                        &proxy_key,
-                                        cooldown,
-                                        failure.body_text(),
-                                    );
-                                }
-                            }
-                            usage_meta.mark_failover();
-                            continue;
-                        },
-                        KiroRouteFailureKind::RetryNext => {
-                            failed_accounts.insert(route.account_name.clone());
-                            true
-                        },
-                        KiroRouteFailureKind::Fatal => false,
-                    };
-                    if should_try_next
-                        && has_remaining_kiro_candidate(
-                            &routes,
-                            &failed_accounts,
-                            &route.account_name,
-                        )
+                    if should_failover_after_kiro_route_failure(
+                        &failure,
+                        &route,
+                        &routes,
+                        &mut failed_accounts,
+                        route_store.as_ref(),
+                        &kiro_request_scheduler,
+                    )
+                    .await
                     {
                         usage_meta.mark_failover();
                         continue;
@@ -3719,65 +3642,18 @@ async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
                 .await;
             },
             Err(failure) => {
-                match failure.kind {
-                    KiroRouteFailureKind::QuotaExhausted => {
-                        let error_message = failure.body_text();
-                        for account_name in account_names_for_kiro_routing_identity(
-                            &routes,
-                            &route.routing_identity,
-                        ) {
-                            failed_accounts.insert(account_name.clone());
-                            let _ = route_store
-                                .mark_kiro_account_quota_exhausted(
-                                    &account_name,
-                                    &error_message,
-                                    now_millis(),
-                                )
-                                .await;
-                        }
-                        if has_remaining_kiro_candidate(
-                            &routes,
-                            &failed_accounts,
-                            &route.account_name,
-                        ) {
-                            usage_meta.mark_failover();
-                            continue;
-                        }
-                        return failure.into_response();
-                    },
-                    KiroRouteFailureKind::RateLimited {
-                        cooldown,
-                        mark_proxy,
-                    } => {
-                        kiro_request_scheduler.mark_account_cooldown(
-                            &route.routing_identity,
-                            cooldown,
-                            failure.body_text(),
-                        );
-                        if mark_proxy {
-                            if let Some(proxy_key) = proxy_cooldown_key_for_route(&route) {
-                                kiro_request_scheduler.mark_proxy_cooldown(
-                                    &proxy_key,
-                                    cooldown,
-                                    failure.body_text(),
-                                );
-                            }
-                        }
-                        usage_meta.mark_failover();
-                        continue;
-                    },
-                    KiroRouteFailureKind::RetryNext => {
-                        failed_accounts.insert(route.account_name.clone());
-                        if has_remaining_kiro_candidate(
-                            &routes,
-                            &failed_accounts,
-                            &route.account_name,
-                        ) {
-                            usage_meta.mark_failover();
-                            continue;
-                        }
-                    },
-                    KiroRouteFailureKind::Fatal => {},
+                if should_failover_after_kiro_route_failure(
+                    &failure,
+                    &route,
+                    &routes,
+                    &mut failed_accounts,
+                    route_store.as_ref(),
+                    &kiro_request_scheduler,
+                )
+                .await
+                {
+                    usage_meta.mark_failover();
+                    continue;
                 }
                 let message = failure.body_text();
                 if websearch::should_propagate_mcp_error_text(&message) {
@@ -3909,66 +3785,6 @@ async fn build_kiro_websearch_response(input: WebsearchResponseInput) -> Respons
                 "failed to build response",
             )
         })
-}
-
-#[derive(Debug, Clone, Copy)]
-enum KiroRouteFailureKind {
-    RetryNext,
-    Fatal,
-    QuotaExhausted,
-    RateLimited { cooldown: Duration, mark_proxy: bool },
-}
-
-#[derive(Debug)]
-pub(crate) struct KiroRouteFailure {
-    status: StatusCode,
-    body: Bytes,
-    kind: KiroRouteFailureKind,
-}
-
-impl KiroRouteFailure {
-    fn synthetic(status: StatusCode, message: String, kind: KiroRouteFailureKind) -> Self {
-        let body = serde_json::json!({
-            "error": {
-                "type": "api_error",
-                "message": message,
-            }
-        })
-        .to_string();
-        Self {
-            status,
-            body: Bytes::from(body),
-            kind,
-        }
-    }
-
-    async fn from_response(response: reqwest::Response, kind: KiroRouteFailureKind) -> Self {
-        let status = response.status();
-        let body = response.bytes().await.unwrap_or_else(|_| Bytes::new());
-        Self {
-            status,
-            body,
-            kind,
-        }
-    }
-
-    fn with_kind(mut self, kind: KiroRouteFailureKind) -> Self {
-        self.kind = kind;
-        self
-    }
-
-    pub(crate) fn body_text(&self) -> String {
-        String::from_utf8_lossy(&self.body).into_owned()
-    }
-
-    pub(crate) fn status(&self) -> StatusCode {
-        self.status
-    }
-
-    fn into_response(self) -> Response {
-        let message = summarize_error_bytes(&self.body);
-        kiro_json_error(self.status, kiro_error_type_for_status(self.status), &message)
-    }
 }
 
 const KIRO_EMPTY_STREAM_MAX_RETRIES: usize = 2;
@@ -4354,6 +4170,52 @@ fn has_remaining_kiro_candidate(
         candidate.account_name != current_account_name
             && !failed_accounts.contains(&candidate.account_name)
     })
+}
+
+async fn should_failover_after_kiro_route_failure(
+    failure: &KiroRouteFailure,
+    route: &ProviderKiroRoute,
+    routes: &[ProviderKiroRoute],
+    failed_accounts: &mut HashSet<String>,
+    route_store: &dyn ProviderRouteStore,
+    scheduler: &KiroRequestScheduler,
+) -> bool {
+    match failure.kind {
+        KiroRouteFailureKind::QuotaExhausted => {
+            let error_message = failure.body_text();
+            for account_name in
+                account_names_for_kiro_routing_identity(routes, &route.routing_identity)
+            {
+                failed_accounts.insert(account_name.clone());
+                let _ = route_store
+                    .mark_kiro_account_quota_exhausted(&account_name, &error_message, now_millis())
+                    .await;
+            }
+            has_remaining_kiro_candidate(routes, failed_accounts, &route.account_name)
+        },
+        KiroRouteFailureKind::RateLimited {
+            cooldown,
+            mark_proxy,
+        } => {
+            let error_message = failure.body_text();
+            scheduler.mark_account_cooldown(
+                &route.routing_identity,
+                cooldown,
+                error_message.clone(),
+            );
+            if mark_proxy {
+                if let Some(proxy_key) = proxy_cooldown_key_for_route(route) {
+                    scheduler.mark_proxy_cooldown(&proxy_key, cooldown, error_message);
+                }
+            }
+            true
+        },
+        KiroRouteFailureKind::RetryNext => {
+            failed_accounts.insert(route.account_name.clone());
+            has_remaining_kiro_candidate(routes, failed_accounts, &route.account_name)
+        },
+        KiroRouteFailureKind::Fatal => false,
+    }
 }
 
 fn account_names_for_kiro_routing_identity(
@@ -4841,11 +4703,6 @@ async fn non_stream_kiro_response(
         })
 }
 
-fn kiro_upstream_error_response(status: StatusCode, _content_type: &str, bytes: Bytes) -> Response {
-    let message = summarize_error_bytes(&bytes);
-    kiro_json_error(status, kiro_error_type_for_status(status), &message)
-}
-
 const KIRO_REQUEST_SESSION_ID_HEADERS: [&str; 8] = [
     "x-claude-code-session-id",
     "x-codex-session-id",
@@ -5097,70 +4954,6 @@ fn anthropic_json_error(status: StatusCode, error_type: &str, message: &str) -> 
         })
 }
 
-fn kiro_error_type_for_status(status: StatusCode) -> &'static str {
-    match status {
-        StatusCode::PAYMENT_REQUIRED | StatusCode::TOO_MANY_REQUESTS => "rate_limit_error",
-        StatusCode::UNAUTHORIZED => "authentication_error",
-        StatusCode::FORBIDDEN => "permission_error",
-        StatusCode::NOT_FOUND => "not_found_error",
-        _ if status.is_client_error() => "invalid_request_error",
-        _ => "api_error",
-    }
-}
-
-fn kiro_default_user_error_message(status: StatusCode) -> &'static str {
-    match status {
-        StatusCode::BAD_REQUEST => "Request is invalid.",
-        StatusCode::UNAUTHORIZED => "Authentication failed.",
-        StatusCode::FORBIDDEN => "Permission denied.",
-        StatusCode::NOT_FOUND => "Endpoint not found.",
-        StatusCode::METHOD_NOT_ALLOWED => "Method not allowed.",
-        StatusCode::PAYMENT_REQUIRED => "Quota exceeded.",
-        StatusCode::TOO_MANY_REQUESTS => "Rate limit exceeded.",
-        StatusCode::SERVICE_UNAVAILABLE => "Service unavailable.",
-        StatusCode::INTERNAL_SERVER_ERROR => "Internal server error.",
-        _ if status.is_server_error() => "Upstream service unavailable.",
-        _ => "Request failed.",
-    }
-}
-
-fn kiro_user_visible_message(status: StatusCode, message: &str) -> String {
-    let trimmed = message.trim();
-    let fallback = kiro_default_user_error_message(status);
-    if trimmed.is_empty() {
-        return fallback.to_string();
-    }
-    if matches!(
-        status,
-        StatusCode::TOO_MANY_REQUESTS
-            | StatusCode::PAYMENT_REQUIRED
-            | StatusCode::METHOD_NOT_ALLOWED
-            | StatusCode::NOT_FOUND
-            | StatusCode::SERVICE_UNAVAILABLE
-            | StatusCode::INTERNAL_SERVER_ERROR
-            | StatusCode::BAD_GATEWAY
-            | StatusCode::GATEWAY_TIMEOUT
-    ) {
-        return fallback.to_string();
-    }
-    if status.is_server_error() {
-        return fallback.to_string();
-    }
-    if trimmed.to_ascii_lowercase().contains("kiro") {
-        return fallback.to_string();
-    }
-    trimmed.to_string()
-}
-
-fn kiro_json_error(status: StatusCode, error_type: &str, message: &str) -> Response {
-    let _ = error_type;
-    anthropic_json_error(
-        status,
-        kiro_error_type_for_status(status),
-        &kiro_user_visible_message(status, message),
-    )
-}
-
 fn codex_error_type_for_status(status: StatusCode) -> &'static str {
     if status.is_client_error() {
         "invalid_request_error"
@@ -5248,22 +5041,6 @@ fn summarize_error_bytes(bytes: &Bytes) -> String {
         "Unknown upstream error".to_string()
     } else {
         body
-    }
-}
-
-fn kiro_conversion_error_response(err: ConversionError) -> Response {
-    match err {
-        ConversionError::UnsupportedModel(model) => kiro_json_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_request_error",
-            &format!("Unsupported model: {model}"),
-        ),
-        ConversionError::EmptyMessages => {
-            kiro_json_error(StatusCode::BAD_REQUEST, "invalid_request_error", "messages are empty")
-        },
-        ConversionError::InvalidRequest(message) => {
-            kiro_json_error(StatusCode::BAD_REQUEST, "invalid_request_error", &message)
-        },
     }
 }
 
@@ -7506,6 +7283,31 @@ mod tests {
 
     fn captured_json_bytes(raw: &'static str) -> axum::body::Bytes {
         axum::body::Bytes::from_static(raw.as_bytes())
+    }
+
+    async fn assert_provider_neutral_json_error(
+        response: Response,
+        status: StatusCode,
+        error_type: &str,
+        message: &str,
+    ) -> String {
+        assert_eq!(response.status(), status);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let raw = String::from_utf8(body.to_vec()).expect("utf8 response");
+        let body = serde_json::from_str::<serde_json::Value>(&raw).expect("json response");
+        assert_eq!(body["error"]["type"], error_type);
+        assert_eq!(body["error"]["message"], message);
+        assert!(!raw.to_ascii_lowercase().contains("kiro"));
+        raw
     }
 
     #[derive(Default)]
@@ -12953,22 +12755,13 @@ mod tests {
         )
         .await;
 
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            response
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok()),
-            Some("application/json")
-        );
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body");
-        let raw = String::from_utf8(body.to_vec()).expect("utf8 response");
-        let body = serde_json::from_str::<serde_json::Value>(&raw).expect("json response");
-        assert_eq!(body["error"]["type"], "api_error");
-        assert_eq!(body["error"]["message"], "Service unavailable.");
-        assert!(!raw.to_ascii_lowercase().contains("kiro"));
+        assert_provider_neutral_json_error(
+            response,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "api_error",
+            "Service unavailable.",
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -13002,16 +12795,14 @@ mod tests {
 
         std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body");
-        let raw = String::from_utf8(body.to_vec()).expect("utf8 response");
-        let body = serde_json::from_str::<serde_json::Value>(&raw).expect("json response");
-        assert_eq!(body["error"]["type"], "invalid_request_error");
-        assert_eq!(body["error"]["message"], "Input is too long.");
+        let raw = assert_provider_neutral_json_error(
+            response,
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            "Input is too long.",
+        )
+        .await;
         assert!(!raw.contains("CONTENT_LENGTH_EXCEEDS_THRESHOLD"));
-        assert!(!raw.to_ascii_lowercase().contains("kiro"));
         assert!(captured.requests.lock().expect("captured requests").len() == 1);
     }
 
@@ -13223,22 +13014,13 @@ mod tests {
 
         std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
 
-        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
-        assert_eq!(
-            response
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok()),
-            Some("application/json")
-        );
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body");
-        let raw = String::from_utf8(body.to_vec()).expect("utf8 response");
-        let body = serde_json::from_str::<serde_json::Value>(&raw).expect("json response");
-        assert_eq!(body["error"]["type"], "api_error");
-        assert_eq!(body["error"]["message"], "Upstream service unavailable.");
-        assert!(!raw.to_ascii_lowercase().contains("kiro"));
+        assert_provider_neutral_json_error(
+            response,
+            StatusCode::BAD_GATEWAY,
+            "api_error",
+            "Upstream service unavailable.",
+        )
+        .await;
     }
 
     #[tokio::test]
