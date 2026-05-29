@@ -1,0 +1,65 @@
+//! Small shared helpers: gzip/gunzip JSON, SHA-256 hex, time helpers, integer
+//! conversions, and DuckDB string-literal quoting.
+
+#[allow(unused_imports, reason = "submodule inherits parent facade imports via glob")]
+use super::*;
+
+#[cfg(feature = "duckdb-runtime")]
+pub(crate) fn i64_to_u64(value: i64) -> u64 {
+    u64::try_from(value.max(0)).unwrap_or(u64::MAX)
+}
+#[cfg(feature = "duckdb-runtime")]
+pub(crate) fn duckdb_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+#[cfg(feature = "duckdb-runtime")]
+pub(crate) fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+#[cfg(feature = "duckdb-runtime")]
+pub(crate) fn utc_date_parts(timestamp_ms: i64) -> (i32, u32, u32) {
+    let datetime = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(timestamp_ms)
+        .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).expect("epoch"));
+    use chrono::Datelike;
+    (datetime.year(), datetime.month(), datetime.day())
+}
+#[cfg(feature = "duckdb-runtime")]
+pub(crate) fn gzip_json_bytes<T: serde::Serialize>(value: &T) -> anyhow::Result<Vec<u8>> {
+    let json = serde_json::to_vec(value).context("serialize usage detail json")?;
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(&json)
+        .context("write gzip usage detail payload")?;
+    encoder.finish().context("finish gzip usage detail payload")
+}
+#[cfg(feature = "duckdb-runtime")]
+pub(crate) fn gunzip_json_bytes<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> anyhow::Result<T> {
+    let mut decoder = GzDecoder::new(bytes);
+    let mut json = Vec::new();
+    decoder
+        .read_to_end(&mut json)
+        .context("gunzip usage detail payload")?;
+    serde_json::from_slice(&json).context("deserialize usage detail json")
+}
+#[cfg(feature = "duckdb-runtime")]
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+#[cfg(feature = "duckdb-runtime")]
+pub(crate) fn i64_to_usize(value: i64) -> usize {
+    usize::try_from(value.max(0)).unwrap_or(usize::MAX)
+}
+#[cfg(feature = "duckdb-runtime")]
+pub(crate) fn usize_to_i64(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
