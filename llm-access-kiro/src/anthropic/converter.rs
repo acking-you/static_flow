@@ -5,6 +5,7 @@
 //! same-role message merging), and tool-result pairing validation.
 
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
     ops::Range,
 };
@@ -612,7 +613,7 @@ enum SystemRoleDisposition {
     StableSystemPrefix(SystemMessage),
     DropDynamicNoise,
     DropEmpty,
-    PreserveInOrderUserContext(super::types::Message),
+    PreserveInOrderUserContext { message: super::types::Message, reason: &'static str },
 }
 
 fn system_role_disposition(
@@ -625,30 +626,58 @@ fn system_role_disposition(
         return Ok(SystemRoleDisposition::DropEmpty);
     };
 
-    if is_stable_session_start_system_message(&text) {
+    if is_stable_system_prefix_message(&text) {
         return Ok(SystemRoleDisposition::StableSystemPrefix(SystemMessage {
             text,
         }));
+    }
+    if let Some(payload) = interrupted_user_message_payload(&text) {
+        return Ok(SystemRoleDisposition::PreserveInOrderUserContext {
+            message: super::types::Message {
+                role: "user".to_string(),
+                content: serde_json::Value::String(payload),
+            },
+            reason: "interrupted_user_message_preserved_as_user_context",
+        });
     }
     if is_dynamic_system_noise(&text) {
         return Ok(SystemRoleDisposition::DropDynamicNoise);
     }
 
-    Ok(SystemRoleDisposition::PreserveInOrderUserContext(super::types::Message {
-        role: "user".to_string(),
-        content: serde_json::Value::String(format!("<system_context>\n{text}\n</system_context>")),
-    }))
+    Ok(SystemRoleDisposition::PreserveInOrderUserContext {
+        message: super::types::Message {
+            role: "user".to_string(),
+            content: serde_json::Value::String(format!(
+                "<system_context>\n{text}\n</system_context>"
+            )),
+        },
+        reason: "system_role_preserved_in_order_as_user_context",
+    })
 }
 
-fn is_stable_session_start_system_message(text: &str) -> bool {
-    text.trim_start()
-        .starts_with("SessionStart hook additional context:")
+fn is_stable_system_prefix_message(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with("SessionStart hook additional context:")
+        || text.lines().map(str::trim_start).any(|line| {
+            line == CLAUDE_CODE_CLI_SYSTEM_IDENTITY_LINE
+                || line == CLAUDE_AGENT_SDK_SYSTEM_IDENTITY_LINE
+        })
+}
+
+fn interrupted_user_message_payload(text: &str) -> Option<String> {
+    let body = text
+        .trim_start()
+        .strip_prefix("The user sent a new message while you were working:")?;
+    let payload = body
+        .split_once("\n\nIMPORTANT:")
+        .map_or(body, |(payload, _)| payload)
+        .trim();
+    (!payload.is_empty()).then(|| payload.to_string())
 }
 
 fn is_dynamic_system_noise(text: &str) -> bool {
     let trimmed = text.trim_start();
-    trimmed.starts_with("The user sent a new message while you were working:")
-        || trimmed.starts_with("The task tools haven't been used recently.")
+    trimmed.starts_with("The task tools haven't been used recently.")
 }
 
 fn web_search_tool_result_text(
@@ -1018,20 +1047,19 @@ fn normalize_tools(
 // The goal is to accept harmless transport noise from upstream proxies without
 // inventing new semantics or rewriting the conversation history.
 pub fn normalize_request(req: &MessagesRequest) -> Result<NormalizedRequest, ConversionError> {
-    let original_last_user_idx = req
-        .messages
-        .iter()
-        .rposition(|message| message.role == "user")
-        .ok_or_else(|| no_user_message_error(&req.messages))?;
+    if !req.messages.iter().any(|message| message.role == "user") {
+        return Err(no_user_message_error(&req.messages));
+    }
     let mut events = Vec::new();
-    let mut preprocessed_messages = Vec::with_capacity(req.messages.len());
+    let mut preprocessed_messages: Vec<Cow<'_, super::types::Message>> =
+        Vec::with_capacity(req.messages.len());
     let mut preprocessed_message_index_map = Vec::with_capacity(req.messages.len());
     let mut system_messages = req.system.clone().unwrap_or_default();
 
     for (message_index, message) in req.messages.iter().enumerate() {
         if message.role != "system" {
             preprocessed_message_index_map.push(message_index);
-            preprocessed_messages.push(message.clone());
+            preprocessed_messages.push(Cow::Borrowed(message));
             continue;
         }
 
@@ -1070,30 +1098,21 @@ pub fn normalize_request(req: &MessagesRequest) -> Result<NormalizedRequest, Con
                     "empty_system_role_message",
                 );
             },
-            SystemRoleDisposition::PreserveInOrderUserContext(converted_message) => {
-                if message_index > original_last_user_idx {
-                    push_normalization_event(
-                        &mut events,
-                        message_index,
-                        &message.role,
-                        None,
-                        None,
-                        "drop_message",
-                        "trailing_after_last_user",
-                    );
-                } else {
-                    push_normalization_event(
-                        &mut events,
-                        message_index,
-                        &message.role,
-                        None,
-                        None,
-                        "convert_message",
-                        "system_role_preserved_in_order_as_user_context",
-                    );
-                    preprocessed_message_index_map.push(message_index);
-                    preprocessed_messages.push(converted_message);
-                }
+            SystemRoleDisposition::PreserveInOrderUserContext {
+                message: converted_message,
+                reason,
+            } => {
+                push_normalization_event(
+                    &mut events,
+                    message_index,
+                    &message.role,
+                    None,
+                    None,
+                    "convert_message",
+                    reason,
+                );
+                preprocessed_message_index_map.push(message_index);
+                preprocessed_messages.push(Cow::Owned(converted_message));
             },
         }
     }
@@ -1102,8 +1121,10 @@ pub fn normalize_request(req: &MessagesRequest) -> Result<NormalizedRequest, Con
         .iter()
         .rposition(|message| message.role == "user")
         .ok_or_else(|| no_user_message_error(&req.messages))?;
-    let current_user_start =
-        trailing_user_message_start(&preprocessed_messages[..last_user_idx + 1])?;
+    let mut current_user_start = last_user_idx;
+    while current_user_start > 0 && preprocessed_messages[current_user_start - 1].role == "user" {
+        current_user_start -= 1;
+    }
     let mut normalized_messages = Vec::with_capacity(last_user_idx + 1);
     let mut message_index_map = Vec::with_capacity(last_user_idx + 1);
     let mut drop_assistant_after_empty_user_noop = false;
@@ -1142,8 +1163,12 @@ pub fn normalize_request(req: &MessagesRequest) -> Result<NormalizedRequest, Con
         }
 
         let drop_empty_user_noop = message.role == "user" && message_index < current_user_start;
-        match normalize_message(message, original_message_index, drop_empty_user_noop, &mut events)?
-        {
+        match normalize_message(
+            message.as_ref(),
+            original_message_index,
+            drop_empty_user_noop,
+            &mut events,
+        )? {
             Some(normalized) => {
                 message_index_map.push(original_message_index);
                 normalized_messages.push(normalized);
@@ -3268,8 +3293,7 @@ mod tests {
     }
 
     #[test]
-    fn convert_request_promotes_stable_session_start_system_role_messages_for_supported_kiro_models(
-    ) {
+    fn convert_request_promotes_stable_system_role_messages_for_supported_kiro_models() {
         let models = [
             "claude-sonnet-4-5-20250929",
             "claude-sonnet-4-5-20250929-thinking",
@@ -3292,6 +3316,12 @@ mod tests {
                 AnthropicMessage {
                     role: "user".to_string(),
                     content: serde_json::json!("first question"),
+                },
+                AnthropicMessage {
+                    role: "system".to_string(),
+                    content: serde_json::json!(
+                        "You are Claude Code, Anthropic's official CLI for Claude."
+                    ),
                 },
                 AnthropicMessage {
                     role: "system".to_string(),
@@ -3322,18 +3352,28 @@ mod tests {
                 "{model}"
             );
             assert_eq!(
-                normalized
-                    .request
-                    .system
-                    .as_ref()
-                    .and_then(|messages| messages.first())
-                    .map(|message| message.text.as_str()),
-                Some("SessionStart hook additional context: stable skill body"),
+                normalized.request.system.as_ref().map(|messages| messages
+                    .iter()
+                    .map(|message| message.text.as_str())
+                    .collect::<Vec<_>>()),
+                Some(vec![
+                    "You are Claude Code, Anthropic's official CLI for Claude.",
+                    "SessionStart hook additional context: stable skill body",
+                ]),
                 "{model}"
             );
             assert!(
                 normalized.normalization_events.iter().any(|event| {
                     event.message_index == 1
+                        && event.role == "system"
+                        && event.action == "promote_message"
+                        && event.reason == "stable_system_role_promoted_to_top_level"
+                }),
+                "{model}"
+            );
+            assert!(
+                normalized.normalization_events.iter().any(|event| {
+                    event.message_index == 2
                         && event.role == "system"
                         && event.action == "promote_message"
                         && event.reason == "stable_system_role_promoted_to_top_level"
@@ -3347,6 +3387,10 @@ mod tests {
                 Message::User(message) => &message.user_input_message.content,
                 other => panic!("expected injected system user message for {model}, got {other:?}"),
             };
+            assert!(
+                system_prefix.contains("You are Claude Code, Anthropic's official CLI"),
+                "{model}"
+            );
             assert!(
                 system_prefix.contains("SessionStart hook additional context: stable skill body"),
                 "{model}"
@@ -3383,7 +3427,9 @@ mod tests {
             AnthropicMessage {
                 role: "system".to_string(),
                 content: serde_json::json!(
-                    "The user sent a new message while you were working:\nvolatile interrupt"
+                    "The user sent a new message while you were working:\nvolatile \
+                     interrupt\n\nIMPORTANT: After completing your current task, you MUST address \
+                     the user's message above. Do not ignore it."
                 ),
             },
             AnthropicMessage {
@@ -3421,9 +3467,9 @@ mod tests {
                 .iter()
                 .map(|message| message.role.as_str())
                 .collect::<Vec<_>>(),
-            vec!["user", "assistant", "user", "assistant", "user", "user"]
+            vec!["user", "assistant", "user", "user", "assistant", "user", "user"]
         );
-        assert_eq!(normalized.message_index_map, vec![0, 2, 4, 6, 7, 8]);
+        assert_eq!(normalized.message_index_map, vec![0, 2, 3, 4, 6, 7, 8]);
         assert_eq!(
             normalized
                 .request
@@ -3435,8 +3481,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["Top level system.", "SessionStart hook additional context: stable skill body",]
         );
+        assert_eq!(normalized.request.messages[2].content, serde_json::json!("volatile interrupt"));
         assert_eq!(
-            normalized.request.messages[4].content,
+            normalized.request.messages[5].content,
             serde_json::json!(
                 "<system_context>\nProject-local rule that should stay in \
                  order.\n</system_context>"
@@ -3448,14 +3495,18 @@ mod tests {
                 && event.action == "promote_message"
                 && event.reason == "stable_system_role_promoted_to_top_level"
         }));
-        for index in [3, 5] {
-            assert!(normalized.normalization_events.iter().any(|event| {
-                event.message_index == index
-                    && event.role == "system"
-                    && event.action == "drop_message"
-                    && event.reason == "dynamic_system_noise_for_cache_stability"
-            }));
-        }
+        assert!(normalized.normalization_events.iter().any(|event| {
+            event.message_index == 3
+                && event.role == "system"
+                && event.action == "convert_message"
+                && event.reason == "interrupted_user_message_preserved_as_user_context"
+        }));
+        assert!(normalized.normalization_events.iter().any(|event| {
+            event.message_index == 5
+                && event.role == "system"
+                && event.action == "drop_message"
+                && event.reason == "dynamic_system_noise_for_cache_stability"
+        }));
         assert!(normalized.normalization_events.iter().any(|event| {
             event.message_index == 7
                 && event.role == "system"
@@ -3471,6 +3522,7 @@ mod tests {
         assert!(system_prefix.contains("Top level system."));
         assert!(system_prefix.contains("SessionStart hook additional context: stable skill body"));
         assert!(!system_prefix.contains("volatile interrupt"));
+        assert!(!system_prefix.contains("The user sent a new message while you were working"));
         assert!(!system_prefix.contains("task tools haven't been used recently"));
         assert!(!system_prefix.contains("Project-local rule that should stay in order."));
 
@@ -3482,8 +3534,87 @@ mod tests {
         assert!(current.contains("<system_context>"));
         assert!(current.contains("Project-local rule that should stay in order."));
         assert!(current.contains("third question"));
-        assert!(!current.contains("volatile interrupt"));
         assert!(!current.contains("task tools haven't been used recently"));
+    }
+
+    #[test]
+    fn normalize_request_preserves_trailing_unknown_system_role_as_current_user_context() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("current request"),
+            },
+            AnthropicMessage {
+                role: "system".to_string(),
+                content: serde_json::json!("Per-turn constraint that follows the final user."),
+            },
+        ]);
+
+        let normalized = normalize_request(&req).expect("normalization should succeed");
+        assert_eq!(
+            normalized
+                .request
+                .messages
+                .iter()
+                .map(|message| message.role.as_str())
+                .collect::<Vec<_>>(),
+            vec!["user", "user"]
+        );
+        assert_eq!(normalized.message_index_map, vec![0, 1]);
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        let current = &result
+            .conversation_state
+            .current_message
+            .user_input_message
+            .content;
+        assert!(current.contains("current request"));
+        assert!(current.contains("Per-turn constraint that follows the final user."));
+    }
+
+    #[test]
+    fn normalize_request_preserves_interrupted_user_message_payload() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("previous request"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!("working on previous request"),
+            },
+            AnthropicMessage {
+                role: "system".to_string(),
+                content: serde_json::json!(
+                    "The user sent a new message while you were working:\nwrite the report from \
+                     the Word and PPT files\n\nIMPORTANT: After completing your current task, you \
+                     MUST address the user's message above. Do not ignore it."
+                ),
+            },
+        ]);
+
+        let normalized = normalize_request(&req).expect("normalization should succeed");
+        assert_eq!(
+            normalized
+                .request
+                .messages
+                .iter()
+                .map(|message| message.role.as_str())
+                .collect::<Vec<_>>(),
+            vec!["user", "assistant", "user"]
+        );
+        assert_eq!(
+            normalized.request.messages[2].content,
+            serde_json::json!("write the report from the Word and PPT files")
+        );
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        let current = &result
+            .conversation_state
+            .current_message
+            .user_input_message
+            .content;
+        assert_eq!(current, "write the report from the Word and PPT files");
     }
 
     #[test]
