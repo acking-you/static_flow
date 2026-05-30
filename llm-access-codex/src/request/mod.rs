@@ -342,8 +342,8 @@ mod tests {
 
         assert!(prepared.client_request_body.is_none());
         assert_eq!(prepared.last_message_content.as_deref(), Some("hello"));
-        assert_eq!(prepared.wants_stream, false);
-        assert_eq!(prepared.force_upstream_stream, true);
+        assert!(!prepared.wants_stream);
+        assert!(prepared.force_upstream_stream);
         assert_eq!(upstream["input"][0]["type"], json!("message"));
         assert_eq!(upstream["input"][0]["role"], json!("user"));
         assert_eq!(upstream["input"][0]["content"][0]["type"], json!("input_text"));
@@ -447,7 +447,7 @@ mod tests {
         let upstream: serde_json::Value =
             serde_json::from_slice(&prepared.request_body).expect("upstream body json");
 
-        assert_eq!(prepared.force_upstream_stream, true);
+        assert!(prepared.force_upstream_stream);
         assert_eq!(upstream["stream"], json!(true));
         assert!(upstream.get("temperature").is_none());
     }
