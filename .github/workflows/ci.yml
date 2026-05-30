@@ -63,4 +63,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run workspace tests
-        run: cargo test --workspace --locked
+        # Test only first-party crates. The vendored forks under deps/ are
+        # implicit workspace members (path deps) but are not ours to gate on:
+        # `ffmpeg-sidecar` spawns the `ffmpeg` binary that isn't installed on
+        # the runner, and the `pingora-*` crates are a self-contained upstream
+        # fork (mirrors the existing deps/lance, deps/lancedb exclusions).
+        run: cargo test --workspace --exclude ffmpeg-sidecar --exclude 'pingora*' --locked
