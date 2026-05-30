@@ -57,9 +57,9 @@ use llm_access_kiro::{
     anthropic::{
         converter::{
             convert_normalized_request_with_resolved_session, current_user_message_range,
-            extract_tool_result_content, normalize_request, preview_session_value,
-            resolve_conversation_id_from_metadata, ResolvedConversationId, ResponseModelIdentity,
-            SessionFallbackReason, SessionIdSource, SessionTracking,
+            extract_tool_result_content, get_context_window_size, normalize_request,
+            preview_session_value, resolve_conversation_id_from_metadata, ResolvedConversationId,
+            ResponseModelIdentity, SessionFallbackReason, SessionIdSource, SessionTracking,
         },
         stream::{anthropic_usage_json, resolve_input_tokens_with_threshold, StreamContext},
         supported_models_response,
@@ -3308,12 +3308,23 @@ async fn dispatch_kiro_proxy(
                     usage_meta.mark_failover();
                     continue;
                 }
-                let status = failure.status;
+                let prompt_too_long_response = kiro_prompt_too_long_response_for_body(
+                    failure.status,
+                    &failure.body,
+                    &effective_model,
+                    request_input_tokens,
+                );
+                let status = if prompt_too_long_response.is_some() {
+                    StatusCode::PAYLOAD_TOO_LARGE
+                } else {
+                    failure.status
+                };
                 capture_client_request_body_json(&mut usage_meta, &body);
                 capture_upstream_request_body_json(&mut usage_meta, &request_body);
                 capture_error_bytes(&mut usage_meta, &failure.body);
                 usage_meta.mark_stream_finish();
-                let error_response = failure.into_response();
+                let error_response =
+                    prompt_too_long_response.unwrap_or_else(|| failure.into_response());
                 let usage = build_kiro_usage_summary(
                     &effective_model,
                     KiroUsageInputs {
@@ -3354,7 +3365,7 @@ async fn dispatch_kiro_proxy(
             },
         };
         if !response.status().is_success() {
-            let status = response.status();
+            let upstream_status = response.status();
             let content_type = response
                 .headers()
                 .get(reqwest::header::CONTENT_TYPE)
@@ -3366,6 +3377,17 @@ async fn dispatch_kiro_proxy(
             capture_upstream_request_body_json(&mut usage_meta, &request_body);
             capture_error_bytes(&mut usage_meta, &bytes);
             usage_meta.mark_stream_finish();
+            let prompt_too_long_response = kiro_prompt_too_long_response_for_body(
+                upstream_status,
+                &bytes,
+                &effective_model,
+                request_input_tokens,
+            );
+            let status = if prompt_too_long_response.is_some() {
+                StatusCode::PAYLOAD_TOO_LARGE
+            } else {
+                upstream_status
+            };
             let usage = build_kiro_usage_summary(
                 &effective_model,
                 KiroUsageInputs {
@@ -3402,7 +3424,9 @@ async fn dispatch_kiro_proxy(
                     "failed to record usage",
                 );
             }
-            return kiro_upstream_error_response(status, &content_type, bytes);
+            return prompt_too_long_response.unwrap_or_else(|| {
+                kiro_upstream_error_response(upstream_status, &content_type, bytes)
+            });
         }
         if payload.stream {
             let stream_response = match prepare_kiro_stream_response_for_route(
@@ -3412,6 +3436,7 @@ async fn dispatch_kiro_proxy(
                 &upstream_url,
                 &request_body,
                 &effective_model,
+                request_input_tokens,
             )
             .await
             {
@@ -3804,12 +3829,14 @@ const KIRO_EMPTY_STREAM_MAX_RETRIES: usize = 2;
 
 struct KiroPeekedStream {
     status: StatusCode,
-    first_chunk: Bytes,
+    buffered_prefix: Bytes,
     remaining: futures_util::stream::BoxStream<'static, Result<Bytes, reqwest::Error>>,
 }
 
 enum KiroStreamPeekError {
     Empty,
+    Incomplete,
+    Decode(String),
     Read(reqwest::Error),
 }
 
@@ -3818,20 +3845,37 @@ async fn peek_kiro_stream(
 ) -> Result<KiroPeekedStream, KiroStreamPeekError> {
     let status = response.status();
     let mut body_stream = response.bytes_stream();
+    let mut buffered_prefix = Vec::new();
+    let mut decoder = EventStreamDecoder::new();
     while let Some(chunk_result) = body_stream.next().await {
         match chunk_result {
             Ok(chunk) if !chunk.is_empty() => {
-                return Ok(KiroPeekedStream {
-                    status,
-                    first_chunk: chunk,
-                    remaining: body_stream.boxed(),
-                })
+                decoder
+                    .feed(&chunk)
+                    .map_err(|err| KiroStreamPeekError::Decode(err.to_string()))?;
+                buffered_prefix.extend_from_slice(chunk.as_ref());
+                let mut decoded_frame = false;
+                for frame in decoder.decode_iter() {
+                    frame.map_err(|err| KiroStreamPeekError::Decode(err.to_string()))?;
+                    decoded_frame = true;
+                }
+                if decoded_frame {
+                    return Ok(KiroPeekedStream {
+                        status,
+                        buffered_prefix: Bytes::from(buffered_prefix),
+                        remaining: body_stream.boxed(),
+                    });
+                }
             },
             Ok(_) => continue,
             Err(err) => return Err(KiroStreamPeekError::Read(err)),
         }
     }
-    Err(KiroStreamPeekError::Empty)
+    if buffered_prefix.is_empty() {
+        Err(KiroStreamPeekError::Empty)
+    } else {
+        Err(KiroStreamPeekError::Incomplete)
+    }
 }
 
 async fn prepare_kiro_stream_response_for_route(
@@ -3841,11 +3885,19 @@ async fn prepare_kiro_stream_response_for_route(
     upstream_url: &str,
     request_body: &[u8],
     model: &str,
+    request_input_tokens: i32,
 ) -> Result<KiroPeekedStream, KiroRouteFailure> {
     let mut response = initial_response;
     for retry in 0..=KIRO_EMPTY_STREAM_MAX_RETRIES {
         match peek_kiro_stream(response).await {
             Ok(stream) => {
+                if kiro_chunk_contains_content_length_exceeded(&stream.buffered_prefix) {
+                    return Err(KiroRouteFailure::synthetic(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        kiro_prompt_too_long_message(model, request_input_tokens),
+                        KiroRouteFailureKind::Fatal,
+                    ));
+                }
                 if retry > 0 {
                     tracing::info!(
                         model = %model,
@@ -3880,6 +3932,29 @@ async fn prepare_kiro_stream_response_for_route(
                     StatusCode::BAD_GATEWAY,
                     "kiro upstream returned empty generateAssistantResponse stream after retries"
                         .to_string(),
+                    KiroRouteFailureKind::RetryNext,
+                ));
+            },
+            Err(KiroStreamPeekError::Incomplete) => {
+                tracing::error!(
+                    model = %model,
+                    "Kiro upstream stream ended before the first complete eventstream frame"
+                );
+                return Err(KiroRouteFailure::synthetic(
+                    StatusCode::BAD_GATEWAY,
+                    "kiro upstream ended before the first complete eventstream frame".to_string(),
+                    KiroRouteFailureKind::RetryNext,
+                ));
+            },
+            Err(KiroStreamPeekError::Decode(err)) => {
+                tracing::error!(
+                    model = %model,
+                    error = %err,
+                    "Failed to decode Kiro upstream stream before sending any response bytes"
+                );
+                return Err(KiroRouteFailure::synthetic(
+                    StatusCode::BAD_GATEWAY,
+                    format!("failed to decode kiro upstream stream: {err}"),
                     KiroRouteFailureKind::RetryNext,
                 ));
             },
@@ -4517,7 +4592,7 @@ fn stream_kiro_upstream_response(response: KiroPeekedStream, ctx: KiroResponseCo
             guard.observe_chunk(&bytes, Some(event.event.as_str()));
             yield Ok::<Bytes, std::io::Error>(bytes);
         }
-        let mut body_stream = futures_util::stream::once(async move { Ok(response.first_chunk) })
+        let mut body_stream = futures_util::stream::once(async move { Ok(response.buffered_prefix) })
             .chain(response.remaining)
             .boxed();
         let mut decoder = EventStreamDecoder::new();
@@ -4633,6 +4708,53 @@ async fn non_stream_kiro_response(
         Ok(events) => events,
         Err(err) => return kiro_json_error(StatusCode::BAD_GATEWAY, "api_error", &err),
     };
+    if kiro_events_contain_content_length_exceeded(&events) {
+        let status = StatusCode::PAYLOAD_TOO_LARGE;
+        let message = kiro_prompt_too_long_message(&ctx.model, ctx.request_input_tokens);
+        let response = anthropic_json_error(status, "invalid_request_error", &message);
+        capture_error_message(&mut usage_meta, &message);
+        capture_error_body(
+            &mut usage_meta,
+            &anthropic_json_error_body("invalid_request_error", &message),
+        );
+        let usage = build_kiro_usage_summary(
+            &ctx.model,
+            KiroUsageInputs {
+                request_input_tokens: ctx.request_input_tokens,
+                context_input_tokens: None,
+                context_usage_min_request_tokens: ctx.route.context_usage_min_request_tokens,
+                output_tokens: 0,
+                credit_usage: None,
+                credit_usage_missing: true,
+                cache_estimation_enabled: false,
+            },
+            &ctx.cache_ctx,
+        );
+        if let Err(err) = record_kiro_usage(KiroUsageRecord {
+            control_store: ctx.control_store.as_ref(),
+            key: &ctx.key,
+            route: &ctx.route,
+            endpoint: &ctx.public_path,
+            model: &ctx.model,
+            status,
+            usage,
+            cache_ctx: &ctx.cache_ctx,
+            meta: &usage_meta,
+        })
+        .await
+        {
+            tracing::error!(
+                error = %err,
+                "Failed to record gateway usage for non-stream content length exception"
+            );
+            return kiro_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "api_error",
+                "failed to record usage",
+            );
+        }
+        return response;
+    }
     let mut stream_ctx = StreamContext::new_with_thinking_visibility(
         &ctx.model,
         ctx.request_input_tokens,
@@ -5068,6 +5190,78 @@ fn summarize_error_bytes(bytes: &Bytes) -> String {
     } else {
         body
     }
+}
+
+fn kiro_prompt_too_long_message(model: &str, request_input_tokens: i32) -> String {
+    let limit_tokens = get_context_window_size(model).max(1);
+    let actual_tokens = request_input_tokens.max(limit_tokens.saturating_add(1));
+    format!(
+        "Prompt is too long: {actual_tokens} tokens > {limit_tokens} tokens for the model context \
+         window."
+    )
+}
+
+fn kiro_prompt_too_long_response_for_body(
+    status: StatusCode,
+    bytes: &Bytes,
+    model: &str,
+    request_input_tokens: i32,
+) -> Option<Response> {
+    if status != StatusCode::PAYLOAD_TOO_LARGE && !kiro_body_is_content_length_exceeded(bytes) {
+        return None;
+    }
+    let message = kiro_prompt_too_long_message(model, request_input_tokens);
+    Some(anthropic_json_error(StatusCode::PAYLOAD_TOO_LARGE, "invalid_request_error", &message))
+}
+
+fn kiro_body_is_content_length_exceeded(bytes: &Bytes) -> bool {
+    kiro_text_is_content_length_exceeded(&String::from_utf8_lossy(bytes.as_ref()))
+}
+
+fn kiro_events_contain_content_length_exceeded(events: &[Event]) -> bool {
+    events.iter().any(kiro_event_is_content_length_exceeded)
+}
+
+fn kiro_chunk_contains_content_length_exceeded(chunk: &Bytes) -> bool {
+    let mut decoder = EventStreamDecoder::new();
+    let _ = decoder.feed(chunk);
+    decoder.decode_iter().any(|result| {
+        let Ok(frame) = result else {
+            return false;
+        };
+        Event::from_frame(frame)
+            .ok()
+            .as_ref()
+            .is_some_and(kiro_event_is_content_length_exceeded)
+    })
+}
+
+fn kiro_event_is_content_length_exceeded(event: &Event) -> bool {
+    match event {
+        Event::Error {
+            error_code,
+            error_message,
+        } => {
+            kiro_text_is_content_length_exceeded(error_code)
+                || kiro_text_is_content_length_exceeded(error_message)
+        },
+        Event::Exception {
+            exception_type,
+            message,
+        } => {
+            kiro_text_is_content_length_exceeded(exception_type)
+                || kiro_text_is_content_length_exceeded(message)
+        },
+        _ => false,
+    }
+}
+
+fn kiro_text_is_content_length_exceeded(text: &str) -> bool {
+    let normalized = text.to_ascii_lowercase();
+    normalized.contains("content_length_exceeds_threshold")
+        || normalized.contains("contentlengthexceededexception")
+        || normalized.contains("input content length exceeds threshold")
+        || normalized.contains("input is too long")
 }
 
 fn apply_kiro_model_mapping(
@@ -9660,6 +9854,91 @@ mod tests {
             .into_response()
     }
 
+    async fn fake_kiro_generate_content_length_exception_eventstream(
+        State(captured): State<Arc<CapturedKiroUpstream>>,
+        headers: HeaderMap,
+        request: Request<Body>,
+    ) -> Response {
+        let path = request.uri().path().to_string();
+        let body = to_bytes(request.into_body(), usize::MAX)
+            .await
+            .expect("upstream request body");
+        let body = serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json");
+        captured
+            .requests
+            .lock()
+            .expect("captured requests")
+            .push(CapturedKiroRequest {
+                path,
+                authorization: headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                user_agent: super::header_value(&headers, header::USER_AGENT.as_str()),
+                x_amz_user_agent: super::header_value(&headers, "x-amz-user-agent"),
+                host: super::header_value(&headers, "host"),
+                token_type: super::header_value(&headers, "TokenType"),
+                redirect_for_internal: super::header_value(&headers, "redirect-for-internal"),
+                agent_mode: super::header_value(&headers, "x-amzn-kiro-agent-mode"),
+                opt_out: super::header_value(&headers, "x-amzn-codewhisperer-optout"),
+                body,
+            });
+        let body = kiro_eventstream_body(vec![kiro_exception_frame(
+            "ContentLengthExceededException",
+            "Input content length exceeds threshold.",
+        )]);
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/vnd.amazon.eventstream")
+            .body(Body::from(body))
+            .expect("upstream response")
+    }
+
+    async fn fake_kiro_generate_split_content_length_exception_eventstream(
+        State(captured): State<Arc<CapturedKiroUpstream>>,
+        headers: HeaderMap,
+        request: Request<Body>,
+    ) -> Response {
+        let path = request.uri().path().to_string();
+        let body = to_bytes(request.into_body(), usize::MAX)
+            .await
+            .expect("upstream request body");
+        let body = serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json");
+        captured
+            .requests
+            .lock()
+            .expect("captured requests")
+            .push(CapturedKiroRequest {
+                path,
+                authorization: headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                user_agent: super::header_value(&headers, header::USER_AGENT.as_str()),
+                x_amz_user_agent: super::header_value(&headers, "x-amz-user-agent"),
+                host: super::header_value(&headers, "host"),
+                token_type: super::header_value(&headers, "TokenType"),
+                redirect_for_internal: super::header_value(&headers, "redirect-for-internal"),
+                agent_mode: super::header_value(&headers, "x-amzn-kiro-agent-mode"),
+                opt_out: super::header_value(&headers, "x-amzn-codewhisperer-optout"),
+                body,
+            });
+        let body = kiro_eventstream_body(vec![kiro_exception_frame(
+            "ContentLengthExceededException",
+            "Input content length exceeds threshold.",
+        )]);
+        let split_at = body.len() / 2;
+        let chunks = vec![
+            Ok::<_, std::io::Error>(super::Bytes::copy_from_slice(&body[..split_at])),
+            Ok(super::Bytes::copy_from_slice(&body[split_at..])),
+        ];
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/vnd.amazon.eventstream")
+            .body(Body::from_stream(futures_util::stream::iter(chunks)))
+            .expect("upstream response")
+    }
+
     async fn fake_kiro_usage_limits(
         State(captured): State<Arc<CapturedKiroUpstream>>,
         headers: HeaderMap,
@@ -9761,6 +10040,24 @@ mod tests {
         frame
     }
 
+    fn kiro_exception_frame(exception_type: &str, payload: &str) -> Vec<u8> {
+        let payload = payload.as_bytes();
+        let mut headers = Vec::new();
+        push_aws_string_header(&mut headers, ":message-type", "exception");
+        push_aws_string_header(&mut headers, ":exception-type", exception_type);
+        let total_length = 12 + headers.len() + payload.len() + 4;
+        let mut frame = Vec::with_capacity(total_length);
+        frame.extend_from_slice(&(total_length as u32).to_be_bytes());
+        frame.extend_from_slice(&(headers.len() as u32).to_be_bytes());
+        let prelude_crc = llm_access_kiro::parser::crc::crc32(&frame);
+        frame.extend_from_slice(&prelude_crc.to_be_bytes());
+        frame.extend_from_slice(&headers);
+        frame.extend_from_slice(payload);
+        let message_crc = llm_access_kiro::parser::crc::crc32(&frame);
+        frame.extend_from_slice(&message_crc.to_be_bytes());
+        frame
+    }
+
     fn push_aws_string_header(headers: &mut Vec<u8>, name: &str, value: &str) {
         headers.push(name.len() as u8);
         headers.extend_from_slice(name.as_bytes());
@@ -9848,6 +10145,52 @@ mod tests {
     ) -> String {
         let app = Router::new()
             .route("/generateAssistantResponse", post(fake_kiro_generate_content_length_error))
+            .route("/mcp", post(fake_kiro_mcp))
+            .route("/getUsageLimits", get(fake_kiro_usage_limits))
+            .with_state(captured);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        upstream_base
+    }
+
+    async fn spawn_fake_kiro_content_length_exception_eventstream_upstream(
+        captured: Arc<CapturedKiroUpstream>,
+    ) -> String {
+        let app = Router::new()
+            .route(
+                "/generateAssistantResponse",
+                post(fake_kiro_generate_content_length_exception_eventstream),
+            )
+            .route("/mcp", post(fake_kiro_mcp))
+            .route("/getUsageLimits", get(fake_kiro_usage_limits))
+            .with_state(captured);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake upstream");
+        let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake upstream");
+        });
+        upstream_base
+    }
+
+    async fn spawn_fake_kiro_split_content_length_exception_eventstream_upstream(
+        captured: Arc<CapturedKiroUpstream>,
+    ) -> String {
+        let app = Router::new()
+            .route(
+                "/generateAssistantResponse",
+                post(fake_kiro_generate_split_content_length_exception_eventstream),
+            )
             .route("/mcp", post(fake_kiro_mcp))
             .route("/getUsageLimits", get(fake_kiro_usage_limits))
             .with_state(captured);
@@ -12853,7 +13196,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn kiro_dispatch_passthroughs_upstream_content_length_errors() {
+    async fn kiro_dispatch_maps_upstream_content_length_errors_to_prompt_too_long() {
         let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
             .lock()
             .expect("kiro upstream env lock");
@@ -12868,7 +13211,8 @@ mod tests {
             "messages": [{"role": "user", "content": oversized_text}],
             "stream": false
         });
-        let state = super::ProviderState::new(Arc::new(TestStore), static_kiro_route_store());
+        let store = Arc::new(RecordingControlStore::default());
+        let state = super::ProviderState::new(store.clone(), static_kiro_route_store());
         let response = super::provider_entry(
             state,
             Request::builder()
@@ -12885,13 +13229,201 @@ mod tests {
 
         let raw = assert_provider_neutral_json_error(
             response,
-            StatusCode::BAD_REQUEST,
+            StatusCode::PAYLOAD_TOO_LARGE,
             "invalid_request_error",
-            "Input is too long.",
+            "Prompt is too long: 1000001 tokens > 1000000 tokens for the model context window.",
         )
         .await;
         assert!(!raw.contains("CONTENT_LENGTH_EXCEEDS_THRESHOLD"));
         assert!(captured.requests.lock().expect("captured requests").len() == 1);
+        let events = store.usage_events.lock().expect("usage events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status_code, 413);
+    }
+
+    #[test]
+    fn kiro_overlength_detection_matches_generic_input_too_long_message() {
+        assert!(super::kiro_text_is_content_length_exceeded("Input is too long."));
+    }
+
+    #[tokio::test]
+    async fn kiro_dispatch_maps_stream_upstream_content_length_errors_to_json_prompt_too_long() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("kiro upstream env lock");
+        let captured = Arc::new(CapturedKiroUpstream::default());
+        let upstream_base = spawn_fake_kiro_content_length_error_upstream(captured.clone()).await;
+        std::env::set_var("KIRO_UPSTREAM_BASE_URL", upstream_base);
+
+        let store = Arc::new(RecordingControlStore::default());
+        let state = super::ProviderState::new(store.clone(), static_kiro_route_store());
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/kiro-gateway/v1/messages")
+                .header("x-api-key", "valid-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "claude-sonnet-4-6",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": true
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
+
+        assert_provider_neutral_json_error(
+            response,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "invalid_request_error",
+            "Prompt is too long: 1000001 tokens > 1000000 tokens for the model context window.",
+        )
+        .await;
+        let events = store.usage_events.lock().expect("usage events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status_code, 413);
+    }
+
+    #[tokio::test]
+    async fn kiro_dispatch_maps_non_stream_content_length_exception_to_prompt_too_long() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("kiro upstream env lock");
+        let captured = Arc::new(CapturedKiroUpstream::default());
+        let upstream_base =
+            spawn_fake_kiro_content_length_exception_eventstream_upstream(captured.clone()).await;
+        std::env::set_var("KIRO_UPSTREAM_BASE_URL", upstream_base);
+
+        let store = Arc::new(RecordingControlStore::default());
+        let state = super::ProviderState::new(store.clone(), static_kiro_route_store());
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/kiro-gateway/v1/messages")
+                .header("x-api-key", "valid-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "claude-sonnet-4-6",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": false
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
+
+        assert_provider_neutral_json_error(
+            response,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "invalid_request_error",
+            "Prompt is too long: 1000001 tokens > 1000000 tokens for the model context window.",
+        )
+        .await;
+        let events = store.usage_events.lock().expect("usage events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status_code, 413);
+    }
+
+    #[tokio::test]
+    async fn kiro_dispatch_maps_stream_content_length_exception_to_json_prompt_too_long() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("kiro upstream env lock");
+        let captured = Arc::new(CapturedKiroUpstream::default());
+        let upstream_base =
+            spawn_fake_kiro_content_length_exception_eventstream_upstream(captured.clone()).await;
+        std::env::set_var("KIRO_UPSTREAM_BASE_URL", upstream_base);
+
+        let store = Arc::new(RecordingControlStore::default());
+        let state = super::ProviderState::new(store.clone(), static_kiro_route_store());
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/kiro-gateway/v1/messages")
+                .header("x-api-key", "valid-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "claude-sonnet-4-6",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": true
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
+
+        assert_provider_neutral_json_error(
+            response,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "invalid_request_error",
+            "Prompt is too long: 1000001 tokens > 1000000 tokens for the model context window.",
+        )
+        .await;
+        let events = store.usage_events.lock().expect("usage events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status_code, 413);
+    }
+
+    #[tokio::test]
+    async fn kiro_dispatch_buffers_split_stream_content_length_exception_before_sse() {
+        let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+            .lock()
+            .expect("kiro upstream env lock");
+        let captured = Arc::new(CapturedKiroUpstream::default());
+        let upstream_base =
+            spawn_fake_kiro_split_content_length_exception_eventstream_upstream(captured.clone())
+                .await;
+        std::env::set_var("KIRO_UPSTREAM_BASE_URL", upstream_base);
+
+        let store = Arc::new(RecordingControlStore::default());
+        let state = super::ProviderState::new(store.clone(), static_kiro_route_store());
+        let response = super::provider_entry(
+            state,
+            Request::builder()
+                .method("POST")
+                .uri("/api/kiro-gateway/v1/messages")
+                .header("x-api-key", "valid-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{
+                        "model": "claude-sonnet-4-6",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": true
+                    }"#,
+                ))
+                .expect("request"),
+        )
+        .await;
+
+        std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
+
+        assert_provider_neutral_json_error(
+            response,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "invalid_request_error",
+            "Prompt is too long: 1000001 tokens > 1000000 tokens for the model context window.",
+        )
+        .await;
+        let events = store.usage_events.lock().expect("usage events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status_code, 413);
     }
 
     #[tokio::test]
