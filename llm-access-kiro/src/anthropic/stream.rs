@@ -831,7 +831,8 @@ impl StreamContext {
                 message,
             } => {
                 if exception_type == "ContentLengthExceededException" {
-                    self.state_manager.set_stop_reason("max_tokens");
+                    self.state_manager
+                        .set_stop_reason("model_context_window_exceeded");
                 }
                 let _ = message;
                 Vec::new()
@@ -2053,6 +2054,25 @@ mod tests {
                 && event.data["delta"]["type"] == "text_delta"
                 && event.data["delta"]["text"] == " "
         }));
+    }
+
+    #[test]
+    fn content_length_exception_sets_context_window_stop_reason() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-sonnet-4-6", 1, false, HashMap::new(), None);
+        let _ = ctx.generate_initial_events();
+
+        let _ = ctx.process_kiro_event(&Event::Exception {
+            exception_type: "ContentLengthExceededException".to_string(),
+            message: "Input content length exceeds threshold.".to_string(),
+        });
+        let events = ctx.generate_final_events();
+
+        let message_delta = events
+            .iter()
+            .find(|event| event.event == "message_delta")
+            .expect("should have message_delta");
+        assert_eq!(message_delta.data["delta"]["stop_reason"], "model_context_window_exceeded");
     }
 
     #[test]
