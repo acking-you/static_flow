@@ -186,8 +186,7 @@ pub fn strip_inline_thinking_content(content: &str) -> String {
             InlineThinkingBlock::Text(text) => Some(text),
             InlineThinkingBlock::Thinking(_) => None,
         })
-        .collect::<Vec<_>>()
-        .join("")
+        .collect::<String>()
 }
 
 #[cfg(test)]
