@@ -18,7 +18,11 @@ members = [
     "llm-access-store",
     "llm-usage-journal",
 ]
-exclude = ["deps/lance", "deps/lancedb"]
+# Vendored forks under deps/ (lance, lancedb, pingora, ffmpeg-sidecar, ...) are
+# their own upstream projects. Exclude the whole directory from this workspace
+# so cargo test/clippy/fmt --workspace never descend into them; first-party
+# crates still depend on them via path deps.
+exclude = ["deps"]
 
 # Workspace 级别的依赖版本管理
 [workspace.dependencies]
