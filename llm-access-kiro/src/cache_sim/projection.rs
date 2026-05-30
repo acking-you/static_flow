@@ -104,13 +104,16 @@ impl PromptProjection {
     }
 
     pub fn build_resume_anchor_hash(&self, assistant_message: &AssistantMessage) -> String {
-        let mut segments = Vec::with_capacity(
-            self.history_anchor_segments.len() + self.current_turn_history_segments.len() + 4,
+        let assistant_segments = canonicalize_assistant_message(assistant_message);
+        let mut hasher = Sha256::new();
+        update_hash_segments(
+            &mut hasher,
+            self.history_anchor_segments
+                .iter()
+                .chain(self.current_turn_history_segments.iter())
+                .chain(assistant_segments.iter()),
         );
-        segments.extend(self.history_anchor_segments.iter().cloned());
-        segments.extend(self.current_turn_history_segments.iter().cloned());
-        segments.extend(canonicalize_assistant_message(assistant_message));
-        hash_segments(&segments)
+        format!("{:x}", hasher.finalize())
     }
 
     pub fn stable_prefix_token_count(&self) -> u64 {
