@@ -2,8 +2,20 @@
 //! fast/priority service-tier policy, store alignment, and billable multiplier
 //! resolution.
 
-use super::*;
 
+// >>> explicit imports (origin-resolved; replaces `use super::*`)
+use axum::body::Bytes;
+use serde_json::Value;
+
+use super::{
+    native_responses::strip_input_item_ids, normalization::is_azure_responses_upstream_base,
+};
+use crate::{
+    error::{internal_error, CodexGatewayResult},
+    types::PreparedGatewayRequest,
+    FAST_BILLABLE_MULTIPLIER, GPT53_CODEX_MODEL_ID, GPT53_CODEX_SPARK_MODEL_ID,
+};
+// <<< explicit imports
 /// Map the public `gpt-5.3-codex` id onto the current upstream Spark id.
 pub fn apply_gpt53_codex_spark_mapping(
     prepared: &PreparedGatewayRequest,
@@ -143,7 +155,7 @@ pub fn resolve_billable_multiplier(json_value: Option<&Value>) -> u64 {
     }
 }
 /// Detect whether the request explicitly opted into the fast/priority tier.
-pub(crate) fn request_uses_fast_service_tier(json_value: Option<&Value>) -> bool {
+fn request_uses_fast_service_tier(json_value: Option<&Value>) -> bool {
     json_value
         .and_then(Value::as_object)
         .and_then(|root| root.get("service_tier"))

@@ -1,9 +1,30 @@
 //! Native `/responses` request handling: instruction injection, upstream
 //! field stripping, tool-role message repair, and structural validation.
 
-use super::*;
 
-pub(crate) fn inject_default_instructions_when_missing(root: &mut Map<String, Value>) {
+// >>> explicit imports (origin-resolved; replaces `use super::*`)
+use serde_json::{json, Map, Value};
+
+use super::{
+    chat_completions::{
+        convert_tool_message_content_to_responses_output,
+        convert_user_message_content_to_responses_items,
+    },
+    extract_non_empty_string, NATIVE_RESPONSES_MESSAGE_ROLES,
+    NATIVE_RESPONSES_UPSTREAM_UNSUPPORTED_FIELDS,
+};
+use crate::{
+    error::{bad_request, bad_request_with_detail, CodexGatewayResult},
+    instructions::codex_default_instructions,
+};
+// <<< explicit imports
+/// Insert the default Codex instructions when the request omits them.
+///
+/// The upstream `/responses` API requires a non-empty `instructions` field.
+/// When the client sends no `instructions`, a JSON null, or a whitespace-only
+/// string, this fills in [`codex_default_instructions`] so the request is
+/// accepted; a meaningful client-supplied value is left untouched.
+pub fn inject_default_instructions_when_missing(root: &mut Map<String, Value>) {
     let needs_default_instructions = match root.get("instructions") {
         None | Some(Value::Null) => true,
         Some(Value::String(value)) => value.trim().is_empty(),
@@ -16,7 +37,14 @@ pub(crate) fn inject_default_instructions_when_missing(root: &mut Map<String, Va
         );
     }
 }
-pub(crate) fn normalize_native_responses_request(path: &str, root: &mut Map<String, Value>) {
+/// Normalize a native `/responses` request body in place for the upstream.
+///
+/// Always drops `max_output_tokens` (unsupported upstream). For the standard
+/// `/v1/responses` path it also strips upstream-unsupported fields and coerces
+/// a scalar/object `input` into the array-of-items shape the upstream expects.
+/// For `/v1/responses/compact` it instead retains only the compact-safe field
+/// set (see [`retain_native_compact_fields`]).
+pub fn normalize_native_responses_request(path: &str, root: &mut Map<String, Value>) {
     root.remove("max_output_tokens");
     if path == "/v1/responses" {
         remove_native_responses_upstream_unsupported_fields(root);
@@ -26,12 +54,12 @@ pub(crate) fn normalize_native_responses_request(path: &str, root: &mut Map<Stri
         retain_native_compact_fields(root);
     }
 }
-pub(crate) fn remove_native_responses_upstream_unsupported_fields(root: &mut Map<String, Value>) {
+fn remove_native_responses_upstream_unsupported_fields(root: &mut Map<String, Value>) {
     for field in NATIVE_RESPONSES_UPSTREAM_UNSUPPORTED_FIELDS {
         root.remove(*field);
     }
 }
-pub(crate) fn normalize_native_responses_input_for_upstream(root: &mut Map<String, Value>) {
+fn normalize_native_responses_input_for_upstream(root: &mut Map<String, Value>) {
     let Some(input) = root.get_mut("input") else {
         return;
     };
@@ -54,7 +82,14 @@ pub(crate) fn normalize_native_responses_input_for_upstream(root: &mut Map<Strin
         _ => {},
     }
 }
-pub(crate) fn repair_native_responses_request(
+/// Repair Chat-Completions-style `tool` messages in a native `/responses` body.
+///
+/// Only acts on the `/v1/responses` path. Upstream rejects items with a `tool`
+/// role, so each such input item is rewritten in place: when a call id is
+/// present it becomes a `function_call_output` item carrying the tool output;
+/// otherwise it degrades to a plain `user` message (with an `(empty)`
+/// placeholder when there is no usable content).
+pub fn repair_native_responses_request(
     path: &str,
     root: &mut Map<String, Value>,
 ) -> CodexGatewayResult<()> {
@@ -63,7 +98,7 @@ pub(crate) fn repair_native_responses_request(
     }
     repair_native_responses_tool_role_messages(root)
 }
-pub(crate) fn repair_native_responses_tool_role_messages(
+fn repair_native_responses_tool_role_messages(
     root: &mut Map<String, Value>,
 ) -> CodexGatewayResult<()> {
     let Some(Value::Array(items)) = root.get_mut("input") else {
@@ -119,7 +154,14 @@ pub(crate) fn repair_native_responses_tool_role_messages(
 
     Ok(())
 }
-pub(crate) fn validate_native_responses_request(
+/// Validate input-item roles in a native `/responses` request body.
+///
+/// Only acts on the `/v1/responses` path. Returns a `400` if any input item
+/// carries an unsupported role: a Chat-Completions `tool` role gets a targeted
+/// message pointing at `function_call_output`, and any other unknown role is
+/// rejected with the list of supported roles (`assistant`, `system`,
+/// `developer`, `user`). Items without a role are left for the upstream.
+pub fn validate_native_responses_request(
     path: &str,
     root: &Map<String, Value>,
 ) -> CodexGatewayResult<()> {
@@ -128,9 +170,7 @@ pub(crate) fn validate_native_responses_request(
     }
     validate_native_responses_input_roles(root.get("input"))
 }
-pub(crate) fn validate_native_responses_input_roles(
-    input: Option<&Value>,
-) -> CodexGatewayResult<()> {
+fn validate_native_responses_input_roles(input: Option<&Value>) -> CodexGatewayResult<()> {
     let Some(Value::Array(items)) = input else {
         return Ok(());
     };
@@ -161,7 +201,12 @@ pub(crate) fn validate_native_responses_input_roles(
 
     Ok(())
 }
-pub(crate) fn strip_input_item_ids(root: &mut Map<String, Value>) -> bool {
+/// Strip per-item `id` fields from a native `/responses` `input` array.
+///
+/// Returns `true` if any `id` was removed. Used when realigning the request
+/// with upstream `store` semantics: item ids are only valid when the upstream
+/// persists the response, so they must be dropped otherwise.
+pub fn strip_input_item_ids(root: &mut Map<String, Value>) -> bool {
     let Some(Value::Array(items)) = root.get_mut("input") else {
         return false;
     };
@@ -176,7 +221,7 @@ pub(crate) fn strip_input_item_ids(root: &mut Map<String, Value>) -> bool {
     }
     removed_any
 }
-pub(crate) fn retain_native_compact_fields(root: &mut Map<String, Value>) {
+fn retain_native_compact_fields(root: &mut Map<String, Value>) {
     root.retain(|key, _| {
         matches!(
             key.as_str(),

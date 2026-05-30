@@ -1,15 +1,55 @@
 //! Request body intake: read, size-guard, decode, and normalize incoming
 //! gateway requests into the upstream Codex `/responses` shape.
 
-use super::*;
 
+// >>> explicit imports (origin-resolved; replaces `use super::*`)
+use std::{
+    collections::BTreeMap,
+    io::{Cursor, Read},
+};
+
+#[cfg(test)]
+use axum::body::{to_bytes, Body};
+use axum::{
+    body::Bytes,
+    http::{header, Method},
+};
+use http::HeaderMap;
+use serde_json::Value;
+
+use super::{
+    chat_completions::adapt_openai_chat_completions_request,
+    extract_non_empty_string,
+    headers::extract_header_value,
+    last_message::extract_last_message_content_from_value,
+    native_responses::{
+        inject_default_instructions_when_missing, normalize_native_responses_request,
+        repair_native_responses_request, validate_native_responses_request,
+    },
+    normalization::{
+        filter_responses_request_fields, normalize_codex_public_model, normalize_responses_request,
+        rewrite_responses_path, validate_responses_request,
+    },
+    path::{is_models_path, is_supported_codex_post_path},
+    policy::resolve_billable_multiplier,
+};
+use crate::{
+    anthropic_messages::adapt_anthropic_messages_request,
+    conversation_normalizer::repair_responses_request,
+    error::{
+        bad_request, bad_request_with_detail, internal_error, method_not_allowed,
+        CodexGatewayResult,
+    },
+    types::{GatewayResponseAdapter, PreparedGatewayRequest},
+};
+// <<< explicit imports
 /// Normalize an incoming OpenAI-compatible request into the upstream Codex
 /// shape.
 ///
 /// `max_request_body_bytes` caps the body read to prevent oversized payloads
 /// from exhausting backend memory.
 #[cfg(test)]
-pub(crate) async fn prepare_gateway_request(
+pub async fn prepare_gateway_request(
     gateway_path: &str,
     query: &str,
     method: Method,
@@ -28,6 +68,7 @@ pub(crate) async fn prepare_gateway_request(
     )
 }
 /// Read an Axum request body with the configured gateway byte limit.
+#[cfg(test)]
 pub async fn read_gateway_request_body(
     body: Body,
     max_request_body_bytes: usize,
@@ -185,7 +226,7 @@ pub fn prepare_gateway_request_from_bytes(
         last_message_content,
     })
 }
-pub(crate) fn decode_gateway_request_body(
+fn decode_gateway_request_body(
     headers: &HeaderMap,
     body: Bytes,
     max_request_body_bytes: usize,

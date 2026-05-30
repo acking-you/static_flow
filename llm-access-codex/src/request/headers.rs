@@ -2,8 +2,13 @@
 //! (incl. forwarded headers), request URL reconstruction, presented key,
 //! external origin, and query-parameter extraction.
 
-use super::*;
 
+// >>> explicit imports (origin-resolved; replaces `use super::*`)
+use std::{collections::BTreeMap, net::IpAddr};
+
+use axum::http::header;
+use http::HeaderMap;
+// <<< explicit imports
 /// Read one trimmed header value as UTF-8 text.
 /// Read one trimmed header value as UTF-8 text.
 pub fn extract_header_value(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -78,12 +83,12 @@ pub fn extract_client_ip_from_headers(headers: &HeaderMap) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 /// Parse the first IP candidate from a comma-delimited proxy header.
-pub(crate) fn parse_first_ip_from_header(value: Option<&http::HeaderValue>) -> Option<String> {
+fn parse_first_ip_from_header(value: Option<&http::HeaderValue>) -> Option<String> {
     let raw = value?.to_str().ok()?;
     raw.split(',').find_map(normalize_ip_token)
 }
 /// Parse the RFC 7239 `Forwarded` header and extract the first usable IP.
-pub(crate) fn parse_ip_from_forwarded_header(value: Option<&http::HeaderValue>) -> Option<String> {
+fn parse_ip_from_forwarded_header(value: Option<&http::HeaderValue>) -> Option<String> {
     let raw = value?.to_str().ok()?;
     raw.split(',').find_map(|entry| {
         entry.split(';').find_map(|segment| {
@@ -101,7 +106,7 @@ pub(crate) fn parse_ip_from_forwarded_header(value: Option<&http::HeaderValue>) 
     })
 }
 /// Normalize raw proxy IP tokens across IPv4, IPv6, and host:port forms.
-pub(crate) fn normalize_ip_token(token: &str) -> Option<String> {
+fn normalize_ip_token(token: &str) -> Option<String> {
     let mut value = token.trim().trim_matches('"');
     if value.is_empty() || value.eq_ignore_ascii_case("unknown") {
         return None;
@@ -143,25 +148,6 @@ pub(crate) fn normalize_ip_token(token: &str) -> Option<String> {
 
     None
 }
-/// Extract the presented API key from Authorization or x-api-key headers.
-pub fn extract_presented_key(headers: &HeaderMap) -> Option<String> {
-    if let Some(value) = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return Some(value.to_string());
-    }
-    headers
-        .get("x-api-key")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
 /// Reconstruct the externally visible origin from reverse-proxy headers.
 pub fn external_origin(headers: &HeaderMap) -> Option<String> {
     let host = headers
@@ -177,11 +163,4 @@ pub fn external_origin(headers: &HeaderMap) -> Option<String> {
         .filter(|value| !value.is_empty())
         .unwrap_or("http");
     Some(format!("{scheme}://{host}"))
-}
-/// Read one query parameter from a raw query string.
-pub fn extract_query_param(query: &str, key: &str) -> Option<String> {
-    let raw = query.strip_prefix('?').unwrap_or(query);
-    url::form_urlencoded::parse(raw.as_bytes())
-        .find(|(candidate, _)| candidate == key)
-        .map(|(_, value)| value.into_owned())
 }

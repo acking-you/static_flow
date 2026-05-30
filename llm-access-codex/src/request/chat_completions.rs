@@ -2,10 +2,29 @@
 //! `/responses` input shape: role normalization, content-item mapping, and
 //! assembling assistant/user/tool messages into responses input items.
 
-use super::*;
 
+// >>> explicit imports (origin-resolved; replaces `use super::*`)
+use std::collections::BTreeSet;
+
+use serde_json::{json, Map, Value};
+
+use super::{
+    coerce_non_empty_scalar_to_string,
+    normalization::normalize_reasoning_effort,
+    tools::{
+        build_openai_tool_name_map, build_openai_tool_name_restore_map, get_dynamic_tools_array,
+        is_openai_chat_function_tool, legacy_openai_function_name_value,
+        map_openai_chat_function_tool, normalize_tool_parameters_schema,
+        openai_chat_tool_name_value, shorten_openai_tool_name_with_map,
+    },
+};
+use crate::{
+    error::{bad_request, bad_request_with_detail, CodexGatewayError, CodexGatewayResult},
+    types::OpenAiChatAdaptedRequest,
+};
+// <<< explicit imports
 /// Map OpenAI chat roles into the role set accepted by the responses API.
-pub(crate) fn normalize_openai_role_for_responses(role: &str) -> Option<&'static str> {
+fn normalize_openai_role_for_responses(role: &str) -> Option<&'static str> {
     match role {
         "system" | "developer" => Some("developer"),
         "user" => Some("user"),
@@ -15,7 +34,7 @@ pub(crate) fn normalize_openai_role_for_responses(role: &str) -> Option<&'static
     }
 }
 /// Flatten mixed chat message content into plain text instructions.
-pub(crate) fn extract_openai_message_content_text(content: &Value) -> String {
+fn extract_openai_message_content_text(content: &Value) -> String {
     match content {
         Value::String(text) => text.clone(),
         Value::Array(items) => {
@@ -45,7 +64,7 @@ pub(crate) fn extract_openai_message_content_text(content: &Value) -> String {
     }
 }
 /// Convert one chat user content item into a responses input item.
-pub(crate) fn map_openai_user_content_item_to_responses_item(item: &Value) -> Option<Value> {
+fn map_openai_user_content_item_to_responses_item(item: &Value) -> Option<Value> {
     if let Some(text) = item.as_str() {
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -108,7 +127,7 @@ pub(crate) fn map_openai_user_content_item_to_responses_item(item: &Value) -> Op
     }
 }
 /// Convert chat-style user content into responses input content items.
-pub(crate) fn convert_user_message_content_to_responses_items(content: &Value) -> Vec<Value> {
+pub fn convert_user_message_content_to_responses_items(content: &Value) -> Vec<Value> {
     match content {
         Value::String(text) => {
             let trimmed = text.trim();
@@ -141,7 +160,7 @@ pub(crate) fn convert_user_message_content_to_responses_items(content: &Value) -
     }
 }
 /// Convert a chat tool-output content item into a responses output item.
-pub(crate) fn map_tool_result_content_item_to_responses_output_item(item: &Value) -> Option<Value> {
+fn map_tool_result_content_item_to_responses_output_item(item: &Value) -> Option<Value> {
     if let Some(text) = item.as_str() {
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -194,7 +213,7 @@ pub(crate) fn map_tool_result_content_item_to_responses_output_item(item: &Value
 }
 /// Convert a chat `tool` role payload into the responses function-call output
 /// shape.
-pub(crate) fn convert_tool_message_content_to_responses_output(
+pub fn convert_tool_message_content_to_responses_output(
     value: Option<&Value>,
 ) -> Result<Value, String> {
     let Some(value) = value else {
@@ -225,10 +244,7 @@ pub(crate) fn convert_tool_message_content_to_responses_output(
 }
 /// Flush pending assistant text parts into a single responses assistant
 /// message.
-pub(crate) fn flush_assistant_output_parts(
-    input_items: &mut Vec<Value>,
-    pending_parts: &mut Vec<Value>,
-) {
+fn flush_assistant_output_parts(input_items: &mut Vec<Value>, pending_parts: &mut Vec<Value>) {
     if pending_parts.is_empty() {
         return;
     }
@@ -239,7 +255,7 @@ pub(crate) fn flush_assistant_output_parts(
     }));
 }
 /// Convert assistant chat history into responses message items.
-pub(crate) fn append_assistant_content_to_responses_input(
+fn append_assistant_content_to_responses_input(
     input_items: &mut Vec<Value>,
     content: &Value,
 ) -> Result<(), String> {
@@ -292,14 +308,11 @@ pub(crate) fn append_assistant_content_to_responses_input(
     flush_assistant_output_parts(input_items, &mut pending_parts);
     Ok(())
 }
-pub(crate) fn chat_message_bad_request(
-    index: usize,
-    message: impl AsRef<str>,
-) -> CodexGatewayError {
+fn chat_message_bad_request(index: usize, message: impl AsRef<str>) -> CodexGatewayError {
     bad_request(&format!("chat.completions message {index}: {}", message.as_ref()))
 }
 /// Adapt an OpenAI chat/completions request into the upstream responses format.
-pub(crate) fn adapt_openai_chat_completions_request(
+pub fn adapt_openai_chat_completions_request(
     obj: &Map<String, Value>,
 ) -> CodexGatewayResult<OpenAiChatAdaptedRequest> {
     let source_messages = obj

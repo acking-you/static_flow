@@ -21,32 +21,11 @@
 //!        +--> [path]              gateway path + key-field validation
 //! ```
 //!
-//! Each submodule pulls the shared imports/consts via `use super::*;`; the
-//! parent re-exports every submodule with `pub use`, so existing call sites
-//! (`request::<fn>`) keep working unchanged.
+//! Each submodule imports its dependencies explicitly from their origin; the
+//! facade re-exports only the items used outside this module, by name, so
+//! existing call sites (`request::<fn>`) keep working unchanged.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    io::{Cursor, Read},
-    net::IpAddr,
-};
-
-use axum::body::{to_bytes, Body, Bytes};
-use http::{header, HeaderMap, Method};
-use serde_json::{json, Map, Value};
-
-use crate::{
-    anthropic_messages::adapt_anthropic_messages_request,
-    conversation_normalizer::repair_responses_request,
-    error::{
-        bad_request, bad_request_with_detail, internal_error, method_not_allowed, not_found,
-        CodexGatewayError, CodexGatewayResult,
-    },
-    instructions::codex_default_instructions,
-    types::{GatewayResponseAdapter, OpenAiChatAdaptedRequest, PreparedGatewayRequest},
-    FAST_BILLABLE_MULTIPLIER, GPT53_CODEX_MODEL_ID, GPT53_CODEX_SPARK_MODEL_ID,
-    MAX_OPENAI_TOOL_NAME_LEN,
-};
+use serde_json::Value;
 
 mod chat_completions;
 mod headers;
@@ -58,18 +37,18 @@ mod policy;
 mod prepare;
 mod tools;
 
-pub(crate) use chat_completions::*;
-pub use headers::*;
-pub use last_message::*;
-pub(crate) use native_responses::*;
-pub use normalization::*;
-pub use path::*;
-pub use policy::*;
-pub use prepare::*;
-pub use tools::*;
+pub use headers::{
+    external_origin, extract_client_ip_from_headers, resolve_request_url_from_headers,
+    serialize_headers_json,
+};
+pub use last_message::extract_last_message_content;
+pub use normalization::normalize_upstream_base_url;
+pub use policy::{
+    align_responses_store_with_upstream, apply_codex_fast_policy, apply_gpt53_codex_spark_mapping,
+};
+pub use prepare::prepare_gateway_request_from_bytes;
+pub use tools::{normalize_tool_parameters_schema, restore_openai_tool_name};
 
-const LLM_GATEWAY_KEY_STATUS_ACTIVE: &str = "active";
-const LLM_GATEWAY_KEY_STATUS_DISABLED: &str = "disabled";
 const DEFAULT_PUBLIC_GPT_MODEL_ID: &str = "gpt-5.5";
 const NATIVE_RESPONSES_UPSTREAM_UNSUPPORTED_FIELDS: &[&str] = &[
     "temperature",
@@ -83,8 +62,12 @@ const NATIVE_RESPONSES_UPSTREAM_UNSUPPORTED_FIELDS: &[&str] = &[
     "stream_options",
 ];
 const NATIVE_RESPONSES_MESSAGE_ROLES: &[&str] = &["assistant", "system", "developer", "user"];
-/// Return a non-empty trimmed JSON string field.
-/// Return a non-empty trimmed JSON string field.
+/// Borrow a trimmed, non-empty string from an optional JSON value.
+///
+/// Returns the inner `&str` only when `value` is a JSON string whose trimmed
+/// form is non-empty. JSON nulls, non-string values, and whitespace-only
+/// strings all yield `None`, so callers can treat blank request fields as
+/// absent rather than as empty values during normalization.
 pub fn extract_non_empty_string(value: Option<&Value>) -> Option<&str> {
     value
         .and_then(Value::as_str)
@@ -113,10 +96,14 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        adapt_openai_chat_completions_request, align_responses_store_with_upstream,
-        apply_codex_fast_policy, codex_default_instructions, prepare_gateway_request,
+        chat_completions::adapt_openai_chat_completions_request,
+        policy::{align_responses_store_with_upstream, apply_codex_fast_policy},
+        prepare::prepare_gateway_request,
     };
-    use crate::types::{GatewayResponseAdapter, PreparedGatewayRequest};
+    use crate::{
+        instructions::codex_default_instructions,
+        types::{GatewayResponseAdapter, PreparedGatewayRequest},
+    };
 
     #[test]
     fn adapt_openai_chat_completions_request_rejects_message_without_role() {

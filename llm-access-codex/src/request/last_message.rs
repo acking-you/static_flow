@@ -1,8 +1,11 @@
 //! Best-effort extraction of the last user/assistant message text from a
 //! request body, used for usage logging and request previews.
 
-use super::*;
 
+// >>> explicit imports (origin-resolved; replaces `use super::*`)
+use axum::body::Bytes;
+use serde_json::Value;
+// <<< explicit imports
 /// Extract the last text-like message content from the request body.
 ///
 /// This intentionally parses request-format structures (`messages` for chat
@@ -10,7 +13,6 @@ use super::*;
 /// body. Unsupported shapes return `Ok(None)` so the main request flow is not
 /// blocked; malformed JSON returns `Err(...)` and the caller can record a
 /// failure marker if desired.
-/// Extract the last text-like message content from an OpenAI-compatible body.
 pub fn extract_last_message_content(body: &Bytes) -> Result<Option<String>, String> {
     if body.is_empty() {
         return Ok(None);
@@ -22,7 +24,12 @@ pub fn extract_last_message_content(body: &Bytes) -> Result<Option<String>, Stri
     }
     Ok(extract_last_message_content_from_value(&value))
 }
-pub(crate) fn extract_last_message_content_from_value(value: &Value) -> Option<String> {
+/// Dispatch last-message extraction by request shape.
+///
+/// Inspects the request JSON object and routes to the chat-style extractor
+/// when a `messages` array is present, or the responses-style extractor when
+/// an `input` field is present. Returns `None` for any other shape.
+pub fn extract_last_message_content_from_value(value: &Value) -> Option<String> {
     let root = value.as_object()?;
 
     if let Some(messages) = root.get("messages").and_then(Value::as_array) {
@@ -33,7 +40,7 @@ pub(crate) fn extract_last_message_content_from_value(value: &Value) -> Option<S
     }
     None
 }
-pub(crate) fn extract_last_message_from_chat_messages(messages: &[Value]) -> Option<String> {
+fn extract_last_message_from_chat_messages(messages: &[Value]) -> Option<String> {
     messages.iter().rev().find_map(|message| {
         message
             .as_object()
@@ -41,7 +48,7 @@ pub(crate) fn extract_last_message_from_chat_messages(messages: &[Value]) -> Opt
             .and_then(extract_last_text_from_generic_content)
     })
 }
-pub(crate) fn extract_last_text_from_responses_input(input: &Value) -> Option<String> {
+fn extract_last_text_from_responses_input(input: &Value) -> Option<String> {
     match input {
         Value::String(text) => normalized_non_empty_text(text),
         Value::Array(items) => items
@@ -52,7 +59,7 @@ pub(crate) fn extract_last_text_from_responses_input(input: &Value) -> Option<St
         _ => None,
     }
 }
-pub(crate) fn extract_last_text_from_responses_item(item: &Value) -> Option<String> {
+fn extract_last_text_from_responses_item(item: &Value) -> Option<String> {
     match item {
         Value::String(text) => normalized_non_empty_text(text),
         Value::Object(obj) => {
@@ -89,7 +96,7 @@ pub(crate) fn extract_last_text_from_responses_item(item: &Value) -> Option<Stri
         _ => None,
     }
 }
-pub(crate) fn extract_last_text_from_generic_content(value: &Value) -> Option<String> {
+fn extract_last_text_from_generic_content(value: &Value) -> Option<String> {
     match value {
         Value::String(text) => normalized_non_empty_text(text),
         Value::Array(items) => items
@@ -111,7 +118,7 @@ pub(crate) fn extract_last_text_from_generic_content(value: &Value) -> Option<St
         _ => None,
     }
 }
-pub(crate) fn normalized_non_empty_text(text: &str) -> Option<String> {
+fn normalized_non_empty_text(text: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         None

@@ -2,9 +2,25 @@
 //! and the OpenAI tool-name mangle/restore maps that keep names within the
 //! upstream length limit.
 
-use super::*;
 
-pub(crate) fn normalize_tool_parameters_schema(value: Value) -> Value {
+// >>> explicit imports (origin-resolved; replaces `use super::*`)
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde_json::{json, Map, Value};
+
+use super::coerce_non_empty_scalar_to_string;
+use crate::MAX_OPENAI_TOOL_NAME_LEN;
+// <<< explicit imports
+/// Recursively normalize a tool's JSON-Schema into the upstream-accepted shape.
+///
+/// Walks the schema tree and applies the fixups the upstream requires:
+/// rewrites a `"$ref": "X[]"` shorthand into a proper `array`/`items` schema;
+/// guarantees every `"type": "object"` node carries a `properties` map (the
+/// upstream rejects objects without one); and recurses through `items`,
+/// `additionalProperties`, `not`, the `allOf`/`anyOf`/`oneOf`/`prefixItems`
+/// arrays, and the `$defs`/`definitions` maps. Non-object/array values pass
+/// through unchanged.
+pub fn normalize_tool_parameters_schema(value: Value) -> Value {
     match value {
         Value::Object(mut obj) => {
             if let Some(array_ref) = obj
@@ -80,7 +96,7 @@ pub(crate) fn normalize_tool_parameters_schema(value: Value) -> Value {
     }
 }
 /// Shorten tool names so they fit the upstream name length budget.
-pub(crate) fn shorten_openai_tool_name_candidate(name: &str) -> String {
+fn shorten_openai_tool_name_candidate(name: &str) -> String {
     if name.len() <= MAX_OPENAI_TOOL_NAME_LEN {
         return name.to_string();
     }
@@ -98,7 +114,7 @@ pub(crate) fn shorten_openai_tool_name_candidate(name: &str) -> String {
     name.chars().take(MAX_OPENAI_TOOL_NAME_LEN).collect()
 }
 /// Apply the stable shortening map for one OpenAI tool/function name.
-pub(crate) fn shorten_openai_tool_name_with_map(
+pub fn shorten_openai_tool_name_with_map(
     name: &str,
     tool_name_map: &BTreeMap<String, String>,
 ) -> String {
@@ -118,12 +134,17 @@ pub fn restore_openai_tool_name(
         .unwrap_or_else(|| name.to_string())
 }
 /// Return the dynamic tools array regardless of the chosen field casing.
-pub(crate) fn get_dynamic_tools_array(obj: &Map<String, Value>) -> Option<&Vec<Value>> {
+pub fn get_dynamic_tools_array(obj: &Map<String, Value>) -> Option<&Vec<Value>> {
     obj.get("dynamic_tools")
         .or_else(|| obj.get("dynamicTools"))
         .and_then(Value::as_array)
 }
-pub(crate) fn is_openai_chat_function_tool(tool_obj: &Map<String, Value>) -> bool {
+/// Detect whether a tool object is an OpenAI Chat Completions function tool.
+///
+/// Matches an explicit `"type": "function"`, and also treats a tool with no
+/// `type` as a function when it carries a `function` object or a bare `name`
+/// (the legacy Chat Completions shapes). Other tool types return `false`.
+pub fn is_openai_chat_function_tool(tool_obj: &Map<String, Value>) -> bool {
     let tool_type = tool_obj
         .get("type")
         .and_then(Value::as_str)
@@ -133,7 +154,7 @@ pub(crate) fn is_openai_chat_function_tool(tool_obj: &Map<String, Value>) -> boo
         || (tool_type.is_empty()
             && (tool_obj.get("function").is_some() || tool_obj.get("name").is_some()))
 }
-pub(crate) fn openai_chat_tool_field<'a>(
+fn openai_chat_tool_field<'a>(
     tool_obj: &'a Map<String, Value>,
     function: Option<&'a Map<String, Value>>,
     key: &str,
@@ -142,18 +163,31 @@ pub(crate) fn openai_chat_tool_field<'a>(
         .get(key)
         .or_else(|| function.and_then(|function| function.get(key)))
 }
-pub(crate) fn openai_chat_tool_name_value<'a>(
+/// Resolve a tool's `name` from either the tool object or its `function` body.
+///
+/// OpenAI Chat Completions tools may carry `name` at the top level or nested
+/// inside a `function` object; this returns the first one present so callers
+/// see a single name regardless of which shape the client sent.
+pub fn openai_chat_tool_name_value<'a>(
     tool_obj: &'a Map<String, Value>,
     function: Option<&'a Map<String, Value>>,
 ) -> Option<&'a Value> {
     openai_chat_tool_field(tool_obj, function, "name")
 }
-pub(crate) fn legacy_openai_function_name_value(
-    function_obj: &Map<String, Value>,
-) -> Option<&Value> {
+/// Return the `name` field of a legacy `{ "function": { ... } }` tool body.
+///
+/// Used only for the legacy Chat Completions function shape, where the name
+/// lives directly on the inner `function` object.
+pub fn legacy_openai_function_name_value(function_obj: &Map<String, Value>) -> Option<&Value> {
     function_obj.get("name")
 }
-pub(crate) fn map_openai_chat_function_tool(
+/// Convert one OpenAI Chat Completions function tool into a responses tool.
+///
+/// Resolves the tool name (top-level or nested `function`), shortens it through
+/// `tool_name_map` to fit the upstream length budget, and copies across
+/// `description`, schema-normalized `parameters`, and `strict` when present.
+/// Returns `None` when the tool has no usable, non-empty name.
+pub fn map_openai_chat_function_tool(
     tool_obj: &Map<String, Value>,
     tool_name_map: &BTreeMap<String, String>,
 ) -> Option<Value> {
@@ -176,7 +210,7 @@ pub(crate) fn map_openai_chat_function_tool(
     Some(Value::Object(mapped))
 }
 /// Collect every function/tool name referenced anywhere in the request.
-pub(crate) fn collect_openai_tool_names(obj: &Map<String, Value>) -> Vec<String> {
+fn collect_openai_tool_names(obj: &Map<String, Value>) -> Vec<String> {
     let mut names = Vec::new();
 
     if let Some(tools) = obj.get("tools").and_then(Value::as_array) {
@@ -285,7 +319,7 @@ pub(crate) fn collect_openai_tool_names(obj: &Map<String, Value>) -> Vec<String>
     names
 }
 /// Build a stable deduplicated shortening map for all tool names in a request.
-pub(crate) fn build_openai_tool_name_map(obj: &Map<String, Value>) -> BTreeMap<String, String> {
+pub fn build_openai_tool_name_map(obj: &Map<String, Value>) -> BTreeMap<String, String> {
     let mut unique_names = BTreeSet::new();
     for name in collect_openai_tool_names(obj) {
         unique_names.insert(name);
@@ -313,7 +347,7 @@ pub(crate) fn build_openai_tool_name_map(obj: &Map<String, Value>) -> BTreeMap<S
     out
 }
 /// Build the reverse map used when adapting responses back to chat format.
-pub(crate) fn build_openai_tool_name_restore_map(
+pub fn build_openai_tool_name_restore_map(
     tool_name_map: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let mut restore_map = BTreeMap::new();

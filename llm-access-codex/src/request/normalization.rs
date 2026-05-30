@@ -3,10 +3,21 @@
 //! normalization, JSON-mode keyword detection, and tool-call history checks.
 //! Hosts the top-level `normalize_responses_request` orchestrator.
 
-use super::*;
 
+// >>> explicit imports (origin-resolved; replaces `use super::*`)
+use std::collections::BTreeSet;
+
+use axum::body::Bytes;
+use serde_json::{Map, Value};
+
+use super::{extract_non_empty_string, DEFAULT_PUBLIC_GPT_MODEL_ID};
+use crate::{
+    error::{bad_request, internal_error, CodexGatewayResult},
+    instructions::codex_default_instructions,
+};
+// <<< explicit imports
 /// Rewrite chat/completions requests onto the upstream responses endpoint.
-pub(crate) fn rewrite_responses_path(path: &str, query: &str) -> String {
+pub fn rewrite_responses_path(path: &str, query: &str) -> String {
     let rewritten = if let Some(suffix) = path.strip_prefix("/v1/chat/completions") {
         format!("/v1/responses{suffix}")
     } else {
@@ -25,7 +36,13 @@ pub fn normalize_upstream_base_url(base: &str) -> String {
     }
     normalized
 }
-pub(crate) fn is_azure_responses_upstream_base(base_url: &str) -> bool {
+/// Detect whether an upstream base URL points at an Azure OpenAI deployment.
+///
+/// Azure's `/responses` surface differs from chatgpt.com (notably it persists
+/// responses, so `store` must be `true`). This recognizes the common Azure
+/// hostname markers case-insensitively so callers can branch on those
+/// semantics. Non-Azure bases (chatgpt.com, custom proxies) return `false`.
+pub fn is_azure_responses_upstream_base(base_url: &str) -> bool {
     let base_url = base_url.to_ascii_lowercase();
     const AZURE_MARKERS: [&str; 6] = [
         "openai.azure.",
@@ -38,7 +55,7 @@ pub(crate) fn is_azure_responses_upstream_base(base_url: &str) -> bool {
     AZURE_MARKERS.iter().any(|marker| base_url.contains(marker))
 }
 /// Collapse user-provided reasoning-effort aliases into supported values.
-pub(crate) fn normalize_reasoning_effort(value: &str) -> Option<&'static str> {
+pub fn normalize_reasoning_effort(value: &str) -> Option<&'static str> {
     match value.trim().to_ascii_lowercase().as_str() {
         "low" => Some("low"),
         "medium" => Some("medium"),
@@ -48,7 +65,14 @@ pub(crate) fn normalize_reasoning_effort(value: &str) -> Option<&'static str> {
         _ => None,
     }
 }
-pub(crate) fn normalize_codex_public_model(
+/// Fall back to the default public GPT model for non-`gpt-` model ids.
+///
+/// Public clients may send model ids the upstream does not recognize. When the
+/// id does not start with `gpt-`, the request body's `model` field is rewritten
+/// to [`DEFAULT_PUBLIC_GPT_MODEL_ID`] and the resolved id is returned alongside
+/// the re-encoded body. `gpt-`-prefixed ids and absent models pass through
+/// untouched. Returns an internal error if the body is not a JSON object.
+pub fn normalize_codex_public_model(
     request_body: Bytes,
     model: Option<String>,
 ) -> CodexGatewayResult<(Bytes, Option<String>)> {
@@ -74,7 +98,13 @@ pub(crate) fn normalize_codex_public_model(
     })?);
     Ok((request_body, Some(DEFAULT_PUBLIC_GPT_MODEL_ID.to_string())))
 }
-pub(crate) fn filter_responses_request_fields(path: &str, root: &mut Map<String, Value>) {
+/// Strip a `/responses` request body down to the upstream-supported fields.
+///
+/// Retains only the allow-listed top-level keys for the given path, dropping
+/// anything else the client sent (the upstream rejects unknown fields). The
+/// allow-list differs between `/v1/responses` and `/v1/responses/compact`; any
+/// other path is left untouched.
+pub fn filter_responses_request_fields(path: &str, root: &mut Map<String, Value>) {
     root.retain(|key, _| match path {
         "/v1/responses" => matches!(
             key.as_str(),
@@ -109,10 +139,13 @@ pub(crate) fn filter_responses_request_fields(path: &str, root: &mut Map<String,
         _ => true,
     });
 }
-pub(crate) fn validate_responses_request(
-    path: &str,
-    root: &Map<String, Value>,
-) -> CodexGatewayResult<()> {
+/// Structurally validate a `/responses` request before it leaves the gateway.
+///
+/// No-op for non-`/responses` paths. For `/v1/responses` it checks that any
+/// JSON-object input messages are well formed. For other `/responses` paths
+/// (e.g. `/compact`) it additionally validates tool-call/tool-result pairing
+/// in the conversation history. Returns a `400` on the first violation.
+pub fn validate_responses_request(path: &str, root: &Map<String, Value>) -> CodexGatewayResult<()> {
     if !path.starts_with("/v1/responses") {
         return Ok(());
     }
@@ -124,13 +157,13 @@ pub(crate) fn validate_responses_request(
     validate_tool_call_history(root)?;
     Ok(())
 }
-pub(crate) fn normalize_codex_input_message_roles(root: &mut Map<String, Value>) {
+fn normalize_codex_input_message_roles(root: &mut Map<String, Value>) {
     let Some(input) = root.get_mut("input") else {
         return;
     };
     normalize_codex_input_message_roles_value(input);
 }
-pub(crate) fn normalize_codex_input_message_roles_value(value: &mut Value) {
+fn normalize_codex_input_message_roles_value(value: &mut Value) {
     match value {
         Value::Array(items) => {
             for item in items {
@@ -147,9 +180,7 @@ pub(crate) fn normalize_codex_input_message_roles_value(value: &mut Value) {
         _ => {},
     }
 }
-pub(crate) fn validate_json_object_input_messages(
-    root: &Map<String, Value>,
-) -> CodexGatewayResult<()> {
+fn validate_json_object_input_messages(root: &Map<String, Value>) -> CodexGatewayResult<()> {
     let format_type = root
         .get("text")
         .and_then(Value::as_object)
@@ -170,7 +201,7 @@ pub(crate) fn validate_json_object_input_messages(
          `json`",
     ))
 }
-pub(crate) fn responses_input_messages_contain_json_keyword(input: Option<&Value>) -> bool {
+fn responses_input_messages_contain_json_keyword(input: Option<&Value>) -> bool {
     let Some(input) = input else {
         return false;
     };
@@ -181,7 +212,7 @@ pub(crate) fn responses_input_messages_contain_json_keyword(input: Option<&Value
         _ => false,
     }
 }
-pub(crate) fn response_input_item_contains_json_keyword(item: &Value) -> bool {
+fn response_input_item_contains_json_keyword(item: &Value) -> bool {
     let Some(obj) = item.as_object() else {
         return false;
     };
@@ -191,7 +222,7 @@ pub(crate) fn response_input_item_contains_json_keyword(item: &Value) -> bool {
     obj.get("content")
         .is_some_and(response_content_contains_json_keyword)
 }
-pub(crate) fn response_content_contains_json_keyword(value: &Value) -> bool {
+fn response_content_contains_json_keyword(value: &Value) -> bool {
     match value {
         Value::String(text) => text_contains_json_keyword(text),
         Value::Array(items) => items.iter().any(response_content_contains_json_keyword),
@@ -206,10 +237,10 @@ pub(crate) fn response_content_contains_json_keyword(value: &Value) -> bool {
         _ => false,
     }
 }
-pub(crate) fn text_contains_json_keyword(text: &str) -> bool {
+fn text_contains_json_keyword(text: &str) -> bool {
     text.to_ascii_lowercase().contains("json")
 }
-pub(crate) fn validate_tool_call_history(root: &Map<String, Value>) -> CodexGatewayResult<()> {
+fn validate_tool_call_history(root: &Map<String, Value>) -> CodexGatewayResult<()> {
     let Some(input) = root.get("input") else {
         return Ok(());
     };
