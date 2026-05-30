@@ -102,7 +102,11 @@ fn shorten_openai_tool_name_candidate(name: &str) -> String {
             if idx > 0 {
                 let mut candidate = format!("mcp__{}", &name[idx + 2..]);
                 if candidate.len() > MAX_OPENAI_TOOL_NAME_LEN {
-                    candidate.truncate(MAX_OPENAI_TOOL_NAME_LEN);
+                    // Truncate on a char boundary; `String::truncate` panics if
+                    // the byte index splits a multi-byte UTF-8 char (a tool name
+                    // with Unicode after `mcp__` could otherwise crash the
+                    // handler). Matches the char-based fallback below.
+                    candidate = candidate.chars().take(MAX_OPENAI_TOOL_NAME_LEN).collect();
                 }
                 return candidate;
             }
