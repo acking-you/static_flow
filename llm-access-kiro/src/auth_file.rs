@@ -5,10 +5,7 @@
 //! canonicalization, and current-account selection deterministic so the rest
 //! of the runtime can treat account records as stable config objects.
 
-use std::{
-    env,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use llm_access_core::proxy::{AccountProxyMode, AccountProxySelection};
@@ -248,20 +245,6 @@ impl KiroAuthRecord {
     }
 }
 
-/// Resolve the root directory that stores persisted Kiro account JSON files.
-pub fn resolve_auths_dir() -> PathBuf {
-    if let Ok(path) = env::var("STATICFLOW_KIRO_AUTHS_DIR") {
-        let trimmed = path.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
-    let home = env::var("HOME").unwrap_or_else(|_| "/home/ts_user".to_string());
-    PathBuf::from(home)
-        .join(".static-flow")
-        .join("auths")
-        .join("kiro")
-}
 
 fn sanitize_auth_file_stem(name: &str) -> String {
     let trimmed = name.trim();
@@ -327,77 +310,6 @@ pub async fn delete_auth_file(path: &Path) -> Result<()> {
         tokio::fs::remove_file(path)
             .await
             .with_context(|| format!("failed to delete `{}`", path.display()))?;
-    }
-    Ok(())
-}
-
-/// Load and canonicalize every Kiro account JSON file from `dir`.
-pub async fn load_auth_records(dir: &Path) -> Result<Vec<KiroAuthRecord>> {
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut entries = tokio::fs::read_dir(dir)
-        .await
-        .with_context(|| format!("failed to read `{}`", dir.display()))?;
-    let mut records = Vec::new();
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .with_context(|| format!("failed to read entry from `{}`", dir.display()))?
-    {
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        if let Some(record) = load_auth_file(&path).await? {
-            records.push(record);
-        }
-    }
-    records.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(records)
-}
-
-/// Save one auth record into the target directory and return the written path.
-pub async fn save_auth_record(dir: &Path, record: &KiroAuthRecord) -> Result<PathBuf> {
-    let canonical = record.clone().canonicalize();
-    let path = auth_path_for_name_in_dir(dir, &canonical.name);
-    save_auth_file(&path, &canonical).await?;
-    Ok(path)
-}
-
-/// Delete one named auth record from the target directory.
-///
-/// The lookup first tries the canonical file name, then falls back to scanning
-/// existing JSON files so old records with non-canonical stems can still be
-/// removed cleanly.
-pub async fn delete_auth_record(dir: &Path, name: &str) -> Result<()> {
-    if !dir.exists() {
-        return Ok(());
-    }
-    let candidate = auth_path_for_name_in_dir(dir, name);
-    if candidate.exists() {
-        delete_auth_file(&candidate).await?;
-        return Ok(());
-    }
-    let mut entries = tokio::fs::read_dir(dir)
-        .await
-        .with_context(|| format!("failed to read `{}`", dir.display()))?;
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .with_context(|| format!("failed to read entry from `{}`", dir.display()))?
-    {
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        let Some(record) = load_auth_file(&path).await? else {
-            continue;
-        };
-        if record.name == name {
-            delete_auth_file(&path).await?;
-            return Ok(());
-        }
     }
     Ok(())
 }

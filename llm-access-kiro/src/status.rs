@@ -5,7 +5,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{auth_file::KiroAuthRecord, wire::UsageLimitsResponse};
@@ -115,33 +114,6 @@ pub fn persisted_status_cache_path_from_dir(auths_dir: &Path) -> PathBuf {
     auths_dir.join(".status-cache").join("snapshot.json")
 }
 
-pub async fn load_persisted_status_cache_from_dir(
-    auths_dir: &Path,
-) -> Result<KiroStatusCacheSnapshot> {
-    let path = persisted_status_cache_path_from_dir(auths_dir);
-    if !path.exists() {
-        return Ok(KiroStatusCacheSnapshot::default());
-    }
-    let raw = tokio::fs::read_to_string(&path).await?;
-    if raw.trim().is_empty() {
-        return Ok(KiroStatusCacheSnapshot::default());
-    }
-    let snapshot = serde_json::from_str(&raw)?;
-    Ok(snapshot)
-}
-
-pub async fn persist_status_cache_to_dir(
-    auths_dir: &Path,
-    snapshot: &KiroStatusCacheSnapshot,
-) -> Result<()> {
-    let path = persisted_status_cache_path_from_dir(auths_dir);
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    let content = serde_json::to_string_pretty(snapshot)?;
-    tokio::fs::write(path, content).await?;
-    Ok(())
-}
 
 pub fn account_request_block_reason(
     auth: &KiroAuthRecord,
@@ -197,24 +169,6 @@ pub fn apply_snapshot_summary(
     snapshot.error_message = if error_count == 0 { None } else { first_error_message(snapshot) };
 }
 
-pub fn merge_newer_account_statuses(
-    snapshot: &mut KiroStatusCacheSnapshot,
-    current: &KiroStatusCacheSnapshot,
-) {
-    for (account_name, current_status) in &current.accounts {
-        let current_checked_at = current_status.cache.last_checked_at.unwrap_or(i64::MIN);
-        let snapshot_checked_at = snapshot
-            .accounts
-            .get(account_name)
-            .and_then(|status| status.cache.last_checked_at)
-            .unwrap_or(i64::MIN);
-        if current_checked_at >= snapshot_checked_at {
-            snapshot
-                .accounts
-                .insert(account_name.clone(), current_status.clone());
-        }
-    }
-}
 
 pub fn refresh_snapshot_aggregate_metadata(
     snapshot: &mut KiroStatusCacheSnapshot,
@@ -278,60 +232,6 @@ pub fn duplicate_upstream_identities(
         .collect()
 }
 
-pub fn ready_status_entry(
-    usage: &UsageLimitsResponse,
-    checked_at: i64,
-    refresh_interval_seconds: u64,
-) -> KiroCachedAccountStatus {
-    KiroCachedAccountStatus {
-        balance: Some(KiroBalanceView::from_usage(usage)),
-        cache: KiroCacheView {
-            status: STATUS_READY.to_string(),
-            refresh_interval_seconds,
-            last_checked_at: Some(checked_at),
-            last_success_at: Some(checked_at),
-            error_message: None,
-        },
-    }
-}
-
-pub fn error_status_entry(
-    prior: Option<&KiroCachedAccountStatus>,
-    checked_at: i64,
-    error_message: String,
-    refresh_interval_seconds: u64,
-) -> KiroCachedAccountStatus {
-    let previous_balance = prior.and_then(|status| status.balance.clone());
-    let previous_success_at = prior.and_then(|status| status.cache.last_success_at);
-    let status = if previous_balance.is_some() { STATUS_DEGRADED } else { STATUS_ERROR };
-    KiroCachedAccountStatus {
-        balance: previous_balance,
-        cache: KiroCacheView {
-            status: status.to_string(),
-            refresh_interval_seconds,
-            last_checked_at: Some(checked_at),
-            last_success_at: previous_success_at,
-            error_message: Some(error_message),
-        },
-    }
-}
-
-pub fn disabled_status_entry(
-    prior: Option<&KiroCachedAccountStatus>,
-    checked_at: i64,
-    refresh_interval_seconds: u64,
-) -> KiroCachedAccountStatus {
-    KiroCachedAccountStatus {
-        balance: prior.and_then(|status| status.balance.clone()),
-        cache: KiroCacheView {
-            status: STATUS_DISABLED.to_string(),
-            refresh_interval_seconds,
-            last_checked_at: Some(checked_at),
-            last_success_at: prior.and_then(|status| status.cache.last_success_at),
-            error_message: None,
-        },
-    }
-}
 
 pub fn quota_exhausted_status_entry(
     prior: Option<&KiroCachedAccountStatus>,

@@ -26,21 +26,6 @@ pub fn parse_kiro_billable_model_multipliers_override_json(
     Ok(overrides)
 }
 
-pub fn canonicalize_kiro_billable_model_multipliers_override_json(
-    value: Option<&str>,
-) -> Result<Option<String>> {
-    let Some(value) = value.map(str::trim).filter(|raw| !raw.is_empty()) else {
-        return Ok(None);
-    };
-    let overrides = parse_kiro_billable_model_multipliers_override_json(value)?;
-    if overrides.is_empty() {
-        Ok(None)
-    } else {
-        serde_json::to_string(&overrides)
-            .map(Some)
-            .map_err(|err| anyhow!("failed to serialize billable multiplier override: {err}"))
-    }
-}
 
 pub fn resolve_effective_kiro_billable_model_multipliers(
     default_multipliers: &BTreeMap<String, f64>,

@@ -25,12 +25,6 @@ const SUPPORTED_MODEL_CATALOG: [(&str, &str, i64); 14] = [
     ("claude-haiku-4-5-20251001-thinking", "Claude Haiku 4.5 (Thinking)", 1727740800),
 ];
 
-pub fn supported_model_ids() -> Vec<String> {
-    SUPPORTED_MODEL_CATALOG
-        .iter()
-        .map(|(id, _, _)| (*id).to_string())
-        .collect()
-}
 
 pub fn supported_models_response() -> ModelsResponse {
     ModelsResponse {

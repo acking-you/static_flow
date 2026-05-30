@@ -1429,17 +1429,6 @@ fn sanitize_tool_name(name: &str) -> String {
     }
 }
 
-pub fn classify_tool_name_rewrite_reason(name: &str) -> &'static str {
-    let has_unsupported_characters = name
-        .chars()
-        .any(|ch| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'));
-    match (has_unsupported_characters, name.len() > TOOL_NAME_MAX_LEN) {
-        (true, true) => "unsupported_characters_and_length",
-        (true, false) => "unsupported_characters",
-        (false, true) => "length_limit",
-        (false, false) => "unchanged",
-    }
-}
 
 fn make_hashed_tool_name_alias(original_name: &str, visible_base: &str) -> String {
     let mut hasher = Sha256::new();

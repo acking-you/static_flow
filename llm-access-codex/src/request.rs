@@ -14,7 +14,7 @@ use crate::{
     anthropic_messages::adapt_anthropic_messages_request,
     conversation_normalizer::repair_responses_request,
     error::{
-        bad_request, bad_request_with_detail, internal_error, method_not_allowed, not_found,
+        bad_request, bad_request_with_detail, internal_error, method_not_allowed,
         CodexGatewayError, CodexGatewayResult,
     },
     instructions::codex_default_instructions,
@@ -2282,15 +2282,6 @@ pub fn normalize_responses_request(
     }
 }
 
-/// Reject unsupported public gateway paths before any auth or upstream work
-/// begins.
-pub fn ensure_supported_gateway_path(path: &str) -> CodexGatewayResult<()> {
-    if is_supported_codex_post_path(path) || is_models_path(path) {
-        Ok(())
-    } else {
-        Err(not_found("Unsupported llm gateway endpoint"))
-    }
-}
 
 fn is_supported_codex_post_path(path: &str) -> bool {
     matches!(
@@ -2315,25 +2306,6 @@ fn is_codex_file_finalize_path(path: &str) -> bool {
     !file_id.is_empty() && !file_id.contains('/')
 }
 
-/// Extract the presented API key from Authorization or x-api-key headers.
-pub fn extract_presented_key(headers: &HeaderMap) -> Option<String> {
-    if let Some(value) = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return Some(value.to_string());
-    }
-    headers
-        .get("x-api-key")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
 
 /// Reconstruct the externally visible origin from reverse-proxy headers.
 pub fn external_origin(headers: &HeaderMap) -> Option<String> {
@@ -2352,13 +2324,6 @@ pub fn external_origin(headers: &HeaderMap) -> Option<String> {
     Some(format!("{scheme}://{host}"))
 }
 
-/// Read one query parameter from a raw query string.
-pub fn extract_query_param(query: &str, key: &str) -> Option<String> {
-    let raw = query.strip_prefix('?').unwrap_or(query);
-    url::form_urlencoded::parse(raw.as_bytes())
-        .find(|(candidate, _)| candidate == key)
-        .map(|(_, value)| value.into_owned())
-}
 
 /// Return whether the path targets the supported `/v1/models` endpoint.
 pub fn is_models_path(path: &str) -> bool {
