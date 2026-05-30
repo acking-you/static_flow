@@ -35,12 +35,14 @@ FRONTEND = "static-flow-frontend"
 
 # Files whose change can affect every crate's build/lint, so they force a full
 # run rather than a per-crate subset: the root manifest, the lockfile, the
-# toolchain pin (rust-toolchain*), and cargo config (.cargo/). CI YAML and
-# scripts deliberately are NOT here -- they change no Rust code, so a PR that
-# only touches them compiles nothing; the `detect` job itself exercises this
-# selector.
+# toolchain pin (rust-toolchain*), cargo config (.cargo/), and the vendored
+# trees first-party crates compile through path deps / patches -- deps/ (lance,
+# lancedb, pingora, ffmpeg-sidecar) and patches/ (object_store, patched in by
+# the root [patch.crates-io]). CI YAML and scripts deliberately are NOT here:
+# they change no Rust code, so a PR touching only them compiles nothing; the
+# `detect` job itself exercises this selector.
 CROSS_EXACT = {"Cargo.toml", "Cargo.lock"}
-CROSS_PREFIX = (".cargo/",)
+CROSS_PREFIX = (".cargo/", "deps/", "patches/")
 
 
 def run(cmd, **kw):
@@ -67,7 +69,7 @@ def workspace_graph():
                 if isinstance(spec, dict) and "path" in spec:
                     tgt = (REPO / m / spec["path"]).resolve()
                     try:
-                        rel = str(tgt.relative_to(REPO))
+                        rel = tgt.relative_to(REPO).as_posix()
                     except ValueError:
                         continue
                     if rel in dir2name:
@@ -153,7 +155,7 @@ def detect():
 
 def sh(cmd):
     print("+", " ".join(cmd))
-    if os.environ.get("CI_AFFECTED_DRY_RUN"):
+    if os.environ.get("CI_AFFECTED_DRY_RUN", "").lower() in ("1", "true"):
         return 0
     return subprocess.run(cmd, cwd=REPO).returncode
 
@@ -165,8 +167,8 @@ def run_test():
         print("No affected crates; skipping tests.")
         return 0
     if mode == "all":
-        return sh(["cargo", "test", "--workspace", "--locked", "--jobs", "8"])
-    cmd = ["cargo", "test", "--locked", "--jobs", "8"]
+        return sh(["cargo", "test", "--workspace", "--locked"])
+    cmd = ["cargo", "test", "--locked"]
     for c in crates:
         cmd += ["-p", c]
     return sh(cmd)
@@ -190,7 +192,7 @@ def run_clippy():
     rc = 0
     non_frontend = [c for c in crates if c != FRONTEND]
     if non_frontend:
-        cmd = ["cargo", "clippy", "--jobs", "8"]
+        cmd = ["cargo", "clippy"]
         for c in non_frontend:
             cmd += ["-p", c]
         cmd += ["--tests", "--", "-D", "warnings"]
