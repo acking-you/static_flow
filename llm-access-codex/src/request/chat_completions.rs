@@ -235,9 +235,8 @@ pub(crate) fn flush_assistant_output_parts(
     input_items.push(json!({
         "type": "message",
         "role": "assistant",
-        "content": pending_parts.clone(),
+        "content": std::mem::take(pending_parts),
     }));
-    pending_parts.clear();
 }
 /// Convert assistant chat history into responses message items.
 pub(crate) fn append_assistant_content_to_responses_input(
@@ -526,10 +525,10 @@ pub(crate) fn adapt_openai_chat_completions_request(
     }
 
     if let Some(functions) = obj.get("functions").and_then(Value::as_array) {
-        let mut mapped_functions = out
-            .remove("tools")
-            .and_then(|value| value.as_array().cloned())
-            .unwrap_or_default();
+        let mut mapped_functions = match out.remove("tools") {
+            Some(Value::Array(vec)) => vec,
+            _ => Vec::new(),
+        };
         for function in functions {
             let Some(function_obj) = function.as_object() else {
                 continue;
@@ -547,10 +546,10 @@ pub(crate) fn adapt_openai_chat_completions_request(
     }
 
     if let Some(dynamic_tools) = get_dynamic_tools_array(obj) {
-        let mut mapped_dynamic_tools = out
-            .remove("tools")
-            .and_then(|value| value.as_array().cloned())
-            .unwrap_or_default();
+        let mut mapped_dynamic_tools = match out.remove("tools") {
+            Some(Value::Array(vec)) => vec,
+            _ => Vec::new(),
+        };
         for dynamic_tool in dynamic_tools {
             let Some(tool_obj) = dynamic_tool.as_object() else {
                 continue;

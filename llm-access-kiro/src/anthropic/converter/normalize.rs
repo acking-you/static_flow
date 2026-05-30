@@ -211,12 +211,9 @@ pub(crate) fn normalize_message(
 // The goal is to accept harmless transport noise from upstream proxies without
 // inventing new semantics or rewriting the conversation history.
 pub fn normalize_request(req: &MessagesRequest) -> Result<NormalizedRequest, ConversionError> {
-    let last_user_idx = req
-        .messages
-        .iter()
-        .rposition(|message| message.role == "user")
-        .ok_or_else(|| no_user_message_error(&req.messages))?;
-    let current_user_start = trailing_user_message_start(&req.messages[..last_user_idx + 1])?;
+    let current_turn = current_user_message_range(&req.messages)?;
+    let current_user_start = current_turn.start;
+    let last_user_idx = current_turn.end - 1;
     let mut events = Vec::new();
     let mut normalized_messages = Vec::with_capacity(last_user_idx + 1);
     let mut message_index_map = Vec::with_capacity(last_user_idx + 1);

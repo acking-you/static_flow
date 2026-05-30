@@ -5,27 +5,18 @@
 #[allow(unused_imports, reason = "submodule inherits parent facade imports via glob")]
 use super::*;
 
-pub(crate) fn trailing_user_message_start(
-    messages: &[super::types::Message],
-) -> Result<usize, ConversionError> {
-    let Some(mut start) = messages.iter().rposition(|message| message.role == "user") else {
-        return Err(no_user_message_error(messages));
-    };
-    while start > 0 && messages[start - 1].role == "user" {
-        start -= 1;
-    }
-    Ok(start)
-}
 pub fn current_user_message_range(
     messages: &[super::types::Message],
 ) -> Result<Range<usize>, ConversionError> {
-    let end = messages
+    let last_user_idx = messages
         .iter()
         .rposition(|message| message.role == "user")
-        .map(|index| index + 1)
         .ok_or_else(|| no_user_message_error(messages))?;
-    let start = trailing_user_message_start(&messages[..end])?;
-    Ok(start..end)
+    let mut start = last_user_idx;
+    while start > 0 && messages[start - 1].role == "user" {
+        start -= 1;
+    }
+    Ok(start..(last_user_idx + 1))
 }
 pub(crate) fn no_user_message_error(messages: &[super::types::Message]) -> ConversionError {
     if messages.is_empty() {
