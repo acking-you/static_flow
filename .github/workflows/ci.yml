@@ -90,6 +90,37 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Provision DuckDB prebuilt library
+        # llm-access-store -> libduckdb-sys links libduckdb at the test-binary
+        # link stage. On the default (non-bundled) path libduckdb-sys downloads
+        # the .so into target/duckdb-download/, but Swatinem/rust-cache prunes
+        # that non-cargo artifact from the restored target/ while keeping the
+        # build-script fingerprint, so a warm cache links against a now-missing
+        # .so ("rust-lld: unable to find library -lduckdb"). clippy never links
+        # so it stays green and hides the breakage. Fetch the matching prebuilt
+        # into a dir outside target/ and point libduckdb-sys at it via
+        # DUCKDB_LIB_DIR (checked before the download path; flipping it from
+        # unset to set also forces build.rs to re-run, self-healing an already
+        # poisoned cache). LD_LIBRARY_PATH lets the test binaries load it at run
+        # time. Version is decoded from Cargo.lock so it tracks future bumps.
+        run: |
+          set -euo pipefail
+          sys_ver="$(awk '/^name = "libduckdb-sys"$/ { getline; gsub(/version = "|"/, ""); print; exit }' Cargo.lock)"
+          mid="$(printf '%s' "$sys_ver" | cut -d. -f2)"
+          duckdb_ver="$((10#$mid / 10000)).$(((10#$mid / 100) % 100)).$((10#$mid % 100))"
+          echo "libduckdb-sys $sys_ver -> DuckDB v$duckdb_ver"
+          lib_dir="$RUNNER_TEMP/duckdb-lib"
+          mkdir -p "$lib_dir"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/libduckdb.zip" \
+            "https://github.com/duckdb/duckdb/releases/download/v${duckdb_ver}/libduckdb-linux-amd64.zip"
+          unzip -o "$RUNNER_TEMP/libduckdb.zip" -d "$lib_dir"
+          test -f "$lib_dir/libduckdb.so"
+          {
+            echo "DUCKDB_LIB_DIR=$lib_dir"
+            echo "DUCKDB_INCLUDE_DIR=$lib_dir"
+            echo "LD_LIBRARY_PATH=$lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          } >> "$GITHUB_ENV"
+
       - name: Run tests for affected crates
         # subset -> test the changed crates + their dependents; all -> the
         # full workspace. See scripts/ci_affected.py.
