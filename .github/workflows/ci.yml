@@ -10,8 +10,33 @@ permissions:
   contents: read
 
 jobs:
+  # Lightweight gate: figure out which crates the change affects. Pure
+  # stdlib (tomllib + git diff) -- no cargo, no submodules, no compilation --
+  # so clippy/test below are skipped entirely when no crate code changed.
+  changes:
+    name: detect affected crates
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.detect.outputs.mode }}
+      test_crates: ${{ steps.detect.outputs.test_crates }}
+      clippy_crates: ${{ steps.detect.outputs.clippy_crates }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect affected crates
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/ci_affected.py detect
+
   clippy:
     name: clippy
+    needs: changes
+    if: needs.changes.outputs.mode != 'none'
     runs-on: ubuntu-latest
 
     steps:
@@ -34,15 +59,18 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Run clippy for backend, shared, and CLI
-        run: cargo clippy -p static-flow-shared -p static-flow-backend -p sf-cli --tests -- -D warnings
-
-      - name: Run clippy for frontend (wasm)
-        run: cargo clippy -p static-flow-frontend --target wasm32-unknown-unknown -- -D warnings
+      - name: Run clippy for affected crates
+        # subset -> clippy only the changed crates; all -> the curated
+        # host + wasm set. See scripts/ci_affected.py.
+        env:
+          MODE: ${{ needs.changes.outputs.mode }}
+          CRATES: ${{ needs.changes.outputs.clippy_crates }}
+        run: python3 scripts/ci_affected.py run-clippy
 
   test:
     name: test
-    if: github.event_name == 'pull_request'
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.mode != 'none'
     runs-on: ubuntu-latest
 
     steps:
@@ -62,5 +90,10 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Run workspace tests
-        run: cargo test --workspace --locked
+      - name: Run tests for affected crates
+        # subset -> test the changed crates + their dependents; all -> the
+        # full workspace. See scripts/ci_affected.py.
+        env:
+          MODE: ${{ needs.changes.outputs.mode }}
+          CRATES: ${{ needs.changes.outputs.test_crates }}
+        run: python3 scripts/ci_affected.py run-test
