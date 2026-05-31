@@ -119,12 +119,12 @@ fn make_structured_output_tool_name(existing_tools: &[Tool]) -> String {
         .iter()
         .map(|tool| tool.tool_specification.name.to_lowercase())
         .collect::<HashSet<_>>();
-    if !existing.contains(&STRUCTURED_OUTPUT_TOOL_NAME_BASE.to_lowercase()) {
+    if !existing.contains(STRUCTURED_OUTPUT_TOOL_NAME_BASE) {
         return STRUCTURED_OUTPUT_TOOL_NAME_BASE.to_string();
     }
     for suffix in 1.. {
         let candidate = format!("{STRUCTURED_OUTPUT_TOOL_NAME_BASE}_{suffix}");
-        if !existing.contains(&candidate.to_lowercase()) {
+        if !existing.contains(&candidate) {
             return candidate;
         }
     }

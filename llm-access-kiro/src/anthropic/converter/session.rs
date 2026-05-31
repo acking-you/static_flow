@@ -10,11 +10,12 @@ use super::{
 use crate::anthropic::types::Metadata;
 
 pub fn preview_session_value(value: &str) -> String {
-    let mut preview = value
-        .chars()
+    let mut chars = value.chars();
+    let mut preview = chars
+        .by_ref()
         .take(SESSION_SOURCE_PREVIEW_MAX_CHARS)
         .collect::<String>();
-    if value.chars().count() > SESSION_SOURCE_PREVIEW_MAX_CHARS {
+    if chars.next().is_some() {
         preview.push_str("...[truncated]");
     }
     preview
