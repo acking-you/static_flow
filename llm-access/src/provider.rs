@@ -3571,6 +3571,7 @@ async fn dispatch_kiro_proxy(
                 control_store,
                 kiro_cache_simulator,
                 usage_meta,
+                affinity_update: None,
                 _key_permit: key_permit
                     .take()
                     .expect("kiro key permit should be held until response is returned"),
@@ -3578,12 +3579,13 @@ async fn dispatch_kiro_proxy(
             };
             return stream_kiro_upstream_response(stream_response, response_ctx);
         }
-        remember_kiro_session_affinity(
-            kiro_session_affinity.as_ref(),
-            &key.key_id,
-            affinity_session_id.as_deref(),
-            &route.account_name,
-        );
+        let affinity_update =
+            affinity_session_id
+                .clone()
+                .map(|session_id| KiroResponseAffinityUpdate {
+                    affinity: Arc::clone(&kiro_session_affinity),
+                    session_id,
+                });
         let response_ctx = KiroResponseContext {
             key,
             route,
@@ -3599,6 +3601,7 @@ async fn dispatch_kiro_proxy(
             control_store,
             kiro_cache_simulator,
             usage_meta,
+            affinity_update,
             _key_permit: key_permit
                 .take()
                 .expect("kiro key permit should be held until response is returned"),
@@ -3623,8 +3626,14 @@ struct KiroResponseContext {
     control_store: Arc<dyn ControlStore>,
     kiro_cache_simulator: Arc<KiroCacheSimulator>,
     usage_meta: ProviderUsageMetadata,
+    affinity_update: Option<KiroResponseAffinityUpdate>,
     _key_permit: LimitPermit,
     _account_permit: KiroRequestLease,
+}
+
+struct KiroResponseAffinityUpdate {
+    affinity: Arc<KiroSessionAffinity>,
+    session_id: String,
 }
 
 struct KiroWebsearchDispatch {
@@ -4636,6 +4645,7 @@ fn stream_kiro_upstream_response(response: KiroPeekedStream, ctx: KiroResponseCo
             control_store,
             kiro_cache_simulator,
             usage_meta,
+            affinity_update: _affinity_update,
             _key_permit,
             _account_permit,
         } = ctx;
@@ -4900,6 +4910,13 @@ async fn non_stream_kiro_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "api_error",
             "failed to record usage",
+        );
+    }
+    if let Some(affinity_update) = &ctx.affinity_update {
+        affinity_update.affinity.remember(
+            &ctx.key.key_id,
+            &affinity_update.session_id,
+            &ctx.route.account_name,
         );
     }
     let body = serde_json::json!({

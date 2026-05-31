@@ -1,4 +1,6 @@
 use std::{
+    cell::RefCell,
+    fmt::Write as _,
     num::NonZeroUsize,
     sync::Mutex,
     time::{Duration, Instant},
@@ -12,10 +14,8 @@ const DEFAULT_KIRO_SESSION_AFFINITY_TTL_SECONDS: u64 = 6 * 60 * 60;
 const MIN_KIRO_SESSION_AFFINITY_TTL_SECONDS: u64 = 60;
 const MAX_KIRO_SESSION_AFFINITY_TTL_SECONDS: u64 = 24 * 60 * 60;
 
-#[derive(Debug, Clone, Eq, Hash, PartialEq)]
-struct KiroSessionAffinityKey {
-    key_id: Box<str>,
-    session_id: Box<str>,
+thread_local! {
+    static LOOKUP_KEY_BUF: RefCell<String> = RefCell::new(String::with_capacity(128));
 }
 
 #[derive(Debug, Clone)]
@@ -26,7 +26,7 @@ struct KiroSessionAffinityEntry {
 
 #[derive(Debug)]
 pub(super) struct KiroSessionAffinity {
-    entries: Mutex<LruCache<KiroSessionAffinityKey, KiroSessionAffinityEntry>>,
+    entries: Mutex<LruCache<Box<str>, KiroSessionAffinityEntry>>,
     ttl: Duration,
 }
 
@@ -63,9 +63,7 @@ impl KiroSessionAffinity {
     }
 
     fn remember_at(&self, key_id: &str, session_id: &str, account_name: &str, now: Instant) {
-        let Some(key) = affinity_key(key_id, session_id) else {
-            return;
-        };
+        let Some(key) = affinity_key(key_id, session_id) else { return };
         let Some(account_name) = trimmed_box(account_name) else {
             return;
         };
@@ -83,22 +81,40 @@ impl KiroSessionAffinity {
     }
 
     fn lookup_at(&self, key_id: &str, session_id: &str, now: Instant) -> Option<String> {
-        let key = affinity_key(key_id, session_id)?;
-        let mut entries = self.entries.lock().expect("kiro session affinity mutex");
-        let entry = entries.get(&key)?;
-        if now.saturating_duration_since(entry.updated_at) > self.ttl {
-            entries.pop(&key);
-            return None;
-        }
-        Some(entry.account_name.to_string())
+        let (key_id, session_id) = trimmed_key_parts(key_id, session_id)?;
+        LOOKUP_KEY_BUF.with(|buf| {
+            let mut buf = buf.borrow_mut();
+            build_affinity_key(&mut buf, key_id, session_id);
+
+            let mut entries = self.entries.lock().expect("kiro session affinity mutex");
+            let entry = entries.get(buf.as_str())?;
+            if now.saturating_duration_since(entry.updated_at) > self.ttl {
+                entries.pop(buf.as_str());
+                return None;
+            }
+            Some(entry.account_name.to_string())
+        })
     }
 }
 
-fn affinity_key(key_id: &str, session_id: &str) -> Option<KiroSessionAffinityKey> {
-    Some(KiroSessionAffinityKey {
-        key_id: trimmed_box(key_id)?,
-        session_id: trimmed_box(session_id)?,
-    })
+fn affinity_key(key_id: &str, session_id: &str) -> Option<Box<str>> {
+    let (key_id, session_id) = trimmed_key_parts(key_id, session_id)?;
+    let mut key = String::with_capacity(key_id.len() + session_id.len() + 20);
+    build_affinity_key(&mut key, key_id, session_id);
+    Some(key.into_boxed_str())
+}
+
+fn build_affinity_key(buf: &mut String, key_id: &str, session_id: &str) {
+    buf.clear();
+    let _ = write!(buf, "{}:", key_id.len());
+    buf.push_str(key_id);
+    buf.push_str(session_id);
+}
+
+fn trimmed_key_parts<'a>(key_id: &'a str, session_id: &'a str) -> Option<(&'a str, &'a str)> {
+    let key_id = key_id.trim();
+    let session_id = session_id.trim();
+    (!key_id.is_empty() && !session_id.is_empty()).then_some((key_id, session_id))
 }
 
 fn trimmed_box(value: &str) -> Option<Box<str>> {
@@ -126,6 +142,16 @@ mod tests {
 
         assert_eq!(affinity.lookup("key-a", "session-a").as_deref(), Some("account-a"));
         assert_eq!(affinity.lookup("key-b", "session-a").as_deref(), Some("account-b"));
+    }
+
+    #[test]
+    fn lookup_distinguishes_separator_like_key_parts() {
+        let affinity = KiroSessionAffinity::new(4, Duration::from_secs(60));
+        affinity.remember("key:a", "bc", "account-a");
+        affinity.remember("key", "a:bc", "account-b");
+
+        assert_eq!(affinity.lookup("key:a", "bc").as_deref(), Some("account-a"));
+        assert_eq!(affinity.lookup("key", "a:bc").as_deref(), Some("account-b"));
     }
 
     #[test]
