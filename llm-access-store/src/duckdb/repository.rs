@@ -277,11 +277,12 @@ impl DuckDbUsageRepository {
     /// call.
     pub async fn append_usage_events_if_new(&self, events: &[UsageEvent]) -> anyhow::Result<usize> {
         let deduped = dedupe_usage_events_owned(events.to_vec());
-        if deduped.is_empty() {
+        let len = deduped.len();
+        if len == 0 {
             return Ok(0);
         }
-        UsageEventSink::append_usage_events(self, &deduped).await?;
-        Ok(deduped.len())
+        UsageEventSink::append_usage_events_owned(self, deduped).await?;
+        Ok(len)
     }
 
     /// Append already-enriched fact rows after removing only in-memory
