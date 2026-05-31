@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kiro Local Importer"
+  short_description: "Import local Kiro CLI accounts into StaticFlow safely."
+  default_prompt: "Discover local Kiro auth SQLite files, import selected Kiro accounts through the local StaticFlow admin API, and apply scheduling and proxy settings."
