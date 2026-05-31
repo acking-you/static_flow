@@ -1,6 +1,7 @@
 //! Provider-facing HTTP entrypoints for `llm-access`.
 
 mod kiro_error;
+mod kiro_session_affinity;
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -85,9 +86,12 @@ use lru::LruCache;
 use rand::Rng;
 use serde_json::{json, Value};
 
-use self::kiro_error::{
-    kiro_conversion_error_response, kiro_json_error, kiro_upstream_error_response,
-    KiroRouteFailure, KiroRouteFailureKind,
+use self::{
+    kiro_error::{
+        kiro_conversion_error_response, kiro_json_error, kiro_upstream_error_response,
+        KiroRouteFailure, KiroRouteFailureKind,
+    },
+    kiro_session_affinity::KiroSessionAffinity,
 };
 use crate::{
     activity::RequestActivityTracker, codex_refresh, geoip::GeoIpResolver, kiro_headers,
@@ -389,6 +393,7 @@ pub struct ProviderState {
     request_limiter: Arc<RequestLimiter>,
     codex_account_cooldowns: Arc<CodexAccountCooldowns>,
     kiro_request_scheduler: Arc<KiroRequestScheduler>,
+    kiro_session_affinity: Arc<KiroSessionAffinity>,
     kiro_latency_ranker: Arc<KiroLatencyRanker>,
     request_activity: Arc<RequestActivityTracker>,
 }
@@ -405,6 +410,7 @@ pub struct ProviderDispatchDeps {
     request_limiter: Arc<RequestLimiter>,
     codex_account_cooldowns: Arc<CodexAccountCooldowns>,
     kiro_request_scheduler: Arc<KiroRequestScheduler>,
+    kiro_session_affinity: Arc<KiroSessionAffinity>,
     kiro_latency_ranker: Arc<KiroLatencyRanker>,
 }
 
@@ -505,6 +511,7 @@ impl ProviderState {
             request_limiter: Arc::new(RequestLimiter::default()),
             codex_account_cooldowns: Arc::new(CodexAccountCooldowns::default()),
             kiro_request_scheduler: KiroRequestScheduler::new(),
+            kiro_session_affinity: Arc::new(KiroSessionAffinity::from_env()),
             kiro_latency_ranker,
             request_activity,
         }
@@ -565,6 +572,7 @@ impl ProviderState {
             request_limiter: Arc::clone(&self.request_limiter),
             codex_account_cooldowns: Arc::clone(&self.codex_account_cooldowns),
             kiro_request_scheduler: Arc::clone(&self.kiro_request_scheduler),
+            kiro_session_affinity: Arc::clone(&self.kiro_session_affinity),
             kiro_latency_ranker: Arc::clone(&self.kiro_latency_ranker),
         }
     }
@@ -1001,6 +1009,7 @@ async fn select_kiro_route_with_account_permit(
     routes: &[ProviderKiroRoute],
     failed_accounts: &HashSet<String>,
     latency_ranker: &KiroLatencyRanker,
+    preferred_account_name: Option<&str>,
 ) -> Result<(ProviderKiroRoute, KiroRequestLease), Response> {
     if routes.is_empty() {
         return Err(kiro_json_error(
@@ -1013,6 +1022,39 @@ async fn select_kiro_route_with_account_permit(
     loop {
         let mut saw_limit = false;
         let mut shortest_wait: Option<Duration> = None;
+        let proxy_cooldowns = scheduler.proxy_cooldown_snapshot();
+        if let Some(preferred_route) = preferred_account_name
+            .and_then(|account_name| {
+                routes.iter().find(|route| {
+                    route.account_name == account_name
+                        && !failed_accounts.contains(&route.account_name)
+                })
+            })
+            .filter(|route| {
+                proxy_cooldown_key_for_route(route)
+                    .is_none_or(|key| !proxy_cooldowns.contains_key(&key))
+            })
+        {
+            if scheduler
+                .cooldown_for_account(&preferred_route.routing_identity)
+                .is_none()
+            {
+                if let Ok(permit) = scheduler.try_acquire(
+                    &preferred_route.routing_identity,
+                    preferred_route
+                        .account_request_max_concurrency
+                        .unwrap_or(llm_access_core::store::DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY),
+                    preferred_route
+                        .account_request_min_start_interval_ms
+                        .unwrap_or(
+                            llm_access_core::store::DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
+                        ),
+                    queued_at,
+                ) {
+                    return Ok((preferred_route.clone(), permit));
+                }
+            }
+        }
         for route in selection_ordered_kiro_routes(routes, scheduler, latency_ranker, now_millis())
         {
             if failed_accounts.contains(&route.account_name) {
@@ -2972,6 +3014,7 @@ async fn dispatch_kiro_proxy(
         kiro_cache_simulator,
         request_limiter,
         kiro_request_scheduler,
+        kiro_session_affinity,
         kiro_latency_ranker,
         ..
     } = deps;
@@ -3065,6 +3108,9 @@ async fn dispatch_kiro_proxy(
     if !route_mcp_web_search {
         websearch::remove_web_search_tools(&mut payload);
     }
+    let resolved_session =
+        resolve_kiro_request_session(&request_headers, payload.metadata.as_ref());
+    let affinity_session_id = kiro_affinity_session_id(&resolved_session).map(str::to_string);
     if routes[0].remote_media_resolution_enabled {
         if let Err(err) = resolve_kiro_remote_media_sources(&mut payload).await {
             let message = err.to_string();
@@ -3123,7 +3169,9 @@ async fn dispatch_kiro_proxy(
             route_store,
             request_limiter,
             kiro_request_scheduler,
+            kiro_session_affinity,
             kiro_latency_ranker,
+            affinity_session_id,
             request_input_tokens,
             usage_meta,
         })
@@ -3161,8 +3209,6 @@ async fn dispatch_kiro_proxy(
             return response;
         },
     };
-    let resolved_session =
-        resolve_kiro_request_session(&request_headers, payload.metadata.as_ref());
     let conversion = match convert_normalized_request_with_resolved_session(
         normalized,
         routes[0].request_validation_enabled,
@@ -3211,6 +3257,9 @@ async fn dispatch_kiro_proxy(
     };
     let mut key_permit = Some(key_permit);
     let mut failed_accounts = HashSet::new();
+    let preferred_account_name = affinity_session_id
+        .as_deref()
+        .and_then(|session_id| kiro_session_affinity.lookup(&key.key_id, session_id));
     loop {
         let route_started = Instant::now();
         let (route, account_permit) = match select_kiro_route_with_account_permit(
@@ -3218,6 +3267,7 @@ async fn dispatch_kiro_proxy(
             &routes,
             &failed_accounts,
             kiro_latency_ranker.as_ref(),
+            preferred_account_name.as_deref(),
         )
         .await
         {
@@ -3500,6 +3550,12 @@ async fn dispatch_kiro_proxy(
                     return failure.into_response();
                 },
             };
+            remember_kiro_session_affinity(
+                kiro_session_affinity.as_ref(),
+                &key.key_id,
+                affinity_session_id.as_deref(),
+                &route.account_name,
+            );
             let response_ctx = KiroResponseContext {
                 key,
                 route,
@@ -3522,6 +3578,12 @@ async fn dispatch_kiro_proxy(
             };
             return stream_kiro_upstream_response(stream_response, response_ctx);
         }
+        remember_kiro_session_affinity(
+            kiro_session_affinity.as_ref(),
+            &key.key_id,
+            affinity_session_id.as_deref(),
+            &route.account_name,
+        );
         let response_ctx = KiroResponseContext {
             key,
             route,
@@ -3573,7 +3635,9 @@ struct KiroWebsearchDispatch {
     route_store: Arc<dyn ProviderRouteStore>,
     request_limiter: Arc<RequestLimiter>,
     kiro_request_scheduler: Arc<KiroRequestScheduler>,
+    kiro_session_affinity: Arc<KiroSessionAffinity>,
     kiro_latency_ranker: Arc<KiroLatencyRanker>,
+    affinity_session_id: Option<String>,
     request_input_tokens: i32,
     usage_meta: ProviderUsageMetadata,
 }
@@ -3587,7 +3651,9 @@ async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
         route_store,
         request_limiter,
         kiro_request_scheduler,
+        kiro_session_affinity,
         kiro_latency_ranker,
+        affinity_session_id,
         request_input_tokens,
         mut usage_meta,
     } = input;
@@ -3621,6 +3687,9 @@ async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
 
     let mut key_permit = Some(key_permit);
     let mut failed_accounts = HashSet::new();
+    let preferred_account_name = affinity_session_id
+        .as_deref()
+        .and_then(|session_id| kiro_session_affinity.lookup(&key.key_id, session_id));
     loop {
         let route_started = Instant::now();
         let (route, account_permit) = match select_kiro_route_with_account_permit(
@@ -3628,6 +3697,7 @@ async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
             &routes,
             &failed_accounts,
             kiro_latency_ranker.as_ref(),
+            preferred_account_name.as_deref(),
         )
         .await
         {
@@ -3660,6 +3730,12 @@ async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
                 route_usage_meta.mark_upstream_headers();
                 route_usage_meta.mark_post_headers_body();
                 route_usage_meta.mark_stream_finish();
+                remember_kiro_session_affinity(
+                    kiro_session_affinity.as_ref(),
+                    &key.key_id,
+                    affinity_session_id.as_deref(),
+                    &route.account_name,
+                );
                 return build_kiro_websearch_response(WebsearchResponseInput {
                     key,
                     route,
@@ -5359,6 +5435,26 @@ fn resolve_kiro_request_session(
         }
     }
     resolved
+}
+
+fn kiro_affinity_session_id(resolved_session: &ResolvedConversationId) -> Option<&str> {
+    if matches!(resolved_session.session_tracking.source, SessionIdSource::GeneratedFallback(_)) {
+        return None;
+    }
+    let session_id = resolved_session.conversation_id.trim();
+    (!session_id.is_empty()).then_some(session_id)
+}
+
+fn remember_kiro_session_affinity(
+    affinity: &KiroSessionAffinity,
+    key_id: &str,
+    session_id: Option<&str>,
+    account_name: &str,
+) {
+    let Some(session_id) = session_id else {
+        return;
+    };
+    affinity.remember(key_id, session_id, account_name);
 }
 
 fn build_kiro_cache_context(
@@ -8369,6 +8465,53 @@ mod tests {
             1_700_000_010_000,
         );
         assert_eq!(ordered[0].account_name, "beta");
+    }
+
+    #[tokio::test]
+    async fn kiro_selection_prefers_sticky_account_when_immediately_available() {
+        let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
+        let routes = vec![
+            kiro_route_for_selection("alpha", "user-alpha", 90.0, None),
+            kiro_route_for_selection("beta", "user-beta", 10.0, None),
+        ];
+        let ranker = crate::kiro_latency::KiroLatencyRanker::default();
+
+        let (route, _permit) = super::select_kiro_route_with_account_permit(
+            &scheduler,
+            &routes,
+            &HashSet::new(),
+            &ranker,
+            Some("beta"),
+        )
+        .await
+        .expect("sticky beta should be selected");
+
+        assert_eq!(route.account_name, "beta");
+    }
+
+    #[tokio::test]
+    async fn kiro_selection_skips_sticky_account_when_locally_throttled() {
+        let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
+        let routes = vec![
+            kiro_route_for_selection("alpha", "user-alpha", 90.0, None),
+            kiro_route_for_selection("beta", "user-beta", 10.0, None),
+        ];
+        let ranker = crate::kiro_latency::KiroLatencyRanker::default();
+        let _held = scheduler
+            .try_acquire("user-beta", 1, 0, Instant::now())
+            .expect("beta should be occupied");
+
+        let (route, _permit) = super::select_kiro_route_with_account_permit(
+            &scheduler,
+            &routes,
+            &HashSet::new(),
+            &ranker,
+            Some("beta"),
+        )
+        .await
+        .expect("alpha should be selected without waiting for beta");
+
+        assert_eq!(route.account_name, "alpha");
     }
 
     #[test]
