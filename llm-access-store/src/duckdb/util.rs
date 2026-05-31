@@ -2,7 +2,7 @@
 //! hashing, numeric casts).
 
 use std::{
-    io::{Read, Write},
+    io::Read,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -39,11 +39,8 @@ pub fn utc_date_parts(timestamp_ms: i64) -> (i32, u32, u32) {
 }
 #[cfg(feature = "duckdb-runtime")]
 pub fn gzip_json_bytes<T: serde::Serialize>(value: &T) -> anyhow::Result<Vec<u8>> {
-    let json = serde_json::to_vec(value).context("serialize usage detail json")?;
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder
-        .write_all(&json)
-        .context("write gzip usage detail payload")?;
+    serde_json::to_writer(&mut encoder, value).context("serialize and gzip usage detail json")?;
     encoder.finish().context("finish gzip usage detail payload")
 }
 #[cfg(feature = "duckdb-runtime")]

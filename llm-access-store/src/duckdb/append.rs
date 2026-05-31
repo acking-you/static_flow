@@ -126,6 +126,11 @@ pub async fn append_usage_events_to_tiered(
     catalog_backend: &Arc<TieredUsageCatalogBackend>,
     rows: &[UsageEventRow],
 ) -> anyhow::Result<()> {
+    // A no-op empty append must not take the write gate, reopen the writer, or
+    // flip `active_has_rows` (which could trigger an empty rollover).
+    if rows.is_empty() {
+        return Ok(());
+    }
     // Serialize against retention's active-segment rollover/discard (see
     // `TieredDuckDbUsageState::write_gate`): hold the gate for the whole append
     // so a concurrent retention cycle cannot delete/roll the active segment
