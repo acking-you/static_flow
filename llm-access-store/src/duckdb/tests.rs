@@ -3065,3 +3065,75 @@ fn duckdb_initialization_drops_legacy_usage_art_indexes() {
 
     std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
 }
+
+#[cfg(feature = "duckdb-runtime")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn duckdb_tiered_append_serializes_retention_via_write_gate() {
+    let root = std::env::temp_dir()
+        .join(format!("llm-access-duckdb-test-{}-tiered-write-gate", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("create tiered duckdb test directory");
+    // Large rollover threshold so the append's own size-based rollover never
+    // fires — this test only exercises append-vs-retention serialization.
+    let repo = std::sync::Arc::new(
+        super::DuckDbUsageRepository::open_tiered(super::TieredDuckDbUsageConfig {
+            active_dir: root.join("active"),
+            archive_dir: root.join("archive"),
+            rollover_bytes: 1 << 30,
+            details_dir: Some(details_store_dir(&root)),
+        })
+        .expect("open tiered duckdb usage db"),
+    );
+
+    // Install the seam so the spawned append parks — still holding the write
+    // gate — right after acquiring it.
+    let (reached_tx, reached_rx) = tokio::sync::oneshot::channel::<()>();
+    let (proceed_tx, proceed_rx) = tokio::sync::oneshot::channel::<()>();
+    match repo.inner.as_ref() {
+        super::DuckDbUsageRepositoryInner::Tiered {
+            state, ..
+        } => {
+            let mut state = state.lock().expect("lock tiered state");
+            state.append_seam = Some(super::AppendSeam {
+                reached: reached_tx,
+                proceed: proceed_rx,
+            });
+        },
+        _ => panic!("expected tiered repository"),
+    }
+
+    let append_repo = std::sync::Arc::clone(&repo);
+    let append_task = tokio::spawn(async move {
+        let mut event = test_usage_event();
+        event.event_id = "write-gate-inflight".to_string();
+        append_repo
+            .append_usage_event(&event)
+            .await
+            .expect("append parks at seam then completes");
+    });
+
+    // Wait until the append is parked while holding the gate.
+    reached_rx.await.expect("append reached the seam");
+
+    // Retention must block on the write gate while the append holds it.
+    let blocked = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        repo.prune_usage_analytics(1_700_000_000_000, 30),
+    )
+    .await;
+    assert!(blocked.is_err(), "retention must block on the write gate while an append holds it");
+
+    // Release the parked append; it finishes and drops the gate.
+    proceed_tx.send(()).expect("signal append to proceed");
+    append_task.await.expect("append task joined");
+
+    // With the gate released, retention must no longer block.
+    let unblocked = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        repo.prune_usage_analytics(1_700_000_000_000, 30),
+    )
+    .await;
+    assert!(unblocked.is_ok(), "retention must proceed once the append releases the gate");
+
+    std::fs::remove_dir_all(&root).expect("cleanup tiered duckdb test directory");
+}

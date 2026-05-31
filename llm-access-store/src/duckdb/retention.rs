@@ -38,12 +38,27 @@ pub async fn prune_tiered_usage_analytics(
     retention_days: u64,
 ) -> anyhow::Result<UsageAnalyticsPruneReport> {
     let cutoff_ms = usage_analytics_retention_cutoff_ms(now_ms, retention_days);
-    let mut deleted_files = rollover_expired_active_segment(
-        config,
-        state,
-        connection_config_snapshot(connection_config),
-        cutoff_ms,
-    )?;
+    let mut deleted_files = {
+        // Serialize the active-segment rollover/discard against the append write
+        // path (see `TieredDuckDbUsageState::write_gate`): an append must not
+        // hold an in-flight writer for the active segment while this cycle
+        // deletes/rolls it. Only this rollover touches the active segment; the
+        // archived/detail cleanup below operates on other files and stays
+        // ungated so it never stalls appends.
+        let write_gate = {
+            let state = state
+                .lock()
+                .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
+            Arc::clone(&state.write_gate)
+        };
+        let _write_guard = write_gate.lock_owned().await;
+        rollover_expired_active_segment(
+            config,
+            state,
+            connection_config_snapshot(connection_config),
+            cutoff_ms,
+        )?
+    };
     let expired_segments = delete_expired_segments_from_catalog(catalog_backend, cutoff_ms)?;
     for segment in &expired_segments {
         deleted_files =

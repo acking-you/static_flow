@@ -126,6 +126,31 @@ pub async fn append_usage_events_to_tiered(
     catalog_backend: &Arc<TieredUsageCatalogBackend>,
     rows: &[UsageEventRow],
 ) -> anyhow::Result<()> {
+    // Serialize against retention's active-segment rollover/discard (see
+    // `TieredDuckDbUsageState::write_gate`): hold the gate for the whole append
+    // so a concurrent retention cycle cannot delete/roll the active segment
+    // while this append holds its writer across the insert `.await` — which
+    // would orphan the writer onto a deleted segment and lose its rows.
+    let write_gate = {
+        let state = state
+            .lock()
+            .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
+        Arc::clone(&state.write_gate)
+    };
+    let _write_guard = write_gate.lock_owned().await;
+    #[cfg(test)]
+    {
+        let seam = {
+            let mut state = state
+                .lock()
+                .map_err(|_| anyhow!("tiered duckdb state lock poisoned"))?;
+            state.append_seam.take()
+        };
+        if let Some(seam) = seam {
+            let _ = seam.reached.send(());
+            let _ = seam.proceed.await;
+        }
+    }
     let connection_config_snapshot = connection_config_snapshot(connection_config);
     let mut writer = {
         let mut state = state

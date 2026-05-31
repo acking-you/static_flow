@@ -519,6 +519,26 @@ struct TieredDuckDbUsageState {
     active_has_rows: bool,
     active_writer: Option<PersistentUsageWriter>,
     detail_store: Option<Arc<UsageEventDetailStore>>,
+    /// Serializes the append write path against retention's active-segment
+    /// rollover/discard. A retention cycle must not delete or roll the active
+    /// segment while an append holds its writer across the insert `.await` —
+    /// otherwise the in-flight writer is orphaned onto a deleted/rolled segment
+    /// and its rows (and all subsequent appends via the stale writer) are lost.
+    write_gate: Arc<tokio::sync::Mutex<()>>,
+    /// Test-only deterministic interleaving hook: when set, an append parks
+    /// (still holding `write_gate`) right after acquiring the gate, letting a
+    /// test observe whether retention is serialized behind it.
+    #[cfg(test)]
+    append_seam: Option<AppendSeam>,
+}
+
+/// Test-only one-shot handshake used to park an in-flight append at a known
+/// point while it holds the tiered `write_gate`.
+#[cfg(test)]
+#[derive(Debug)]
+struct AppendSeam {
+    reached: tokio::sync::oneshot::Sender<()>,
+    proceed: tokio::sync::oneshot::Receiver<()>,
 }
 
 #[cfg(feature = "duckdb-runtime")]

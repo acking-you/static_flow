@@ -173,6 +173,9 @@ impl DuckDbUsageRepository {
                     active_has_rows,
                     active_writer: None,
                     detail_store,
+                    write_gate: Arc::new(tokio::sync::Mutex::new(())),
+                    #[cfg(test)]
+                    append_seam: None,
                 })),
                 connection_config,
                 catalog_backend,
