@@ -92,7 +92,7 @@ impl PostgresControlRepository {
                  FROM llm_codex_accounts
                  WHERE account_name = ANY($1)
                  ORDER BY account_name",
-                &[&account_names.to_vec()],
+                &[&account_names],
             )
             .await
             .context("list postgres codex route candidates by names")?;
@@ -224,7 +224,7 @@ impl PostgresControlRepository {
                  FROM llm_kiro_accounts
                  WHERE account_name = ANY($1)
                  ORDER BY account_name",
-                &[&account_names.to_vec()],
+                &[&account_names],
             )
             .await
             .context("list postgres kiro route candidates by names")?;
@@ -289,7 +289,7 @@ impl PostgresControlRepository {
                 "SELECT account_name, balance_json::text, cache_json::text
                  FROM llm_kiro_status_cache
                  WHERE account_name = ANY($1)",
-                &[&account_names.to_vec()],
+                &[&account_names],
             )
             .await
             .context("list kiro cached status by names")?;
@@ -723,19 +723,19 @@ impl ProviderRouteStore for PostgresControlRepository {
         }))
     }
 
-    async fn save_kiro_auth_update(&self, _update: ProviderKiroAuthUpdate) -> anyhow::Result<()> {
-        let Some(mut record) = self.get_kiro_account_row(&_update.account_name).await? else {
-            anyhow::bail!("kiro account `{}` is not configured", _update.account_name);
+    async fn save_kiro_auth_update(&self, update: ProviderKiroAuthUpdate) -> anyhow::Result<()> {
+        let Some(mut record) = self.get_kiro_account_row(&update.account_name).await? else {
+            anyhow::bail!("kiro account `{}` is not configured", update.account_name);
         };
-        record.auth_json = _update.auth_json.clone();
-        record.auth_method = _update.auth_method.clone();
-        record.account_id = _update.account_id.clone();
-        record.profile_arn = _update.profile_arn.clone();
-        record.user_id = _update.user_id.clone();
-        record.status = _update.status.clone();
-        record.last_refresh_at_ms = Some(_update.refreshed_at_ms);
-        record.last_error = _update.last_error.clone();
-        record.updated_at_ms = _update.refreshed_at_ms;
+        record.auth_json = update.auth_json.clone();
+        record.auth_method = update.auth_method.clone();
+        record.account_id = update.account_id.clone();
+        record.profile_arn = update.profile_arn.clone();
+        record.user_id = update.user_id.clone();
+        record.status = update.status.clone();
+        record.last_refresh_at_ms = Some(update.refreshed_at_ms);
+        record.last_error = update.last_error.clone();
+        record.updated_at_ms = update.refreshed_at_ms;
         self.upsert_kiro_account(&record).await?;
         self.invalidate_account_cache(core_store::PROVIDER_KIRO, &record.account_name)
             .await;

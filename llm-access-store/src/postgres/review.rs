@@ -438,15 +438,9 @@ impl AdminReviewQueueStore for PostgresControlRepository {
         refresh_token: String,
         action: AdminReviewQueueAction,
     ) -> anyhow::Result<Option<AdminAccountContributionRequest>> {
-        if self
-            .get_admin_account_contribution_request_row(request_id)
-            .await?
-            .is_none()
-        {
-            return Ok(None);
-        }
         self.ensure_connection_alive()?;
-        self.client
+        let rows_affected = self
+            .client
             .execute(
                 "UPDATE llm_account_contribution_requests
                  SET status = $2,
@@ -472,6 +466,9 @@ impl AdminReviewQueueStore for PostgresControlRepository {
             )
             .await
             .context("validate postgres admin account contribution request")?;
+        if rows_affected == 0 {
+            return Ok(None);
+        }
         self.get_admin_account_contribution_request_row(request_id)
             .await
     }
@@ -482,15 +479,9 @@ impl AdminReviewQueueStore for PostgresControlRepository {
         failure_reason: String,
         action: AdminReviewQueueAction,
     ) -> anyhow::Result<Option<AdminAccountContributionRequest>> {
-        if self
-            .get_admin_account_contribution_request_row(request_id)
-            .await?
-            .is_none()
-        {
-            return Ok(None);
-        }
         self.ensure_connection_alive()?;
-        self.client
+        let rows_affected = self
+            .client
             .execute(
                 "UPDATE llm_account_contribution_requests
                  SET status = 'failed',
@@ -503,6 +494,9 @@ impl AdminReviewQueueStore for PostgresControlRepository {
             )
             .await
             .context("fail postgres admin account contribution request")?;
+        if rows_affected == 0 {
+            return Ok(None);
+        }
         self.get_admin_account_contribution_request_row(request_id)
             .await
     }
@@ -548,15 +542,9 @@ impl AdminReviewQueueStore for PostgresControlRepository {
         request_id: &str,
         action: AdminReviewQueueAction,
     ) -> anyhow::Result<Option<AdminSponsorRequest>> {
-        if self
-            .get_admin_sponsor_request_row(request_id)
-            .await?
-            .is_none()
-        {
-            return Ok(None);
-        }
         self.ensure_connection_alive()?;
-        self.client
+        let rows_affected = self
+            .client
             .execute(
                 "UPDATE llm_sponsor_requests
                  SET status = 'approved',
@@ -569,6 +557,9 @@ impl AdminReviewQueueStore for PostgresControlRepository {
             )
             .await
             .context("approve postgres sponsor request")?;
+        if rows_affected == 0 {
+            return Ok(None);
+        }
         self.get_admin_sponsor_request_row(request_id).await
     }
 

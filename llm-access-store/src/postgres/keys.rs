@@ -64,7 +64,7 @@ impl PostgresControlRepository {
                 "SELECT key_id, key_hash
                  FROM llm_keys
                  WHERE key_id = ANY($1)",
-                &[&key_ids.to_vec()],
+                &[&key_ids],
             )
             .await
             .context("load key hashes by ids")?;
@@ -676,14 +676,15 @@ impl PostgresControlRepository {
         key_id: &str,
         updated_at_ms: i64,
     ) -> anyhow::Result<()> {
-        if self.load_key_bundle_by_id(key_id).await?.is_some() {
-            self.patch_admin_key(key_id, AdminKeyPatch {
-                status: Some(core_store::KEY_STATUS_DISABLED.to_string()),
-                updated_at_ms,
-                ..AdminKeyPatch::default()
-            })
-            .await?;
-        }
+        // `patch_admin_key` already returns `Ok(None)` for a missing key without
+        // side effects, so the prior `load_key_bundle_by_id` presence check was a
+        // redundant round-trip. Discard the returned row as before.
+        self.patch_admin_key(key_id, AdminKeyPatch {
+            status: Some(core_store::KEY_STATUS_DISABLED.to_string()),
+            updated_at_ms,
+            ..AdminKeyPatch::default()
+        })
+        .await?;
         Ok(())
     }
 }

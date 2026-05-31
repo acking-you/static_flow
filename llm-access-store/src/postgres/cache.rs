@@ -180,6 +180,9 @@ impl PostgresControlRepository {
     }
 
     pub(super) async fn invalidate_authenticated_key_cache_by_ids(&self, key_ids: &[String]) {
+        if key_ids.is_empty() {
+            return;
+        }
         let Some(cache) = self.request_cache.as_ref() else {
             return;
         };
@@ -262,6 +265,9 @@ impl PostgresControlRepository {
             },
             _ => return,
         };
+        if account_names.is_empty() {
+            return;
+        }
         let scope = self.proxy_scope.cache_key_segment();
         let view_keys = account_names
             .iter()
