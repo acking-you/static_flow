@@ -496,6 +496,7 @@ static KIRO_REMOTE_MEDIA_CLIENT: std::sync::LazyLock<reqwest::Client> =
         reqwest::Client::builder()
             .timeout(KIRO_REMOTE_MEDIA_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
+            .dns_resolver(Arc::new(kiro_media::PrivateFilteringDnsResolver))
             .pool_idle_timeout(provider_client_pool_idle_timeout())
             .pool_max_idle_per_host(provider_client_pool_max_idle_per_host())
             .tcp_keepalive(Duration::from_secs(30))

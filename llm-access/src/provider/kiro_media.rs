@@ -1,6 +1,6 @@
 //! Kiro remote-media (image/document) resolution, validation, and fetch.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -526,4 +526,101 @@ fn is_private_kiro_remote_media_ipv6(ip: Ipv6Addr) -> bool {
         || ip.is_unicast_link_local()
         || ip.is_unspecified()
         || matches!(ip.segments(), [0x2001, 0x0db8, _, _, _, _, _, _])
+}
+
+/// Drops private/local addresses from a resolved set, rejecting the lookup if
+/// none remain. Used by [`PrivateFilteringDnsResolver`] so the address that is
+/// vetted is exactly the address reqwest dials.
+fn filter_public_kiro_remote_media_addrs(
+    host: &str,
+    addrs: Vec<SocketAddr>,
+) -> Result<Vec<SocketAddr>, String> {
+    let public = addrs
+        .into_iter()
+        .filter(|addr| !is_private_kiro_remote_media_ip(addr.ip()))
+        .collect::<Vec<_>>();
+    if public.is_empty() {
+        return Err(format!(
+            "URL source host `{host}` resolved only to private or local addresses"
+        ));
+    }
+    Ok(public)
+}
+
+/// Custom reqwest DNS resolver for the Kiro remote-media client that filters
+/// out private/local addresses at resolution time.
+///
+/// This is the actual SSRF guard against DNS rebinding: reqwest dials the
+/// addresses this resolver returns, so the IP that is checked is the IP that is
+/// connected to — closing the time-of-check/time-of-use gap that a separate
+/// pre-flight `lookup_host` check cannot (reqwest performs its own resolution
+/// at connect time, which a hostile resolver can answer differently).
+/// IP-literal URLs (never sent to a resolver) remain covered by the literal-IP
+/// gate in [`validate_kiro_remote_media_url`].
+pub(super) struct PrivateFilteringDnsResolver;
+
+impl reqwest::dns::Resolve for PrivateFilteringDnsResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            let resolved = tokio::net::lookup_host((host.as_str(), 0u16))
+                .await
+                .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>)?
+                .collect::<Vec<SocketAddr>>();
+            let public = filter_public_kiro_remote_media_addrs(&host, resolved)
+                .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
+            Ok(Box::new(public.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sa(addr: &str) -> SocketAddr {
+        format!("{addr}:443").parse().expect("valid socket addr")
+    }
+
+    #[test]
+    fn filter_public_addrs_keeps_public_drops_private() {
+        let out = filter_public_kiro_remote_media_addrs("example.test", vec![
+            sa("8.8.8.8"),
+            sa("10.0.0.5"),
+            sa("1.1.1.1"),
+            sa("127.0.0.1"),
+        ])
+        .expect("public addresses remain");
+        assert_eq!(out, vec![sa("8.8.8.8"), sa("1.1.1.1")]);
+    }
+
+    #[test]
+    fn filter_public_addrs_rejects_all_private() {
+        let err = filter_public_kiro_remote_media_addrs("rebind.test", vec![
+            sa("127.0.0.1"),
+            sa("169.254.169.254"),
+            sa("10.1.2.3"),
+        ])
+        .expect_err("an all-private resolution must be rejected");
+        assert!(err.contains("private or local"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn filter_public_addrs_rejects_empty() {
+        let err = filter_public_kiro_remote_media_addrs("empty.test", Vec::new())
+            .expect_err("an empty resolution must be rejected");
+        assert!(err.contains("private or local"), "unexpected message: {err}");
+    }
+
+    #[tokio::test]
+    async fn resolver_rejects_loopback_hostname() {
+        use std::str::FromStr;
+
+        use reqwest::dns::Resolve;
+        // `localhost` resolves to loopback (RFC 6761), so the resolver must drop
+        // every address and error — proving rebinding to loopback is blocked.
+        let name = reqwest::dns::Name::from_str("localhost").expect("valid dns name");
+        let result = PrivateFilteringDnsResolver.resolve(name).await;
+        assert!(result.is_err(), "localhost must be rejected by the filtering resolver");
+    }
 }
