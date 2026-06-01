@@ -78,6 +78,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "kiro_context_usage_threshold",
         sql: include_str!("../migrations/postgres/0018_kiro_context_usage_threshold.sql"),
     },
+    SqlMigration {
+        version: 19,
+        name: "kiro_compact_trigger",
+        sql: include_str!("../migrations/postgres/0019_kiro_compact_trigger.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.

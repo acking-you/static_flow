@@ -11,6 +11,7 @@ use axum::{
 use futures_util::StreamExt;
 use llm_access_kiro::{
     anthropic::stream::{resolve_input_tokens_with_threshold, StreamContext},
+    cache_sim::AnchorTokenCounts,
     parser::decoder::EventStreamDecoder,
     wire::Event,
 };
@@ -336,7 +337,10 @@ pub fn stream_kiro_upstream_response(
             &guard.cache_ctx.projection,
             &assistant_message,
             &guard.cache_ctx.conversation_id,
-            Some(real_input_tokens),
+            Some(AnchorTokenCounts {
+                real_input_tokens,
+                local_input_tokens: request_input_tokens,
+            }),
             guard.route.cache_estimation_enabled,
             guard.cache_ctx.simulation_config,
             Instant::now(),
@@ -483,7 +487,10 @@ pub async fn non_stream_kiro_response(
             &ctx.cache_ctx.projection,
             &assistant_message,
             &ctx.cache_ctx.conversation_id,
-            Some(real_input_tokens),
+            Some(AnchorTokenCounts {
+                real_input_tokens,
+                local_input_tokens: ctx.request_input_tokens,
+            }),
             ctx.route.cache_estimation_enabled,
             ctx.cache_ctx.simulation_config,
             Instant::now(),

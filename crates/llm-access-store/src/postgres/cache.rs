@@ -491,6 +491,7 @@ impl PostgresControlRepository {
             context_usage_min_request_tokens: runtime_config
                 .kiro_context_usage_min_request_tokens
                 .max(0) as u64,
+            compact_trigger_tokens: runtime_config.kiro_compact_trigger_tokens.max(0) as u64,
             prefix_cache_mode: runtime_config.kiro_prefix_cache_mode.clone(),
             prefix_cache_max_tokens: runtime_config.kiro_prefix_cache_max_tokens.max(0) as u64,
             prefix_cache_entry_ttl_seconds: runtime_config

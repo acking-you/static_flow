@@ -17,7 +17,7 @@ mod prefix_tree;
 mod projection;
 mod simulator;
 
-pub use anchor_index::ConversationAnchorRuntimeStats;
+pub use anchor_index::{AnchorTokenCounts, ConversationAnchorRuntimeStats};
 pub use prefix_tree::{PrefixCacheMatch, PrefixTreeRuntimeStats};
 pub use projection::{CanonicalTokenPage, PromptProjection, RuntimePromptProjection};
 pub use simulator::{

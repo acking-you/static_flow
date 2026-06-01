@@ -91,6 +91,10 @@ fn default_kiro_context_usage_min_request_tokens() -> u64 {
     15_000
 }
 
+fn default_kiro_compact_trigger_tokens() -> u64 {
+    780_000
+}
+
 // API base URL. Read at compile time from STATICFLOW_API_BASE and fall back
 // to the local development backend when the variable is absent.
 #[cfg(not(feature = "mock"))]
@@ -6924,6 +6928,8 @@ pub struct LlmGatewayRuntimeConfig {
     pub kiro_cache_policy_json: String,
     #[serde(default = "default_kiro_context_usage_min_request_tokens")]
     pub kiro_context_usage_min_request_tokens: u64,
+    #[serde(default = "default_kiro_compact_trigger_tokens")]
+    pub kiro_compact_trigger_tokens: u64,
     pub kiro_prefix_cache_mode: String,
     pub kiro_prefix_cache_max_tokens: u64,
     pub kiro_prefix_cache_entry_ttl_seconds: u64,
@@ -7730,6 +7736,7 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             kiro_billable_model_multipliers_json: default_kiro_billable_model_multipliers_json(),
             kiro_cache_policy_json: r#"{"small_input_high_credit_boost":{"target_input_tokens":100000,"credit_start":1.0,"credit_end":1.8},"prefix_tree_credit_ratio_bands":[{"credit_start":0.3,"credit_end":1.0,"cache_ratio_start":0.7,"cache_ratio_end":0.2},{"credit_start":1.0,"credit_end":2.5,"cache_ratio_start":0.2,"cache_ratio_end":0.0}],"high_credit_diagnostic_threshold":2.0}"#.to_string(),
             kiro_context_usage_min_request_tokens: default_kiro_context_usage_min_request_tokens(),
+            kiro_compact_trigger_tokens: default_kiro_compact_trigger_tokens(),
             kiro_prefix_cache_mode: "prefix_tree".to_string(),
             kiro_prefix_cache_max_tokens: 4_000_000,
             kiro_prefix_cache_entry_ttl_seconds: 21_600,

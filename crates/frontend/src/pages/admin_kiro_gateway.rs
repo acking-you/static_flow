@@ -2916,6 +2916,7 @@ pub fn admin_kiro_gateway_page() -> Html {
     let persisted_kiro_billable_model_multipliers_json = use_state(String::new);
     let saving_kmodel_config = use_state(|| false);
     let kiro_context_usage_min_request_tokens = use_state(String::new);
+    let kiro_compact_trigger_tokens = use_state(String::new);
     let kiro_prefix_cache_mode = use_state(String::new);
     let kiro_prefix_cache_max_tokens = use_state(String::new);
     let kiro_prefix_cache_entry_ttl_seconds = use_state(String::new);
@@ -3069,6 +3070,7 @@ pub fn admin_kiro_gateway_page() -> Html {
         let persisted_kiro_billable_model_multipliers_json =
             persisted_kiro_billable_model_multipliers_json.clone();
         let kiro_context_usage_min_request_tokens = kiro_context_usage_min_request_tokens.clone();
+        let kiro_compact_trigger_tokens = kiro_compact_trigger_tokens.clone();
         let kiro_prefix_cache_mode = kiro_prefix_cache_mode.clone();
         let kiro_prefix_cache_max_tokens = kiro_prefix_cache_max_tokens.clone();
         let kiro_prefix_cache_entry_ttl_seconds = kiro_prefix_cache_entry_ttl_seconds.clone();
@@ -3165,6 +3167,8 @@ pub fn admin_kiro_gateway_page() -> Html {
                                 .kiro_context_usage_min_request_tokens
                                 .to_string(),
                         );
+                        kiro_compact_trigger_tokens
+                            .set(config_resp.kiro_compact_trigger_tokens.to_string());
                         kiro_prefix_cache_mode.set(config_resp.kiro_prefix_cache_mode.clone());
                         kiro_prefix_cache_max_tokens
                             .set(config_resp.kiro_prefix_cache_max_tokens.to_string());
@@ -3434,6 +3438,7 @@ pub fn admin_kiro_gateway_page() -> Html {
             persisted_kiro_billable_model_multipliers_json.clone();
         let kiro_context_usage_min_request_tokens_input =
             kiro_context_usage_min_request_tokens.clone();
+        let kiro_compact_trigger_tokens_input = kiro_compact_trigger_tokens.clone();
         let kiro_prefix_cache_mode_input = kiro_prefix_cache_mode.clone();
         let kiro_prefix_cache_max_tokens_input = kiro_prefix_cache_max_tokens.clone();
         let kiro_prefix_cache_entry_ttl_seconds_input = kiro_prefix_cache_entry_ttl_seconds.clone();
@@ -3461,6 +3466,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                 persisted_kiro_billable_model_multipliers_json_input.clone();
             let kiro_context_usage_min_request_tokens_value =
                 (*kiro_context_usage_min_request_tokens_input).clone();
+            let kiro_compact_trigger_tokens_value = (*kiro_compact_trigger_tokens_input).clone();
             let kiro_prefix_cache_mode_value = (*kiro_prefix_cache_mode_input).clone();
             let kiro_prefix_cache_max_tokens_value = (*kiro_prefix_cache_max_tokens_input).clone();
             let kiro_prefix_cache_entry_ttl_seconds_value =
@@ -3472,6 +3478,7 @@ pub fn admin_kiro_gateway_page() -> Html {
             let kiro_prefix_cache_mode_input = kiro_prefix_cache_mode_input.clone();
             let kiro_context_usage_min_request_tokens_input =
                 kiro_context_usage_min_request_tokens_input.clone();
+            let kiro_compact_trigger_tokens_input = kiro_compact_trigger_tokens_input.clone();
             let kiro_prefix_cache_max_tokens_input = kiro_prefix_cache_max_tokens_input.clone();
             let kiro_prefix_cache_entry_ttl_seconds_input =
                 kiro_prefix_cache_entry_ttl_seconds_input.clone();
@@ -3516,6 +3523,16 @@ pub fn admin_kiro_gateway_page() -> Html {
                     notify.emit((message, true));
                     return;
                 }
+                // `0` disables the proactive compaction gate, so it is allowed.
+                let Ok(compact_trigger_tokens) =
+                    kiro_compact_trigger_tokens_value.trim().parse::<u64>()
+                else {
+                    let message =
+                        "Kiro compaction trigger tokens must be a valid integer.".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                };
                 let Ok(prefix_cache_max_tokens) =
                     kiro_prefix_cache_max_tokens_value.trim().parse::<u64>()
                 else {
@@ -3572,6 +3589,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                 next_config.kiro_cache_policy_json = kiro_cache_policy_json;
                 next_config.kiro_context_usage_min_request_tokens =
                     context_usage_min_request_tokens;
+                next_config.kiro_compact_trigger_tokens = compact_trigger_tokens;
                 next_config.kiro_prefix_cache_mode = mode.to_string();
                 next_config.kiro_prefix_cache_max_tokens = prefix_cache_max_tokens;
                 next_config.kiro_prefix_cache_entry_ttl_seconds = prefix_cache_entry_ttl_seconds;
@@ -3604,6 +3622,8 @@ pub fn admin_kiro_gateway_page() -> Html {
                         );
                         kiro_context_usage_min_request_tokens_input
                             .set(saved.kiro_context_usage_min_request_tokens.to_string());
+                        kiro_compact_trigger_tokens_input
+                            .set(saved.kiro_compact_trigger_tokens.to_string());
                         kiro_prefix_cache_mode_input.set(saved.kiro_prefix_cache_mode.clone());
                         kiro_prefix_cache_max_tokens_input
                             .set(saved.kiro_prefix_cache_max_tokens.to_string());
@@ -4232,6 +4252,21 @@ pub fn admin_kiro_gateway_page() -> Html {
                                 Callback::from(move |event: InputEvent| {
                                     let input: HtmlInputElement = event.target_unchecked_into();
                                     kiro_context_usage_min_request_tokens.set(input.value());
+                                })
+                            }}
+                        />
+                    </label>
+                    <label class={classes!("block", "text-sm")}>
+                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Compaction Trigger Tokens (0 disables)" }</div>
+                        <input
+                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                            value={(*kiro_compact_trigger_tokens).clone()}
+                            oninput={{
+                                let kiro_compact_trigger_tokens =
+                                    kiro_compact_trigger_tokens.clone();
+                                Callback::from(move |event: InputEvent| {
+                                    let input: HtmlInputElement = event.target_unchecked_into();
+                                    kiro_compact_trigger_tokens.set(input.value());
                                 })
                             }}
                         />

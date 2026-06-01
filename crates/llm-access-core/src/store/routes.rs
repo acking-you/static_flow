@@ -176,6 +176,8 @@ pub struct ProviderKiroRoute {
     pub cache_policy_json: String,
     /// Minimum request-side input tokens before trusting Kiro contextUsage.
     pub context_usage_min_request_tokens: u64,
+    /// Proactive auto-compaction trigger in counted input tokens; `0` disables.
+    pub compact_trigger_tokens: u64,
     /// Prefix-cache simulation mode.
     pub prefix_cache_mode: String,
     /// Prefix-cache maximum token budget.

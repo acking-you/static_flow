@@ -13,10 +13,10 @@ use super::{
     DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_CODEX_WEIGHT_FREE,
     DEFAULT_CODEX_WEIGHT_PLUS, DEFAULT_CODEX_WEIGHT_PRO20X, DEFAULT_CODEX_WEIGHT_PRO5X,
     DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB, DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
-    DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS, DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
-    DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS, DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS,
-    DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS, DEFAULT_KIRO_PREFIX_CACHE_MODE,
-    DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+    DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS, DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
+    DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES, DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS,
+    DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS, DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS,
+    DEFAULT_KIRO_PREFIX_CACHE_MODE, DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
     DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
     DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_MAX_REQUEST_BODY_BYTES,
     DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS, DEFAULT_USAGE_EVENT_FLUSH_BATCH_SIZE,
@@ -104,6 +104,8 @@ pub struct AdminRuntimeConfig {
     pub kiro_cache_policy_json: String,
     /// Minimum request-side input tokens before trusting Kiro contextUsage.
     pub kiro_context_usage_min_request_tokens: u64,
+    /// Proactive auto-compaction trigger in counted input tokens; `0` disables.
+    pub kiro_compact_trigger_tokens: u64,
     /// Kiro prefix cache mode.
     pub kiro_prefix_cache_mode: String,
     /// Kiro prefix cache token budget.
@@ -161,6 +163,7 @@ impl Default for AdminRuntimeConfig {
             kiro_billable_model_multipliers_json: default_kiro_billable_model_multipliers_json(),
             kiro_cache_policy_json: default_kiro_cache_policy_json(),
             kiro_context_usage_min_request_tokens: DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
+            kiro_compact_trigger_tokens: DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS,
             kiro_prefix_cache_mode: DEFAULT_KIRO_PREFIX_CACHE_MODE.to_string(),
             kiro_prefix_cache_max_tokens: DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS,
             kiro_prefix_cache_entry_ttl_seconds: DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS,
@@ -281,6 +284,9 @@ pub struct UpdateAdminRuntimeConfig {
     /// Minimum request-side input tokens before trusting Kiro contextUsage.
     #[serde(default)]
     pub kiro_context_usage_min_request_tokens: Option<u64>,
+    /// Proactive auto-compaction trigger in counted input tokens; `0` disables.
+    #[serde(default)]
+    pub kiro_compact_trigger_tokens: Option<u64>,
     /// Kiro prefix cache mode.
     #[serde(default)]
     pub kiro_prefix_cache_mode: Option<String>,
@@ -439,5 +445,6 @@ mod tests {
         assert_eq!(config.kiro_conversation_anchor_max_entries, 4_096);
         assert_eq!(config.kiro_conversation_anchor_ttl_seconds, 6 * 60 * 60);
         assert_eq!(config.kiro_context_usage_min_request_tokens, 15_000);
+        assert_eq!(config.kiro_compact_trigger_tokens, 780_000);
     }
 }

@@ -155,45 +155,6 @@ pub fn summarize_error_bytes(bytes: &Bytes) -> String {
         body
     }
 }
-/// Default proactive auto-compaction trigger, in counted input tokens.
-///
-/// When a Kiro `/v1/messages` request's counted input reaches this many tokens
-/// — and the request is not itself a compaction-summary request — the gateway
-/// returns a `Prompt is too long` error *before* dispatching upstream, so the
-/// client (e.g. Claude Code) reactively compacts the conversation while there
-/// is still real headroom under the model's true context window. Override with
-/// the `LLM_ACCESS_KIRO_COMPACT_TRIGGER_TOKENS` env var; `0` or a negative
-/// value disables the proactive gate (the model's real window still applies).
-pub const DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS: i32 = 780_000;
-
-/// Pure parse of the proactive-compaction trigger from a raw env value.
-///
-/// `None` input (unset) and unparseable text both fall back to the default; an
-/// explicit non-positive value disables the gate (returns `None`).
-pub fn parse_kiro_compact_trigger_tokens(raw: Option<&str>) -> Option<i32> {
-    let value = match raw {
-        Some(text) => text
-            .trim()
-            .parse::<i32>()
-            .unwrap_or(DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS),
-        None => DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS,
-    };
-    (value > 0).then_some(value)
-}
-
-/// The configured proactive-compaction trigger (read once), or `None` if the
-/// gate is disabled.
-pub fn kiro_compact_trigger_tokens() -> Option<i32> {
-    static TRIGGER: std::sync::LazyLock<Option<i32>> = std::sync::LazyLock::new(|| {
-        parse_kiro_compact_trigger_tokens(
-            std::env::var("LLM_ACCESS_KIRO_COMPACT_TRIGGER_TOKENS")
-                .ok()
-                .as_deref(),
-        )
-    });
-    *TRIGGER
-}
-
 /// Formats the `Prompt is too long` message against an explicit limit. The
 /// actual count is forced strictly above the limit so the client's `N > M`
 /// overflow parser always fires.
@@ -207,6 +168,12 @@ fn kiro_too_long_message_with_limit(request_input_tokens: i32, limit_tokens: i32
 }
 pub fn kiro_prompt_too_long_message(model: &str, request_input_tokens: i32) -> String {
     kiro_too_long_message_with_limit(request_input_tokens, get_context_window_size(model))
+}
+/// The proactive-compaction `Prompt is too long` message for the configured
+/// `trigger`. Exposed so the dispatch gate can record the same text into the
+/// usage/error audit trail before returning the response.
+pub fn kiro_proactive_compact_message(request_input_tokens: i32, trigger: i32) -> String {
+    kiro_too_long_message_with_limit(request_input_tokens, trigger)
 }
 /// Builds the proactive `Prompt is too long` response that nudges the client
 /// into reactive compaction at the configured `trigger`, before the request is
@@ -278,30 +245,6 @@ pub fn kiro_text_is_content_length_exceeded(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn compact_trigger_defaults_when_unset_or_garbage() {
-        assert_eq!(
-            parse_kiro_compact_trigger_tokens(None),
-            Some(DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS)
-        );
-        assert_eq!(
-            parse_kiro_compact_trigger_tokens(Some("not-a-number")),
-            Some(DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS)
-        );
-    }
-
-    #[test]
-    fn compact_trigger_honors_explicit_value_and_trims() {
-        assert_eq!(parse_kiro_compact_trigger_tokens(Some("500000")), Some(500_000));
-        assert_eq!(parse_kiro_compact_trigger_tokens(Some("  650000  ")), Some(650_000));
-    }
-
-    #[test]
-    fn compact_trigger_disabled_by_zero_or_negative() {
-        assert_eq!(parse_kiro_compact_trigger_tokens(Some("0")), None);
-        assert_eq!(parse_kiro_compact_trigger_tokens(Some("-1")), None);
-    }
 
     #[test]
     fn proactive_message_reports_trigger_as_limit_with_strict_overflow() {

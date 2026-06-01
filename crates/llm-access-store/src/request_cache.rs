@@ -3,7 +3,8 @@ use std::time::Duration;
 use anyhow::Context;
 use llm_access_core::store::{
     AdminKiroBalanceView, AdminKiroCacheView, AdminProxyBinding, AdminProxyConfig,
-    CodexRateLimitStatus, ProviderProxyConfig, DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
+    CodexRateLimitStatus, ProviderProxyConfig, DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS,
+    DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
 };
 use redis::{AsyncCommands, Commands};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -29,6 +30,10 @@ const fn default_true() -> bool {
 
 const fn default_kiro_context_usage_min_request_tokens() -> u64 {
     DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS
+}
+
+const fn default_kiro_compact_trigger_tokens() -> u64 {
+    DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS
 }
 
 /// Shared Valkey configuration for the request-path cache layer.
@@ -144,6 +149,8 @@ pub(crate) struct CachedKiroRequestSnapshot {
     pub cache_policy_json: String,
     #[serde(default = "default_kiro_context_usage_min_request_tokens")]
     pub context_usage_min_request_tokens: u64,
+    #[serde(default = "default_kiro_compact_trigger_tokens")]
+    pub compact_trigger_tokens: u64,
     pub prefix_cache_mode: String,
     pub prefix_cache_max_tokens: u64,
     pub prefix_cache_entry_ttl_seconds: u64,

@@ -87,6 +87,7 @@ const MAX_RUNTIME_USAGE_JOURNAL_ZSTD_LEVEL: i64 = 22;
 const MIN_RUNTIME_USAGE_JOURNAL_CONSUMER_LEASE_MS: u64 = 1_000;
 const MAX_RUNTIME_USAGE_JOURNAL_CONSUMER_LEASE_MS: u64 = 60 * 60 * 1000;
 const MAX_RUNTIME_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS: u64 = 1_000_000;
+const MAX_RUNTIME_KIRO_COMPACT_TRIGGER_TOKENS: u64 = 1_000_000;
 const MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY: u64 = 1_024;
 const MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS: u64 = 300_000;
 const DEFAULT_ADMIN_REVIEW_QUEUE_LIMIT: usize = 50;
@@ -3936,6 +3937,17 @@ fn apply_runtime_config_update(
         MAX_RUNTIME_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
     )?;
 
+    // `0` disables the proactive compaction gate, so allow it (validate_max,
+    // not validate_positive).
+    let kiro_compact_trigger_tokens = request
+        .kiro_compact_trigger_tokens
+        .unwrap_or(current.kiro_compact_trigger_tokens);
+    validate_max(
+        "kiro_compact_trigger_tokens",
+        kiro_compact_trigger_tokens,
+        MAX_RUNTIME_KIRO_COMPACT_TRIGGER_TOKENS,
+    )?;
+
     let kiro_prefix_cache_mode = request
         .kiro_prefix_cache_mode
         .unwrap_or(current.kiro_prefix_cache_mode);
@@ -4001,6 +4013,7 @@ fn apply_runtime_config_update(
         kiro_billable_model_multipliers_json,
         kiro_cache_policy_json,
         kiro_context_usage_min_request_tokens,
+        kiro_compact_trigger_tokens,
         kiro_prefix_cache_mode,
         kiro_prefix_cache_max_tokens,
         kiro_prefix_cache_entry_ttl_seconds,
@@ -7128,6 +7141,44 @@ mod tests {
         assert!(err
             .message
             .contains("kiro_context_usage_min_request_tokens"));
+    }
+
+    #[test]
+    fn runtime_config_update_accepts_kiro_compact_trigger_tokens() {
+        let updated =
+            apply_runtime_config_update(AdminRuntimeConfig::default(), UpdateAdminRuntimeConfig {
+                kiro_compact_trigger_tokens: Some(640_000),
+                ..UpdateAdminRuntimeConfig::default()
+            })
+            .expect("kiro compact trigger should be valid");
+
+        assert_eq!(updated.kiro_compact_trigger_tokens, 640_000);
+    }
+
+    #[test]
+    fn runtime_config_update_accepts_zero_kiro_compact_trigger_tokens() {
+        // `0` is a valid value that disables the proactive gate.
+        let updated =
+            apply_runtime_config_update(AdminRuntimeConfig::default(), UpdateAdminRuntimeConfig {
+                kiro_compact_trigger_tokens: Some(0),
+                ..UpdateAdminRuntimeConfig::default()
+            })
+            .expect("zero compact trigger disables the gate and should be valid");
+
+        assert_eq!(updated.kiro_compact_trigger_tokens, 0);
+    }
+
+    #[test]
+    fn runtime_config_update_rejects_oversized_kiro_compact_trigger_tokens() {
+        let err =
+            apply_runtime_config_update(AdminRuntimeConfig::default(), UpdateAdminRuntimeConfig {
+                kiro_compact_trigger_tokens: Some(2_000_000),
+                ..UpdateAdminRuntimeConfig::default()
+            })
+            .expect_err("a trigger above the cap should be rejected");
+
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("kiro_compact_trigger_tokens"));
     }
 
     #[test]

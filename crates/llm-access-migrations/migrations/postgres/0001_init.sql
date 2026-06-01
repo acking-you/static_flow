@@ -97,6 +97,9 @@ CREATE TABLE IF NOT EXISTS llm_runtime_config (
     kiro_context_usage_min_request_tokens BIGINT NOT NULL DEFAULT 15000 CHECK (
         kiro_context_usage_min_request_tokens >= 1
     ),
+    kiro_compact_trigger_tokens BIGINT NOT NULL DEFAULT 780000 CHECK (
+        kiro_compact_trigger_tokens >= 0
+    ),
     kiro_prefix_cache_mode TEXT NOT NULL CHECK (
         kiro_prefix_cache_mode IN ('formula', 'prefix_tree')
     ),

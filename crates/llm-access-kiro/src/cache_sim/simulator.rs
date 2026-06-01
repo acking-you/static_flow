@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use super::{
-    anchor_index::{ConversationAnchorIndex, ConversationAnchorRuntimeStats},
+    anchor_index::{AnchorTokenCounts, ConversationAnchorIndex, ConversationAnchorRuntimeStats},
     prefix_tree::{PrefixCacheMatch, PrefixTree, PrefixTreeRuntimeStats},
     projection::{PromptProjection, RuntimePromptProjection, PREFIX_CACHE_PAGE_SIZE},
 };
@@ -145,18 +145,18 @@ impl KiroCacheSimulator {
         );
     }
 
-    /// Recover the previous turn's real (upstream contextUsage-derived) input
-    /// token count for the conversation that produced this prompt prefix, if
-    /// still cached. Drives the proactive-compaction gate's threshold so it
-    /// does not rely on the local request estimate. Read-only on recency.
-    pub fn recover_real_input_tokens_from_runtime_projection(
+    /// Recover the previous turn's cached input-token counts (real + local) for
+    /// the conversation that produced this prompt prefix, if still cached.
+    /// Drives the proactive-compaction gate's threshold so it does not rely on
+    /// the local request estimate alone. Read-only on recency.
+    pub fn recover_token_counts_from_runtime_projection(
         &self,
         projection: &RuntimePromptProjection,
         config: KiroCacheSimulationConfig,
         now: Instant,
-    ) -> Option<i32> {
+    ) -> Option<AnchorTokenCounts> {
         let mut index = self.anchor_index.lock();
-        index.get_real_input_tokens(
+        index.recover_token_counts(
             projection.lookup_anchor_hash(),
             now,
             config.conversation_anchor_ttl,
@@ -165,16 +165,16 @@ impl KiroCacheSimulator {
 
     #[allow(
         clippy::too_many_arguments,
-        reason = "one over the limit after adding real_input_tokens; the args are cohesive \
-                  (projection + recorded facts + config + clock) and a borrowed param struct \
-                  would add more surface than it removes"
+        reason = "one over the limit after adding token_counts; the args are cohesive (projection \
+                  + recorded facts + config + clock) and a borrowed param struct would add more \
+                  surface than it removes"
     )]
     pub fn record_success_from_runtime_projection(
         &self,
         projection: &RuntimePromptProjection,
         assistant_message: &AssistantMessage,
         conversation_id: &str,
-        real_input_tokens: Option<i32>,
+        token_counts: Option<AnchorTokenCounts>,
         record_prefix_tree: bool,
         config: KiroCacheSimulationConfig,
         now: Instant,
@@ -193,7 +193,7 @@ impl KiroCacheSimulator {
         index.insert(
             resume_anchor_hash,
             conversation_id.to_string(),
-            real_input_tokens,
+            token_counts,
             now,
             config.conversation_anchor_ttl,
             config.conversation_anchor_max_entries,

@@ -57,6 +57,7 @@ impl PostgresControlRepository {
                         AS kiro_billable_model_multipliers_json,
                     kiro_cache_policy_json::text AS kiro_cache_policy_json,
                     kiro_context_usage_min_request_tokens,
+                    kiro_compact_trigger_tokens,
                     kiro_prefix_cache_mode,
                     kiro_prefix_cache_max_tokens,
                     kiro_prefix_cache_entry_ttl_seconds,
@@ -162,6 +163,7 @@ impl PostgresControlRepository {
                     usage_event_detail_retention_days, kiro_cache_kmodels_json,
                     kiro_billable_model_multipliers_json, kiro_cache_policy_json,
                     kiro_context_usage_min_request_tokens,
+                    kiro_compact_trigger_tokens,
                     kiro_prefix_cache_mode, kiro_prefix_cache_max_tokens,
                     kiro_prefix_cache_entry_ttl_seconds,
                     kiro_conversation_anchor_max_entries,
@@ -171,7 +173,7 @@ impl PostgresControlRepository {
                     $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
                     $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35,
                     $36, $37, $38, $39::jsonb, $40::jsonb, $41::jsonb, $42,
-                    $43, $44, $45, $46, $47, $48
+                    $43, $44, $45, $46, $47, $48, $49
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     auth_cache_ttl_seconds = EXCLUDED.auth_cache_ttl_seconds,
@@ -237,6 +239,7 @@ impl PostgresControlRepository {
                     kiro_cache_policy_json = EXCLUDED.kiro_cache_policy_json,
                     kiro_context_usage_min_request_tokens =
                         EXCLUDED.kiro_context_usage_min_request_tokens,
+                    kiro_compact_trigger_tokens = EXCLUDED.kiro_compact_trigger_tokens,
                     kiro_prefix_cache_mode = EXCLUDED.kiro_prefix_cache_mode,
                     kiro_prefix_cache_max_tokens = EXCLUDED.kiro_prefix_cache_max_tokens,
                     kiro_prefix_cache_entry_ttl_seconds =
@@ -289,6 +292,7 @@ impl PostgresControlRepository {
                     &record.kiro_billable_model_multipliers_json,
                     &record.kiro_cache_policy_json,
                     &record.kiro_context_usage_min_request_tokens,
+                    &record.kiro_compact_trigger_tokens,
                     &record.kiro_prefix_cache_mode,
                     &record.kiro_prefix_cache_max_tokens,
                     &record.kiro_prefix_cache_entry_ttl_seconds,

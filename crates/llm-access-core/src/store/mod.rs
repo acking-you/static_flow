@@ -158,6 +158,12 @@ pub const DEFAULT_USAGE_EVENT_MAINTENANCE_INTERVAL_SECONDS: u64 = 60 * 60;
 pub const DEFAULT_USAGE_EVENT_DETAIL_RETENTION_DAYS: i64 = 7;
 /// Default request-token threshold below which Kiro contextUsage is ignored.
 pub const DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS: u64 = 15_000;
+/// Default proactive auto-compaction trigger, in counted input tokens. When a
+/// Kiro request's estimated input reaches this many tokens the gateway returns
+/// a `Prompt is too long` error before dispatching upstream, so the client
+/// compacts the conversation while there is still real context-window headroom.
+/// `0` disables the proactive gate (the model's real window still applies).
+pub const DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS: u64 = 780_000;
 /// Default Kiro prefix cache mode.
 pub const DEFAULT_KIRO_PREFIX_CACHE_MODE: &str = "prefix_tree";
 /// Alternate Kiro prefix cache mode retained for admin compatibility.

@@ -63,12 +63,13 @@ pub fn decode_runtime_config_row(row: PgRow) -> anyhow::Result<RuntimeConfigReco
         kiro_billable_model_multipliers_json: row.get(39),
         kiro_cache_policy_json: row.get(40),
         kiro_context_usage_min_request_tokens: row.get(41),
-        kiro_prefix_cache_mode: row.get(42),
-        kiro_prefix_cache_max_tokens: row.get(43),
-        kiro_prefix_cache_entry_ttl_seconds: row.get(44),
-        kiro_conversation_anchor_max_entries: row.get(45),
-        kiro_conversation_anchor_ttl_seconds: row.get(46),
-        updated_at_ms: row.get(47),
+        kiro_compact_trigger_tokens: row.get(42),
+        kiro_prefix_cache_mode: row.get(43),
+        kiro_prefix_cache_max_tokens: row.get(44),
+        kiro_prefix_cache_entry_ttl_seconds: row.get(45),
+        kiro_conversation_anchor_max_entries: row.get(46),
+        kiro_conversation_anchor_ttl_seconds: row.get(47),
+        updated_at_ms: row.get(48),
     })
 }
 

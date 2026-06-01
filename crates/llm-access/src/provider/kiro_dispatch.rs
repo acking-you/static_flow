@@ -25,6 +25,7 @@ use llm_access_kiro::{
         types::MessagesRequest,
         websearch::{self, McpResponse},
     },
+    cache_sim::AnchorTokenCounts,
     parser::decoder::EventStreamDecoder,
     scheduler::KiroRequestScheduler,
     token,
@@ -35,7 +36,7 @@ use super::{
     client::provider_client,
     errors::{
         anthropic_json_error_body, daily_request_limit_cooldown, is_monthly_request_limit,
-        kiro_chunk_contains_content_length_exceeded, kiro_compact_trigger_tokens,
+        kiro_chunk_contains_content_length_exceeded, kiro_proactive_compact_message,
         kiro_proactive_compact_response, kiro_prompt_too_long_message,
         kiro_prompt_too_long_response_for_body, proxy_cooldown_key_for_route,
         transient_invalid_model_cooldown,
@@ -231,20 +232,42 @@ pub async fn dispatch_kiro_proxy(
     if route_mcp_web_search {
         // Proactive auto-compaction gate (websearch path): this branch performs
         // no anchor-based recovery, so it gates on the local request estimate
-        // only. The main path below uses the contextUsage-accurate gate.
-        if let Some(trigger) = kiro_compact_trigger_tokens() {
-            if request_input_tokens >= trigger && !request_is_compaction_summary(&payload) {
-                tracing::info!(
-                    key_id = %key.key_id,
-                    key_name = %key.key_name,
-                    endpoint = %public_path,
-                    model = %effective_model,
-                    request_input_tokens,
-                    trigger,
-                    "proactively returning prompt-too-long to trigger client compaction (websearch)"
-                );
-                return kiro_proactive_compact_response(request_input_tokens, trigger);
-            }
+        // only. The main path below uses the contextUsage-accurate gate. Trigger
+        // comes from PG runtime config (route.compact_trigger_tokens; 0 = off).
+        let trigger = routes[0].compact_trigger_tokens;
+        if trigger > 0
+            && (request_input_tokens as u64) >= trigger
+            && !request_is_compaction_summary(&payload)
+        {
+            let trigger_i32 = trigger.min(i32::MAX as u64) as i32;
+            let message = kiro_proactive_compact_message(request_input_tokens, trigger_i32);
+            tracing::info!(
+                key_id = %key.key_id,
+                key_name = %key.key_name,
+                endpoint = %public_path,
+                model = %effective_model,
+                request_input_tokens,
+                trigger,
+                "proactively returning prompt-too-long to trigger client compaction (websearch)"
+            );
+            capture_error_message(&mut usage_meta, &message);
+            capture_error_body(
+                &mut usage_meta,
+                &anthropic_json_error_body("invalid_request_error", &message),
+            );
+            capture_client_request_body_json(&mut usage_meta, &body);
+            record_kiro_preflight_failure(KiroPreflightFailureRecord {
+                control_store: control_store.as_ref(),
+                key: &key,
+                route: &routes[0],
+                endpoint: public_path,
+                model: &effective_model,
+                status: StatusCode::PAYLOAD_TOO_LARGE,
+                meta: &mut usage_meta,
+                cache_simulator: kiro_cache_simulator.as_ref(),
+            })
+            .await;
+            return kiro_proactive_compact_response(request_input_tokens, trigger_i32);
         }
         if routes[0].full_request_logging_enabled {
             capture_client_request_body_json(&mut usage_meta, &body);
@@ -393,35 +416,60 @@ pub async fn dispatch_kiro_proxy(
             }
         }
         // Proactive auto-compaction gate (main path): recover the previous
-        // turn's real (upstream contextUsage-derived) input-token count for this
-        // conversation prefix and gate on max(local estimate, recovered real).
-        // The recovered value is accurate where the local estimate drifts (large
-        // context + bridge scaffolding + the 15k/ratio rule); the local estimate
-        // still captures the newest delta. After a compaction the prefix changes
-        // so recovery misses and the gate falls back to the (now small) local
-        // count — no deadlock. Compaction-summary requests are always exempt.
-        if let Some(trigger) = kiro_compact_trigger_tokens() {
-            let recovered_real_tokens = kiro_cache_simulator
-                .recover_real_input_tokens_from_runtime_projection(
-                    &cache_ctx.projection,
-                    cache_ctx.simulation_config,
-                    Instant::now(),
-                )
-                .unwrap_or(0);
-            let effective_input_tokens = request_input_tokens.max(recovered_real_tokens);
-            if effective_input_tokens >= trigger && !request_is_compaction_summary(&payload) {
+        // turn's cached token counts (real + local) for this conversation prefix
+        // and estimate the current turn's real consumption as
+        // `real_prev + max(0, local_now - local_prev)`, gated against
+        // max(local_now, estimated_real). The recovered real value is accurate
+        // where the local estimate drifts (large context + bridge scaffolding +
+        // the 15k/ratio rule), while the delta keeps the newest turn in play (so
+        // a large follow-up paste still fires the gate). After a compaction the
+        // prefix changes so recovery misses and the gate falls back to the (now
+        // small) local count — no deadlock. Compaction-summary requests are
+        // always exempt. Trigger comes from PG runtime config
+        // (route.compact_trigger_tokens; 0 = off).
+        let compact_trigger = route.compact_trigger_tokens;
+        if compact_trigger > 0 {
+            let recovered = kiro_cache_simulator.recover_token_counts_from_runtime_projection(
+                &cache_ctx.projection,
+                cache_ctx.simulation_config,
+                Instant::now(),
+            );
+            let effective_input_tokens =
+                estimate_effective_input_tokens(request_input_tokens, recovered);
+            if (effective_input_tokens as u64) >= compact_trigger
+                && !request_is_compaction_summary(&payload)
+            {
+                let trigger_i32 = compact_trigger.min(i32::MAX as u64) as i32;
+                let message = kiro_proactive_compact_message(effective_input_tokens, trigger_i32);
                 tracing::info!(
                     key_id = %key.key_id,
                     key_name = %key.key_name,
                     endpoint = %public_path,
                     model = %effective_model,
                     request_input_tokens,
-                    recovered_real_tokens,
+                    recovered_real_tokens = recovered.map(|c| c.real_input_tokens).unwrap_or(0),
                     effective_input_tokens,
-                    trigger,
+                    trigger = compact_trigger,
                     "proactively returning prompt-too-long to trigger client compaction"
                 );
-                return kiro_proactive_compact_response(effective_input_tokens, trigger);
+                capture_error_message(&mut usage_meta, &message);
+                capture_error_body(
+                    &mut usage_meta,
+                    &anthropic_json_error_body("invalid_request_error", &message),
+                );
+                capture_client_request_body_json(&mut usage_meta, &body);
+                record_kiro_preflight_failure(KiroPreflightFailureRecord {
+                    control_store: control_store.as_ref(),
+                    key: &key,
+                    route: &route,
+                    endpoint: public_path,
+                    model: &effective_model,
+                    status: StatusCode::PAYLOAD_TOO_LARGE,
+                    meta: &mut usage_meta,
+                    cache_simulator: kiro_cache_simulator.as_ref(),
+                })
+                .await;
+                return kiro_proactive_compact_response(effective_input_tokens, trigger_i32);
             }
         }
         let request_body = match serde_json::to_vec(&KiroRequest {
@@ -1432,14 +1480,29 @@ pub fn account_names_for_kiro_routing_identity(
         .collect()
 }
 
+/// Allocation-free case-insensitive substring search. `needle` must be ASCII
+/// (our markers are), so we can compare byte windows with
+/// `eq_ignore_ascii_case` instead of allocating a lowercased copy of `haystack`
+/// — which matters because the haystack can be megabytes of request text.
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    if needle.is_empty() {
+        return true;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
 /// True when `text` looks like Claude Code's conversation-compaction summary
 /// instruction. Matching is intentionally generous: a false positive only lets
 /// an oversized normal request through to the model (benign — the model's real
 /// window still applies), whereas a false negative would gate the client's own
 /// reactive-compaction summary request and deadlock its compaction loop.
 fn text_is_compaction_summary_prompt(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("detailed summary of") && lower.contains("conversation")
+    contains_ignore_ascii_case(text, "detailed summary of")
+        && contains_ignore_ascii_case(text, "conversation")
 }
 fn json_value_contains_compaction_summary(value: &serde_json::Value) -> bool {
     match value {
@@ -1452,6 +1515,13 @@ fn json_value_contains_compaction_summary(value: &serde_json::Value) -> bool {
 /// Detects whether this request is the client's conversation-compaction summary
 /// request (rather than a normal turn). Such requests are exempt from the
 /// proactive compaction gate — they must always reach the model.
+///
+/// Only the active request's instruction surface is scanned — the system prompt
+/// and the *last* message — not the whole history. Scanning all messages would
+/// let any earlier turn that merely quoted "detailed summary of ...
+/// conversation" permanently exempt every later turn in that conversation, so a
+/// large normal follow-up could then slip past the gate and hit Kiro's hard
+/// limit.
 fn request_is_compaction_summary(payload: &MessagesRequest) -> bool {
     if let Some(system) = payload.system.as_deref() {
         if system
@@ -1463,16 +1533,36 @@ fn request_is_compaction_summary(payload: &MessagesRequest) -> bool {
     }
     payload
         .messages
-        .iter()
-        .any(|message| json_value_contains_compaction_summary(&message.content))
+        .last()
+        .is_some_and(|message| json_value_contains_compaction_summary(&message.content))
+}
+
+/// Estimates the current turn's real (upstream contextUsage-equivalent) input
+/// tokens for the proactive-compaction gate, from the local estimate plus the
+/// previous turn's cached counts. Returns `max(local_now, real_prev + delta)`
+/// where `delta = max(0, local_now - local_prev)` adds this turn's growth on
+/// top of the previous real baseline. Falls back to `local_now` when nothing is
+/// cached (e.g. first turn, or just after a compaction changed the prefix).
+fn estimate_effective_input_tokens(local_now: i32, recovered: Option<AnchorTokenCounts>) -> i32 {
+    match recovered {
+        Some(counts) => {
+            let delta = local_now.saturating_sub(counts.local_input_tokens).max(0);
+            let estimated_real = counts.real_input_tokens.saturating_add(delta);
+            local_now.max(estimated_real)
+        },
+        None => local_now,
+    }
 }
 
 #[cfg(test)]
 mod compaction_gate_tests {
-    use llm_access_kiro::anthropic::types::{Message, MessagesRequest, SystemMessage};
+    use llm_access_kiro::{
+        anthropic::types::{Message, MessagesRequest, SystemMessage},
+        cache_sim::AnchorTokenCounts,
+    };
     use serde_json::json;
 
-    use super::request_is_compaction_summary;
+    use super::{estimate_effective_input_tokens, request_is_compaction_summary};
 
     fn request(
         system: Option<Vec<&str>>,
@@ -1565,5 +1655,46 @@ mod compaction_gate_tests {
             ),
         )]);
         assert!(!request_is_compaction_summary(&req));
+    }
+
+    #[test]
+    fn earlier_history_summary_phrase_does_not_exempt_later_turn() {
+        // CR#5: only the LAST message (+ system) is scanned. An earlier turn
+        // that merely quoted the instruction must not permanently exempt the
+        // conversation — the final normal turn here must NOT be detected.
+        let req = request(None, vec![
+            ("user", json!("Your task is to create a detailed summary of this conversation.")),
+            ("assistant", json!("(summary)")),
+            ("user", json!("now add pagination to the /users endpoint")),
+        ]);
+        assert!(!request_is_compaction_summary(&req));
+    }
+
+    #[test]
+    fn effective_tokens_falls_back_to_local_without_cache() {
+        assert_eq!(estimate_effective_input_tokens(640_000, None), 640_000);
+    }
+
+    #[test]
+    fn effective_tokens_adds_current_delta_to_recovered_real() {
+        // prev: real 760k, local 740k; now local 770k → delta 30k → est 790k.
+        // CR#4: max(local_now=770k, real_prev+delta=790k) = 790k crosses 780k
+        // even though local_now alone (770k) would not.
+        let recovered = Some(AnchorTokenCounts {
+            real_input_tokens: 760_000,
+            local_input_tokens: 740_000,
+        });
+        assert_eq!(estimate_effective_input_tokens(770_000, recovered), 790_000);
+    }
+
+    #[test]
+    fn effective_tokens_ignores_shrunk_local_delta() {
+        // After a partial trim local_now < local_prev → delta clamps to 0, so
+        // the estimate is just the recovered real baseline (not inflated).
+        let recovered = Some(AnchorTokenCounts {
+            real_input_tokens: 800_000,
+            local_input_tokens: 790_000,
+        });
+        assert_eq!(estimate_effective_input_tokens(500_000, recovered), 800_000);
     }
 }

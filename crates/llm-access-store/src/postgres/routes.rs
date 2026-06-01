@@ -622,6 +622,7 @@ impl ProviderRouteStore for PostgresControlRepository {
                 cache_kmodels_json: snapshot.cache_kmodels_json.clone(),
                 cache_policy_json: snapshot.cache_policy_json.clone(),
                 context_usage_min_request_tokens: snapshot.context_usage_min_request_tokens,
+                compact_trigger_tokens: snapshot.compact_trigger_tokens,
                 prefix_cache_mode: snapshot.prefix_cache_mode.clone(),
                 prefix_cache_max_tokens: snapshot.prefix_cache_max_tokens,
                 prefix_cache_entry_ttl_seconds: snapshot.prefix_cache_entry_ttl_seconds,
@@ -691,6 +692,7 @@ impl ProviderRouteStore for PostgresControlRepository {
             context_usage_min_request_tokens: runtime_config
                 .kiro_context_usage_min_request_tokens
                 .max(0) as u64,
+            compact_trigger_tokens: runtime_config.kiro_compact_trigger_tokens.max(0) as u64,
             prefix_cache_mode: runtime_config.kiro_prefix_cache_mode,
             prefix_cache_max_tokens: runtime_config.kiro_prefix_cache_max_tokens.max(0) as u64,
             prefix_cache_entry_ttl_seconds: runtime_config

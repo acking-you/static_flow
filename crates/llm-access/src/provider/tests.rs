@@ -907,6 +907,7 @@ fn static_kiro_route() -> ProviderKiroRoute {
             cache_policy_json: llm_access_core::store::default_kiro_cache_policy_json(),
             context_usage_min_request_tokens:
                 llm_access_core::store::DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
+            compact_trigger_tokens: llm_access_core::store::DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS,
             prefix_cache_mode: "formula".to_string(),
             prefix_cache_max_tokens: 100_000,
             prefix_cache_entry_ttl_seconds: 3600,
