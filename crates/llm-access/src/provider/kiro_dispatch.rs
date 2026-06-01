@@ -35,7 +35,8 @@ use super::{
     client::provider_client,
     errors::{
         anthropic_json_error_body, daily_request_limit_cooldown, is_monthly_request_limit,
-        kiro_chunk_contains_content_length_exceeded, kiro_prompt_too_long_message,
+        kiro_chunk_contains_content_length_exceeded, kiro_compact_trigger_tokens,
+        kiro_proactive_compact_response, kiro_prompt_too_long_message,
         kiro_prompt_too_long_response_for_body, proxy_cooldown_key_for_route,
         transient_invalid_model_cooldown,
     },
@@ -220,14 +221,31 @@ pub async fn dispatch_kiro_proxy(
             );
         }
     }
+    let request_input_tokens = token::count_all_tokens(
+        &payload.model,
+        payload.system.as_deref(),
+        &payload.messages,
+        payload.tools.as_deref(),
+    ) as i32;
+    override_kiro_thinking_from_model_name(&mut payload);
     if route_mcp_web_search {
-        let request_input_tokens = token::count_all_tokens(
-            &payload.model,
-            payload.system.as_deref(),
-            &payload.messages,
-            payload.tools.as_deref(),
-        ) as i32;
-        override_kiro_thinking_from_model_name(&mut payload);
+        // Proactive auto-compaction gate (websearch path): this branch performs
+        // no anchor-based recovery, so it gates on the local request estimate
+        // only. The main path below uses the contextUsage-accurate gate.
+        if let Some(trigger) = kiro_compact_trigger_tokens() {
+            if request_input_tokens >= trigger && !request_is_compaction_summary(&payload) {
+                tracing::info!(
+                    key_id = %key.key_id,
+                    key_name = %key.key_name,
+                    endpoint = %public_path,
+                    model = %effective_model,
+                    request_input_tokens,
+                    trigger,
+                    "proactively returning prompt-too-long to trigger client compaction (websearch)"
+                );
+                return kiro_proactive_compact_response(request_input_tokens, trigger);
+            }
+        }
         if routes[0].full_request_logging_enabled {
             capture_client_request_body_json(&mut usage_meta, &body);
         }
@@ -247,13 +265,6 @@ pub async fn dispatch_kiro_proxy(
         })
         .await;
     }
-    let request_input_tokens = token::count_all_tokens(
-        &payload.model,
-        payload.system.as_deref(),
-        &payload.messages,
-        payload.tools.as_deref(),
-    ) as i32;
-    override_kiro_thinking_from_model_name(&mut payload);
     let normalized = match normalize_request(&payload) {
         Ok(normalized) => normalized,
         Err(err) => {
@@ -379,6 +390,38 @@ pub async fn dispatch_kiro_proxy(
             {
                 conversation_state.conversation_id = recovered.clone();
                 cache_ctx.conversation_id = recovered;
+            }
+        }
+        // Proactive auto-compaction gate (main path): recover the previous
+        // turn's real (upstream contextUsage-derived) input-token count for this
+        // conversation prefix and gate on max(local estimate, recovered real).
+        // The recovered value is accurate where the local estimate drifts (large
+        // context + bridge scaffolding + the 15k/ratio rule); the local estimate
+        // still captures the newest delta. After a compaction the prefix changes
+        // so recovery misses and the gate falls back to the (now small) local
+        // count — no deadlock. Compaction-summary requests are always exempt.
+        if let Some(trigger) = kiro_compact_trigger_tokens() {
+            let recovered_real_tokens = kiro_cache_simulator
+                .recover_real_input_tokens_from_runtime_projection(
+                    &cache_ctx.projection,
+                    cache_ctx.simulation_config,
+                    Instant::now(),
+                )
+                .unwrap_or(0);
+            let effective_input_tokens = request_input_tokens.max(recovered_real_tokens);
+            if effective_input_tokens >= trigger && !request_is_compaction_summary(&payload) {
+                tracing::info!(
+                    key_id = %key.key_id,
+                    key_name = %key.key_name,
+                    endpoint = %public_path,
+                    model = %effective_model,
+                    request_input_tokens,
+                    recovered_real_tokens,
+                    effective_input_tokens,
+                    trigger,
+                    "proactively returning prompt-too-long to trigger client compaction"
+                );
+                return kiro_proactive_compact_response(effective_input_tokens, trigger);
             }
         }
         let request_body = match serde_json::to_vec(&KiroRequest {
@@ -1387,4 +1430,140 @@ pub fn account_names_for_kiro_routing_identity(
         .filter(|route| route.routing_identity == routing_identity)
         .map(|route| route.account_name.clone())
         .collect()
+}
+
+/// True when `text` looks like Claude Code's conversation-compaction summary
+/// instruction. Matching is intentionally generous: a false positive only lets
+/// an oversized normal request through to the model (benign — the model's real
+/// window still applies), whereas a false negative would gate the client's own
+/// reactive-compaction summary request and deadlock its compaction loop.
+fn text_is_compaction_summary_prompt(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("detailed summary of") && lower.contains("conversation")
+}
+fn json_value_contains_compaction_summary(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(text) => text_is_compaction_summary_prompt(text),
+        serde_json::Value::Array(items) => items.iter().any(json_value_contains_compaction_summary),
+        serde_json::Value::Object(map) => map.values().any(json_value_contains_compaction_summary),
+        _ => false,
+    }
+}
+/// Detects whether this request is the client's conversation-compaction summary
+/// request (rather than a normal turn). Such requests are exempt from the
+/// proactive compaction gate — they must always reach the model.
+fn request_is_compaction_summary(payload: &MessagesRequest) -> bool {
+    if let Some(system) = payload.system.as_deref() {
+        if system
+            .iter()
+            .any(|message| text_is_compaction_summary_prompt(&message.text))
+        {
+            return true;
+        }
+    }
+    payload
+        .messages
+        .iter()
+        .any(|message| json_value_contains_compaction_summary(&message.content))
+}
+
+#[cfg(test)]
+mod compaction_gate_tests {
+    use llm_access_kiro::anthropic::types::{Message, MessagesRequest, SystemMessage};
+    use serde_json::json;
+
+    use super::request_is_compaction_summary;
+
+    fn request(
+        system: Option<Vec<&str>>,
+        messages: Vec<(&str, serde_json::Value)>,
+    ) -> MessagesRequest {
+        MessagesRequest {
+            model: "claude-opus-4-8".to_string(),
+            _max_tokens: 32000,
+            messages: messages
+                .into_iter()
+                .map(|(role, content)| Message {
+                    role: role.to_string(),
+                    content,
+                })
+                .collect(),
+            stream: false,
+            system: system.map(|texts| {
+                texts
+                    .into_iter()
+                    .map(|text| SystemMessage {
+                        text: text.to_string(),
+                    })
+                    .collect()
+            }),
+            tools: None,
+            _tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn detects_summary_instruction_in_last_user_message() {
+        let req = request(None, vec![
+            ("user", json!("help me write a function")),
+            ("assistant", json!("sure")),
+            (
+                "user",
+                json!(
+                    "Your task is to create a detailed summary of this conversation. This summary \
+                     will be placed at the start of a continuing session."
+                ),
+            ),
+        ]);
+        assert!(request_is_compaction_summary(&req));
+    }
+
+    #[test]
+    fn detects_summary_instruction_in_content_blocks() {
+        let req = request(None, vec![(
+            "user",
+            json!([{
+                "type": "text",
+                "text": "create a detailed summary of the conversation so far, paying close attention to the user's requests"
+            }]),
+        )]);
+        assert!(request_is_compaction_summary(&req));
+    }
+
+    #[test]
+    fn detects_summary_instruction_in_system() {
+        let req = request(
+            Some(vec!["Your task is to create a detailed summary of this conversation."]),
+            vec![("user", json!("anything"))],
+        );
+        assert!(request_is_compaction_summary(&req));
+    }
+
+    #[test]
+    fn normal_request_is_not_compaction() {
+        let req = request(Some(vec!["You are a helpful coding assistant."]), vec![
+            ("user", json!("refactor this module")),
+            ("assistant", json!([{"type": "text", "text": "done"}])),
+        ]);
+        assert!(!request_is_compaction_summary(&req));
+    }
+
+    #[test]
+    fn post_compaction_continuation_text_is_not_matched() {
+        // The injected continuation text after a compaction lacks the "detailed
+        // summary of" instruction fragment, so it must not be treated as a
+        // compaction request (otherwise every post-compaction turn would be
+        // exempted from the gate forever).
+        let req = request(None, vec![(
+            "user",
+            json!(
+                "This session is being continued from a previous conversation that ran out of \
+                 context. The summary below covers the earlier portion of the conversation."
+            ),
+        )]);
+        assert!(!request_is_compaction_summary(&req));
+    }
 }

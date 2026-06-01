@@ -10,7 +10,9 @@ use axum::{
 };
 use futures_util::StreamExt;
 use llm_access_kiro::{
-    anthropic::stream::StreamContext, parser::decoder::EventStreamDecoder, wire::Event,
+    anthropic::stream::{resolve_input_tokens_with_threshold, StreamContext},
+    parser::decoder::EventStreamDecoder,
+    wire::Event,
 };
 
 use super::{
@@ -325,10 +327,16 @@ pub fn stream_kiro_upstream_response(
             }
         }
         let assistant_message = guard.stream_ctx.final_assistant_message();
+        let (real_input_tokens, _) = resolve_input_tokens_with_threshold(
+            request_input_tokens,
+            guard.stream_ctx.context_input_tokens(),
+            guard.route.context_usage_min_request_tokens,
+        );
         kiro_cache_simulator.record_success_from_runtime_projection(
             &guard.cache_ctx.projection,
             &assistant_message,
             &guard.cache_ctx.conversation_id,
+            Some(real_input_tokens),
             guard.route.cache_estimation_enabled,
             guard.cache_ctx.simulation_config,
             Instant::now(),
@@ -465,11 +473,17 @@ pub async fn non_stream_kiro_response(
         }));
     }
     let stop_reason = stream_ctx.state_manager.get_stop_reason();
+    let (real_input_tokens, _) = resolve_input_tokens_with_threshold(
+        ctx.request_input_tokens,
+        stream_ctx.context_input_tokens(),
+        ctx.route.context_usage_min_request_tokens,
+    );
     ctx.kiro_cache_simulator
         .record_success_from_runtime_projection(
             &ctx.cache_ctx.projection,
             &assistant_message,
             &ctx.cache_ctx.conversation_id,
+            Some(real_input_tokens),
             ctx.route.cache_estimation_enabled,
             ctx.cache_ctx.simulation_config,
             Instant::now(),
