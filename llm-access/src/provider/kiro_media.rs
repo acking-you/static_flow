@@ -459,32 +459,47 @@ fn validate_kiro_remote_media_url(
             ))
         },
     }
-    let host = url
-        .host_str()
-        .ok_or_else(|| KiroRemoteMediaResolutionError::new("URL source is missing host"))?;
-    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
-        return Err(KiroRemoteMediaResolutionError::new("URL source host must not be localhost"));
-    }
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        reject_private_kiro_remote_media_ip(ip)?;
+    // Match the parsed host enum, NOT `host_str()`: the latter returns IPv6
+    // literals bracketed (`[::1]`), which `parse::<IpAddr>()` rejects, letting a
+    // literal-IP URL skip the private-address gate entirely (reqwest dials the
+    // literal without ever calling the filtering resolver).
+    match url
+        .host()
+        .ok_or_else(|| KiroRemoteMediaResolutionError::new("URL source is missing host"))?
+    {
+        url::Host::Domain(domain) => {
+            if domain.eq_ignore_ascii_case("localhost") || domain.ends_with(".localhost") {
+                return Err(KiroRemoteMediaResolutionError::new(
+                    "URL source host must not be localhost",
+                ));
+            }
+        },
+        url::Host::Ipv4(ip) => reject_private_kiro_remote_media_ip(IpAddr::V4(ip))?,
+        url::Host::Ipv6(ip) => reject_private_kiro_remote_media_ip(IpAddr::V6(ip))?,
     }
     Ok(url)
 }
 async fn validate_kiro_remote_media_resolved_addresses(
     url: &url::Url,
 ) -> Result<(), KiroRemoteMediaResolutionError> {
-    let host = url
-        .host_str()
-        .ok_or_else(|| KiroRemoteMediaResolutionError::new("URL source is missing host"))?;
-    if host.parse::<IpAddr>().is_ok() {
-        return Ok(());
-    }
+    // Literal IPs are already vetted by `validate_kiro_remote_media_url` and are
+    // dialed directly (no resolver); only domains need a pre-flight lookup. Use
+    // the host enum so bracketed IPv6 literals aren't misread as domains.
+    let domain = match url
+        .host()
+        .ok_or_else(|| KiroRemoteMediaResolutionError::new("URL source is missing host"))?
+    {
+        url::Host::Domain(domain) => domain.to_string(),
+        url::Host::Ipv4(_) | url::Host::Ipv6(_) => return Ok(()),
+    };
     let port = url
         .port_or_known_default()
         .ok_or_else(|| KiroRemoteMediaResolutionError::new("URL source is missing port"))?;
-    let addresses = tokio::net::lookup_host((host, port)).await.map_err(|err| {
-        KiroRemoteMediaResolutionError::new(format!("failed to resolve URL source host: {err}"))
-    })?;
+    let addresses = tokio::net::lookup_host((domain.as_str(), port))
+        .await
+        .map_err(|err| {
+            KiroRemoteMediaResolutionError::new(format!("failed to resolve URL source host: {err}"))
+        })?;
     let mut resolved_any = false;
     for address in addresses {
         resolved_any = true;
@@ -521,6 +536,15 @@ fn is_private_kiro_remote_media_ipv4(ip: Ipv4Addr) -> bool {
         || ip == Ipv4Addr::UNSPECIFIED
 }
 fn is_private_kiro_remote_media_ipv6(ip: Ipv6Addr) -> bool {
+    // IPv4-mapped (`::ffff:a.b.c.d`) and IPv4-compatible (`::a.b.c.d`) addresses
+    // are dialed as their embedded IPv4 by dual-stack sockets, so an attacker
+    // could smuggle a private IPv4 target (e.g. `::ffff:127.0.0.1`) past the
+    // native-IPv6 checks below. Re-check the embedded IPv4 against the v4 rules.
+    if let Some(mapped) = ip.to_ipv4() {
+        if is_private_kiro_remote_media_ipv4(mapped) {
+            return true;
+        }
+    }
     ip.is_loopback()
         || ip.is_unique_local()
         || ip.is_unicast_link_local()
@@ -622,5 +646,54 @@ mod tests {
         let name = reqwest::dns::Name::from_str("localhost").expect("valid dns name");
         let result = PrivateFilteringDnsResolver.resolve(name).await;
         assert!(result.is_err(), "localhost must be rejected by the filtering resolver");
+    }
+
+    #[test]
+    fn filter_public_addrs_rejects_ipv4_mapped_private() {
+        // Dual-stack sockets dial `::ffff:a.b.c.d` as the embedded IPv4, so a
+        // hostile resolver could smuggle a private IPv4 target as IPv4-mapped
+        // IPv6. The embedded address must be re-checked against the v4 rules.
+        let err = filter_public_kiro_remote_media_addrs("rebind.test", vec![
+            sa("[::ffff:127.0.0.1]"),
+            sa("[::ffff:10.1.2.3]"),
+            sa("[::ffff:169.254.169.254]"),
+        ])
+        .expect_err("IPv4-mapped private addresses must be rejected");
+        assert!(err.contains("private or local"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn filter_public_addrs_keeps_ipv4_mapped_public() {
+        let out = filter_public_kiro_remote_media_addrs("example.test", vec![
+            sa("[::ffff:8.8.8.8]"),
+            sa("[::ffff:10.0.0.1]"),
+        ])
+        .expect("the mapped-public address remains");
+        assert_eq!(out, vec![sa("[::ffff:8.8.8.8]")]);
+    }
+
+    #[test]
+    fn validate_url_rejects_literal_loopback_variants() {
+        // host_str() brackets IPv6 literals, so a `parse::<IpAddr>()` gate would
+        // skip them; matching url.host() must reject these (incl. IPv4-mapped and
+        // url-normalized decimal IPv4).
+        for raw in [
+            "http://[::1]/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://[::ffff:10.0.0.1]/",
+            "http://127.0.0.1/",
+            "http://2130706433/",
+        ] {
+            let err = validate_kiro_remote_media_url(raw)
+                .err()
+                .unwrap_or_else(|| panic!("{raw} must be rejected"));
+            assert!(err.to_string().contains("private or local"), "raw={raw} msg={err}");
+        }
+    }
+
+    #[test]
+    fn validate_url_allows_public_literal_ipv6() {
+        validate_kiro_remote_media_url("http://[2606:4700:4700::1111]/")
+            .expect("public literal IPv6 must be allowed");
     }
 }
