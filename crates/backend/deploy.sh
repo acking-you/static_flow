@@ -69,8 +69,8 @@ prepare_deployment_package() {
     cp "target/release/${BINARY_NAME}" "$TEMP_DIR/staticflow/"
 
     # Copy configuration
-    cp "backend/.env.production" "$TEMP_DIR/staticflow/.env"
-    cp "backend/staticflow-backend.service" "$TEMP_DIR/staticflow/"
+    cp "crates/backend/.env.production" "$TEMP_DIR/staticflow/.env"
+    cp "crates/backend/staticflow-backend.service" "$TEMP_DIR/staticflow/"
 
     # Prepare LanceDB data directory
     mkdir -p "$TEMP_DIR/staticflow/data"

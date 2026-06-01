@@ -540,7 +540,7 @@ fn parse_bool_env(raw: &str) -> bool {
 async fn ensure_fresh_sf_cli_binary(workdir: &Path) -> Result<PathBuf> {
     let binary_path = workdir.join("target/release/sf-cli");
     let repo_relative_paths =
-        ["cli", "shared", "Cargo.toml", "Cargo.lock", "deps/lance", "deps/lancedb"];
+        ["crates/cli", "crates/shared", "Cargo.toml", "Cargo.lock", "deps/lance", "deps/lancedb"];
     let latest_commit_epoch =
         latest_relevant_git_commit_epoch(workdir, &repo_relative_paths).await?;
     let dirty = git_has_relevant_changes(workdir, &repo_relative_paths).await?;

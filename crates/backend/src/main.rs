@@ -54,24 +54,24 @@ async fn main() -> Result<()> {
 
     // Load environment variables
     let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());
-    // Dev defaults assume `cargo run` from this crate dir (crates/backend). The
-    // `data/` dir stays at the repo root, so escape two levels; real runs set
-    // these env vars to absolute paths.
-    let db_uri = env::var("LANCEDB_URI").unwrap_or_else(|_| "../../data/lancedb".to_string());
-    let comments_db_uri = env::var("COMMENTS_LANCEDB_URI")
-        .unwrap_or_else(|_| "../../data/lancedb-comments".to_string());
+    // Dev defaults assume the process runs from the repo root (the canonical
+    // CWD: `start_backend_selfhosted.sh` cds there, and `make dev-backend` runs
+    // `cargo run -p static-flow-backend` from root). `data/` lives at the repo
+    // root; real runs set these env vars to absolute paths.
+    let db_uri = env::var("LANCEDB_URI").unwrap_or_else(|_| "data/lancedb".to_string());
+    let comments_db_uri =
+        env::var("COMMENTS_LANCEDB_URI").unwrap_or_else(|_| "data/lancedb-comments".to_string());
     let music_db_uri =
-        env::var("MUSIC_LANCEDB_URI").unwrap_or_else(|_| "../../data/lancedb-music".to_string());
+        env::var("MUSIC_LANCEDB_URI").unwrap_or_else(|_| "data/lancedb-music".to_string());
 
     tracing::info!("Starting StaticFlow backend server");
     tracing::info!("LanceDB URI: {}", db_uri);
     tracing::info!("Comments LanceDB URI: {}", comments_db_uri);
     tracing::info!("Music LanceDB URI: {}", music_db_uri);
 
-    // `../frontend/dist` stays correct: frontend moved into crates/ alongside
-    // this crate, so it remains a sibling (crates/frontend/dist).
+    // Repo-root-relative, matching the canonical CWD above.
     let frontend_dist_dir =
-        env::var("FRONTEND_DIST_DIR").unwrap_or_else(|_| "../frontend/dist".to_string());
+        env::var("FRONTEND_DIST_DIR").unwrap_or_else(|_| "crates/frontend/dist".to_string());
     tracing::info!("Frontend dist dir: {}", frontend_dist_dir);
 
     // Initialize application state

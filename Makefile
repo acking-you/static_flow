@@ -53,8 +53,8 @@ dev:
 # 启动后端
 dev-backend:
 	@echo "🔧 启动后端（http://localhost:3000）..."
-	@cd crates/backend && [ -f .env ] || cp .env.example .env
-	@cd crates/backend && RUST_LOG=info cargo run
+	@[ -f crates/backend/.env ] || cp crates/backend/.env.example crates/backend/.env
+	@RUST_LOG=info cargo run -p static-flow-backend
 
 # 启动前端
 dev-frontend:
