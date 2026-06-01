@@ -63,17 +63,17 @@ LanceError(IO): External error: Not found:
 
 对应后端入口见：
 
-- `backend/src/handlers.rs:1884` `list_images`
-- `backend/src/handlers.rs:1904` `search_images`
-- `backend/src/handlers.rs:1930` `search_images_by_text`
-- `backend/src/handlers.rs:1968` `serve_image`
+- `crates/backend/src/handlers.rs:1884` `list_images`
+- `crates/backend/src/handlers.rs:1904` `search_images`
+- `crates/backend/src/handlers.rs:1930` `search_images_by_text`
+- `crates/backend/src/handlers.rs:1968` `serve_image`
 
 对应 LanceDB 扫描路径见：
 
-- `shared/src/lancedb_api.rs:874` `list_images`
-- `shared/src/lancedb_api.rs:926` `search_images_by_text`
-- `shared/src/lancedb_api.rs:1017` `search_images`
-- `shared/src/lancedb_api.rs:1167` 查询路径诊断日志 `Query path selected`
+- `crates/shared/src/lancedb_api.rs:874` `list_images`
+- `crates/shared/src/lancedb_api.rs:926` `search_images_by_text`
+- `crates/shared/src/lancedb_api.rs:1017` `search_images`
+- `crates/shared/src/lancedb_api.rs:1167` 查询路径诊断日志 `Query path selected`
 
 ## 3. 时间线（关键节点）
 
@@ -286,14 +286,14 @@ mv images.lance/_transactions/420-*.txn /tmp/
 
 ## Code Index
 
-- `backend/src/handlers.rs:1884` `list_images`
-- `backend/src/handlers.rs:1904` `search_images`
-- `backend/src/handlers.rs:1930` `search_images_by_text`
-- `backend/src/handlers.rs:1968` `serve_image`
-- `shared/src/lancedb_api.rs:874` `list_images`
-- `shared/src/lancedb_api.rs:926` `search_images_by_text`
-- `shared/src/lancedb_api.rs:1017` `search_images`
-- `shared/src/lancedb_api.rs:1167` query-path diagnostics log
+- `crates/backend/src/handlers.rs:1884` `list_images`
+- `crates/backend/src/handlers.rs:1904` `search_images`
+- `crates/backend/src/handlers.rs:1930` `search_images_by_text`
+- `crates/backend/src/handlers.rs:1968` `serve_image`
+- `crates/shared/src/lancedb_api.rs:874` `list_images`
+- `crates/shared/src/lancedb_api.rs:926` `search_images_by_text`
+- `crates/shared/src/lancedb_api.rs:1017` `search_images`
+- `crates/shared/src/lancedb_api.rs:1167` query-path diagnostics log
 - `scripts/start_backend_from_tmp.sh:7` DB path resolution policy (`DB_PATH` / `COMMENTS_DB_PATH`)
 
 ## References

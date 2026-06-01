@@ -56,7 +56,7 @@ graph LR
 3. 点击时调用 `navigator.clipboard.writeText()`
 4. 复制 `<code>` 元素的 `textContent`
 
-**代码位置**：`frontend/index.html` line 132-175
+**代码位置**：`crates/frontend/index.html` line 132-175
 
 ```javascript
 function addCopyButtonsToCodeBlocks() {
@@ -80,7 +80,7 @@ function addCopyButtonsToCodeBlocks() {
    - 调用 `navigator.clipboard.write()` 写入图片
 4. 如果浏览器不支持图片复制，降级为复制 SVG 代码
 
-**代码位置**：`frontend/index.html` line 177-257
+**代码位置**：`crates/frontend/index.html` line 177-257
 
 **降级策略**：
 ```

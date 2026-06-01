@@ -106,7 +106,7 @@ trunk build --release
 
 ### Trunk 配置文件
 
-`frontend/Trunk.toml`：
+`crates/frontend/Trunk.toml`：
 ```toml
 [build]
 target = "index.html"       # 入口 HTML
@@ -134,7 +134,7 @@ open = false                # 是否自动打开浏览器
 └─────────────────────────────────────────────────────────────┘
 
 1. 编辑源代码
-   frontend/src/*.rs
+   crates/frontend/src/*.rs
          │
          ↓
 2. trunk serve 监听文件变化
@@ -154,7 +154,7 @@ open = false                # 是否自动打开浏览器
          │
          ↓
 6. Trunk 复制静态资源
-   frontend/static/ → frontend/dist/static/
+   crates/frontend/static/ → crates/frontend/dist/static/
          │
          ↓
 7. Trunk 将所有产物打包到 dist/
@@ -272,19 +272,19 @@ const element = document.querySelector('.my-class');
 
 | 路径 | 作用 | 谁使用 | 是否提交 Git |
 |------|------|--------|-------------|
-| `frontend/static/` | **源文件目录**（开发者编辑） | Trunk 读取 | ✅ 是 |
-| `frontend/dist/static/` | **构建产物**（自动生成） | 浏览器加载 | ❌ 否（被 .gitignore） |
+| `crates/frontend/static/` | **源文件目录**（开发者编辑） | Trunk 读取 | ✅ 是 |
+| `crates/frontend/dist/static/` | **构建产物**（自动生成） | 浏览器加载 | ❌ 否（被 .gitignore） |
 
 ### 依赖关系图
 
 ```
 开发者编辑
     ↓
-frontend/static/styles.css
+crates/frontend/static/styles.css
     │
     │ (Trunk 每次构建时复制)
     ↓
-frontend/dist/static/styles.css
+crates/frontend/dist/static/styles.css
     │
     │ (浏览器 HTTP 请求)
     ↓
@@ -311,12 +311,12 @@ html! { <img src="/static/avatar.jpg" /> }
 
 实际加载流程：
 1. 浏览器请求 `http://127.0.0.1:8080/static/avatar.jpg`
-2. Trunk 开发服务器映射到 `frontend/dist/static/avatar.jpg`
+2. Trunk 开发服务器映射到 `crates/frontend/dist/static/avatar.jpg`
 3. 返回文件内容
 
 ### 必要文件清单
 
-**frontend/static/ 中必须保留：**
+**crates/frontend/static/ 中必须保留：**
 
 | 文件 | 作用 | 可删除 |
 |------|------|--------|
@@ -330,7 +330,7 @@ html! { <img src="/static/avatar.jpg" /> }
 | `svg/loading.min.svg` | 加载动画 | ❌ |
 
 **可以安全删除：**
-- `frontend/dist/` **整个目录** - 每次构建自动重新生成
+- `crates/frontend/dist/` **整个目录** - 每次构建自动重新生成
 - `.gitkeep` 文件 - 仅用于 Git 追踪空目录，现在有内容了
 
 ### 验证方法
@@ -381,7 +381,7 @@ trunk serve
 cd frontend
 trunk build --release
 
-# 产物位于 frontend/dist/
+# 产物位于 crates/frontend/dist/
 # - WASM 文件已压缩（wasm-opt -Oz）
 # - 文件名包含 Hash（缓存优化）
 # - 可直接部署到静态服务器
@@ -428,24 +428,24 @@ wasm-objdump -x dist/*.wasm | less
 
 ```
 /home/ts_user/web/static_flow/Cargo.lock        # Workspace 级别
-/home/ts_user/web/static_flow/frontend/Cargo.lock  # 子项目级别
+/home/ts_user/web/static_flow/crates/frontend/Cargo.lock  # 子项目级别
 ```
 
 **原因**：
 - Workspace 的 `Cargo.lock` 锁定所有成员项目的依赖版本
-- `frontend/Cargo.lock` 可能是之前独立项目遗留的
+- `crates/frontend/Cargo.lock` 可能是之前独立项目遗留的
 
 **解决方案**：
 ```bash
 # 删除子项目的 Cargo.lock，只保留根目录的
-rm frontend/Cargo.lock
+rm crates/frontend/Cargo.lock
 ```
 
 ### Q2: 修改 CSS 后样式不生效？
 
 **可能原因**：
 1. 浏览器缓存 - 按 `Ctrl + F5` 强制刷新
-2. 编辑了错误的文件 - 确保编辑 `frontend/static/styles.css`（不是 `dist/`）
+2. 编辑了错误的文件 - 确保编辑 `crates/frontend/static/styles.css`（不是 `dist/`）
 3. Trunk 未检测到变化 - 重启 `trunk serve`
 
 ### Q3: trunk serve 报错 "address already in use"
@@ -521,7 +521,7 @@ cargo check --workspace
 yew = { version = "0.21", features = ["csr"] }
 ```
 
-**子项目引用**（frontend/Cargo.toml）：
+**子项目引用**（crates/frontend/Cargo.toml）：
 ```toml
 [dependencies]
 yew = { workspace = true }

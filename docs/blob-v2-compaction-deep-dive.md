@@ -710,7 +710,7 @@ sf-cli db --db-path /mnt/wsl/data4tb/static-flow-data/lancedb-music verify-audio
 
 | 文件 | 行号 | 符号 | 职责 |
 |------|------|------|------|
-| `shared/src/music_store.rs` | 721-727 | `songs_table()` | StaticFlow 音乐表 blob v2 配置 |
+| `crates/shared/src/music_store.rs` | 721-727 | `songs_table()` | StaticFlow 音乐表 blob v2 配置 |
 | `protos/table.proto` | 339 | `DataFragment.blob_source_keys` | GC 保护的 protobuf 字段 |
 | `lance-core/.../datatypes.rs` | 50-58 | `BLOB_V2_DESC_FIELDS` | 5-field 描述符定义 |
 | | 434-446 | `BlobKind` | Inline/Packed/Dedicated/External 枚举 |

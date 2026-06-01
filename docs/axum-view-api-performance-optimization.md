@@ -44,7 +44,7 @@ time curl -X POST "http://localhost:3000/api/articles/post-001/view"
 
 ### 2.1 中间件链
 
-Axum 路由在 `backend/src/routes.rs:115-121` 中注册了三层中间件：
+Axum 路由在 `crates/backend/src/routes.rs:115-121` 中注册了三层中间件：
 
 ```
 请求 → CORS → behavior_analytics → request_context → Handler → 响应
@@ -54,7 +54,7 @@ Axum 路由在 `backend/src/routes.rs:115-121` 中注册了三层中间件：
 
 ### 2.2 Handler 内部操作链
 
-Handler `track_article_view`（`backend/src/handlers.rs:578-600`）内部的操作序列：
+Handler `track_article_view`（`crates/backend/src/handlers.rs:578-600`）内部的操作序列：
 
 ```mermaid
 flowchart TD
@@ -92,7 +92,7 @@ flowchart TD
 
 ### 3.1 问题分析
 
-`behavior_analytics_middleware`（`backend/src/behavior_analytics.rs:24-93`）的原始逻辑：
+`behavior_analytics_middleware`（`crates/backend/src/behavior_analytics.rs:24-93`）的原始逻辑：
 
 ```rust
 // 优化前 — behavior_analytics.rs
@@ -116,7 +116,7 @@ pub async fn behavior_analytics_middleware(
 }
 ```
 
-> 💡 **Key Point**: `resolve_region` 的实现（`backend/src/geoip.rs:141-179`）会先尝试本地 MaxMind 数据库查询，如果本地数据不够详细（`require_region_detail=true` 时缺少省/市信息），会回退到 `ipwho.is` HTTP API，默认超时 **120 秒**。这意味着在最坏情况下，每个 API 请求都可能被 GeoIP 回退拖住数秒。
+> 💡 **Key Point**: `resolve_region` 的实现（`crates/backend/src/geoip.rs:141-179`）会先尝试本地 MaxMind 数据库查询，如果本地数据不够详细（`require_region_detail=true` 时缺少省/市信息），会回退到 `ipwho.is` HTTP API，默认超时 **120 秒**。这意味着在最坏情况下，每个 API 请求都可能被 GeoIP 回退拖住数秒。
 
 ### 3.2 优化方案：tokio::spawn fire-and-forget
 
@@ -155,7 +155,7 @@ response  // 立即返回，不等后台任务
 
 ### 4.1 问题分析
 
-原始的 `ensure_article_exists`（`backend/src/handlers.rs:2230-2250`）调用 `get_article`，后者通过 `fetch_article_detail` 执行全表扫描并读取 `content`、`content_en`、`detailed_summary` 等大文本字段：
+原始的 `ensure_article_exists`（`crates/backend/src/handlers.rs:2230-2250`）调用 `get_article`，后者通过 `fetch_article_detail` 执行全表扫描并读取 `content`、`content_en`、`detailed_summary` 等大文本字段：
 
 ```rust
 // 优化前 — handlers.rs:2230
@@ -169,7 +169,7 @@ async fn ensure_article_exists(state: &AppState, id: &str) -> Result<...> {
 
 ### 4.2 优化方案：count_rows 替代全表扫描
 
-新增 `article_exists` 方法（`shared/src/lancedb_api.rs:590-598`），只用 `count_rows` 返回一个整数：
+新增 `article_exists` 方法（`crates/shared/src/lancedb_api.rs:590-598`），只用 `count_rows` 返回一个整数：
 
 ```rust
 // 优化后 — lancedb_api.rs:590-598
@@ -200,7 +200,7 @@ async fn ensure_article_exists(state: &AppState, id: &str) -> Result<...> {
 
 ### 5.1 问题分析
 
-在 `track_article_view`（`shared/src/lancedb_api.rs:405-483`）中，upsert 之后有三个独立查询串行执行：
+在 `track_article_view`（`crates/shared/src/lancedb_api.rs:405-483`）中，upsert 之后有三个独立查询串行执行：
 
 ```
 upsert → total_views → today_views → day_counts → 返回
@@ -253,7 +253,7 @@ upsert → ┌ total_views  ┐
 
 ### 6.1 问题分析
 
-`fetch_article_view_day_counts`（`shared/src/lancedb_api.rs:2439-2465`）原始实现查询该文章的**所有** view 记录，然后在内存中按 `day_bucket` 聚合：
+`fetch_article_view_day_counts`（`crates/shared/src/lancedb_api.rs:2439-2465`）原始实现查询该文章的**所有** view 记录，然后在内存中按 `day_bucket` 聚合：
 
 ```rust
 // 优化前
@@ -334,14 +334,14 @@ flowchart LR
 
 | 组件 | 文件 | 关键行号 |
 |------|------|----------|
-| 中间件（优化后） | `backend/src/behavior_analytics.rs` | 24-93 |
-| 路由注册 | `backend/src/routes.rs` | 115-121 |
-| Handler | `backend/src/handlers.rs` | 578-600 |
-| ensure_article_exists（优化后） | `backend/src/handlers.rs` | 2230-2250 |
-| article_exists（新增） | `shared/src/lancedb_api.rs` | 590-598 |
-| track_article_view（优化后） | `shared/src/lancedb_api.rs` | 405-483 |
-| fetch_article_view_day_counts（优化后） | `shared/src/lancedb_api.rs` | 2439-2465 |
-| GeoIP 解析器 | `backend/src/geoip.rs` | 141-179 |
+| 中间件（优化后） | `crates/backend/src/behavior_analytics.rs` | 24-93 |
+| 路由注册 | `crates/backend/src/routes.rs` | 115-121 |
+| Handler | `crates/backend/src/handlers.rs` | 578-600 |
+| ensure_article_exists（优化后） | `crates/backend/src/handlers.rs` | 2230-2250 |
+| article_exists（新增） | `crates/shared/src/lancedb_api.rs` | 590-598 |
+| track_article_view（优化后） | `crates/shared/src/lancedb_api.rs` | 405-483 |
+| fetch_article_view_day_counts（优化后） | `crates/shared/src/lancedb_api.rs` | 2439-2465 |
+| GeoIP 解析器 | `crates/backend/src/geoip.rs` | 141-179 |
 
 ## 9. 总结与思考
 

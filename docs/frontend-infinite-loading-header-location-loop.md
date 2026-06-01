@@ -65,8 +65,8 @@ content_en: |
 
   ## 7. Code Index
 
-  - `frontend/src/components/header.rs`: location sync + search URL build
-  - `frontend/src/router.rs`: route transitions
+  - `crates/frontend/src/components/header.rs`: location sync + search URL build
+  - `crates/frontend/src/router.rs`: route transitions
 
 detailed_summary:
   zh: |
@@ -239,6 +239,6 @@ flowchart TD
 
 ## 8. 代码索引
 
-- `frontend/src/components/header.rs`：URL 同步与搜索 URL 构建
-- `frontend/src/router.rs`：路由状态切换
-- `frontend/src/pages/search.rs`：模式/参数消费逻辑
+- `crates/frontend/src/components/header.rs`：URL 同步与搜索 URL 构建
+- `crates/frontend/src/router.rs`：路由状态切换
+- `crates/frontend/src/pages/search.rs`：模式/参数消费逻辑

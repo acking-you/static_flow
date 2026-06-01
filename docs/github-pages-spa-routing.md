@@ -71,7 +71,7 @@ GET https://acking-you.github.io/latest
 
 #### 1. 创建 404.html 捕获并保存原始 URL
 
-**文件位置：** `frontend/404.html`（与 `index.html` 同级）
+**文件位置：** `crates/frontend/404.html`（与 `index.html` 同级）
 
 ```html
 <!DOCTYPE html>
@@ -109,7 +109,7 @@ GET https://acking-you.github.io/latest
 
 #### 2. 修改 index.html 恢复原始 URL
 
-**文件位置：** `frontend/index.html`（在 `<head>` 最前面添加）
+**文件位置：** `crates/frontend/index.html`（在 `<head>` 最前面添加）
 
 ```html
 <head>
@@ -171,7 +171,7 @@ history.replaceState(null, '', '/latest');
   with:
     personal_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
     external_repository: acking-you/acking-you.github.io
-    publish_dir: frontend/dist
+    publish_dir: crates/frontend/dist
 ```
 
 ## 📊 完整流程图
@@ -376,7 +376,7 @@ location / {
 **检查清单：**
 ```bash
 # 1. 确认 404.html 在 dist 根目录
-ls -la frontend/dist/ | grep 404
+ls -la crates/frontend/dist/ | grep 404
 # 应该看到：-rw-r--r-- ... 404.html
 
 # 2. 确认 GitHub Actions 复制步骤存在

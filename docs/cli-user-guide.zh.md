@@ -803,7 +803,7 @@ sf-cli rebuild-songs-table --db-path /mnt/wsl/data4tb/static-flow-data/lancedb-m
 
 当需要对 `articles`、`images` 等表执行类似重建时，可参照以下步骤在 `shared/` 和 `cli/` 中实现：
 
-**1) `shared/src/*_store.rs` — 核心逻辑**
+**1) `crates/shared/src/*_store.rs` — 核心逻辑**
 
 ```rust
 pub async fn rebuild_xxx_table(&self, batch_size: usize, db_uri: &str) -> Result<usize> {
@@ -820,7 +820,7 @@ pub async fn rebuild_xxx_table(&self, batch_size: usize, db_uri: &str) -> Result
 }
 ```
 
-**2) `cli/src/cli.rs` — 注册子命令**
+**2) `crates/cli/src/cli.rs` — 注册子命令**
 
 ```rust
 /// Rebuild xxx table with new schema.
@@ -832,7 +832,7 @@ RebuildXxxTable {
 },
 ```
 
-**3) `cli/src/commands/rebuild_xxx.rs` — 入口**
+**3) `crates/cli/src/commands/rebuild_xxx.rs` — 入口**
 
 ```rust
 pub async fn run(db_path: &Path, batch_size: usize) -> Result<()> {
@@ -843,7 +843,7 @@ pub async fn run(db_path: &Path, batch_size: usize) -> Result<()> {
 }
 ```
 
-**4) `cli/src/commands/mod.rs` — 注册 dispatch**
+**4) `crates/cli/src/commands/mod.rs` — 注册 dispatch**
 
 ```rust
 pub mod rebuild_xxx;

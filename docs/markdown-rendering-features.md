@@ -204,7 +204,7 @@ window.initMarkdownRendering();
 
 ### 添加更多语言支持
 
-编辑 `frontend/index.html`，添加语言包:
+编辑 `crates/frontend/index.html`，添加语言包:
 ```html
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/go.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>

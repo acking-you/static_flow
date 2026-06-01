@@ -78,7 +78,7 @@ target.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
 ### 代码位置
 
-#### JavaScript（frontend/index.html:414-513）
+#### JavaScript（crates/frontend/index.html:414-513）
 
 **生成目录**：
 ```javascript
@@ -130,7 +130,7 @@ function updateActiveTOC(headings) {
 }
 ```
 
-#### CSS（frontend/static/styles.css:2080-2165）
+#### CSS（crates/frontend/static/styles.css:2080-2165）
 
 **目录容器**：
 ```css
@@ -274,7 +274,7 @@ window.addEventListener('scroll', () => {
 
 ### 代码位置
 
-#### JavaScript（frontend/index.html:515-548）
+#### JavaScript（crates/frontend/index.html:515-548）
 
 ```javascript
 function initBackToTop() {
@@ -302,7 +302,7 @@ function initBackToTop() {
 }
 ```
 
-#### CSS（frontend/static/styles.css:2169-2228）
+#### CSS（crates/frontend/static/styles.css:2169-2228）
 
 ```css
 .back-to-top {
@@ -502,5 +502,5 @@ window.scrollY
 **实现时间**: 2025-11-15
 **功能**: 文章目录 + 回到顶部
 **文件修改**:
-- `frontend/index.html` - JavaScript 逻辑
-- `frontend/static/styles.css` - 样式定义
+- `crates/frontend/index.html` - JavaScript 逻辑
+- `crates/frontend/static/styles.css` - 样式定义

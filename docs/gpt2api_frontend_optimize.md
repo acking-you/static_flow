@@ -16,7 +16,7 @@
 
 ## 目标与范围
 
-1. **后端（backend/src/gpt2api_rs.rs + routes.rs）**：新增 key 生成/重置 API、key 鉴权中间件、公开转发路由、用 1 个"总调用次数"字段替换「图片张数字段」，usage 记录扩展到 chat/responses。
+1. **后端（crates/backend/src/gpt2api_rs.rs + routes.rs）**：新增 key 生成/重置 API、key 鉴权中间件、公开转发路由、用 1 个"总调用次数"字段替换「图片张数字段」，usage 记录扩展到 chat/responses。
 2. **前端 admin `/admin/gpt2api-rs`**：UI 重构（form 友好化、列表分页/排序/状态标签、Accounts 错误诊断提升、Keys tab 加「新建 key」弹窗，明文只显示一次）。
 3. **前端公开 `/gpt2api/*`**：Login、Image（文生/编辑 + 粘贴 + Lightbox + 左侧历史）、Chat（单轮 SSE completion + 历史）三页，参考 chatgpt2api WebUI 外观，但用 Yew+Tailwind，不引入 React。
 
@@ -29,9 +29,9 @@
 ### Phase A — 后端：key 生成 + 公开转发（骨架）
 
 **关键文件**：
-- `backend/src/gpt2api_rs.rs` — 添加 `create_key` / `rotate_key` / `delete_key` / `update_key`；新增「公开 handler 组」：`public_chat_completions` / `public_image_generation` / `public_image_edit` / `public_responses`；公共 key 鉴权中间件 `require_public_api_key`。
-- `backend/src/routes.rs` — 注册新路由。
-- `backend/src/schema.sql`（或相关 migration） — `gpt2api_rs_keys` 表字段：
+- `crates/backend/src/gpt2api_rs.rs` — 添加 `create_key` / `rotate_key` / `delete_key` / `update_key`；新增「公开 handler 组」：`public_chat_completions` / `public_image_generation` / `public_image_edit` / `public_responses`；公共 key 鉴权中间件 `require_public_api_key`。
+- `crates/backend/src/routes.rs` — 注册新路由。
+- `crates/backend/src/schema.sql`（或相关 migration） — `gpt2api_rs_keys` 表字段：
   - 新增 `quota_total_calls`、`quota_used_calls`（保留老字段，但停止读写；或迁移后 drop，看你的 db 风格）
   - 现有 `secret_hash` 字段继续存 sha256；在创建/重置时返回**一次明文**给调用方
 
@@ -114,9 +114,9 @@ curl -i http://127.0.0.1:39080/api/gpt2api/chat/completions -d '{...}'
 - 继续保留给管理员手测用，不做大改；只把 request/response JSON 的 pre 改成带行号的可折叠组件（可选）。
 
 **B-6 新共享 util**
-- `frontend/src/pages/llm_access_shared.rs`：新增
+- `crates/frontend/src/pages/llm_access_shared.rs`：新增
   - `pub fn format_relative_time(now_ms: f64, ts_ms: i64) -> String`
-  - 如果 B-7 要做 Toast 组件，放 `frontend/src/components/toast.rs`。
+  - 如果 B-7 要做 Toast 组件，放 `crates/frontend/src/components/toast.rs`。
 
 **B-7（可选）Toast 组件**
 - 用 `gloo_timers::Timeout` 做 3s 自动消失，`use_context` 或全局 `UseStateHandle<VecDeque<Toast>>`。不是必须，现有 notice 横幅也够用；**默认不做，除非时间充裕**。
@@ -125,12 +125,12 @@ curl -i http://127.0.0.1:39080/api/gpt2api/chat/completions -d '{...}'
 
 ### Phase C — 前端公开页面骨架
 
-**新增前端路由**（`frontend/src/router.rs`）：
+**新增前端路由**（`crates/frontend/src/router.rs`）：
 - `Route::Gpt2apiLogin` → `/gpt2api/login`
 - `Route::Gpt2apiImage` → `/gpt2api/image`
 - `Route::Gpt2apiChat` → `/gpt2api/chat`
 
-**新增页面**（`frontend/src/pages/`）：
+**新增页面**（`crates/frontend/src/pages/`）：
 - `gpt2api_public_shared.rs`：key 存储（IndexedDB wrapper）+ `use_require_key` hook + API client（fetch `/api/gpt2api/*`）。
 - `gpt2api_login.rs`：单输入框「输入 API Key」→ 调 `/api/gpt2api/auth/verify` → 存 IndexedDB → 跳 `/gpt2api/chat`。
 - `gpt2api_layout.rs`：顶栏（右上角 Logout 清除 key + 跳登录页；中间 tab：Chat / Image；左上 brand）。所有公开页共享。
@@ -150,7 +150,7 @@ curl -i http://127.0.0.1:39080/api/gpt2api/chat/completions -d '{...}'
 
 ### Phase D — 公开图片页
 
-**文件**：`frontend/src/pages/gpt2api_image.rs`（+ 拆分 `gpt2api_image/sidebar.rs / composer.rs / results.rs` 子模块）。
+**文件**：`crates/frontend/src/pages/gpt2api_image.rs`（+ 拆分 `gpt2api_image/sidebar.rs / composer.rs / results.rs` 子模块）。
 
 **对照 chatgpt2api WebUI**：
 - 左侧 `ImageSidebar`：历史会话列表（IndexedDB `conversations` store），点击切换，「删除」「清空」。
@@ -167,7 +167,7 @@ curl -i http://127.0.0.1:39080/api/gpt2api/chat/completions -d '{...}'
 
 ### Phase E — 公开聊天页（SSE）
 
-**文件**：`frontend/src/pages/gpt2api_chat.rs`。
+**文件**：`crates/frontend/src/pages/gpt2api_chat.rs`。
 
 **设计**：
 - 单轮 completion。左侧历史（IndexedDB `conversations` 里的 chat 类型）；主区 messages 列表；底部 textarea + 发送按钮。
@@ -176,10 +176,10 @@ curl -i http://127.0.0.1:39080/api/gpt2api/chat/completions -d '{...}'
   - `web_sys::EventSource` 不支持 POST body，不能用。
   - 改用 `fetch` + `ReadableStream`，`gloo_net::http::Request::post(...).send().await?.body()` 再 `ReadableStream::getReader()`。Yew/wasm 没现成的 SSE for POST helper，需要写一个解析器：按 `data: ...\n\n` 分包。或者更稳：直接在响应 body 里 poll 字节、用 `\n\n` 切分。
   - 上游 SSE 每行 `data: {"choices":[{"delta":{"content":"..."}}]}`，空行表示结束。我在 parser 里 accumulate `delta.content` 拼到当前 assistant message。
-  - 已经有 SSE 批处理先例：`frontend/src/components/stream_chunk_batcher.rs`（但它是 listen 模式，基于 `EventSource`）。**chat SSE 用 POST-stream**，不能直接用；需要新增 `components/post_sse_stream.rs`（reusable wrapper）。
+  - 已经有 SSE 批处理先例：`crates/frontend/src/components/stream_chunk_batcher.rs`（但它是 listen 模式，基于 `EventSource`）。**chat SSE 用 POST-stream**，不能直接用；需要新增 `components/post_sse_stream.rs`（reusable wrapper）。
 
 **UI 参考 chatgpt2api**：
-- 消息气泡：用户右、assistant 左；assistant 渲染 markdown（用现有 `components::raw_html` 吗？那是给管理员文章用的；聊天 markdown 建议引入一个轻量 md parser 或直接用 `pulldown_cmark` — frontend/Cargo.toml 已经有 `pulldown-cmark`，复用它）。
+- 消息气泡：用户右、assistant 左；assistant 渲染 markdown（用现有 `components::raw_html` 吗？那是给管理员文章用的；聊天 markdown 建议引入一个轻量 md parser 或直接用 `pulldown_cmark` — crates/frontend/Cargo.toml 已经有 `pulldown-cmark`，复用它）。
 - 滚动：自动滚到底部；流式过程中也保持底部。
 - 停止生成按钮：点击后 abort `fetch`（`AbortController` via `wasm-bindgen` or gloo_net 自带）。
 
@@ -204,27 +204,27 @@ curl -i http://127.0.0.1:39080/api/gpt2api/chat/completions -d '{...}'
 ## 关键文件清单
 
 后端（Phase A）：
-- `backend/src/gpt2api_rs.rs`
-- `backend/src/routes.rs`
-- `backend/src/schema.sql`（若有 migration 机制）
+- `crates/backend/src/gpt2api_rs.rs`
+- `crates/backend/src/routes.rs`
+- `crates/backend/src/schema.sql`（若有 migration 机制）
 - 相关 state 结构里的 key repo 模块
 
 前端 admin（Phase B）：
-- `frontend/src/pages/admin_gpt2api_rs.rs`（继续重构）
-- `frontend/src/pages/llm_access_shared.rs`（加 `format_relative_time`）
-- 可能新增 `frontend/src/components/toast.rs`（B-7 可选）
+- `crates/frontend/src/pages/admin_gpt2api_rs.rs`（继续重构）
+- `crates/frontend/src/pages/llm_access_shared.rs`（加 `format_relative_time`）
+- 可能新增 `crates/frontend/src/components/toast.rs`（B-7 可选）
 
 前端公开（Phase C-E）：
-- `frontend/src/router.rs`（新增 3 条 Route）
-- `frontend/src/pages/mod.rs`
-- `frontend/src/pages/gpt2api_public_shared.rs`（新）
-- `frontend/src/pages/gpt2api_login.rs`（新）
-- `frontend/src/pages/gpt2api_layout.rs`（新，公共顶栏）
-- `frontend/src/pages/gpt2api_image.rs`（新，含 composer/results/sidebar 子模块）
-- `frontend/src/pages/gpt2api_chat.rs`（新）
-- `frontend/src/components/image_lightbox.rs`（新）
-- `frontend/src/components/post_sse_stream.rs`（新；支持 fetch POST + 读 SSE）
-- `frontend/src/components/idb_store.rs` 或放 `gpt2api_public_shared.rs`（IndexedDB wrapper）
+- `crates/frontend/src/router.rs`（新增 3 条 Route）
+- `crates/frontend/src/pages/mod.rs`
+- `crates/frontend/src/pages/gpt2api_public_shared.rs`（新）
+- `crates/frontend/src/pages/gpt2api_login.rs`（新）
+- `crates/frontend/src/pages/gpt2api_layout.rs`（新，公共顶栏）
+- `crates/frontend/src/pages/gpt2api_image.rs`（新，含 composer/results/sidebar 子模块）
+- `crates/frontend/src/pages/gpt2api_chat.rs`（新）
+- `crates/frontend/src/components/image_lightbox.rs`（新）
+- `crates/frontend/src/components/post_sse_stream.rs`（新；支持 fetch POST + 读 SSE）
+- `crates/frontend/src/components/idb_store.rs` 或放 `gpt2api_public_shared.rs`（IndexedDB wrapper）
 
 ## 验证流程
 

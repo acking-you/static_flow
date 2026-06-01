@@ -82,7 +82,7 @@ JavaScript 创建覆盖层 DOM
 
 ### 核心代码结构
 
-#### JavaScript 部分（frontend/index.html）
+#### JavaScript 部分（crates/frontend/index.html）
 
 **1. 添加全屏按钮**：
 
@@ -140,7 +140,7 @@ function openMermaidFullscreen(mermaidDiv) {
 }
 ```
 
-#### CSS 部分（frontend/static/styles.css）
+#### CSS 部分（crates/frontend/static/styles.css）
 
 **1. 全屏按钮定位**（styles.css:1913-1915）：
 
@@ -383,5 +383,5 @@ document.querySelectorAll('.mermaid-fullscreen-overlay').length
 **实现时间**: 2025-11-15
 **功能**: Mermaid 图表全屏查看
 **文件修改**:
-- `frontend/index.html` - 添加全屏按钮和逻辑
-- `frontend/static/styles.css` - 全屏样式和动画
+- `crates/frontend/index.html` - 添加全屏按钮和逻辑
+- `crates/frontend/static/styles.css` - 全屏样式和动画

@@ -126,7 +126,7 @@ graph LR
 > - localStorage 指纹容易被清除，且无法在服务端验证
 > - IP + UA 的方案完全在服务端完成，前端零改动
 
-**指纹生成** — `backend/src/handlers.rs:509-522`：
+**指纹生成** — `crates/backend/src/handlers.rs:509-522`：
 
 ```rust
 fn build_client_fingerprint(headers: &HeaderMap) -> String {
@@ -145,7 +145,7 @@ fn build_client_fingerprint(headers: &HeaderMap) -> String {
 }
 ```
 
-**IP 提取优先级链** — `backend/src/handlers.rs:524-530`：
+**IP 提取优先级链** — `crates/backend/src/handlers.rs:524-530`：
 
 ```rust
 fn extract_client_ip(headers: &HeaderMap) -> String {
@@ -159,7 +159,7 @@ fn extract_client_ip(headers: &HeaderMap) -> String {
 
 优先级：`X-Real-IP` > `X-Forwarded-For` 第一个有效 IP > `"unknown"`。
 
-**IP 归一化** — `backend/src/handlers.rs:537-578`：
+**IP 归一化** — `crates/backend/src/handlers.rs:537-578`：
 
 `normalize_ip_token` 函数处理了多种 IP 格式：
 
@@ -178,7 +178,7 @@ fn extract_client_ip(headers: &HeaderMap) -> String {
 
 同一个用户短时间内多次刷新页面，不应该每次都计为一次新浏览。我们用**时间窗口去重**来解决这个问题。
 
-**核心公式** — `shared/src/lancedb_api.rs:233-235`：
+**核心公式** — `crates/shared/src/lancedb_api.rs:233-235`：
 
 ```rust
 let dedupe_window_ms = (dedupe_window_seconds.max(1) as i64) * 1_000;
@@ -203,7 +203,7 @@ let record_id = format!("{article_id}:{client_fingerprint}:{dedupe_bucket}");
   counted: false
 ```
 
-**去重流程** — `shared/src/lancedb_api.rs:239-255`：
+**去重流程** — `crates/shared/src/lancedb_api.rs:239-255`：
 
 ```rust
 // Step 1: 检查去重键是否已存在
@@ -234,7 +234,7 @@ upsert_article_view_record(&table, &record).await?;
 
 每条浏览记录同时携带 `day_bucket` 和 `hour_bucket`，用于后续的聚合查询。
 
-**时区处理** — `shared/src/lancedb_api.rs:228-232, 1810-1814`：
+**时区处理** — `crates/shared/src/lancedb_api.rs:228-232, 1810-1814`：
 
 ```rust
 const SHANGHAI_TIMEZONE: &str = "Asia/Shanghai";
@@ -254,7 +254,7 @@ let hour_bucket = now_local.format("%Y-%m-%d %H").to_string(); // "2026-02-16 14
 
 ### 2.4 LanceDB 存储层
 
-**ArticleViewRecord Schema** — `shared/src/lancedb_api.rs:1799-1832`：
+**ArticleViewRecord Schema** — `crates/shared/src/lancedb_api.rs:1799-1832`：
 
 ```rust
 struct ArticleViewRecord {
@@ -271,7 +271,7 @@ struct ArticleViewRecord {
 
 对应的 Arrow Schema 使用 `Utf8` 和 `Timestamp(Millisecond)` 类型。
 
-**Upsert 实现** — `shared/src/lancedb_api.rs:1868-1878`：
+**Upsert 实现** — `crates/shared/src/lancedb_api.rs:1868-1878`：
 
 ```rust
 async fn upsert_article_view_record(table: &Table, record: &ArticleViewRecord) -> Result<()> {
@@ -287,7 +287,7 @@ async fn upsert_article_view_record(table: &Table, record: &ArticleViewRecord) -
 }
 ```
 
-**表自动创建** — `shared/src/lancedb_api.rs:193-217`：
+**表自动创建** — `crates/shared/src/lancedb_api.rs:193-217`：
 
 ```rust
 async fn article_views_table(&self) -> Result<Table> {
@@ -315,7 +315,7 @@ async fn article_views_table(&self) -> Result<Table> {
 
 ### 3.1 按天聚合
 
-**fetch_article_view_day_counts** — `shared/src/lancedb_api.rs:1880-1906`：
+**fetch_article_view_day_counts** — `crates/shared/src/lancedb_api.rs:1880-1906`：
 
 ```rust
 async fn fetch_article_view_day_counts(
@@ -348,7 +348,7 @@ async fn fetch_article_view_day_counts(
 > 🤔 **Think About**：全量扫描 + HashMap 计数，性能如何？
 > 对于个人博客场景（几千到几万条浏览记录），这完全没问题。LanceDB 的列存格式意味着只读 `day_bucket` 一列，I/O 开销很小。如果数据量增长到百万级，可以考虑加 `day_bucket` 过滤条件来缩小扫描范围。
 
-**build_recent_day_points** — `shared/src/lancedb_api.rs:1945-1963`：
+**build_recent_day_points** — `crates/shared/src/lancedb_api.rs:1945-1963`：
 
 聚合结果是一个 `HashMap<String, u32>`，但前端需要的是**连续的日期序列**（缺失的日期补零）：
 
@@ -389,7 +389,7 @@ HashMap: {"2026-02-14": 3, "2026-02-16": 5}
 
 ### 3.2 按小时聚合
 
-**fetch_article_view_hour_counts_for_day** — `shared/src/lancedb_api.rs:1908-1943`：
+**fetch_article_view_hour_counts_for_day** — `crates/shared/src/lancedb_api.rs:1908-1943`：
 
 ```rust
 async fn fetch_article_view_hour_counts_for_day(
@@ -425,7 +425,7 @@ async fn fetch_article_view_hour_counts_for_day(
 }
 ```
 
-**固定 24 点输出** — `shared/src/lancedb_api.rs:325-333`：
+**固定 24 点输出** — `crates/shared/src/lancedb_api.rs:325-333`：
 
 ```rust
 let points = (0..24)
@@ -445,7 +445,7 @@ let points = (0..24)
 
 系统提供两个浏览相关的公开端点：
 
-**POST /api/articles/:id/view** — `backend/src/handlers.rs:161-183`
+**POST /api/articles/:id/view** — `crates/backend/src/handlers.rs:161-183`
 
 追踪浏览 + 返回初始趋势数据，一次请求完成两件事：
 
@@ -473,7 +473,7 @@ pub async fn track_article_view(
 > 💡 **Key Point**：为什么 POST 请求同时返回趋势数据？
 > 减少前端初始加载时的请求数。用户打开文章时，一次 POST 同时完成浏览追踪和初始趋势数据获取，避免额外的 GET 请求。
 
-**GET /api/articles/:id/view-trend** — `backend/src/handlers.rs:185-231`
+**GET /api/articles/:id/view-trend** — `crates/backend/src/handlers.rs:185-231`
 
 按需查询趋势数据，支持两种粒度：
 
@@ -483,7 +483,7 @@ pub async fn track_article_view(
 | `days` | `usize` | 天数窗口（仅 day 粒度），默认 30，上限 180 |
 | `day` | `YYYY-MM-DD` | 指定日期（仅 hour 粒度，必填） |
 
-**日期格式校验** — `backend/src/handlers.rs:590-604`：
+**日期格式校验** — `crates/backend/src/handlers.rs:590-604`：
 
 ```rust
 fn is_valid_day_format(value: &str) -> bool {
@@ -507,7 +507,7 @@ fn is_valid_day_format(value: &str) -> bool {
 
 ### 4.1 配置结构
 
-**ViewAnalyticsRuntimeConfig** — `backend/src/state.rs:13-34`：
+**ViewAnalyticsRuntimeConfig** — `crates/backend/src/state.rs:13-34`：
 
 ```rust
 pub const DEFAULT_VIEW_DEDUPE_WINDOW_SECONDS: u64 = 60;
@@ -532,7 +532,7 @@ pub struct ViewAnalyticsRuntimeConfig {
 
 ### 4.2 热加载机制
 
-配置存储在 `AppState` 的 `Arc<RwLock<ViewAnalyticsRuntimeConfig>>` 中 — `backend/src/state.rs:42`：
+配置存储在 `AppState` 的 `Arc<RwLock<ViewAnalyticsRuntimeConfig>>` 中 — `crates/backend/src/state.rs:42`：
 
 ```rust
 pub struct AppState {
@@ -557,7 +557,7 @@ let mut writer = state.view_analytics_config.write().await;
 
 ### 4.3 Admin API
 
-**GET/POST /admin/view-analytics-config** — `backend/src/routes.rs:62-65`
+**GET/POST /admin/view-analytics-config** — `crates/backend/src/routes.rs:62-65`
 
 更新接口支持**部分更新语义** — 只传需要修改的字段：
 
@@ -636,7 +636,7 @@ graph TB
 
 ### 5.2 路由前缀分离与路径过滤
 
-后端路由通过前缀区分公开 API 和管理接口 — `backend/src/routes.rs:47-65`：
+后端路由通过前缀区分公开 API 和管理接口 — `crates/backend/src/routes.rs:47-65`：
 
 ```rust
 Router::new()
@@ -713,7 +713,7 @@ Caddy 自动处理证书申请、续期和 HTTPS 重定向，零配置。
 
 ### 5.5 CORS 配置
 
-**生产环境** — `backend/src/routes.rs:18-35`：
+**生产环境** — `crates/backend/src/routes.rs:18-35`：
 
 ```rust
 let cors = match std::env::var("RUST_ENV").as_deref() {
@@ -738,7 +738,7 @@ let cors = match std::env::var("RUST_ENV").as_deref() {
 
 ### 6.1 API 层
 
-前端通过两个函数与后端交互 — `frontend/src/api.rs:186-290`：
+前端通过两个函数与后端交互 — `crates/frontend/src/api.rs:186-290`：
 
 **track_article_view** — 页面加载时调用：
 
@@ -793,7 +793,7 @@ pub async fn fetch_article_view_trend(
 
 ### 6.2 状态管理
 
-文章详情页管理了 8 个趋势相关的状态 — `frontend/src/pages/article_detail.rs:69-76`：
+文章详情页管理了 8 个趋势相关的状态 — `crates/frontend/src/pages/article_detail.rs:69-76`：
 
 ```rust
 let view_total = use_state(|| None::<usize>);          // 总浏览量
@@ -842,7 +842,7 @@ sequenceDiagram
     API-->>Page: {points: [...]}
 ```
 
-**响应式数据加载** — `frontend/src/pages/article_detail.rs:338-408`：
+**响应式数据加载** — `crates/frontend/src/pages/article_detail.rs:338-408`：
 
 ```rust
 use_effect_with(
@@ -921,7 +921,7 @@ use_effect_with(
 - 日期选择器：仅在 Hour 模式下显示，选项来自 Day 模式的 points keys
 - 三态渲染：Loading（"趋势加载中..."）→ Error（红色提示框）→ Data（ViewTrendChart）
 
-**i18n 支持** — `frontend/src/i18n/zh_cn.rs:275-284`：
+**i18n 支持** — `crates/frontend/src/i18n/zh_cn.rs:275-284`：
 
 ```rust
 pub const TREND_TOOLTIP: &str = "查看浏览趋势";
@@ -938,7 +938,7 @@ pub const TREND_CLOSE_ARIA: &str = "关闭趋势面板";
 
 ### 6.4 ViewTrendChart 组件 — 零依赖 SVG 图表
 
-这是整个功能的视觉核心。完整实现在 `frontend/src/components/view_trend_chart.rs`，仅 183 行 Rust 代码，零外部依赖。
+这是整个功能的视觉核心。完整实现在 `crates/frontend/src/components/view_trend_chart.rs`，仅 183 行 Rust 代码，零外部依赖。
 
 #### 6.4.1 组件接口
 
@@ -1161,7 +1161,7 @@ x_label_indices.dedup();
 
 #### 6.4.6 完整组件源码
 
-以下是 `frontend/src/components/view_trend_chart.rs` 的完整 183 行代码：
+以下是 `crates/frontend/src/components/view_trend_chart.rs` 的完整 183 行代码：
 
 ```rust
 use yew::prelude::*;
@@ -1364,7 +1364,7 @@ pub fn view_trend_chart(props: &ViewTrendChartProps) -> Html {
 
 ### 8.1 后端单元测试
 
-IP 提取和配置更新的测试 — `backend/src/handlers.rs:679-770`：
+IP 提取和配置更新的测试 — `crates/backend/src/handlers.rs:679-770`：
 
 ```rust
 #[test]
@@ -1405,7 +1405,7 @@ fn update_view_analytics_config_rejects_invalid_ranges() {
 
 ### 8.2 前端 Mock 模式
 
-通过 Cargo feature flag 在编译时切换 — `frontend/src/api.rs:187-203`：
+通过 Cargo feature flag 在编译时切换 — `crates/frontend/src/api.rs:187-203`：
 
 ```rust
 #[cfg(feature = "mock")]
@@ -1429,27 +1429,27 @@ Mock 数据生成确定性的伪随机分布（`(offset * 7 + 11) % 42`），方
 
 | 文件 | 行号 | 内容 |
 |------|------|------|
-| `backend/src/handlers.rs` | 161-183 | `track_article_view` 端点 |
-| `backend/src/handlers.rs` | 185-231 | `get_article_view_trend` 端点 |
-| `backend/src/handlers.rs` | 233-251 | Admin 配置 GET/POST |
-| `backend/src/handlers.rs` | 509-522 | `build_client_fingerprint` |
-| `backend/src/handlers.rs` | 524-578 | `extract_client_ip` + `normalize_ip_token` |
-| `backend/src/handlers.rs` | 590-604 | `is_valid_day_format` |
-| `backend/src/handlers.rs` | 643-677 | `apply_view_analytics_config_update` |
-| `backend/src/handlers.rs` | 679-770 | 单元测试 |
-| `backend/src/routes.rs` | 18-44 | CORS 配置 |
-| `backend/src/routes.rs` | 47-65 | API/Admin 路由定义 |
-| `backend/src/state.rs` | 13-56 | 运行时配置结构与 AppState |
-| `shared/src/lancedb_api.rs` | 193-217 | 表自动创建 |
-| `shared/src/lancedb_api.rs` | 219-283 | `track_article_view` 核心逻辑 |
-| `shared/src/lancedb_api.rs` | 285-347 | 趋势查询（day/hour） |
-| `shared/src/lancedb_api.rs` | 1798-1878 | Schema + Arrow batch + upsert |
-| `shared/src/lancedb_api.rs` | 1880-1963 | 聚合函数 + 日期补零 |
-| `frontend/src/api.rs` | 39-64 | 数据结构定义 |
-| `frontend/src/api.rs` | 186-290 | API 调用函数 |
-| `frontend/src/components/view_trend_chart.rs` | 1-183 | ViewTrendChart 完整组件 |
-| `frontend/src/pages/article_detail.rs` | 40-44 | TrendGranularity 枚举 |
-| `frontend/src/pages/article_detail.rs` | 69-76 | 趋势状态声明 |
-| `frontend/src/pages/article_detail.rs` | 117-177 | 初始数据加载 |
-| `frontend/src/pages/article_detail.rs` | 338-408 | 响应式趋势数据加载 |
-| `frontend/src/i18n/zh_cn.rs` | 275-284 | 趋势相关 i18n 字符串 |
+| `crates/backend/src/handlers.rs` | 161-183 | `track_article_view` 端点 |
+| `crates/backend/src/handlers.rs` | 185-231 | `get_article_view_trend` 端点 |
+| `crates/backend/src/handlers.rs` | 233-251 | Admin 配置 GET/POST |
+| `crates/backend/src/handlers.rs` | 509-522 | `build_client_fingerprint` |
+| `crates/backend/src/handlers.rs` | 524-578 | `extract_client_ip` + `normalize_ip_token` |
+| `crates/backend/src/handlers.rs` | 590-604 | `is_valid_day_format` |
+| `crates/backend/src/handlers.rs` | 643-677 | `apply_view_analytics_config_update` |
+| `crates/backend/src/handlers.rs` | 679-770 | 单元测试 |
+| `crates/backend/src/routes.rs` | 18-44 | CORS 配置 |
+| `crates/backend/src/routes.rs` | 47-65 | API/Admin 路由定义 |
+| `crates/backend/src/state.rs` | 13-56 | 运行时配置结构与 AppState |
+| `crates/shared/src/lancedb_api.rs` | 193-217 | 表自动创建 |
+| `crates/shared/src/lancedb_api.rs` | 219-283 | `track_article_view` 核心逻辑 |
+| `crates/shared/src/lancedb_api.rs` | 285-347 | 趋势查询（day/hour） |
+| `crates/shared/src/lancedb_api.rs` | 1798-1878 | Schema + Arrow batch + upsert |
+| `crates/shared/src/lancedb_api.rs` | 1880-1963 | 聚合函数 + 日期补零 |
+| `crates/frontend/src/api.rs` | 39-64 | 数据结构定义 |
+| `crates/frontend/src/api.rs` | 186-290 | API 调用函数 |
+| `crates/frontend/src/components/view_trend_chart.rs` | 1-183 | ViewTrendChart 完整组件 |
+| `crates/frontend/src/pages/article_detail.rs` | 40-44 | TrendGranularity 枚举 |
+| `crates/frontend/src/pages/article_detail.rs` | 69-76 | 趋势状态声明 |
+| `crates/frontend/src/pages/article_detail.rs` | 117-177 | 初始数据加载 |
+| `crates/frontend/src/pages/article_detail.rs` | 338-408 | 响应式趋势数据加载 |
+| `crates/frontend/src/i18n/zh_cn.rs` | 275-284 | 趋势相关 i18n 字符串 |

@@ -44,7 +44,7 @@
                     │   ├── GET /sitemap.xml  → 动态生成         │
                     │   ├── GET /robots.txt   → 静态返回         │
                     │   ├── GET /posts/{id}   → 动态 SEO HTML    │
-                    │   └── GET /*            → frontend/dist/   │
+                    │   └── GET /*            → crates/frontend/dist/   │
                     │                            (SPA fallback)  │
                     │       │                                    │
                     │       ▼                                    │
@@ -59,16 +59,16 @@
 | GitHub Pages | `acking-you.github.io` | 仅首页可索引 | 备用/分享链接 |
 | 自托管 | `ackingliu.top` | 全站可索引 | 主站，提交给搜索引擎 |
 
-两者共用同一套前端构建产物（`frontend/dist/`），同一个后端 API。
+两者共用同一套前端构建产物（`crates/frontend/dist/`），同一个后端 API。
 
 ## 3. 实现步骤
 
 ### Step 1: 后端添加静态文件服务
 
-**文件**: `backend/src/routes.rs`
+**文件**: `crates/backend/src/routes.rs`
 
 在现有 API 路由之后，添加 `tower_http::services::ServeDir` 作为 fallback，
-服务 `frontend/dist/` 目录下的静态文件。
+服务 `crates/frontend/dist/` 目录下的静态文件。
 
 ```rust
 use tower_http::services::{ServeDir, ServeFile};
@@ -89,7 +89,7 @@ pub fn create_router(state: AppState) -> Router {
 
     // 静态文件 fallback（SPA：所有未匹配路由返回 index.html）
     let frontend_dir = std::env::var("FRONTEND_DIST_DIR")
-        .unwrap_or_else(|_| "../frontend/dist".to_string());
+        .unwrap_or_else(|_| "../crates/frontend/dist".to_string());
     let spa_fallback = ServeDir::new(&frontend_dir)
         .not_found_service(ServeFile::new(format!("{}/index.html", frontend_dir)));
 
@@ -100,12 +100,12 @@ pub fn create_router(state: AppState) -> Router {
 ```
 
 **关键点**:
-- `FRONTEND_DIST_DIR` 环境变量指定前端构建产物目录，默认 `../frontend/dist`
+- `FRONTEND_DIST_DIR` 环境变量指定前端构建产物目录，默认 `../crates/frontend/dist`
 - `ServeDir` + `not_found_service(index.html)` 实现 SPA fallback
 - API 路由优先级高于静态文件（Axum 路由匹配顺序）
 - SEO 路由 `/posts/:id` 优先于 SPA fallback，确保爬虫拿到注入后的 HTML
 
-**依赖**: `backend/Cargo.toml` 添加
+**依赖**: `crates/backend/Cargo.toml` 添加
 
 ```toml
 [dependencies]
@@ -116,12 +116,12 @@ tower-http = { version = "0.6", features = ["fs"] }
 
 ### Step 2: 实现动态 SEO HTML handler
 
-**文件**: `backend/src/handlers.rs`（新增函数）
+**文件**: `crates/backend/src/handlers.rs`（新增函数）
 
 `GET /posts/{id}` 的 handler 逻辑：
 
 1. 从 LanceDB 查询文章（复用现有 `get_article` 的查询逻辑）
-2. 读取 `frontend/dist/index.html` 作为模板
+2. 读取 `crates/frontend/dist/index.html` 作为模板
 3. 替换 `<head>` 中的 meta tags 为文章专属内容
 4. 在 `<body>` 开头注入文章纯文本（`<noscript>` 或隐藏 div）
 5. 返回修改后的 HTML（Content-Type: text/html, HTTP 200）
@@ -136,7 +136,7 @@ pub async fn seo_article_page(
 
     // 2. 读模板
     let frontend_dir = std::env::var("FRONTEND_DIST_DIR")
-        .unwrap_or_else(|_| "../frontend/dist".to_string());
+        .unwrap_or_else(|_| "../crates/frontend/dist".to_string());
     let template = tokio::fs::read_to_string(format!("{}/index.html", frontend_dir))
         .await
         .unwrap_or_default();
@@ -153,7 +153,7 @@ pub async fn seo_article_page(
 
 ### Step 3: HTML 注入逻辑
 
-**文件**: `backend/src/seo.rs`（新建模块）
+**文件**: `crates/backend/src/seo.rs`（新建模块）
 
 核心函数 `inject_article_seo`，对 `index.html` 模板做字符串替换：
 
@@ -295,7 +295,7 @@ fn build_article_json_ld(article: &Article, canonical: &str, og_image: &str) -> 
 
 ### Step 4: 动态 sitemap.xml
 
-**文件**: `backend/src/handlers.rs`
+**文件**: `crates/backend/src/handlers.rs`
 
 ```rust
 pub async fn sitemap_xml(State(state): State<AppState>) -> impl IntoResponse {
@@ -345,7 +345,7 @@ pub async fn robots_txt() -> impl IntoResponse {
 
 ### Step 6: CORS 更新
 
-**文件**: `backend/src/routes.rs`
+**文件**: `crates/backend/src/routes.rs`
 
 生产环境 `ALLOWED_ORIGINS` 需要加上自托管域名：
 
@@ -451,11 +451,11 @@ pub fn api_base() -> String {
 
 | 文件 | 改动类型 | 说明 |
 |------|----------|------|
-| `backend/Cargo.toml` | 修改 | 确认 `tower-http` 的 `fs` feature |
-| `backend/src/routes.rs` | 修改 | 添加 SEO 路由 + 静态文件 fallback |
-| `backend/src/handlers.rs` | 修改 | 新增 `seo_article_page`, `sitemap_xml`, `robots_txt` |
-| `backend/src/seo.rs` | 新建 | HTML 注入逻辑（meta tags, JSON-LD, body content） |
-| `backend/src/main.rs` | 修改 | `mod seo;` |
+| `crates/backend/Cargo.toml` | 修改 | 确认 `tower-http` 的 `fs` feature |
+| `crates/backend/src/routes.rs` | 修改 | 添加 SEO 路由 + 静态文件 fallback |
+| `crates/backend/src/handlers.rs` | 修改 | 新增 `seo_article_page`, `sitemap_xml`, `robots_txt` |
+| `crates/backend/src/seo.rs` | 新建 | HTML 注入逻辑（meta tags, JSON-LD, body content） |
+| `crates/backend/src/main.rs` | 修改 | `mod seo;` |
 
 **不需要改动的文件**:
 - 前端代码（零改动，或可选方式 B 的 api.rs 小改）
@@ -473,7 +473,7 @@ Axum 匹配 /posts/:id 路由
     ↓
 seo_article_page handler:
   1. LanceDB 查询 article (id = "agent-harness-2026")
-  2. 读取 frontend/dist/index.html
+  2. 读取 crates/frontend/dist/index.html
   3. 注入: <title>, meta tags, JSON-LD, <body> 纯文本
   4. 返回 HTTP 200 + 完整 HTML
     ↓
@@ -540,7 +540,7 @@ fn site_base_url() -> String {
 
 ### 6.3 前端 seo.rs 中的 SITE_BASE_URL
 
-前端 `frontend/src/seo.rs:8` 硬编码了 `https://acking-you.github.io`。
+前端 `crates/frontend/src/seo.rs:8` 硬编码了 `https://acking-you.github.io`。
 自托管版本中，客户端 SEO 更新（如 SPA 内导航时的 canonical URL）
 应该使用 `ackingliu.top`。可通过编译时环境变量或运行时检测处理。
 

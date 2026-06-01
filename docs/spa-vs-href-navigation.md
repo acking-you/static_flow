@@ -106,7 +106,7 @@ App (main.rs:18)
 ### 3.2 音乐播放器状态结构
 
 ```rust
-// frontend/src/music_context.rs:15
+// crates/frontend/src/music_context.rs:15
 pub struct MusicPlayerState {
     pub current_song: Option<SongDetail>,
     pub song_id: Option<String>,
@@ -125,7 +125,7 @@ pub struct MusicPlayerState {
 这个状态通过 Yew 的 `use_reducer` + `ContextProvider` 在整个组件树中共享：
 
 ```rust
-// frontend/src/main.rs:18-24
+// crates/frontend/src/main.rs:18-24
 fn app() -> Html {
     html! {
         <MusicPlayerProvider>      // ← use_reducer(MusicPlayerState::default)
@@ -191,7 +191,7 @@ window().location().set_href(&url);  // ← 等同于 <a href>，触发全页刷
 ### 5.1 核心工具函数：`spa_navigate`
 
 ```rust
-// frontend/src/pages/search.rs:27-40
+// crates/frontend/src/pages/search.rs:27-40
 fn spa_navigate(href: &str) {
     if let Some(window) = web_sys::window() {
         if let Ok(history) = window.history() {
@@ -217,7 +217,7 @@ fn spa_navigate(href: &str) {
 搜索页面内有大量动态生成的 `<a>` 标签（模式切换、分页等）。逐个给每个 `<a>` 加 `onclick` 不现实，所以采用**事件委托**模式：
 
 ```rust
-// frontend/src/pages/search.rs:42-62
+// crates/frontend/src/pages/search.rs:42-62
 fn intercept_search_links(e: MouseEvent) {
     let search_prefix = crate::config::route_path("/search");
     // 从点击目标向上冒泡，找到最近的 <a> 元素
@@ -262,7 +262,7 @@ fn intercept_search_links(e: MouseEvent) {
 Header 中的搜索入口是固定的几个 `<a>` 标签，直接用 `onclick` 回调：
 
 ```rust
-// frontend/src/components/header.rs:16-33
+// crates/frontend/src/components/header.rs:16-33
 fn spa_search_click(href: String) -> Callback<MouseEvent> {
     Callback::from(move |e: MouseEvent| {
         e.prevent_default();
@@ -292,7 +292,7 @@ fn spa_search_click(href: String) -> Callback<MouseEvent> {
 ### 5.4 音乐库搜索：替换 `set_href`
 
 ```rust
-// 修复后：frontend/src/pages/music_library.rs:82-93
+// 修复后：crates/frontend/src/pages/music_library.rs:82-93
 let url = crate::config::route_path(
     &format!("/search?q={encoded}&mode=music")
 );
@@ -469,7 +469,7 @@ SEO（Search Engine Optimization，搜索引擎优化）的核心目标是让搜
 | 用户右键"新标签页打开" | 走 `href` | 新标签页完整加载 |
 | 搜索引擎爬虫 | 只看 `href` 属性 | 发现页面链接，建立索引 |
 
-StaticFlow 的 `index.html` 中已经做了基础 SEO 工作——`og:title`、`og:description`、`canonical`、结构化 meta 标签等（见 `frontend/index.html:1-30`）。但如果内部链接全用 JS 导航而不保留 `href`，爬虫就无法发现页面之间的链接关系，SEO 效果会大打折扣。
+StaticFlow 的 `index.html` 中已经做了基础 SEO 工作——`og:title`、`og:description`、`canonical`、结构化 meta 标签等（见 `crates/frontend/index.html:1-30`）。但如果内部链接全用 JS 导航而不保留 `href`，爬虫就无法发现页面之间的链接关系，SEO 效果会大打折扣。
 
 > 📝 **SEO 常见手段**: 合理的 `<title>`、`<meta description>`、语义化 HTML 标签（`<article>`、`<nav>`）、`sitemap.xml`、结构化数据（JSON-LD）、`canonical` URL 等。
 
@@ -708,7 +708,7 @@ StaticFlow 有两个 SSE 端点，分别用于评论 AI 和音乐心愿 AI：
 | `GET /admin/comments/tasks/:task_id/ai-output/stream` | 评论 AI 回复日志流 |
 | `GET /admin/music-wishes/tasks/:wish_id/ai-output/stream` | 音乐心愿处理日志流 |
 
-评论 AI 端点的核心实现（`backend/src/handlers.rs:1958`）：
+评论 AI 端点的核心实现（`crates/backend/src/handlers.rs:1958`）：
 
 ```rust
 pub async fn admin_stream_comment_task_ai_output(
@@ -733,7 +733,7 @@ SSE 事件类型：
 
 #### 9.7.3 Worker 日志泵送
 
-Worker 通过 `pump_child_stream` 函数将 Codex 子进程的 stdout/stderr 实时写入数据库（`backend/src/comment_worker.rs:493`）：
+Worker 通过 `pump_child_stream` 函数将 Codex 子进程的 stdout/stderr 实时写入数据库（`crates/backend/src/comment_worker.rs:493`）：
 
 ```rust
 async fn pump_child_stream(
@@ -760,7 +760,7 @@ async fn pump_child_stream(
 
 #### 9.7.4 前端 EventSource 消费
 
-评论 AI 流页面（`frontend/src/pages/admin_ai_stream.rs:142`）：
+评论 AI 流页面（`crates/frontend/src/pages/admin_ai_stream.rs:142`）：
 
 ```rust
 let stream_url = build_admin_comment_ai_stream_url(
@@ -797,7 +797,7 @@ match EventSource::new(&stream_url) {
 }
 ```
 
-音乐心愿流页面（`frontend/src/pages/admin_music_wish_stream.rs:102`）使用了**命名事件**，区别于评论流的默认 `message` 事件：
+音乐心愿流页面（`crates/frontend/src/pages/admin_music_wish_stream.rs:102`）使用了**命名事件**，区别于评论流的默认 `message` 事件：
 
 ```rust
 // 监听命名事件而非 onmessage
@@ -828,22 +828,22 @@ source.add_event_listener_with_callback("error", on_error.as_ref().unchecked_ref
 
 | 文件 | 关键函数/结构 | 行号 |
 |------|-------------|------|
-| `frontend/src/pages/search.rs` | `spa_navigate()` | :27 |
-| `frontend/src/pages/search.rs` | `intercept_search_links()` | :45 |
-| `frontend/src/components/header.rs` | `spa_search_click()` | :17 |
-| `frontend/src/pages/music_library.rs` | hero 搜索 `push_state_with_url` | :86 |
-| `frontend/src/music_context.rs` | `MusicPlayerState` | :15 |
-| `frontend/src/music_context.rs` | `MusicPlayerProvider` | :246 |
-| `frontend/src/components/persistent_audio.rs` | `PersistentAudio` | :110 |
-| `frontend/src/components/persistent_audio.rs` | `try_play()` | :13 |
-| `frontend/src/main.rs` | `App` 组件树根 | :18 |
-| `frontend/src/router.rs` | `BrowserRouter` + `Switch<Route>` | :190 |
-| `backend/src/handlers.rs` | 评论 AI SSE 端点 | :1958 |
-| `backend/src/handlers.rs` | 音乐心愿 AI SSE 端点 | :3920 |
-| `backend/src/comment_worker.rs` | `spawn_comment_worker()` | :153 |
-| `backend/src/comment_worker.rs` | `pump_child_stream()` | :493 |
-| `frontend/src/pages/admin_ai_stream.rs` | 评论 AI 流前端 EventSource | :142 |
-| `frontend/src/pages/admin_music_wish_stream.rs` | 音乐心愿流前端 EventSource | :102 |
+| `crates/frontend/src/pages/search.rs` | `spa_navigate()` | :27 |
+| `crates/frontend/src/pages/search.rs` | `intercept_search_links()` | :45 |
+| `crates/frontend/src/components/header.rs` | `spa_search_click()` | :17 |
+| `crates/frontend/src/pages/music_library.rs` | hero 搜索 `push_state_with_url` | :86 |
+| `crates/frontend/src/music_context.rs` | `MusicPlayerState` | :15 |
+| `crates/frontend/src/music_context.rs` | `MusicPlayerProvider` | :246 |
+| `crates/frontend/src/components/persistent_audio.rs` | `PersistentAudio` | :110 |
+| `crates/frontend/src/components/persistent_audio.rs` | `try_play()` | :13 |
+| `crates/frontend/src/main.rs` | `App` 组件树根 | :18 |
+| `crates/frontend/src/router.rs` | `BrowserRouter` + `Switch<Route>` | :190 |
+| `crates/backend/src/handlers.rs` | 评论 AI SSE 端点 | :1958 |
+| `crates/backend/src/handlers.rs` | 音乐心愿 AI SSE 端点 | :3920 |
+| `crates/backend/src/comment_worker.rs` | `spawn_comment_worker()` | :153 |
+| `crates/backend/src/comment_worker.rs` | `pump_child_stream()` | :493 |
+| `crates/frontend/src/pages/admin_ai_stream.rs` | 评论 AI 流前端 EventSource | :142 |
+| `crates/frontend/src/pages/admin_music_wish_stream.rs` | 音乐心愿流前端 EventSource | :102 |
 | `scripts/comment_ai_worker_runner.sh` | Codex 执行脚本 | :1-121 |
 
 ## 参考

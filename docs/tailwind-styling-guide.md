@@ -1,19 +1,19 @@
 # Tailwind CSS v4 样式使用指南
 
 ## 项目 CSS 架构概述
-- **Tailwind 版本**：项目固定在 Tailwind CSS v4.1.17，使用随仓库提交的 `frontend/tailwindcss/tailwindcss` CLI，可离线复现构建。
-- **源码文件**：所有样式均从 `frontend/input.css` 入口开始，文件中包含 `@import "tailwindcss"`、`@theme` 设计令牌以及 `@layer components` 自定义组件类。
-- **构建流程**：Trunk 的 `pre_build` hook 会调用 `./tailwindcss -i input.css -o static/styles.css --minify`，输出的 `frontend/static/styles.css` 会被 `index.html` 通过 `<link data-trunk rel="css">` 注入，Trunk 再把它打包进 `dist/`。
+- **Tailwind 版本**：项目固定在 Tailwind CSS v4.1.17，使用随仓库提交的 `crates/frontend/tailwindcss/tailwindcss` CLI，可离线复现构建。
+- **源码文件**：所有样式均从 `crates/frontend/input.css` 入口开始，文件中包含 `@import "tailwindcss"`、`@theme` 设计令牌以及 `@layer components` 自定义组件类。
+- **构建流程**：Trunk 的 `pre_build` hook 会调用 `./tailwindcss -i input.css -o static/styles.css --minify`，输出的 `crates/frontend/static/styles.css` 会被 `index.html` 通过 `<link data-trunk rel="css">` 注入，Trunk 再把它打包进 `dist/`。
 - **混合策略**：新的组件与页面优先使用 Tailwind utility classes；遗留的 `.footer`、`.article-card` 等语义类保留在 `@layer components` 内，逐步迁移时也可以与 utility 混用。
 
 ```text
-frontend/input.css
+crates/frontend/input.css
     └─ tailwindcss v4.1.17 (CLI, Trunk pre_build hook)
         ├─ 解析 @theme 令牌
         ├─ 合并 @layer components
         └─ tree-shake 工具类
     ↓
-frontend/static/styles.css
+crates/frontend/static/styles.css
     └─ trunk serve/build 引入并写入 dist/
 ```
 
@@ -58,11 +58,11 @@ pub fn primary_button() -> Html {
 
 ### 2. 添加到 @layer components
 - **适用场景**：当组件包含复杂的层级（如 `.article-card`、`.header`），或者需要复用遗留的 BEM/语义类时，把样式集中在 `@layer components` 更易维护，也方便 SSR/非 Yew 入口重用。
-- **编辑位置**：`frontend/input.css` 的 `@layer components { ... }` 块已经包含 `body`, `.header`, `.article-card` 等样式；将新增类放在相同块内，Tailwind 会保持组件层级优先级。
+- **编辑位置**：`crates/frontend/input.css` 的 `@layer components { ... }` 块已经包含 `body`, `.header`, `.article-card` 等样式；将新增类放在相同块内，Tailwind 会保持组件层级优先级。
 - **示例**：
 
 ```css
-/* frontend/input.css */
+/* crates/frontend/input.css */
 @layer components {
   .cta-banner {
     display: grid;
@@ -91,7 +91,7 @@ pub fn primary_button() -> Html {
 - **示例**：
 
 ```css
-/* frontend/input.css */
+/* crates/frontend/input.css */
 @theme {
   --brand-surface: #11133c;
   --brand-surface-dark: #050713;
@@ -154,9 +154,9 @@ pub fn info_card(props: &CardProps) -> Html {
 ```
 
 ## 示范组件
-- **`frontend/src/components/theme_toggle.rs`**：100% utility-first，展示 `classes!` + `group` + `dark:` + CSS 变量的组合；按钮状态和 `aria` 文案通过 Hooks + JS 交互保持同步。
-- **`frontend/src/components/footer.rs`**：`<footer class="footer">` 仍引用 `@layer components` 中的布局规则，其余子节点用 Tailwind utility（`flex`, `gap`, `dark:hover:*`）快速搭建；适合逐渐迁移大型旧组件。
-- **`frontend/src/components/article_card.rs`**：外层使用 `.article-card` 语义类（定义在 `input.css`），内部 `Link<Route>` 与标签列表使用 `classes!` 组合 `border-border`, `hover:text-primary` 等 utility，演示“组件类 + utility”混合策略。
+- **`crates/frontend/src/components/theme_toggle.rs`**：100% utility-first，展示 `classes!` + `group` + `dark:` + CSS 变量的组合；按钮状态和 `aria` 文案通过 Hooks + JS 交互保持同步。
+- **`crates/frontend/src/components/footer.rs`**：`<footer class="footer">` 仍引用 `@layer components` 中的布局规则，其余子节点用 Tailwind utility（`flex`, `gap`, `dark:hover:*`）快速搭建；适合逐渐迁移大型旧组件。
+- **`crates/frontend/src/components/article_card.rs`**：外层使用 `.article-card` 语义类（定义在 `input.css`），内部 `Link<Route>` 与标签列表使用 `classes!` 组合 `border-border`, `hover:text-primary` 等 utility，演示“组件类 + utility”混合策略。
 
 ## 常见问题
 - **编译错误**：若看到 `unknown at-rule @theme` 或 `Cannot find module tailwindcss`，确认使用的是仓库自带 CLI (`./tailwindcss`)；断开 `trunk serve` 后手动运行 `./tailwindcss -i input.css -o static/styles.css --watch` 以获取更详细日志。
@@ -174,5 +174,5 @@ TAILWIND_MODE=watch ./tailwindcss -i input.css -o static/styles.css --watch
 ```
 
   然后在另一个终端运行 `trunk serve --no-default-features` 或保持浏览器自动刷新。
-- **生产构建**：CI 或本地执行 `trunk build --release`（或仓库根目录 `trunk build -d frontend/dist`）；Tailwind 输出在 hook 中自动加上 `--minify`。
+- **生产构建**：CI 或本地执行 `trunk build --release`（或仓库根目录 `trunk build -d crates/frontend/dist`）；Tailwind 输出在 hook 中自动加上 `--minify`。
 - **仅产出 CSS**：需要快速验证 CSS 产物时执行 `./tailwindcss -i input.css -o static/styles.css --minify`，再把 `static/styles.css` 提供给设计/测试同学。

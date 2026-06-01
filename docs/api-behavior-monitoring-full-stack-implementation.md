@@ -343,20 +343,20 @@ flowchart TB
 ## 10. 源码索引（用于对应实现）
 
 ### 10.1 采集与路由
-- `backend/src/behavior_analytics.rs`
-- `backend/src/routes.rs`
-- `backend/src/request_context.rs`
+- `crates/backend/src/behavior_analytics.rs`
+- `crates/backend/src/routes.rs`
+- `crates/backend/src/request_context.rs`
 
 ### 10.2 配置与聚合
-- `backend/src/state.rs`
-- `backend/src/handlers.rs`
+- `crates/backend/src/state.rs`
+- `crates/backend/src/handlers.rs`
 
 ### 10.3 存储与查询
-- `shared/src/lancedb_api.rs`
+- `crates/shared/src/lancedb_api.rs`
 
 ### 10.4 前端请求与可视化
-- `frontend/src/api.rs`
-- `frontend/src/pages/admin.rs`
+- `crates/frontend/src/api.rs`
+- `crates/frontend/src/pages/admin.rs`
 
 ## 11. 总结
 

@@ -33,7 +33,7 @@ flowchart LR
 这里有两个目录角色，不要混淆：
 
 - 仓库 checkout 提供 `scripts/`、模板和日常运维命令
-- release bundle 提供编译好的 backend binary、gateway binary 和 `frontend/dist`
+- release bundle 提供编译好的 backend binary、gateway binary 和 `crates/frontend/dist`
 
 下面默认你把仓库放在 `/opt/staticflow/current`。
 
@@ -65,7 +65,7 @@ cd /opt/staticflow/current
 ./scripts/build_frontend_selfhosted.sh
 ```
 
-这一步会生成 `frontend/dist`，供后面的 release bundle 使用。
+这一步会生成 `crates/frontend/dist`，供后面的 release bundle 使用。
 
 ## 5. 生成 release bundle
 
@@ -79,7 +79,7 @@ cd /opt/staticflow/current
 
 - `/opt/staticflow/releases/current/bin/static-flow-backend`
 - `/opt/staticflow/releases/current/bin/staticflow-pingora-gateway`
-- `/opt/staticflow/releases/current/frontend/dist`
+- `/opt/staticflow/releases/current/crates/frontend/dist`
 - `/opt/staticflow/releases/current/conf/pingora/staticflow-gateway.yaml.template`
 
 ## 6. 写配置文件
@@ -112,7 +112,7 @@ sudo cp /opt/staticflow/releases/current/conf/pingora/staticflow-gateway.yaml.te
 ### `/etc/staticflow/selfhosted/common.env`
 
 - `DB_ROOT`：你的数据根目录
-- `FRONTEND_DIST_DIR`：指向 `/opt/staticflow/releases/current/frontend/dist`
+- `FRONTEND_DIST_DIR`：指向 `/opt/staticflow/releases/current/crates/frontend/dist`
 - `BACKEND_BIN`：指向 `/opt/staticflow/releases/current/bin/static-flow-backend`
 - `GATEWAY_BIN`：指向 `/opt/staticflow/releases/current/bin/staticflow-pingora-gateway`
 - `SITE_BASE_URL`：你的站点地址

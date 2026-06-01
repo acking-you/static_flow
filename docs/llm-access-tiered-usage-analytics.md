@@ -979,19 +979,19 @@ old archive schema path does not raise Binder Error
 
 | 子系统 | 文件 | 说明 |
 |---|---|---|
-| Runtime wiring | `llm-access/src/runtime.rs` | API 进程打开 journal sink，并把 analytics sink 指向 journal |
-| Journal producer | `llm-access/src/usage_journal.rs` | API producer 写 active/sealed journal |
-| Public usage forwarding | `llm-access/src/public.rs` | public usage 页面转发 worker 查询 |
-| Query contract | `llm-access/src/usage_query.rs` | worker list/detail/chart HTTP contract |
+| Runtime wiring | `crates/llm-access/src/runtime.rs` | API 进程打开 journal sink，并把 analytics sink 指向 journal |
+| Journal producer | `crates/llm-access/src/usage_journal.rs` | API producer 写 active/sealed journal |
+| Public usage forwarding | `crates/llm-access/src/public.rs` | public usage 页面转发 worker 查询 |
+| Query contract | `crates/llm-access/src/usage_query.rs` | worker list/detail/chart HTTP contract |
 
 ### 13.2 Worker 与 tiered storage
 
 | 子系统 | 文件 | 说明 |
 |---|---|---|
-| Worker binary | `llm-access/src/bin/llm-access-usage-worker.rs` | 打开 tiered DuckDB repository 并启动 HTTP/query/import loop |
-| Worker runtime | `llm-access/src/usage_worker.rs` | journal consumer、worker status、query router |
-| Tiered repository | `llm-access-store/src/duckdb.rs` | active/archive/catalog、rollover、查询规划 |
-| Core trait | `llm-access-core/src/store.rs` | `UsageEventSink`、`UsageAnalyticsStore`、`UsageEventQuery` |
+| Worker binary | `crates/llm-access/src/bin/llm-access-usage-worker.rs` | 打开 tiered DuckDB repository 并启动 HTTP/query/import loop |
+| Worker runtime | `crates/llm-access/src/usage_worker.rs` | journal consumer、worker status、query router |
+| Tiered repository | `crates/llm-access-store/src/duckdb.rs` | active/archive/catalog、rollover、查询规划 |
+| Core trait | `crates/llm-access-core/src/store.rs` | `UsageEventSink`、`UsageAnalyticsStore`、`UsageEventQuery` |
 
 ### 13.3 关键实现点
 

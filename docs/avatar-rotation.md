@@ -230,7 +230,7 @@ animation-iteration-count: infinite;
 
 ## 代码位置
 
-**CSS 文件**：`frontend/static/styles.css`（末尾）
+**CSS 文件**：`crates/frontend/static/styles.css`（末尾）
 
 ```css
 /* 头像旋转动画 */
@@ -244,7 +244,7 @@ animation-iteration-count: infinite;
 }
 ```
 
-**HTML 结构**：`frontend/src/pages/home.rs`
+**HTML 结构**：`crates/frontend/src/pages/home.rs`
 
 ```rust
 <div class="home-avatar">

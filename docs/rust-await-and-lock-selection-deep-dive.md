@@ -508,10 +508,10 @@ flowchart TD
 
 ### 5.3 StaticFlow 里的典型例子：AccountPool 两级锁
 
-`AccountPool`（`backend/src/llm_gateway/accounts.rs`）采用”外层索引 + 内层条目锁”的模式。先看结构定义：
+`AccountPool`（`crates/backend/src/llm_gateway/accounts.rs`）采用”外层索引 + 内层条目锁”的模式。先看结构定义：
 
 ```rust
-// backend/src/llm_gateway/accounts.rs
+// crates/backend/src/llm_gateway/accounts.rs
 pub(crate) struct AccountPool {
     // 外层：parking_lot::RwLock 保护索引结构
     accounts: RwLock<HashMap<String, Arc<AsyncRwLock<CodexAccount>>>>,
@@ -559,7 +559,7 @@ flowchart TD
 实际使用模式——选择最佳账号：
 
 ```rust
-// backend/src/llm_gateway/accounts.rs — select_best_account
+// crates/backend/src/llm_gateway/accounts.rs — select_best_account
 pub async fn select_best_account(&self, ...) -> Option<(String, CodexAuthSnapshot, bool)> {
     // 第一步：同步读外层索引，clone Arc 引用后立即释放锁
     let account_entries = self
@@ -591,10 +591,10 @@ pub async fn select_best_account(&self, ...) -> Option<(String, CodexAuthSnapsho
 3. 外层索引锁先释放，再进入内层账号锁，避免锁顺序放大。
 4. 不同账号的操作完全并行——Account A 在刷新 token 时，Account B 的读取不受影响。
 
-同样的两级模式也出现在 Kiro gateway 的 per-account refresh lock（`backend/src/kiro_gateway/runtime.rs`）：
+同样的两级模式也出现在 Kiro gateway 的 per-account refresh lock（`crates/backend/src/kiro_gateway/runtime.rs`）：
 
 ```rust
-// backend/src/kiro_gateway/runtime.rs — KiroTokenManager
+// crates/backend/src/kiro_gateway/runtime.rs — KiroTokenManager
 pub struct KiroTokenManager {
     refresh_locks: RwLock<HashMap<String, Arc<Mutex<()>>>>,  // 外层 parking_lot
     // ...
@@ -670,7 +670,7 @@ StaticFlow backend 里这类对象包括：
 
 下面是几个典型的 `parking_lot` 使用模式：
 
-**模式一：纯内存限流表**（`backend/src/public_submit_guard.rs`）
+**模式一：纯内存限流表**（`crates/backend/src/public_submit_guard.rs`）
 
 ```rust
 // 类型定义：parking_lot::RwLock 包裹 HashMap
@@ -699,7 +699,7 @@ pub(crate) fn enforce_public_submit_rate_limit(
 
 这是 `parking_lot` 的理想场景：纯内存 HashMap 操作，临界区极短，没有任何 I/O。
 
-**模式二：Double-check 客户端缓存**（`backend/src/upstream_proxy.rs`）
+**模式二：Double-check 客户端缓存**（`crates/backend/src/upstream_proxy.rs`）
 
 ```rust
 pub async fn client_for_selection(&self, ...) -> Result<(reqwest::Client, ResolvedUpstreamProxy)> {
@@ -727,7 +727,7 @@ pub async fn client_for_selection(&self, ...) -> Result<(reqwest::Client, Resolv
 
 注意 `resolve_proxy_for_selection().await` 在获取锁之前完成——所有 I/O 在锁外，锁内只做 HashMap 查找和插入。
 
-**模式三：Lazy 初始化 + 读多写少**（`backend/src/geoip.rs`）
+**模式三：Lazy 初始化 + 读多写少**（`crates/backend/src/geoip.rs`）
 
 ```rust
 async fn ensure_reader(&self) -> Result<()> {
@@ -823,7 +823,7 @@ StaticFlow backend 里仍保留 async 锁的典型对象包括：
 
 下面是两个典型的 `tokio::sync` 使用模式：
 
-**模式一：Per-entry 异步读写锁**（`backend/src/llm_gateway/token_refresh.rs`）
+**模式一：Per-entry 异步读写锁**（`crates/backend/src/llm_gateway/token_refresh.rs`）
 
 ```rust
 // 每个账号条目用 tokio::sync::RwLock 保护
@@ -857,7 +857,7 @@ async fn refresh_and_poll_single_account(
 
 这里必须用 `tokio::sync::RwLock` 而不是 `parking_lot::RwLock`，因为 `refresh_account_token` 内部会在持有写锁期间执行网络请求。如果用同步锁，刷新一个账号的 token 就会阻塞整个 worker 线程。
 
-**模式二：Per-account 串行化 Mutex**（`backend/src/kiro_gateway/runtime.rs`）
+**模式二：Per-account 串行化 Mutex**（`crates/backend/src/kiro_gateway/runtime.rs`）
 
 ```rust
 pub async fn ensure_context_for_account(
@@ -962,7 +962,7 @@ pub async fn ensure_context_for_account(
 
 ```rust
 // 模式：读锁 → clone → 释放 → 异步处理
-// backend/src/kiro_gateway/status_cache.rs
+// crates/backend/src/kiro_gateway/status_cache.rs
 pub(crate) async fn refresh_cached_status(runtime: &Arc<KiroGatewayRuntimeState>) -> Result<()> {
     let checked_at = now_ms();
     let auths = runtime.token_manager.list_auths().await?;  // await 在锁外
@@ -985,7 +985,7 @@ pub(crate) async fn refresh_cached_status(runtime: &Arc<KiroGatewayRuntimeState>
 
 ```rust
 // 模式：写锁 → 纯内存更新 → 释放
-// backend/src/llm_gateway/runtime.rs
+// crates/backend/src/llm_gateway/runtime.rs
 pub(crate) async fn rebuild_usage_rollups(&self) -> Result<()> {
     let rows = self.store.aggregate_usage_rollups().await?;  // await 在锁外
     let rollups = rows.into_iter()
@@ -1023,7 +1023,7 @@ pub(crate) async fn append_usage_event(&self, ...) -> Result<LlmGatewayKeyRecord
 
 ### 10.3 当前已修复的一处真实风险
 
-`track_music_play`（`backend/src/handlers.rs`）之前的路径是：
+`track_music_play`（`crates/backend/src/handlers.rs`）之前的路径是：
 
 1. 拿 `music_play_dedupe_guard` 写锁
 2. 发现命中冷却窗口
@@ -1271,15 +1271,15 @@ flowchart TD
 
 | 子系统 | 文件 | 说明 |
 |---|---|---|
-| 公共提交限流 | `backend/src/public_submit_guard.rs` | 纯内存限流表，适合同步锁 |
-| 全局运行时状态 | `backend/src/state.rs` | `AppState` 中各类配置锁和缓存锁 |
-| 音乐播放判重 | `backend/src/handlers.rs` | 异步长持锁修复示例 |
-| Codex 账号池 | `backend/src/llm_gateway/accounts.rs` | 外层索引锁 + 内层条目 async 锁 |
-| Codex runtime | `backend/src/llm_gateway/runtime.rs` | usage rollup、rate-limit cache、runtime config |
-| 共享代理注册表 | `backend/src/upstream_proxy.rs` | snapshot 和 reqwest client cache |
-| GeoIP | `backend/src/geoip.rs` | reader cache 的同步锁化 |
-| Kiro runtime | `backend/src/kiro_gateway/runtime.rs` | 每账号 refresh lock 与状态快照 |
-| Kiro status cache | `backend/src/kiro_gateway/status_cache.rs` | 读多写少快照对象 |
+| 公共提交限流 | `crates/backend/src/public_submit_guard.rs` | 纯内存限流表，适合同步锁 |
+| 全局运行时状态 | `crates/backend/src/state.rs` | `AppState` 中各类配置锁和缓存锁 |
+| 音乐播放判重 | `crates/backend/src/handlers.rs` | 异步长持锁修复示例 |
+| Codex 账号池 | `crates/backend/src/llm_gateway/accounts.rs` | 外层索引锁 + 内层条目 async 锁 |
+| Codex runtime | `crates/backend/src/llm_gateway/runtime.rs` | usage rollup、rate-limit cache、runtime config |
+| 共享代理注册表 | `crates/backend/src/upstream_proxy.rs` | snapshot 和 reqwest client cache |
+| GeoIP | `crates/backend/src/geoip.rs` | reader cache 的同步锁化 |
+| Kiro runtime | `crates/backend/src/kiro_gateway/runtime.rs` | 每账号 refresh lock 与状态快照 |
+| Kiro status cache | `crates/backend/src/kiro_gateway/status_cache.rs` | 读多写少快照对象 |
 
 ## 15. 总结
 
