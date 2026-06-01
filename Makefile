@@ -38,7 +38,7 @@ install:
 	@echo "🔧 安装依赖..."
 	@rustup target add wasm32-unknown-unknown
 	@cargo install trunk --locked || true
-	@cd frontend && npm install
+	@cd crates/frontend && npm install
 	@echo "✅ 依赖安装完成"
 
 # 一键启动前后端
@@ -53,19 +53,19 @@ dev:
 # 启动后端
 dev-backend:
 	@echo "🔧 启动后端（http://localhost:3000）..."
-	@cd backend && [ -f .env ] || cp .env.example .env
-	@cd backend && RUST_LOG=info cargo run
+	@cd crates/backend && [ -f .env ] || cp .env.example .env
+	@cd crates/backend && RUST_LOG=info cargo run
 
 # 启动前端
 dev-frontend:
 	@echo "🎨 启动前端（http://localhost:8080）..."
-	@cd frontend && trunk serve --open
+	@cd crates/frontend && trunk serve --open
 
 # 构建项目
 build:
 	@echo "📦 构建项目..."
 	@cargo build --workspace --release
-	@cd frontend && trunk build --release
+	@cd crates/frontend && trunk build --release
 	@echo "✅ 构建完成"
 
 # 检查代码
@@ -79,7 +79,7 @@ test:
 # 清理
 clean:
 	@cargo clean
-	@rm -rf frontend/dist
+	@rm -rf crates/frontend/dist
 	@rm -rf $(BIN_DIR)
 
 # 停止服务

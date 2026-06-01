@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-const DEFAULT_SUPPORT_DIR: &str = "backend/.local/llm_access_support";
+const DEFAULT_SUPPORT_DIR: &str = "crates/backend/.local/llm_access_support";
 const FALLBACK_SUPPORT_DIR: &str = ".local/llm_access_support";
 const SUPPORT_CONFIG_FILE: &str = "config.json";
 const PAYMENT_EMAIL_TEMPLATE_FILE: &str = "payment_email.md";

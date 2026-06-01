@@ -16,7 +16,7 @@ use lettre::{
 use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag};
 use serde::Deserialize;
 
-const DEFAULT_EMAIL_ACCOUNTS_FILE: &str = "backend/.local/email_accounts.json";
+const DEFAULT_EMAIL_ACCOUNTS_FILE: &str = "crates/backend/.local/email_accounts.json";
 const FALLBACK_EMAIL_ACCOUNTS_FILE: &str = ".local/email_accounts.json";
 const DEFAULT_SMTP_HOST: &str = "smtp.gmail.com";
 const DEFAULT_SMTP_PORT: u16 = 587;
@@ -294,7 +294,7 @@ pub fn resolve_email_accounts_file_path() -> PathBuf {
         return fallback_path;
     }
 
-    PathBuf::from("backend/.local/email_accounts.json")
+    PathBuf::from("crates/backend/.local/email_accounts.json")
 }
 
 /// Normalize and validate one email address.

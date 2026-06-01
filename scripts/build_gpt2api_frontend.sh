@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_DIR="$ROOT_DIR/frontend/gpt2api-app"
+APP_DIR="$ROOT_DIR/crates/frontend/gpt2api-app"
 NPM_CACHE_DIR="${NPM_CACHE_DIR:-$ROOT_DIR/tmp/npm-cache}"
 
 cd "$APP_DIR"

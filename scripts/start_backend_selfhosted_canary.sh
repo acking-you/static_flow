@@ -18,7 +18,7 @@ COMMENTS_DB_PATH="${COMMENTS_DB_PATH:-${COMMENTS_LANCEDB_URI:-$DB_ROOT/lancedb-c
 MUSIC_DB_PATH="${MUSIC_DB_PATH:-${MUSIC_LANCEDB_URI:-$DB_ROOT/lancedb-music}}"
 HOST="${HOST:-${BIND_ADDR:-127.0.0.1}}"
 PORT="${PORT:-39081}"
-FRONTEND_DIST_DIR="${FRONTEND_DIST_DIR:-$ROOT_DIR/frontend/dist}"
+FRONTEND_DIST_DIR="${FRONTEND_DIST_DIR:-$ROOT_DIR/crates/frontend/dist}"
 DAEMON="false"
 BUILD_BACKEND="false"
 BUILD_FRONTEND="false"
@@ -54,7 +54,7 @@ Environment variables (all optional):
   COMMENTS_DB_PATH     Comments DB override
   MUSIC_DB_PATH        Music DB override
   SITE_BASE_URL        Public URL override (default: http://127.0.0.1:$PORT)
-  FRONTEND_DIST_DIR    Frontend dist path (default: ./frontend/dist)
+  FRONTEND_DIST_DIR    Frontend dist path (default: ./crates/frontend/dist)
   LOG_FILE             Legacy wrapper log path (backend runtime logs now roll under STATICFLOW_LOG_DIR)
   CANARY_BIN_PATH      Output binary path (default: ./bin/static-flow-backend-canary)
   PID_FILE             Daemon pid file (default: ./tmp/staticflow-backend-canary.pid)

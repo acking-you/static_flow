@@ -5,9 +5,9 @@ on:
     branches:
       - master
     paths:
-      - 'frontend/**'
-      - 'shared/src/**'
-      - 'shared/Cargo.toml'
+      - 'crates/frontend/**'
+      - 'crates/shared/src/**'
+      - 'crates/shared/Cargo.toml'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
@@ -46,10 +46,10 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: crates/frontend/package-lock.json
 
       - name: Install npm dependencies
-        working-directory: frontend
+        working-directory: crates/frontend
         run: npm install
 
       - name: Install wasm-opt (from binaryen)
@@ -62,18 +62,18 @@ jobs:
           ~/.cache/trunk/wasm-opt-version_116/bin/wasm-opt --version
 
       - name: Build frontend (production)
-        working-directory: frontend
+        working-directory: crates/frontend
         run: trunk build --release
         env:
           STATICFLOW_API_BASE: ${{ vars.STATICFLOW_API_BASE }}
           TRUNK_SKIP_VERSION_CHECK: "true"
 
       - name: Copy 404.html to dist root (GitHub Pages SPA routing)
-        working-directory: frontend
+        working-directory: crates/frontend
         run: cp 404.html dist/404.html
 
       - name: Copy standalone pages to dist
-        working-directory: frontend
+        working-directory: crates/frontend
         run: |
           if [ -d "standalone" ] && [ "$(ls -A standalone 2>/dev/null)" ]; then
             cp -r standalone dist/
@@ -87,6 +87,6 @@ jobs:
         with:
           personal_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           external_repository: acking-you/acking-you.github.io
-          publish_dir: frontend/dist
+          publish_dir: crates/frontend/dist
           publish_branch: master
           force_orphan: true

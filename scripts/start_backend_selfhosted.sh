@@ -24,7 +24,7 @@ MUSIC_DB_PATH="${MUSIC_DB_PATH:-${MUSIC_LANCEDB_URI:-$DB_ROOT/lancedb-music}}"
 HOST="${HOST:-${BIND_ADDR:-127.0.0.1}}"
 PORT="${PORT:-39080}"
 SITE_BASE_URL="${SITE_BASE_URL:-https://ackingliu.top}"
-FRONTEND_DIST_DIR="${FRONTEND_DIST_DIR:-$ROOT_DIR/frontend/dist}"
+FRONTEND_DIST_DIR="${FRONTEND_DIST_DIR:-$ROOT_DIR/crates/frontend/dist}"
 DAEMON="false"
 LOG_FILE="${LOG_FILE:-$ROOT_DIR/tmp/staticflow-backend.log}"
 STATICFLOW_LOG_DIR="${STATICFLOW_LOG_DIR:-$ROOT_DIR/tmp/runtime-logs}"
@@ -50,7 +50,7 @@ Environment variables (all optional):
   COMMENTS_DB_PATH     Comments DB override
   MUSIC_DB_PATH        Music DB override
   SITE_BASE_URL        Public URL (default: https://ackingliu.top)
-  FRONTEND_DIST_DIR    Frontend dist path (default: ./frontend/dist)
+  FRONTEND_DIST_DIR    Frontend dist path (default: ./crates/frontend/dist)
   LOG_FILE             Legacy wrapper log path (backend runtime logs now roll under STATICFLOW_LOG_DIR)
   STATICFLOW_LOG_DIR   Runtime log root (default: ./tmp/runtime-logs)
   STATICFLOW_LOG_SERVICE Service log folder name (default: backend)

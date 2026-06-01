@@ -325,21 +325,23 @@ Key points:
 
 ## Codebase Structure
 ```
-# Workspace crates (14)
-shared/              Rust library — LanceDB stores, data types (#[cfg(not(wasm32))] gated)
-backend/             Axum HTTP server — handlers, routes, state, workers, email
-frontend/            Yew/WASM SPA — pages, components, api, router, i18n
-cli/                 sf-cli binary — LanceDB operations (write/query/embed/optimize)
-gateway/             Pingora-based local ingress gateway (blue/green upstream switching)
-runtime/             Shared runtime utilities (logging, tracing, signal handling)
-media-service/       Media processing service (image/audio pipelines)
-media-types/         Shared media type definitions
-llm-access/          Standalone LLM access service binary (cloud deployment)
-llm-access-core/     Core LLM access logic (routing, quota, proxy resolution)
-llm-access-codex/    Codex/OpenAI-compatible gateway implementation
-llm-access-kiro/     Kiro/Anthropic-compatible gateway implementation
-llm-access-migrations/ Schema migration tooling for llm-access stores
-llm-access-store/    Storage layer for llm-access (Postgres/SQLite control + DuckDB analytics)
+# Workspace crates (16) — all under crates/
+crates/shared/              Rust library — LanceDB stores, data types (#[cfg(not(wasm32))] gated)
+crates/backend/             Axum HTTP server — handlers, routes, state, workers, email
+crates/frontend/            Yew/WASM SPA — pages, components, api, router, i18n
+crates/cli/                 sf-cli binary — LanceDB operations (write/query/embed/optimize)
+crates/gateway/             Pingora-based local ingress gateway (blue/green upstream switching)
+crates/runtime/             Shared runtime utilities (logging, tracing, signal handling)
+crates/media-service/       Media processing service (image/audio pipelines)
+crates/media-types/         Shared media type definitions
+crates/email-notifier/      Email notification utilities (package static-flow-email)
+crates/llm-access/          Standalone LLM access service binary (cloud deployment)
+crates/llm-access-core/     Core LLM access logic (routing, quota, proxy resolution)
+crates/llm-access-codex/    Codex/OpenAI-compatible gateway implementation
+crates/llm-access-kiro/     Kiro/Anthropic-compatible gateway implementation
+crates/llm-access-migrations/ Schema migration tooling for llm-access stores
+crates/llm-access-store/    Storage layer for llm-access (Postgres/SQLite control + DuckDB analytics)
+crates/llm-usage-journal/   Hot local usage journal for llm-access
 
 # Non-crate directories
 skills/              Codex/Claude agent skill definitions (SKILL.md + references)

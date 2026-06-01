@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/tmp/systemd-release/current}"
-FRONTEND_DIST_SOURCE="${FRONTEND_DIST_SOURCE:-$ROOT_DIR/frontend/dist}"
+FRONTEND_DIST_SOURCE="${FRONTEND_DIST_SOURCE:-$ROOT_DIR/crates/frontend/dist}"
 BUILD_MODE="${BUILD_MODE:-if-missing}"
 COPY_FRONTEND="true"
 BACKEND_DEFAULT_FEATURES="${BACKEND_DEFAULT_FEATURES:-1}"
@@ -26,7 +26,7 @@ Options:
 
 Environment variables:
   OUTPUT_DIR             Bundle output directory
-  FRONTEND_DIST_SOURCE   Frontend dist source (default: ./frontend/dist)
+  FRONTEND_DIST_SOURCE   Frontend dist source (default: ./crates/frontend/dist)
   BUILD_MODE             always|if-missing (default: if-missing)
   BACKEND_DEFAULT_FEATURES
   BACKEND_FEATURES

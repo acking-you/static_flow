@@ -1,22 +1,22 @@
 [workspace]
 resolver = "2"
 members = [
-    "frontend",
-    "shared",
-    "backend",
-    "cli",
-    "media-service",
-    "media-types",
-    "email-notifier",
-    "gateway",
-    "runtime",
-    "llm-access",
-    "llm-access-core",
-    "llm-access-codex",
-    "llm-access-kiro",
-    "llm-access-migrations",
-    "llm-access-store",
-    "llm-usage-journal",
+    "crates/frontend",
+    "crates/shared",
+    "crates/backend",
+    "crates/cli",
+    "crates/media-service",
+    "crates/media-types",
+    "crates/email-notifier",
+    "crates/gateway",
+    "crates/runtime",
+    "crates/llm-access",
+    "crates/llm-access-core",
+    "crates/llm-access-codex",
+    "crates/llm-access-kiro",
+    "crates/llm-access-migrations",
+    "crates/llm-access-store",
+    "crates/llm-usage-journal",
 ]
 # Vendored forks under deps/ (lance, lancedb, pingora, ffmpeg-sidecar, ...) are
 # their own upstream projects. Exclude the whole directory from this workspace

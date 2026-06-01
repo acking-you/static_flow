@@ -6,7 +6,7 @@ set -euo pipefail
 # Key difference from GitHub Pages build:
 #   STATICFLOW_API_BASE=/api  (relative, same-origin)
 #
-# Output: frontend/dist/  (ready to be served by backend via FRONTEND_DIST_DIR)
+# Output: crates/frontend/dist/  (ready to be served by backend via FRONTEND_DIST_DIR)
 #
 # Usage:
 #   ./scripts/build_frontend_selfhosted.sh
@@ -14,7 +14,7 @@ set -euo pipefail
 #   ./scripts/build_frontend_selfhosted.sh --skip-npm  # skip npm install
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FRONTEND_DIR="$ROOT_DIR/frontend"
+FRONTEND_DIR="$ROOT_DIR/crates/frontend"
 STANDALONE_SRC_DIR="$FRONTEND_DIR/standalone"
 STANDALONE_DIST_DIR="$FRONTEND_DIR/dist/standalone"
 OUTPUT_DIR=""
