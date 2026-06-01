@@ -290,7 +290,9 @@ pub fn spawn_segment_sealer(
     segment_id: String,
     connection_config: SharedDuckDbUsageConnectionConfig,
 ) {
-    let _ = thread::Builder::new()
+    let sealer_segment_id = segment_id.clone();
+    let sealer_pending_path = pending_path.clone();
+    let spawn_result = thread::Builder::new()
         .name("llm-access-duckdb-sealer".to_string())
         .spawn(move || {
             let Ok(_sealer_guard) = TIERED_SEGMENT_SEALER_LOCK.lock() else {
@@ -328,6 +330,13 @@ pub fn spawn_segment_sealer(
                 );
             }
         });
+    if let Err(err) = spawn_result {
+        eprintln!(
+            "failed to spawn llm-access duckdb segment sealer thread for `{sealer_segment_id}` \
+             from `{}`: {err}",
+            sealer_pending_path.display()
+        );
+    }
 }
 #[cfg(feature = "duckdb-runtime")]
 pub async fn publish_pending_segment_async(

@@ -2,7 +2,7 @@
 //! hashing, numeric casts).
 
 use std::{
-    io::{Read, Write},
+    io::{BufWriter, Read},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -39,11 +39,21 @@ pub fn utc_date_parts(timestamp_ms: i64) -> (i32, u32, u32) {
 }
 #[cfg(feature = "duckdb-runtime")]
 pub fn gzip_json_bytes<T: serde::Serialize>(value: &T) -> anyhow::Result<Vec<u8>> {
-    let json = serde_json::to_vec(value).context("serialize usage detail json")?;
+    // Stream JSON straight into the encoder (no intermediate uncompressed Vec),
+    // but through a BufWriter: serde_json emits many tiny writes and an
+    // unbuffered GzEncoder would run the compressor on each one. Drain via
+    // `into_inner()` rather than `flush()` so we don't inject a DEFLATE
+    // sync-flush — the encoder then sees the exact same byte stream as a single
+    // bulk write, keeping the output bytes identical.
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder
-        .write_all(&json)
-        .context("write gzip usage detail payload")?;
+    {
+        let mut writer = BufWriter::new(&mut encoder);
+        serde_json::to_writer(&mut writer, value)
+            .context("serialize and gzip usage detail json")?;
+        writer
+            .into_inner()
+            .map_err(|err| anyhow::anyhow!("flush gzip usage detail payload: {err}"))?;
+    }
     encoder.finish().context("finish gzip usage detail payload")
 }
 #[cfg(feature = "duckdb-runtime")]
