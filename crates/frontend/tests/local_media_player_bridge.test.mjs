@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import path from 'node:path';
 import vm from 'node:vm';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
-const bridgePath = path.resolve('frontend/static/local_media_player_bridge.js');
+// Resolve relative to THIS test file (not the CWD), so the test works whether
+// it is run from the repo root, the crate dir, or anywhere else.
+const bridgePath = fileURLToPath(
+  new URL('../static/local_media_player_bridge.js', import.meta.url),
+);
 const bridgeSource = fs.readFileSync(bridgePath, 'utf8');
 
 function createEnvironment({ nativeHls = false } = {}) {
