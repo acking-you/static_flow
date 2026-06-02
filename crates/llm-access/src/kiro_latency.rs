@@ -15,13 +15,14 @@ const PROXY_WEIGHT: f64 = 0.3;
 const SMOOTHING_SAMPLES: f64 = 5.0;
 const SNAPSHOT_STALE_MS: i64 = 5 * 60 * 1000;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
-/// Latency-score band width as a fraction of the global average first-token
-/// latency. Accounts whose smoothed scores fall within the same band are
-/// treated as equally fast during selection, so a small latency edge no longer
-/// starves accounts that merely lack samples (which fall back to the global
-/// average). Selection then balances those near-equal accounts on other keys
-/// (bound-session count, least-recently-started) instead of always picking the
-/// nominally fastest one.
+/// Latency-score band tolerance radius, as a fraction of the global average
+/// first-token latency. Bands are centered on the neutral baseline: band 0
+/// spans `global_avg ± (global_avg * BAND_FRACTION)`, so accounts within this
+/// tolerance of the average — including no-sample accounts, which score exactly
+/// `global_avg` — are treated as equally fast during selection. A small latency
+/// edge no longer starves accounts that merely lack samples. Selection then
+/// balances those near-equal accounts on other keys (bound-session count,
+/// least-recently-started) instead of always picking the nominally fastest one.
 const BAND_FRACTION: f64 = 0.15;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,17 +66,24 @@ impl KiroLatencyRanker {
     }
 
     /// Quantize the route's smoothed latency score into a band index (lower is
-    /// faster). Returns `None` under the same guards as the raw score: latency
-    /// routing disabled, or no usable (fresh, finite) snapshot. Accounts in the
-    /// same band are equally preferred during selection.
+    /// faster). Bands are centered on the neutral baseline: band 0 spans
+    /// `global_avg ± (global_avg * BAND_FRACTION)`, so a no-sample account
+    /// (which scores exactly `global_avg`) and any account within the tolerance
+    /// are treated as equally fast, rather than the no-sample score landing on
+    /// an arbitrary bucket boundary. Returns `None` under the same guards as
+    /// the raw score: latency routing disabled, or no usable (fresh,
+    /// finite) snapshot.
     pub(crate) fn route_score_band(&self, route: &ProviderKiroRoute, now_ms: i64) -> Option<i64> {
         if !route.latency_routing_enabled {
             return None;
         }
         let snapshot = self.current_snapshot(now_ms)?;
         let score = snapshot.route_score(route);
-        let band_width = (snapshot.global_avg_first_token_ms * BAND_FRACTION).max(1.0);
-        Some((score / band_width).floor() as i64)
+        let global_avg = snapshot.global_avg_first_token_ms;
+        // Tolerance radius around the neutral score; full band width is 2x this,
+        // so band 0 is `[global_avg - tolerance, global_avg + tolerance)`.
+        let tolerance = (global_avg * BAND_FRACTION).max(1.0);
+        Some(((score - global_avg) / (2.0 * tolerance)).round() as i64)
     }
 
     fn current_snapshot(&self, now_ms: i64) -> Option<Arc<PreparedKiroLatencySnapshot>> {

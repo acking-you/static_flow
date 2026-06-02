@@ -323,6 +323,23 @@ pub fn selection_ordered_kiro_routes<'a>(
 
     let last_started_snapshot = scheduler.last_started_snapshot();
     let proxy_cooldowns = scheduler.proxy_cooldown_snapshot();
+    // Aggregate the affinity session counts (keyed by account name) onto routing
+    // identities, so aliases of the same upstream Kiro account share one load
+    // figure — matching how the scheduler, cooldowns, last-started, and quota
+    // failover all group by `routing_identity`. Without this, sessions bound to
+    // one alias would not deter new sessions from another alias of the same
+    // upstream account. O(routes), keys borrow from `routes` (zero-alloc).
+    let identity_session_counts: Option<HashMap<&str, usize>> = session_counts.map(|counts| {
+        routes
+            .iter()
+            .fold(HashMap::new(), |mut by_identity, route| {
+                let count = counts.get(&route.account_name).copied().unwrap_or(0);
+                *by_identity
+                    .entry(route.routing_identity.as_str())
+                    .or_insert(0) += count;
+                by_identity
+            })
+    });
     let mut sorted = routes
         .iter()
         .map(|route| {
@@ -332,8 +349,12 @@ pub fn selection_ordered_kiro_routes<'a>(
                 proxy_in_cooldown: proxy_key
                     .as_deref()
                     .is_some_and(|key| proxy_cooldowns.contains_key(key)),
-                session_count: session_counts
-                    .map(|counts| counts.get(&route.account_name).copied().unwrap_or(0)),
+                session_count: identity_session_counts.as_ref().map(|counts| {
+                    counts
+                        .get(route.routing_identity.as_str())
+                        .copied()
+                        .unwrap_or(0)
+                }),
                 last_started_at: last_started_snapshot.get(&route.routing_identity).copied(),
                 latency_band: latency_ranker.route_score_band(route, now_ms),
                 remaining: route.cached_remaining_credits.unwrap_or(-1.0),
