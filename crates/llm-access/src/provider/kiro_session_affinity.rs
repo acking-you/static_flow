@@ -113,7 +113,13 @@ impl KiroSessionAffinity {
             if now.saturating_duration_since(entry.updated_at) > self.ttl {
                 continue;
             }
-            *counts.entry(entry.account_name.to_string()).or_insert(0) += 1;
+            // Borrow for the lookup; only allocate the key when first inserting an
+            // account, so allocations are O(distinct accounts), not O(entries).
+            if let Some(count) = counts.get_mut(entry.account_name.as_ref()) {
+                *count += 1;
+            } else {
+                counts.insert(entry.account_name.to_string(), 1);
+            }
         }
         counts
     }
