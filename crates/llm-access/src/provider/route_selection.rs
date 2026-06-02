@@ -1,7 +1,7 @@
 //! Route selection with account permits + the `DefaultProviderDispatcher`.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -127,6 +127,7 @@ pub async fn select_kiro_route_with_account_permit(
     failed_accounts: &HashSet<String>,
     latency_ranker: &KiroLatencyRanker,
     preferred_account_name: Option<&str>,
+    session_counts: Option<&HashMap<String, usize>>,
 ) -> Result<(ProviderKiroRoute, KiroRequestLease), Response> {
     if routes.is_empty() {
         return Err(kiro_json_error(
@@ -172,8 +173,13 @@ pub async fn select_kiro_route_with_account_permit(
                 }
             }
         }
-        for route in selection_ordered_kiro_routes(routes, scheduler, latency_ranker, now_millis())
-        {
+        for route in selection_ordered_kiro_routes(
+            routes,
+            scheduler,
+            latency_ranker,
+            now_millis(),
+            session_counts,
+        ) {
             if failed_accounts.contains(&route.account_name) {
                 continue;
             }
@@ -303,18 +309,37 @@ pub fn selection_ordered_kiro_routes<'a>(
     scheduler: &KiroRequestScheduler,
     latency_ranker: &KiroLatencyRanker,
     now_ms: i64,
+    session_counts: Option<&HashMap<String, usize>>,
 ) -> Vec<&'a ProviderKiroRoute> {
     #[derive(Clone, Copy)]
     struct Candidate<'a> {
         route: &'a ProviderKiroRoute,
         proxy_in_cooldown: bool,
+        session_count: Option<usize>,
         last_started_at: Option<Instant>,
-        latency_score_ms: Option<f64>,
+        latency_band: Option<i64>,
         remaining: f64,
     }
 
     let last_started_snapshot = scheduler.last_started_snapshot();
     let proxy_cooldowns = scheduler.proxy_cooldown_snapshot();
+    // Aggregate the affinity session counts (keyed by account name) onto routing
+    // identities, so aliases of the same upstream Kiro account share one load
+    // figure — matching how the scheduler, cooldowns, last-started, and quota
+    // failover all group by `routing_identity`. Without this, sessions bound to
+    // one alias would not deter new sessions from another alias of the same
+    // upstream account. O(routes), keys borrow from `routes` (zero-alloc).
+    let identity_session_counts: Option<HashMap<&str, usize>> = session_counts.map(|counts| {
+        routes
+            .iter()
+            .fold(HashMap::new(), |mut by_identity, route| {
+                let count = counts.get(&route.account_name).copied().unwrap_or(0);
+                *by_identity
+                    .entry(route.routing_identity.as_str())
+                    .or_insert(0) += count;
+                by_identity
+            })
+    });
     let mut sorted = routes
         .iter()
         .map(|route| {
@@ -324,8 +349,14 @@ pub fn selection_ordered_kiro_routes<'a>(
                 proxy_in_cooldown: proxy_key
                     .as_deref()
                     .is_some_and(|key| proxy_cooldowns.contains_key(key)),
+                session_count: identity_session_counts.as_ref().map(|counts| {
+                    counts
+                        .get(route.routing_identity.as_str())
+                        .copied()
+                        .unwrap_or(0)
+                }),
                 last_started_at: last_started_snapshot.get(&route.routing_identity).copied(),
-                latency_score_ms: latency_ranker.route_score_ms(route, now_ms),
+                latency_band: latency_ranker.route_score_band(route, now_ms),
                 remaining: route.cached_remaining_credits.unwrap_or(-1.0),
             }
         })
@@ -336,9 +367,19 @@ pub fn selection_ordered_kiro_routes<'a>(
             (true, false) => return std::cmp::Ordering::Greater,
             _ => {},
         }
-        match (left.latency_score_ms, right.latency_score_ms) {
-            (Some(left_score), Some(right_score)) => {
-                let ordering = left_score.total_cmp(&right_score);
+        // New-session balancing: when session counts are supplied, fewest bound
+        // sessions wins before latency so new conversations spread across
+        // accounts instead of stacking on the nominally fastest one. In normal
+        // mode every candidate carries `None`, so this key is inert.
+        if let (Some(left_count), Some(right_count)) = (left.session_count, right.session_count) {
+            let ordering = left_count.cmp(&right_count);
+            if ordering != std::cmp::Ordering::Equal {
+                return ordering;
+            }
+        }
+        match (left.latency_band, right.latency_band) {
+            (Some(left_band), Some(right_band)) => {
+                let ordering = left_band.cmp(&right_band);
                 if ordering != std::cmp::Ordering::Equal {
                     return ordering;
                 }

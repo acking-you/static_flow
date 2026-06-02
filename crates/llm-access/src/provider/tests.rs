@@ -1084,7 +1084,8 @@ fn kiro_selection_prefers_balance_then_least_recently_started_identity() {
     ];
 
     let ranker = crate::kiro_latency::KiroLatencyRanker::default();
-    let ordered = super::selection_ordered_kiro_routes(&routes, scheduler.as_ref(), &ranker, 0);
+    let ordered =
+        super::selection_ordered_kiro_routes(&routes, scheduler.as_ref(), &ranker, 0, None);
     assert_eq!(ordered[0].account_name, "alpha");
 
     let lease = scheduler
@@ -1092,7 +1093,8 @@ fn kiro_selection_prefers_balance_then_least_recently_started_identity() {
         .expect("alpha should acquire");
     drop(lease);
 
-    let ordered = super::selection_ordered_kiro_routes(&routes, scheduler.as_ref(), &ranker, 0);
+    let ordered =
+        super::selection_ordered_kiro_routes(&routes, scheduler.as_ref(), &ranker, 0, None);
     assert_eq!(ordered[0].account_name, "beta");
 }
 
@@ -1110,7 +1112,8 @@ fn kiro_selection_deprioritizes_routes_on_cooled_proxy() {
     ];
 
     let ranker = crate::kiro_latency::KiroLatencyRanker::default();
-    let ordered = super::selection_ordered_kiro_routes(&routes, scheduler.as_ref(), &ranker, 0);
+    let ordered =
+        super::selection_ordered_kiro_routes(&routes, scheduler.as_ref(), &ranker, 0, None);
     assert_eq!(ordered[0].account_name, "beta");
 }
 
@@ -1156,6 +1159,7 @@ fn kiro_selection_prefers_recent_low_latency_account_and_proxy() {
         scheduler.as_ref(),
         &ranker,
         1_700_000_010_000,
+        None,
     );
     assert_eq!(ordered[0].account_name, "beta");
 }
@@ -1175,6 +1179,7 @@ async fn kiro_selection_prefers_sticky_account_when_immediately_available() {
         &HashSet::new(),
         &ranker,
         Some("beta"),
+        None,
     )
     .await
     .expect("sticky beta should be selected");
@@ -1200,6 +1205,7 @@ async fn kiro_selection_skips_sticky_account_when_locally_throttled() {
         &HashSet::new(),
         &ranker,
         Some("beta"),
+        None,
     )
     .await
     .expect("alpha should be selected without waiting for beta");
@@ -1233,6 +1239,7 @@ fn kiro_selection_keeps_legacy_order_when_latency_routing_disabled() {
         scheduler.as_ref(),
         &ranker,
         1_700_000_010_000,
+        None,
     );
     assert_eq!(ordered[0].account_name, "alpha");
 }
@@ -1261,8 +1268,130 @@ fn kiro_selection_keeps_legacy_order_when_latency_snapshot_is_stale() {
         scheduler.as_ref(),
         &ranker,
         1_700_010_000_000,
+        None,
     );
     assert_eq!(ordered[0].account_name, "alpha");
+}
+
+#[test]
+fn kiro_selection_spreads_new_session_to_least_bound_account() {
+    let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
+    let routes = vec![
+        kiro_route_for_selection("alpha", "user-alpha", 90.0, None),
+        kiro_route_for_selection("beta", "user-beta", 10.0, None),
+    ];
+    let ranker = crate::kiro_latency::KiroLatencyRanker::default();
+    ranker.replace_snapshot(crate::kiro_latency::KiroLatencyRoutingSnapshot {
+        generated_at_ms: 1_700_000_000_000,
+        global_avg_first_token_ms: 500.0,
+        accounts: vec![
+            crate::kiro_latency::KiroLatencyDimensionStat {
+                key: "account:alpha".to_string(),
+                samples: 20,
+                avg_first_token_ms: 120.0,
+            },
+            crate::kiro_latency::KiroLatencyDimensionStat {
+                key: "account:beta".to_string(),
+                samples: 20,
+                avg_first_token_ms: 1_200.0,
+            },
+        ],
+        proxies: Vec::new(),
+    });
+    let now_ms = 1_700_000_010_000;
+
+    // Normal mode (no session counts): the faster account leads.
+    let ordered =
+        super::selection_ordered_kiro_routes(&routes, scheduler.as_ref(), &ranker, now_ms, None);
+    assert_eq!(ordered[0].account_name, "alpha");
+
+    // New-session mode: alpha already holds more bound sessions, so a brand-new
+    // session is steered to beta for spread even though alpha is faster.
+    let mut session_counts = HashMap::new();
+    session_counts.insert("alpha".to_string(), 5usize);
+    session_counts.insert("beta".to_string(), 1usize);
+    let ordered = super::selection_ordered_kiro_routes(
+        &routes,
+        scheduler.as_ref(),
+        &ranker,
+        now_ms,
+        Some(&session_counts),
+    );
+    assert_eq!(ordered[0].account_name, "beta");
+}
+
+#[test]
+fn kiro_selection_treats_same_band_accounts_as_equal_for_round_robin() {
+    let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
+    let routes = vec![
+        kiro_route_for_selection("alpha", "user-alpha", 50.0, None),
+        kiro_route_for_selection("beta", "user-beta", 50.0, None),
+    ];
+    let ranker = crate::kiro_latency::KiroLatencyRanker::default();
+    // alpha samples to a route score of 430ms — ~14% faster than the 500ms
+    // global average, still inside the ±15% tolerance; beta has no sample and
+    // scores exactly the global average. Under the old floor-from-zero banding
+    // these landed in different buckets (alpha 5, beta 6) and alpha won forever;
+    // with neutral-centered bands both are band 0, so beta is not starved.
+    ranker.replace_snapshot(crate::kiro_latency::KiroLatencyRoutingSnapshot {
+        generated_at_ms: 1_700_000_000_000,
+        global_avg_first_token_ms: 500.0,
+        accounts: vec![crate::kiro_latency::KiroLatencyDimensionStat {
+            key: "account:alpha".to_string(),
+            samples: 20,
+            avg_first_token_ms: 375.0,
+        }],
+        proxies: Vec::new(),
+    });
+    let now_ms = 1_700_000_010_000;
+
+    // Same band → tie falls through; both unused and equal credits, name decides.
+    let ordered =
+        super::selection_ordered_kiro_routes(&routes, scheduler.as_ref(), &ranker, now_ms, None);
+    assert_eq!(ordered[0].account_name, "alpha");
+
+    // After alpha starts once, round-robin flips to beta: the marginal latency
+    // edge no longer pins traffic to alpha.
+    let lease = scheduler
+        .try_acquire("user-alpha", 1, 0, Instant::now())
+        .expect("alpha should acquire");
+    drop(lease);
+    let ordered =
+        super::selection_ordered_kiro_routes(&routes, scheduler.as_ref(), &ranker, now_ms, None);
+    assert_eq!(ordered[0].account_name, "beta");
+}
+
+#[test]
+fn kiro_selection_spreads_new_session_by_routing_identity_not_account_name() {
+    let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
+    // alpha + beta are aliases of one upstream account (shared routing identity);
+    // gamma is a separate upstream account. beta carries the highest remaining
+    // credits so that, absent identity aggregation, the fewest-sessions tie
+    // (beta=0, gamma=0) would resolve to beta — steering a new session onto the
+    // same upstream account that alpha already loads.
+    let routes = vec![
+        kiro_route_for_selection("alpha", "shared-user", 10.0, None),
+        kiro_route_for_selection("beta", "shared-user", 90.0, None),
+        kiro_route_for_selection("gamma", "other-user", 10.0, None),
+    ];
+    let ranker = crate::kiro_latency::KiroLatencyRanker::default();
+
+    // Affinity counts are keyed by account name: alpha already holds 3 sessions.
+    let mut session_counts = HashMap::new();
+    session_counts.insert("alpha".to_string(), 3usize);
+    session_counts.insert("beta".to_string(), 0usize);
+    session_counts.insert("gamma".to_string(), 0usize);
+
+    // Aggregated by identity: shared-user=3, other-user=0 → gamma is the truly
+    // least-bound upstream and must lead, not beta.
+    let ordered = super::selection_ordered_kiro_routes(
+        &routes,
+        scheduler.as_ref(),
+        &ranker,
+        0,
+        Some(&session_counts),
+    );
+    assert_eq!(ordered[0].account_name, "gamma");
 }
 
 #[test]

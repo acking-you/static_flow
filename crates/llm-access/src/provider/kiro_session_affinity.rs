@@ -1,5 +1,6 @@
 use std::{
     cell::RefCell,
+    collections::HashMap,
     fmt::Write as _,
     num::NonZeroUsize,
     sync::Mutex,
@@ -95,6 +96,34 @@ impl KiroSessionAffinity {
             Some(entry.account_name.to_string())
         })
     }
+
+    /// Count how many non-expired sessions are currently bound to each account.
+    /// Used to spread new sessions across accounts (fewest bound sessions wins)
+    /// instead of stacking them on the nominally fastest one. Read-only: it
+    /// does not evict expired entries (they are reclaimed lazily by
+    /// `lookup_at`) and `LruCache::iter` does not perturb recency order.
+    pub(super) fn account_session_counts(&self) -> HashMap<String, usize> {
+        self.account_session_counts_at(Instant::now())
+    }
+
+    fn account_session_counts_at(&self, now: Instant) -> HashMap<String, usize> {
+        self.entries
+            .lock()
+            .expect("kiro session affinity mutex")
+            .iter()
+            .filter(|(_, entry)| now.saturating_duration_since(entry.updated_at) <= self.ttl)
+            .fold(HashMap::new(), |mut counts, (_, entry)| {
+                // Borrow for the lookup; only allocate the key when first
+                // inserting an account, so allocations are O(distinct accounts),
+                // not O(entries).
+                if let Some(count) = counts.get_mut(entry.account_name.as_ref()) {
+                    *count += 1;
+                } else {
+                    counts.insert(entry.account_name.to_string(), 1);
+                }
+                counts
+            })
+    }
 }
 
 fn affinity_key(key_id: &str, session_id: &str) -> Option<Box<str>> {
@@ -180,5 +209,31 @@ mod tests {
         assert_eq!(affinity.lookup("key-a", "session-b").as_deref(), None);
         assert_eq!(affinity.lookup("key-a", "session-a").as_deref(), Some("account-a"));
         assert_eq!(affinity.lookup("key-a", "session-c").as_deref(), Some("account-c"));
+    }
+
+    #[test]
+    fn account_session_counts_tallies_live_entries_per_account() {
+        let affinity = KiroSessionAffinity::new(8, Duration::from_secs(60));
+        let now = Instant::now();
+        affinity.remember_at("key-a", "session-1", "account-a", now);
+        affinity.remember_at("key-a", "session-2", "account-a", now);
+        affinity.remember_at("key-b", "session-3", "account-b", now);
+
+        let counts = affinity.account_session_counts_at(now);
+        assert_eq!(counts.get("account-a").copied(), Some(2));
+        assert_eq!(counts.get("account-b").copied(), Some(1));
+        assert_eq!(counts.get("account-c").copied(), None);
+    }
+
+    #[test]
+    fn account_session_counts_skips_expired_entries() {
+        let affinity = KiroSessionAffinity::new(8, Duration::from_secs(60));
+        let now = Instant::now();
+        affinity.remember_at("key-a", "session-old", "account-a", now);
+        affinity.remember_at("key-a", "session-new", "account-a", now + Duration::from_secs(120));
+
+        // At now+121s the first entry is >60s stale and must be excluded.
+        let counts = affinity.account_session_counts_at(now + Duration::from_secs(121));
+        assert_eq!(counts.get("account-a").copied(), Some(1));
     }
 }

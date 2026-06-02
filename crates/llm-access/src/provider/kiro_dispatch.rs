@@ -364,6 +364,13 @@ pub async fn dispatch_kiro_proxy(
     let preferred_account_name = affinity_session_id
         .as_deref()
         .and_then(|session_id| kiro_session_affinity.lookup(&key.key_id, session_id));
+    // New session (has a session id but no existing affinity): balance it onto
+    // the least-bound account. Skipped for single-account keys (nothing to
+    // spread). Computed once — affinity only mutates on success after the loop,
+    // so it is stable across failover retries.
+    let session_counts =
+        (routes.len() > 1 && affinity_session_id.is_some() && preferred_account_name.is_none())
+            .then(|| kiro_session_affinity.account_session_counts());
     loop {
         let route_started = Instant::now();
         let (route, account_permit) = match select_kiro_route_with_account_permit(
@@ -372,6 +379,7 @@ pub async fn dispatch_kiro_proxy(
             &failed_accounts,
             kiro_latency_ranker.as_ref(),
             preferred_account_name.as_deref(),
+            session_counts.as_ref(),
         )
         .await
         {
@@ -819,6 +827,13 @@ async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
     let preferred_account_name = affinity_session_id
         .as_deref()
         .and_then(|session_id| kiro_session_affinity.lookup(&key.key_id, session_id));
+    // New session (has a session id but no existing affinity): balance it onto
+    // the least-bound account. Skipped for single-account keys (nothing to
+    // spread). Computed once — affinity only mutates on success after the loop,
+    // so it is stable across failover retries.
+    let session_counts =
+        (routes.len() > 1 && affinity_session_id.is_some() && preferred_account_name.is_none())
+            .then(|| kiro_session_affinity.account_session_counts());
     loop {
         let route_started = Instant::now();
         let (route, account_permit) = match select_kiro_route_with_account_permit(
@@ -827,6 +842,7 @@ async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
             &failed_accounts,
             kiro_latency_ranker.as_ref(),
             preferred_account_name.as_deref(),
+            session_counts.as_ref(),
         )
         .await
         {
