@@ -107,21 +107,22 @@ impl KiroSessionAffinity {
     }
 
     fn account_session_counts_at(&self, now: Instant) -> HashMap<String, usize> {
-        let entries = self.entries.lock().expect("kiro session affinity mutex");
-        let mut counts: HashMap<String, usize> = HashMap::new();
-        for (_, entry) in entries.iter() {
-            if now.saturating_duration_since(entry.updated_at) > self.ttl {
-                continue;
-            }
-            // Borrow for the lookup; only allocate the key when first inserting an
-            // account, so allocations are O(distinct accounts), not O(entries).
-            if let Some(count) = counts.get_mut(entry.account_name.as_ref()) {
-                *count += 1;
-            } else {
-                counts.insert(entry.account_name.to_string(), 1);
-            }
-        }
-        counts
+        self.entries
+            .lock()
+            .expect("kiro session affinity mutex")
+            .iter()
+            .filter(|(_, entry)| now.saturating_duration_since(entry.updated_at) <= self.ttl)
+            .fold(HashMap::new(), |mut counts, (_, entry)| {
+                // Borrow for the lookup; only allocate the key when first
+                // inserting an account, so allocations are O(distinct accounts),
+                // not O(entries).
+                if let Some(count) = counts.get_mut(entry.account_name.as_ref()) {
+                    *count += 1;
+                } else {
+                    counts.insert(entry.account_name.to_string(), 1);
+                }
+                counts
+            })
     }
 }
 
