@@ -20,6 +20,7 @@ use llm_access_kiro::{
         converter::{
             convert_normalized_request_with_resolved_session, normalize_request, SessionIdSource,
         },
+        protected_content::validate_protected_content,
         stream::anthropic_usage_json,
         supported_models_response,
         types::MessagesRequest,
@@ -42,6 +43,7 @@ use super::{
         transient_invalid_model_cooldown,
     },
     kiro_error::{
+        kiro_bedrock_anthropic_error, kiro_bedrock_anthropic_error_body,
         kiro_conversion_error_response, kiro_json_error, kiro_upstream_error_response,
         KiroRouteFailure, KiroRouteFailureKind,
     },
@@ -88,6 +90,7 @@ pub async fn dispatch_kiro_proxy(
         kiro_request_scheduler,
         kiro_session_affinity,
         kiro_latency_ranker,
+        protected_thinking_signature_secret,
         ..
     } = deps;
     if request.uri().path() == "/v1/models" {
@@ -229,6 +232,51 @@ pub async fn dispatch_kiro_proxy(
         payload.tools.as_deref(),
     ) as i32;
     override_kiro_thinking_from_model_name(&mut payload);
+    let protected_thinking_signature_secret = if routes[0].protected_content_validation_enabled {
+        let Some(secret) = protected_thinking_signature_secret.clone() else {
+            return kiro_bedrock_anthropic_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "api_error",
+                "InternalServerException",
+                "protected content validation is enabled but KIRO_THINKING_SIGNATURE_SECRET is \
+                 not configured",
+            );
+        };
+        if let Err(err) =
+            validate_protected_content(&payload, &key.key_id, &effective_model, secret.as_ref())
+        {
+            let message = err.to_string();
+            let response = kiro_bedrock_anthropic_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+                "ValidationException",
+                &message,
+            );
+            let response_body = kiro_bedrock_anthropic_error_body(
+                "invalid_request_error",
+                "ValidationException",
+                &message,
+            );
+            capture_error_message(&mut usage_meta, &message);
+            capture_error_body(&mut usage_meta, &response_body);
+            capture_client_request_body_json(&mut usage_meta, &body);
+            record_kiro_preflight_failure(KiroPreflightFailureRecord {
+                control_store: control_store.as_ref(),
+                key: &key,
+                route: &routes[0],
+                endpoint: public_path,
+                model: &effective_model,
+                status: StatusCode::BAD_REQUEST,
+                meta: &mut usage_meta,
+                cache_simulator: kiro_cache_simulator.as_ref(),
+            })
+            .await;
+            return response;
+        }
+        Some(secret)
+    } else {
+        None
+    };
     if route_mcp_web_search {
         // Proactive auto-compaction gate (websearch path): this branch performs
         // no anchor-based recovery, so it gates on the local request estimate
@@ -733,6 +781,7 @@ pub async fn dispatch_kiro_proxy(
                 request_input_tokens,
                 thinking_enabled,
                 hidden_thinking_enabled,
+                protected_thinking_signature_secret: protected_thinking_signature_secret.clone(),
                 tool_name_map: conversion.tool_name_map.clone(),
                 structured_output_tool_name: conversion.structured_output_tool_name.clone(),
                 response_identity: conversion.response_identity.clone(),
@@ -763,6 +812,7 @@ pub async fn dispatch_kiro_proxy(
             request_input_tokens,
             thinking_enabled,
             hidden_thinking_enabled,
+            protected_thinking_signature_secret,
             tool_name_map: conversion.tool_name_map.clone(),
             structured_output_tool_name: conversion.structured_output_tool_name.clone(),
             response_identity: conversion.response_identity.clone(),

@@ -28,7 +28,10 @@ mod validate;
 
 use std::collections::{BTreeMap, HashMap};
 
-pub use convert::{convert_normalized_request_with_resolved_session, current_user_message_range};
+pub use convert::{
+    convert_normalized_request_with_resolved_session, current_user_message_range,
+    web_search_tool_result_text,
+};
 pub use model::{get_context_window_size, map_model};
 pub use normalize::normalize_request;
 pub use session::{preview_session_value, resolve_conversation_id_from_metadata};

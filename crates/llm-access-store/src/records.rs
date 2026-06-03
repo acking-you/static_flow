@@ -74,6 +74,8 @@ pub struct KeyRouteConfig {
     pub kiro_remote_media_resolution_enabled: bool,
     /// Whether recent Kiro latency metrics may influence route ordering.
     pub kiro_latency_routing_enabled: bool,
+    /// Whether Kiro thinking signatures and encrypted content are validated.
+    pub kiro_protected_content_validation_enabled: bool,
     /// Optional Kiro cache policy override JSON.
     pub kiro_cache_policy_override_json: Option<String>,
     /// Optional Kiro billable multiplier override JSON.

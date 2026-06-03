@@ -28,6 +28,14 @@ use crate::{
     activity::RequestActivityTracker, geoip::GeoIpResolver, kiro_latency::KiroLatencyRanker,
 };
 
+fn protected_thinking_signature_secret_from_env() -> Option<Arc<str>> {
+    std::env::var(super::KIRO_THINKING_SIGNATURE_SECRET_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(Arc::from)
+}
+
 impl ProviderState {
     /// Create provider request state.
     pub fn new(
@@ -128,6 +136,7 @@ impl ProviderState {
             kiro_session_affinity: Arc::new(KiroSessionAffinity::from_env()),
             kiro_latency_ranker,
             request_activity,
+            protected_thinking_signature_secret: protected_thinking_signature_secret_from_env(),
         }
     }
 
@@ -188,6 +197,7 @@ impl ProviderState {
             kiro_request_scheduler: Arc::clone(&self.kiro_request_scheduler),
             kiro_session_affinity: Arc::clone(&self.kiro_session_affinity),
             kiro_latency_ranker: Arc::clone(&self.kiro_latency_ranker),
+            protected_thinking_signature_secret: self.protected_thinking_signature_secret.clone(),
         }
     }
 }

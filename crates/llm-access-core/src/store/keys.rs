@@ -74,6 +74,8 @@ pub struct AdminKey {
     pub kiro_remote_media_resolution_enabled: bool,
     /// Whether recent first-token metrics may influence Kiro route ordering.
     pub kiro_latency_routing_enabled: bool,
+    /// Whether Kiro thinking signatures and encrypted content are validated.
+    pub kiro_protected_content_validation_enabled: bool,
     /// Kiro cache policy override JSON.
     pub kiro_cache_policy_override_json: Option<String>,
     /// Kiro billable multiplier override JSON.
@@ -346,6 +348,8 @@ pub struct AdminKeyPatch {
     pub kiro_remote_media_resolution_enabled: Option<bool>,
     /// New Kiro latency-routing toggle.
     pub kiro_latency_routing_enabled: Option<bool>,
+    /// New Kiro protected-content validation toggle.
+    pub kiro_protected_content_validation_enabled: Option<bool>,
     /// New Kiro cache policy override JSON.
     pub kiro_cache_policy_override_json: Option<Option<String>>,
     /// New Kiro billable model multiplier override JSON.

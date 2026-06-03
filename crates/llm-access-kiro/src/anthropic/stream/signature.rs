@@ -5,11 +5,17 @@
 //! observed Claude Code field layout. It is synthetic, not cryptographically
 //! valid.
 
+use std::sync::Arc;
+
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::{Digest, Sha512};
 
 const THINKING_SIGNATURE_DOMAIN: &[u8] =
     b"staticflow-kiro-anthropic-thinking-signature-anthropic-shape-v6\0";
+const PROTECTED_THINKING_SIGNATURE_DOMAIN: &[u8] =
+    b"staticflow-kiro-anthropic-protected-thinking-signature-v1\0";
+const SHA512_BLOCK_LEN: usize = 128;
+const SHA512_OUTPUT_LEN: usize = 64;
 /// Protobuf header field-1 value identifying the signature kind.
 pub const THINKING_SIGNATURE_HEADER_KIND: u64 = 12;
 /// Protobuf header field-3 value identifying the signature mode.
@@ -23,6 +29,25 @@ pub const THINKING_SIGNATURE_HEADER_PROOF_LEN: usize = 48;
 /// Minimum byte length of the inner signature body field (5).
 pub const THINKING_SIGNATURE_BODY_MIN_LEN: usize = 619;
 const THINKING_SIGNATURE_BODY_MAX_LEN: usize = 8_192;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThinkingSignatureContext {
+    key_id: Arc<str>,
+    secret: Arc<str>,
+}
+
+impl ThinkingSignatureContext {
+    pub fn new(key_id: impl Into<Arc<str>>, secret: impl Into<Arc<str>>) -> Self {
+        Self {
+            key_id: key_id.into(),
+            secret: secret.into(),
+        }
+    }
+
+    pub fn signature(&self, model: &str, thinking: &str) -> String {
+        protected_thinking_signature(model, thinking, self.key_id.as_ref(), self.secret.as_ref())
+    }
+}
 
 fn encode_proto_varint(mut value: u64, out: &mut Vec<u8>) {
     loop {
@@ -92,53 +117,88 @@ fn derive_deterministic_signature_bytes(
     out
 }
 
+fn hmac_sha512(secret: &[u8], chunks: &[&[u8]]) -> [u8; SHA512_OUTPUT_LEN] {
+    let mut key_block = [0u8; SHA512_BLOCK_LEN];
+    if secret.len() > SHA512_BLOCK_LEN {
+        let mut hasher = Sha512::new();
+        hasher.update(secret);
+        key_block[..SHA512_OUTPUT_LEN].copy_from_slice(&hasher.finalize());
+    } else {
+        key_block[..secret.len()].copy_from_slice(secret);
+    }
+
+    let mut inner_pad = [0x36u8; SHA512_BLOCK_LEN];
+    let mut outer_pad = [0x5cu8; SHA512_BLOCK_LEN];
+    for index in 0..SHA512_BLOCK_LEN {
+        inner_pad[index] ^= key_block[index];
+        outer_pad[index] ^= key_block[index];
+    }
+
+    let mut inner = Sha512::new();
+    inner.update(inner_pad);
+    for chunk in chunks {
+        inner.update(chunk);
+    }
+    let inner_hash = inner.finalize();
+
+    let mut outer = Sha512::new();
+    outer.update(outer_pad);
+    outer.update(inner_hash);
+    outer.finalize().into()
+}
+
+fn derive_protected_signature_bytes(
+    model: &str,
+    thinking: &str,
+    key_id: &str,
+    secret: &str,
+    label: &[u8],
+    len: usize,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(len);
+    let mut counter = 0u32;
+    while out.len() < len {
+        let counter_bytes = counter.to_le_bytes();
+        let digest = hmac_sha512(secret.as_bytes(), &[
+            PROTECTED_THINKING_SIGNATURE_DOMAIN,
+            label,
+            b"\0",
+            key_id.as_bytes(),
+            b"\0",
+            model.as_bytes(),
+            b"\0",
+            thinking.as_bytes(),
+            &counter_bytes,
+        ]);
+        out.extend_from_slice(&digest);
+        counter = counter.wrapping_add(1);
+    }
+    out.truncate(len);
+    out
+}
+
 fn signature_body_target_len(thinking: &str) -> usize {
     let thinking_len = thinking.len();
     thinking_len.clamp(THINKING_SIGNATURE_BODY_MIN_LEN, THINKING_SIGNATURE_BODY_MAX_LEN)
 }
 
-/// Build a deterministic protobuf envelope matching the field layout of recent
-/// Claude Code signatures observed locally:
-/// outer field-2 payload + outer field-3=1; inner fields 1/2/3/4/5; header
-/// fields 1=12, 3=2, 5=64-byte body, 6=model string, 7=0.
-///
-/// Kiro exposes summarized thinking text but not Anthropic's encrypted
-/// signature. This remains synthetic and is not a cryptographically valid
-/// signature.
-pub fn synthetic_thinking_signature(model: &str, thinking: &str) -> String {
+fn build_signature_envelope<F>(model: &str, thinking: &str, mut derive: F) -> String
+where
+    F: FnMut(&str, &str, &[u8], usize) -> Vec<u8>,
+{
     let mut header = Vec::new();
     encode_proto_varint_field(1, THINKING_SIGNATURE_HEADER_KIND, &mut header);
     encode_proto_varint_field(3, THINKING_SIGNATURE_HEADER_MODE, &mut header);
-    let header_body = derive_deterministic_signature_bytes(
-        model,
-        thinking,
-        b"header-body",
-        THINKING_SIGNATURE_HEADER_BODY_LEN,
-    );
+    let header_body = derive(model, thinking, b"header-body", THINKING_SIGNATURE_HEADER_BODY_LEN);
     encode_proto_bytes_field(5, &header_body, &mut header);
     encode_proto_bytes_field(6, model.as_bytes(), &mut header);
     encode_proto_varint_field(7, 0, &mut header);
 
-    let field_2 = derive_deterministic_signature_bytes(
-        model,
-        thinking,
-        b"field-2",
-        THINKING_SIGNATURE_HEADER_NONCE_LEN,
-    );
-    let field_3 = derive_deterministic_signature_bytes(
-        model,
-        thinking,
-        b"field-3",
-        THINKING_SIGNATURE_HEADER_NONCE_LEN,
-    );
-    let field_4 = derive_deterministic_signature_bytes(
-        model,
-        thinking,
-        b"field-4",
-        THINKING_SIGNATURE_HEADER_PROOF_LEN,
-    );
+    let field_2 = derive(model, thinking, b"field-2", THINKING_SIGNATURE_HEADER_NONCE_LEN);
+    let field_3 = derive(model, thinking, b"field-3", THINKING_SIGNATURE_HEADER_NONCE_LEN);
+    let field_4 = derive(model, thinking, b"field-4", THINKING_SIGNATURE_HEADER_PROOF_LEN);
     let body_len = signature_body_target_len(thinking);
-    let field_5 = derive_deterministic_signature_bytes(model, thinking, b"field-5", body_len);
+    let field_5 = derive(model, thinking, b"field-5", body_len);
     let fixed_payload_len = proto_bytes_field_encoded_len(1, header.len())
         + proto_bytes_field_encoded_len(2, field_2.len())
         + proto_bytes_field_encoded_len(3, field_3.len())
@@ -158,4 +218,98 @@ pub fn synthetic_thinking_signature(model: &str, thinking: &str) -> String {
     encode_proto_varint_field(3, 1, &mut envelope);
 
     STANDARD.encode(envelope)
+}
+
+/// Build a deterministic protobuf envelope matching the field layout of recent
+/// Claude Code signatures observed locally:
+/// outer field-2 payload + outer field-3=1; inner fields 1/2/3/4/5; header
+/// fields 1=12, 3=2, 5=64-byte body, 6=model string, 7=0.
+///
+/// Kiro exposes summarized thinking text but not Anthropic's encrypted
+/// signature. This remains synthetic and is not a cryptographically valid
+/// signature.
+pub fn synthetic_thinking_signature(model: &str, thinking: &str) -> String {
+    build_signature_envelope(model, thinking, |model, thinking, label, len| {
+        derive_deterministic_signature_bytes(model, thinking, label, len)
+    })
+}
+
+/// Build a service-authenticated thinking signature. The output keeps the
+/// existing Claude-shaped envelope, while the bytes are derived from a server
+/// secret and bound to one StaticFlow key id.
+pub fn protected_thinking_signature(
+    model: &str,
+    thinking: &str,
+    key_id: &str,
+    secret: &str,
+) -> String {
+    build_signature_envelope(model, thinking, |model, thinking, label, len| {
+        derive_protected_signature_bytes(model, thinking, key_id, secret, label, len)
+    })
+}
+
+pub fn verify_protected_thinking_signature(
+    model: &str,
+    thinking: &str,
+    key_id: &str,
+    secret: &str,
+    signature: &str,
+) -> bool {
+    let expected = protected_thinking_signature(model, thinking, key_id, secret);
+    constant_time_eq(expected.as_bytes(), signature.as_bytes())
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (left_byte, right_byte) in left.iter().zip(right.iter()) {
+        diff |= left_byte ^ right_byte;
+    }
+    diff == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{protected_thinking_signature, verify_protected_thinking_signature};
+
+    #[test]
+    fn protected_signature_verifies_only_exact_key_model_and_thinking() {
+        let signature = protected_thinking_signature(
+            "claude-opus-4-8",
+            "private reasoning",
+            "kiro-key-1",
+            "server-secret",
+        );
+
+        assert!(verify_protected_thinking_signature(
+            "claude-opus-4-8",
+            "private reasoning",
+            "kiro-key-1",
+            "server-secret",
+            &signature,
+        ));
+        assert!(!verify_protected_thinking_signature(
+            "claude-opus-4-8",
+            "tampered reasoning",
+            "kiro-key-1",
+            "server-secret",
+            &signature,
+        ));
+        assert!(!verify_protected_thinking_signature(
+            "claude-opus-4-7",
+            "private reasoning",
+            "kiro-key-1",
+            "server-secret",
+            &signature,
+        ));
+        assert!(!verify_protected_thinking_signature(
+            "claude-opus-4-8",
+            "private reasoning",
+            "kiro-key-2",
+            "server-secret",
+            &signature,
+        ));
+    }
 }

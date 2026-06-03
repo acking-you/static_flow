@@ -23,6 +23,7 @@ use llm_access_core::{
     },
     usage::UsageStreamDetails,
 };
+use llm_access_kiro::anthropic::stream::protected_thinking_signature;
 use serde_json::json;
 use tokio::sync::Notify;
 
@@ -888,59 +889,69 @@ fn static_kiro_route_store() -> Arc<dyn ProviderRouteStore> {
     })
 }
 
+fn protected_kiro_route_store() -> Arc<dyn ProviderRouteStore> {
+    let mut route = static_kiro_route();
+    route.protected_content_validation_enabled = true;
+    Arc::new(StaticRouteStore {
+        codex_route: codex_route_for_account("codex-a", "upstream-token"),
+        kiro_route: route,
+    })
+}
+
 fn static_kiro_route() -> ProviderKiroRoute {
     ProviderKiroRoute {
-            account_name: "kiro-a".to_string(),
-            account_group_id_at_event: None,
-            route_strategy_at_event: RouteStrategy::Auto,
-            auth_json: r#"{"accessToken":"kiro-upstream-token","machineId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#.to_string(),
-            profile_arn: Some("arn:aws:kiro:test".to_string()),
-            api_region: "us-east-1".to_string(),
-            request_validation_enabled: true,
-            cache_estimation_enabled: true,
-            zero_cache_debug_enabled: false,
-            full_request_logging_enabled: false,
-            remote_media_resolution_enabled: false,
-            latency_routing_enabled: true,
-            model_name_map_json: "{}".to_string(),
-            cache_kmodels_json: llm_access_core::store::default_kiro_cache_kmodels_json(),
-            cache_policy_json: llm_access_core::store::default_kiro_cache_policy_json(),
-            context_usage_min_request_tokens:
-                llm_access_core::store::DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
-            compact_trigger_tokens: llm_access_core::store::DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS,
-            prefix_cache_mode: "formula".to_string(),
-            prefix_cache_max_tokens: 100_000,
-            prefix_cache_entry_ttl_seconds: 3600,
-            conversation_anchor_max_entries: 1024,
-            conversation_anchor_ttl_seconds: 3600,
-            billable_model_multipliers_json:
-                llm_access_core::store::default_kiro_billable_model_multipliers_json(),
-            request_max_concurrency: None,
-            request_min_start_interval_ms: None,
-            account_request_max_concurrency: None,
-            account_request_min_start_interval_ms: None,
-            proxy: None,
-            routing_identity: "kiro-a".to_string(),
-            cached_status: Some("ready".to_string()),
-            cached_remaining_credits: Some(100.0),
-            cached_balance: Some(llm_access_core::store::AdminKiroBalanceView {
-                current_usage: 0.0,
-                usage_limit: 100.0,
-                remaining: 100.0,
-                next_reset_at: None,
-                subscription_title: None,
-                user_id: Some("kiro-a".to_string()),
-            }),
-            cached_cache: Some(llm_access_core::store::AdminKiroCacheView {
-                status: "ready".to_string(),
-                refresh_interval_seconds: 300,
-                last_checked_at: Some(1),
-                last_success_at: Some(1),
-                error_message: None,
-            }),
-            status_refresh_interval_seconds: 300,
-            minimum_remaining_credits_before_block: 0.0,
-        }
+        account_name: "kiro-a".to_string(),
+        account_group_id_at_event: None,
+        route_strategy_at_event: RouteStrategy::Auto,
+        auth_json: r#"{"accessToken":"kiro-upstream-token","machineId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#.to_string(),
+        profile_arn: Some("arn:aws:kiro:test".to_string()),
+        api_region: "us-east-1".to_string(),
+        request_validation_enabled: true,
+        cache_estimation_enabled: true,
+        zero_cache_debug_enabled: false,
+        full_request_logging_enabled: false,
+        remote_media_resolution_enabled: false,
+        latency_routing_enabled: true,
+        protected_content_validation_enabled: false,
+        model_name_map_json: "{}".to_string(),
+        cache_kmodels_json: llm_access_core::store::default_kiro_cache_kmodels_json(),
+        cache_policy_json: llm_access_core::store::default_kiro_cache_policy_json(),
+        context_usage_min_request_tokens:
+            llm_access_core::store::DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
+        compact_trigger_tokens: llm_access_core::store::DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS,
+        prefix_cache_mode: "formula".to_string(),
+        prefix_cache_max_tokens: 100_000,
+        prefix_cache_entry_ttl_seconds: 3600,
+        conversation_anchor_max_entries: 1024,
+        conversation_anchor_ttl_seconds: 3600,
+        billable_model_multipliers_json:
+            llm_access_core::store::default_kiro_billable_model_multipliers_json(),
+        request_max_concurrency: None,
+        request_min_start_interval_ms: None,
+        account_request_max_concurrency: None,
+        account_request_min_start_interval_ms: None,
+        proxy: None,
+        routing_identity: "kiro-a".to_string(),
+        cached_status: Some("ready".to_string()),
+        cached_remaining_credits: Some(100.0),
+        cached_balance: Some(llm_access_core::store::AdminKiroBalanceView {
+            current_usage: 0.0,
+            usage_limit: 100.0,
+            remaining: 100.0,
+            next_reset_at: None,
+            subscription_title: None,
+            user_id: Some("kiro-a".to_string()),
+        }),
+        cached_cache: Some(llm_access_core::store::AdminKiroCacheView {
+            status: "ready".to_string(),
+            refresh_interval_seconds: 300,
+            last_checked_at: Some(1),
+            last_success_at: Some(1),
+            error_message: None,
+        }),
+        status_refresh_interval_seconds: 300,
+        minimum_remaining_credits_before_block: 0.0,
+    }
 }
 
 fn static_kiro_route_with_auth_method_and_provider(
@@ -5679,6 +5690,169 @@ async fn kiro_dispatch_non_stream_messages_normalize_reasoning_signature() {
         .is_some_and(|signature| signature.len() >= 900));
     assert_eq!(body["content"][1]["type"], "text");
     assert_eq!(body["content"][1]["text"], "最终答案");
+}
+
+#[tokio::test]
+async fn kiro_dispatch_rejects_tampered_thinking_when_protected_content_validation_enabled() {
+    let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("kiro upstream env lock");
+    std::env::set_var("KIRO_THINKING_SIGNATURE_SECRET", "server-secret");
+    let signature = protected_thinking_signature(
+        "claude-opus-4-8",
+        "private reasoning",
+        "key-1",
+        "server-secret",
+    );
+    let body = json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 128,
+        "messages": [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "changed reasoning",
+                    "signature": signature
+                }
+            ]},
+            {"role": "user", "content": "continue"}
+        ]
+    });
+    let state = super::ProviderState::new(Arc::new(TestStore), protected_kiro_route_store());
+    let response = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/api/kiro-gateway/v1/messages")
+            .header("x-api-key", "valid-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request"),
+    )
+    .await;
+    std::env::remove_var("KIRO_THINKING_SIGNATURE_SECRET");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(response.headers().get("x-amzn-errortype").is_none());
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let body = serde_json::from_slice::<serde_json::Value>(&body).expect("json response");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("Bedrock"));
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("ValidationException"));
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("invalid thinking signature"));
+}
+
+#[tokio::test]
+async fn kiro_dispatch_rejects_encrypted_content_when_protected_content_validation_enabled() {
+    let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("kiro upstream env lock");
+    std::env::set_var("KIRO_THINKING_SIGNATURE_SECRET", "server-secret");
+    let body = json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 128,
+        "messages": [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": [
+                {
+                    "type": "text",
+                    "text": "answer",
+                    "encrypted_content": "opaque"
+                }
+            ]},
+            {"role": "user", "content": "continue"}
+        ]
+    });
+    let state = super::ProviderState::new(Arc::new(TestStore), protected_kiro_route_store());
+    let response = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/api/kiro-gateway/v1/messages")
+            .header("x-api-key", "valid-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request"),
+    )
+    .await;
+    std::env::remove_var("KIRO_THINKING_SIGNATURE_SECRET");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(response.headers().get("x-amzn-errortype").is_none());
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let body = serde_json::from_slice::<serde_json::Value>(&body).expect("json response");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("Bedrock"));
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("ValidationException"));
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("encrypted_content"));
+}
+
+#[tokio::test]
+async fn kiro_dispatch_reports_missing_protected_secret_as_anthropic_error_with_bedrock_message() {
+    let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("kiro upstream env lock");
+    std::env::remove_var("KIRO_THINKING_SIGNATURE_SECRET");
+    let body = json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 128,
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+    let state = super::ProviderState::new(Arc::new(TestStore), protected_kiro_route_store());
+    let response = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/api/kiro-gateway/v1/messages")
+            .header("x-api-key", "valid-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request"),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(response.headers().get("x-amzn-errortype").is_none());
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let body = serde_json::from_slice::<serde_json::Value>(&body).expect("json response");
+    assert_eq!(body["error"]["type"], "api_error");
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("Bedrock"));
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("InternalServerException"));
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("protected content validation"));
 }
 
 #[tokio::test]

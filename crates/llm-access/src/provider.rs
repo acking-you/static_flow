@@ -121,6 +121,7 @@ const DEFAULT_PROVIDER_CLIENT_POOL_MAX_IDLE_PER_HOST: usize = 4;
 const MAX_PROVIDER_CLIENT_POOL_MAX_IDLE_PER_HOST: usize = 16;
 const CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MIN: Duration = Duration::from_secs(45);
 const CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MAX: Duration = Duration::from_secs(90);
+const KIRO_THINKING_SIGNATURE_SECRET_ENV: &str = "KIRO_THINKING_SIGNATURE_SECRET";
 
 #[derive(Debug, Clone)]
 struct CodexDispatchRuntimeConfig {
@@ -174,6 +175,7 @@ pub struct ProviderState {
     kiro_session_affinity: Arc<KiroSessionAffinity>,
     kiro_latency_ranker: Arc<KiroLatencyRanker>,
     request_activity: Arc<RequestActivityTracker>,
+    protected_thinking_signature_secret: Option<Arc<str>>,
 }
 
 /// Runtime dependencies passed from the authenticated provider entrypoint into
@@ -190,6 +192,7 @@ pub struct ProviderDispatchDeps {
     kiro_request_scheduler: Arc<KiroRequestScheduler>,
     kiro_session_affinity: Arc<KiroSessionAffinity>,
     kiro_latency_ranker: Arc<KiroLatencyRanker>,
+    protected_thinking_signature_secret: Option<Arc<str>>,
 }
 
 struct ForcedProxyRouteStore {
@@ -340,6 +343,7 @@ struct KiroResponseContext {
     request_input_tokens: i32,
     thinking_enabled: bool,
     hidden_thinking_enabled: bool,
+    protected_thinking_signature_secret: Option<Arc<str>>,
     tool_name_map: std::collections::HashMap<String, String>,
     structured_output_tool_name: Option<String>,
     response_identity: Option<ResponseModelIdentity>,

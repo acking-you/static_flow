@@ -1277,6 +1277,7 @@ impl AdminKiroAccountStore for PostgresControlRepository {
             full_request_logging_enabled: false,
             remote_media_resolution_enabled: false,
             latency_routing_enabled: true,
+            protected_content_validation_enabled: false,
             model_name_map_json: "{}".to_string(),
             cache_kmodels_json: runtime_config.kiro_cache_kmodels_json,
             cache_policy_json: runtime_config.kiro_cache_policy_json,

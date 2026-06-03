@@ -10,7 +10,9 @@ use axum::{
 };
 use futures_util::StreamExt;
 use llm_access_kiro::{
-    anthropic::stream::{resolve_input_tokens_with_threshold, StreamContext},
+    anthropic::stream::{
+        resolve_input_tokens_with_threshold, StreamContext, ThinkingSignatureContext,
+    },
     cache_sim::AnchorTokenCounts,
     parser::decoder::EventStreamDecoder,
     wire::Event,
@@ -224,6 +226,7 @@ pub fn stream_kiro_upstream_response(
             request_input_tokens,
             thinking_enabled,
             hidden_thinking_enabled,
+            protected_thinking_signature_secret,
             tool_name_map,
             structured_output_tool_name,
             response_identity,
@@ -236,6 +239,8 @@ pub fn stream_kiro_upstream_response(
             _account_permit,
         } = ctx;
         let stream_model = model.clone();
+        let thinking_signature_context = protected_thinking_signature_secret
+            .map(|secret| ThinkingSignatureContext::new(key.key_id.clone(), secret));
         let context_usage_min_request_tokens = route.context_usage_min_request_tokens;
         let mut guard = KiroStreamRecordGuard {
             control_store,
@@ -255,6 +260,7 @@ pub fn stream_kiro_upstream_response(
                 structured_output_tool_name,
             )
             .with_context_usage_min_request_tokens(context_usage_min_request_tokens)
+            .with_thinking_signature_context(thinking_signature_context)
             .with_response_identity(response_identity),
             state: StreamRecordState::Pending,
             record_committed: false,
@@ -444,6 +450,11 @@ pub async fn non_stream_kiro_response(
         ctx.structured_output_tool_name.clone(),
     )
     .with_context_usage_min_request_tokens(ctx.route.context_usage_min_request_tokens)
+    .with_thinking_signature_context(
+        ctx.protected_thinking_signature_secret
+            .clone()
+            .map(|secret| ThinkingSignatureContext::new(ctx.key.key_id.clone(), secret)),
+    )
     .with_response_identity(ctx.response_identity.clone());
     for event in &events {
         let _ = stream_ctx.process_kiro_event(event);

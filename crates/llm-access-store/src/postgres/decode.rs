@@ -111,6 +111,9 @@ fn decode_key_bundle(row: &PgRow) -> anyhow::Result<KeyBundle> {
             kiro_latency_routing_enabled: row
                 .get_optional_bool("kiro_latency_routing_enabled")
                 .unwrap_or(true),
+            kiro_protected_content_validation_enabled: row
+                .get_optional_bool("kiro_protected_content_validation_enabled")
+                .unwrap_or(false),
             kiro_cache_policy_override_json: row.get(24),
             kiro_billable_model_multipliers_override_json: row.get(25),
         },
@@ -173,6 +176,9 @@ pub fn admin_key_from_bundle(bundle: &KeyBundle) -> AdminKey {
         kiro_full_request_logging_enabled: bundle.route.kiro_full_request_logging_enabled,
         kiro_remote_media_resolution_enabled: bundle.route.kiro_remote_media_resolution_enabled,
         kiro_latency_routing_enabled: bundle.route.kiro_latency_routing_enabled,
+        kiro_protected_content_validation_enabled: bundle
+            .route
+            .kiro_protected_content_validation_enabled,
         kiro_cache_policy_override_json: bundle.route.kiro_cache_policy_override_json.clone(),
         kiro_billable_model_multipliers_override_json: bundle
             .route

@@ -481,6 +481,9 @@ impl PostgresControlRepository {
             full_request_logging_enabled: bundle.route.kiro_full_request_logging_enabled,
             remote_media_resolution_enabled: bundle.route.kiro_remote_media_resolution_enabled,
             latency_routing_enabled: bundle.route.kiro_latency_routing_enabled,
+            protected_content_validation_enabled: bundle
+                .route
+                .kiro_protected_content_validation_enabled,
             model_name_map_json: bundle
                 .route
                 .model_name_map_json

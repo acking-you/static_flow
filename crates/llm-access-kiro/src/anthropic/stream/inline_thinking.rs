@@ -6,7 +6,7 @@
 
 use serde_json::json;
 
-use super::signature::synthetic_thinking_signature;
+use super::signature::{synthetic_thinking_signature, ThinkingSignatureContext};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum InlineThinkingBlock {
@@ -19,14 +19,33 @@ pub fn build_inline_thinking_content_blocks(
     model: &str,
     thinking_enabled: bool,
 ) -> Vec<serde_json::Value> {
+    build_inline_thinking_content_blocks_with_signature_context(
+        content,
+        model,
+        thinking_enabled,
+        None,
+    )
+}
+
+pub fn build_inline_thinking_content_blocks_with_signature_context(
+    content: &str,
+    model: &str,
+    thinking_enabled: bool,
+    signature_context: Option<&ThinkingSignatureContext>,
+) -> Vec<serde_json::Value> {
     let mut blocks = Vec::new();
     for block in split_inline_thinking_content(content, thinking_enabled) {
         match block {
-            InlineThinkingBlock::Thinking(thinking) => blocks.push(json!({
-                "type": "thinking",
-                "thinking": thinking,
-                "signature": synthetic_thinking_signature(model, &thinking),
-            })),
+            InlineThinkingBlock::Thinking(thinking) => {
+                let signature = signature_context
+                    .map(|context| context.signature(model, &thinking))
+                    .unwrap_or_else(|| synthetic_thinking_signature(model, &thinking));
+                blocks.push(json!({
+                    "type": "thinking",
+                    "thinking": thinking,
+                    "signature": signature,
+                }));
+            },
             InlineThinkingBlock::Text(text) => {
                 if !text.is_empty() {
                     blocks.push(json!({"type": "text", "text": text}));

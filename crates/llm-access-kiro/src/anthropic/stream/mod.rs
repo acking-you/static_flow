@@ -21,7 +21,10 @@ mod state;
 mod usage;
 
 pub use context::{BufferedStreamContext, StreamContext};
-pub use inline_thinking::build_inline_thinking_content_blocks;
+pub use inline_thinking::{build_inline_thinking_content_blocks, find_real_thinking_start_tag};
+pub use signature::{
+    protected_thinking_signature, verify_protected_thinking_signature, ThinkingSignatureContext,
+};
 pub use sse_event::SseEvent;
 pub use state::SseStateManager;
 pub use usage::{
