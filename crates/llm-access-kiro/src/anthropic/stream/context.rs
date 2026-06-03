@@ -1100,10 +1100,12 @@ mod tests {
         BufferedStreamContext, ResponseModelIdentity, SseEvent, StreamContext,
     };
     use crate::{
-        anthropic::stream::signature::{
-            THINKING_SIGNATURE_BODY_MIN_LEN, THINKING_SIGNATURE_HEADER_BODY_LEN,
-            THINKING_SIGNATURE_HEADER_KIND, THINKING_SIGNATURE_HEADER_MODE,
-            THINKING_SIGNATURE_HEADER_NONCE_LEN, THINKING_SIGNATURE_HEADER_PROOF_LEN,
+        anthropic::{
+            converter::ResponseIdentityKind,
+            stream::signature::{
+                THINKING_SIGNATURE_HEADER_BODY_LEN, THINKING_SIGNATURE_HEADER_MODE,
+                THINKING_SIGNATURE_HEADER_NONCE_LEN, THINKING_SIGNATURE_HEADER_PROOF_LEN,
+            },
         },
         parser::{
             frame::Frame,
@@ -1182,9 +1184,7 @@ mod tests {
         (varints, bytes)
     }
 
-    fn assert_claude_shaped_signature(signature: &str, expected_model: &str) {
-        assert!(signature.len() >= 900);
-
+    fn assert_bytecat_shaped_signature(signature: &str, expected_model: &str) -> usize {
         let decoded = STANDARD
             .decode(signature.as_bytes())
             .expect("signature should be valid base64");
@@ -1199,17 +1199,13 @@ mod tests {
         let payload = &outer_payloads[0];
         let (inner_varints, inner_bytes) = parse_proto_fields(payload);
         assert!(inner_varints.is_empty());
-        assert!(payload.len() >= 791);
 
         let header = inner_bytes
             .get(&1)
             .and_then(|values| values.first())
             .expect("signature payload should contain the header block");
         let (header_varints, header_bytes) = parse_proto_fields(header);
-        assert_eq!(
-            header_varints.get(&1).map(Vec::as_slice),
-            Some(&[THINKING_SIGNATURE_HEADER_KIND][..])
-        );
+        assert_eq!(header_varints.get(&1).map(Vec::as_slice), Some(&[14][..]));
         assert_eq!(
             header_bytes.get(&6).map(|values| values[0].as_slice()),
             Some(expected_model.as_bytes())
@@ -1235,13 +1231,13 @@ mod tests {
             Some(THINKING_SIGNATURE_HEADER_PROOF_LEN)
         );
         assert_eq!(header_varints.get(&7).map(Vec::as_slice), Some(&[0][..]));
-        assert!(
-            inner_bytes
-                .get(&5)
-                .map(|values| values[0].len())
-                .unwrap_or_default()
-                >= THINKING_SIGNATURE_BODY_MIN_LEN
-        );
+        assert_eq!(header_bytes.get(&8).map(|values| values[0].len()), Some(8));
+        let body_len = inner_bytes
+            .get(&5)
+            .map(|values| values[0].len())
+            .expect("signature payload should contain field 5");
+        assert!(matches!(body_len, 140 | 425), "unexpected signature body length: {body_len}");
+        body_len
     }
 
     #[test]
@@ -1258,7 +1254,7 @@ mod tests {
         let signature = blocks[0]["signature"]
             .as_str()
             .expect("thinking block should include signature");
-        assert_claude_shaped_signature(signature, "claude-opus-4-6");
+        assert_bytecat_shaped_signature(signature, "claude-opus-4-6");
         assert_eq!(blocks[1], json!({"type": "text", "text": "beta"}));
     }
 
@@ -1460,7 +1456,10 @@ mod tests {
             None,
             ResponseModelIdentity {
                 model_name: "Claude Opus 4.7".to_string(),
+                model_short_name: "Opus 4.7".to_string(),
                 model_id: "claude-opus-4-7".to_string(),
+                kind: ResponseIdentityKind::ModelOnly,
+                repo_name_hint: None,
             },
         );
 
@@ -1489,7 +1488,10 @@ mod tests {
             None,
             ResponseModelIdentity {
                 model_name: "Claude Opus 4.8".to_string(),
+                model_short_name: "Opus 4.8".to_string(),
                 model_id: "claude-opus-4-8".to_string(),
+                kind: ResponseIdentityKind::ModelOnly,
+                repo_name_hint: None,
             },
         );
         let _ = ctx.generate_initial_events();
@@ -1507,10 +1509,13 @@ mod tests {
                     .flatten()
             })
             .expect("thinking identity response should carry a signature");
-        assert_claude_shaped_signature(signature, "claude-opus-4-8");
+        assert_bytecat_shaped_signature(signature, "claude-opus-4-8");
         let thinking = collect_delta_text(&final_events, "thinking_delta", "thinking");
-        assert!(thinking.contains("Claude Opus 4.8"));
-        assert!(thinking.contains("claude-opus-4-8"));
+        assert_eq!(
+            thinking,
+            " The user is asking me to identify myself in Chinese, and they want an honest \
+             answer. I should respond directly and truthfully about who I am."
+        );
         assert!(!thinking.contains("Kiro"));
         let text = collect_delta_text(&final_events, "text_delta", "text");
         assert!(text.contains("Claude Opus 4.8"));
@@ -1532,7 +1537,13 @@ mod tests {
                 None,
                 ResponseModelIdentity {
                     model_name: model_name.to_string(),
+                    model_short_name: model_name
+                        .strip_prefix("Claude ")
+                        .unwrap_or(model_name)
+                        .to_string(),
                     model_id: model_id.to_string(),
+                    kind: ResponseIdentityKind::ModelOnly,
+                    repo_name_hint: None,
                 },
             );
             let _ = ctx.generate_initial_events();
@@ -1552,8 +1563,11 @@ mod tests {
             events.extend(ctx.generate_final_events());
 
             let thinking = collect_delta_text(&events, "thinking_delta", "thinking");
-            assert!(thinking.contains(model_name));
-            assert!(thinking.contains(model_id));
+            assert_eq!(
+                thinking,
+                " The user is asking me to identify myself in Chinese, and they want an honest \
+                 answer. I should respond directly and truthfully about who I am."
+            );
             assert!(!thinking.contains("Kiro"));
             assert!(!thinking.contains("identity conflict"));
 
@@ -1571,7 +1585,7 @@ mod tests {
                         .flatten()
                 })
                 .expect("thinking identity response should carry a signature");
-            assert_claude_shaped_signature(signature, model_id);
+            assert_bytecat_shaped_signature(signature, model_id);
 
             let blocks = ctx.final_content_blocks();
             assert_eq!(blocks[0]["type"], "thinking");
@@ -1625,7 +1639,7 @@ mod tests {
         let signature = events[signature_pos].data["delta"]["signature"]
             .as_str()
             .expect("signature should be a string");
-        assert_claude_shaped_signature(signature, "claude-opus-4-6");
+        assert_bytecat_shaped_signature(signature, "claude-opus-4-6");
     }
 
     #[test]
@@ -1670,7 +1684,7 @@ mod tests {
             })
             .expect("signature delta should exist");
         assert_ne!(signature, "upstream-signature-47");
-        assert_claude_shaped_signature(signature, "claude-opus-4-7");
+        assert_bytecat_shaped_signature(signature, "claude-opus-4-7");
         assert!(events.iter().any(|event| {
             event.event == "content_block_delta"
                 && event.data["delta"]["type"] == "text_delta"
@@ -1680,7 +1694,7 @@ mod tests {
         let blocks = ctx.final_content_blocks();
         assert_eq!(blocks[0]["type"], "thinking");
         assert_eq!(blocks[0]["thinking"], "先想一步");
-        assert_claude_shaped_signature(
+        assert_bytecat_shaped_signature(
             blocks[0]["signature"]
                 .as_str()
                 .expect("signature should be string"),
@@ -1688,6 +1702,58 @@ mod tests {
         );
         assert_eq!(blocks[1]["type"], "text");
         assert_eq!(blocks[1]["text"], "最终答案");
+    }
+
+    #[test]
+    fn reasoning_content_preserves_long_upstream_chunks_while_capping_signature_body() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-7", 1, true, HashMap::new(), None);
+        let _ = ctx.generate_initial_events();
+        let first_chunk = "alpha ".repeat(36);
+        let second_chunk = "beta ".repeat(24);
+
+        let mut events = ctx.process_kiro_event(&parse_kiro_event(
+            "reasoningContentEvent",
+            json!({"text": first_chunk}),
+        ));
+        events.extend(ctx.process_kiro_event(&parse_kiro_event(
+            "reasoningContentEvent",
+            json!({"text": second_chunk}),
+        )));
+        events.extend(ctx.process_kiro_event(&parse_kiro_event(
+            "reasoningContentEvent",
+            json!({"signature":"upstream-signature-47"}),
+        )));
+
+        let thinking_chunks = events
+            .iter()
+            .filter(|event| {
+                event.event == "content_block_delta"
+                    && event.data["delta"]["type"] == "thinking_delta"
+            })
+            .map(|event| {
+                event.data["delta"]["thinking"]
+                    .as_str()
+                    .expect("thinking should be string")
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(thinking_chunks, vec!["alpha ".repeat(36), "beta ".repeat(24)]);
+
+        let signature = events
+            .iter()
+            .find_map(|event| {
+                (event.event == "content_block_delta"
+                    && event.data["delta"]["type"] == "signature_delta")
+                    .then(|| event.data["delta"]["signature"].as_str())
+                    .flatten()
+            })
+            .expect("signature delta should exist");
+        let body_len = assert_bytecat_shaped_signature(signature, "claude-opus-4-7");
+        assert_eq!(body_len, 425);
+
+        let blocks = ctx.final_content_blocks();
+        assert_eq!(blocks[0]["thinking"], "alpha ".repeat(36) + &"beta ".repeat(24));
     }
 
     #[test]
@@ -1713,7 +1779,7 @@ mod tests {
             })
             .expect("text should still be emitted");
         assert!(signature_pos < text_pos);
-        assert_claude_shaped_signature(
+        assert_bytecat_shaped_signature(
             events[signature_pos].data["delta"]["signature"]
                 .as_str()
                 .expect("signature should be string"),
@@ -1771,11 +1837,11 @@ mod tests {
                     .flatten()
             })
             .expect("empty thinking response should still carry a signature");
-        assert_claude_shaped_signature(signature, "claude-opus-4-8");
+        assert_bytecat_shaped_signature(signature, "claude-opus-4-8");
 
         let blocks = ctx.final_content_blocks();
         assert_eq!(blocks[0]["type"], "thinking");
-        assert_claude_shaped_signature(
+        assert_bytecat_shaped_signature(
             blocks[0]["signature"]
                 .as_str()
                 .expect("signature should be string"),
@@ -1805,7 +1871,7 @@ mod tests {
     #[test]
     fn synthetic_signature_matches_current_claude_code_field_layout() {
         let signature = synthetic_thinking_signature("claude-opus-4-6", "reasoned output");
-        assert_claude_shaped_signature(&signature, "claude-opus-4-6");
+        assert_bytecat_shaped_signature(&signature, "claude-opus-4-6");
     }
 
     #[test]

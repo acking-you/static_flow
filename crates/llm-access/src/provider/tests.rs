@@ -5687,7 +5687,7 @@ async fn kiro_dispatch_non_stream_messages_normalize_reasoning_signature() {
     assert_ne!(body["content"][0]["signature"], "upstream-signature-47");
     assert!(body["content"][0]["signature"]
         .as_str()
-        .is_some_and(|signature| signature.len() >= 900));
+        .is_some_and(|signature| signature.len() == 436));
     assert_eq!(body["content"][1]["type"], "text");
     assert_eq!(body["content"][1]["text"], "最终答案");
 }

@@ -2,11 +2,15 @@
 //! and stripping volatile Claude Code billing headers from system text.
 
 use super::{
-    ResponseModelIdentity, CLAUDE_AGENT_SDK_SYSTEM_IDENTITY_LINE,
+    ResponseIdentityKind, ResponseModelIdentity, CLAUDE_AGENT_SDK_SYSTEM_IDENTITY_LINE,
     CLAUDE_CODE_BILLING_HEADER_PREFIX, CLAUDE_CODE_CLI_SYSTEM_IDENTITY_LINE,
     GENERIC_ANTHROPIC_IDENTITY_OVERRIDE,
 };
 use crate::anthropic::types::MessagesRequest;
+
+const MODEL_IDENTITY_PREFIX: &str = "You are powered by the model named ";
+const MODEL_IDENTITY_DELIMITER: &str = ". The exact model ID is ";
+const CLAUDE_CODE_MEMORY_PATH_MARKER: &str = "/.claude/projects/";
 
 fn requested_model_identity_id(model: &str) -> &str {
     model.strip_suffix("-thinking").unwrap_or(model)
@@ -24,19 +28,131 @@ fn requested_model_identity_name(model: &str) -> Option<&'static str> {
     }
 }
 
-fn response_model_identity(model: &str) -> Option<ResponseModelIdentity> {
+fn build_response_identity(
+    model_short_name: impl Into<String>,
+    model_id: impl Into<String>,
+) -> ResponseModelIdentity {
+    let model_short_name = model_short_name.into();
+    let model_name = if model_short_name.starts_with("Claude ") {
+        model_short_name.clone()
+    } else {
+        format!("Claude {model_short_name}")
+    };
+    ResponseModelIdentity {
+        model_name,
+        model_short_name: model_short_name
+            .strip_prefix("Claude ")
+            .unwrap_or(&model_short_name)
+            .to_string(),
+        model_id: model_id.into(),
+        kind: ResponseIdentityKind::ModelOnly,
+        repo_name_hint: None,
+    }
+}
+
+fn requested_response_identity(model: &str) -> Option<ResponseModelIdentity> {
     let model_name = requested_model_identity_name(model)?;
-    Some(ResponseModelIdentity {
-        model_name: format!("Claude {model_name}"),
-        model_id: requested_model_identity_id(model).to_string(),
+    Some(build_response_identity(model_name, requested_model_identity_id(model)))
+}
+
+fn cleaned_request_system_text(req: &MessagesRequest) -> Option<String> {
+    req.system
+        .as_ref()
+        .map(|system| {
+            system
+                .iter()
+                .map(|message| strip_volatile_claude_code_billing_header(message.text.clone()))
+                .filter(|text| !text.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .filter(|content| !content.is_empty())
+}
+
+fn has_claude_code_identity(system_text: &str) -> bool {
+    system_text.lines().map(str::trim_start).any(|line| {
+        line == CLAUDE_CODE_CLI_SYSTEM_IDENTITY_LINE
+            || line == CLAUDE_AGENT_SDK_SYSTEM_IDENTITY_LINE
     })
 }
 
-pub fn response_identity_for_current_turn(
-    req: &MessagesRequest,
-    current_content: &str,
-) -> Option<ResponseModelIdentity> {
-    is_model_identity_probe(current_content).then(|| response_model_identity(&req.model))?
+fn parse_prompt_model_identity(system_text: &str) -> Option<ResponseModelIdentity> {
+    let line = system_text.lines().find_map(|line| {
+        let trimmed = line.trim();
+        trimmed
+            .contains(MODEL_IDENTITY_PREFIX)
+            .then_some(trimmed)
+            .filter(|candidate| candidate.contains(MODEL_IDENTITY_DELIMITER))
+    })?;
+    let prefix_start = line.find(MODEL_IDENTITY_PREFIX)? + MODEL_IDENTITY_PREFIX.len();
+    let remainder = &line[prefix_start..];
+    let delimiter_index = remainder.find(MODEL_IDENTITY_DELIMITER)?;
+    let short_name = remainder[..delimiter_index].trim();
+    let model_id = remainder[delimiter_index + MODEL_IDENTITY_DELIMITER.len()..]
+        .trim()
+        .trim_end_matches('.');
+    if model_id.is_empty() || short_name.is_empty() {
+        return None;
+    }
+    let normalized_short_name = requested_model_identity_name(model_id).unwrap_or(short_name);
+    Some(build_response_identity(normalized_short_name, model_id))
+}
+
+fn primary_workdir_basename(system_text: &str) -> Option<&str> {
+    let line = system_text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("- Primary working directory: "))?;
+    line.rsplit('/').find(|segment| !segment.is_empty())
+}
+
+fn extract_repo_name_hint(system_text: &str) -> Option<String> {
+    let slug_start = system_text.find(CLAUDE_CODE_MEMORY_PATH_MARKER)?;
+    let slug_remainder = &system_text[slug_start + CLAUDE_CODE_MEMORY_PATH_MARKER.len()..];
+    let slug_end = slug_remainder.find("/memory/")?;
+    let slug = slug_remainder[..slug_end].trim_matches('`');
+    let workdir_basename = primary_workdir_basename(system_text)?;
+    let marker = format!("{workdir_basename}-");
+    let suffix = slug
+        .rfind(&marker)
+        .map(|index| &slug[index + marker.len()..])?;
+    (!suffix.is_empty()).then_some(suffix.to_string())
+}
+
+fn is_multi_identity_probe_zh(content: &str) -> bool {
+    content.contains("多重身份")
+        && (content.contains("你是谁")
+            || content.contains("不要隐瞒")
+            || content.contains("不要骗我"))
+}
+
+fn is_multi_identity_probe_en(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    lower.contains("multiple identities")
+        && (lower.contains("who are you")
+            || lower.contains("do not hide anything")
+            || lower.contains("don't hide anything"))
+}
+
+fn is_conflict_probe_zh(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    let mentions_products = ["kiro", "warp", "windsurf", "0z", "sn", "antigravity"]
+        .iter()
+        .any(|name| lower.contains(name));
+    content.contains("身份冲突")
+        || content.contains("包含你的thinking")
+        || (content.contains("多重身份") && content.contains("thinking"))
+        || (mentions_products && (content.contains("那个平台") || content.contains("平台中")))
+}
+
+fn is_conflict_probe_en(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    let mentions_products = ["kiro", "warp", "windsurf", "0z", "sn", "antigravity"]
+        .iter()
+        .any(|name| lower.contains(name));
+    lower.contains("identity conflict")
+        || lower.contains("include your thinking")
+        || (lower.contains("multiple identities") && lower.contains("thinking"))
+        || (mentions_products && lower.contains("platform"))
 }
 
 fn is_model_identity_probe(content: &str) -> bool {
@@ -70,8 +186,52 @@ fn is_model_identity_probe(content: &str) -> bool {
     asks_identity || asks_model_identity
 }
 
-pub fn anthropic_identity_override(requested_model: &str) -> String {
-    let Some(identity) = response_model_identity(requested_model) else {
+pub fn effective_response_identity_for_request(
+    req: &MessagesRequest,
+) -> Option<ResponseModelIdentity> {
+    let system_text = cleaned_request_system_text(req);
+    let mut identity = match system_text
+        .as_deref()
+        .filter(|text| has_claude_code_identity(text))
+        .and_then(parse_prompt_model_identity)
+    {
+        Some(identity) => identity,
+        None => requested_response_identity(&req.model)?,
+    };
+    identity.repo_name_hint = system_text
+        .as_deref()
+        .and_then(extract_repo_name_hint)
+        .or(identity.repo_name_hint);
+    Some(identity)
+}
+
+pub fn response_identity_for_current_turn(
+    req: &MessagesRequest,
+    current_content: &str,
+) -> Option<ResponseModelIdentity> {
+    let system_text = cleaned_request_system_text(req);
+    let has_claude_code_prompt = system_text.as_deref().is_some_and(has_claude_code_identity);
+    let kind = if has_claude_code_prompt && is_conflict_probe_zh(current_content) {
+        Some(ResponseIdentityKind::ConflictJsonZh)
+    } else if has_claude_code_prompt && is_conflict_probe_en(current_content) {
+        Some(ResponseIdentityKind::ConflictJsonEn)
+    } else if has_claude_code_prompt && is_multi_identity_probe_zh(current_content) {
+        Some(ResponseIdentityKind::MultiIdentityZh)
+    } else if has_claude_code_prompt && is_multi_identity_probe_en(current_content) {
+        Some(ResponseIdentityKind::MultiIdentityEn)
+    } else if is_model_identity_probe(current_content) {
+        Some(ResponseIdentityKind::ModelOnly)
+    } else {
+        None
+    }?;
+
+    let mut identity = effective_response_identity_for_request(req)?;
+    identity.kind = kind;
+    Some(identity)
+}
+
+pub fn anthropic_identity_override(identity: Option<&ResponseModelIdentity>) -> String {
+    let Some(identity) = identity else {
         return GENERIC_ANTHROPIC_IDENTITY_OVERRIDE.to_string();
     };
     format!(
@@ -85,18 +245,20 @@ pub fn anthropic_identity_override(requested_model: &str) -> String {
     )
 }
 
-pub fn normalize_claude_code_model_identity(content: String, requested_model: &str) -> String {
-    let Some(model_name) = requested_model_identity_name(requested_model) else {
+pub fn normalize_claude_code_model_identity(
+    content: String,
+    identity: Option<&ResponseModelIdentity>,
+) -> String {
+    let Some(identity) = identity else {
         return content;
     };
-    let model_id = requested_model_identity_id(requested_model);
     let replacement = format!(
-        "You are powered by the model named {model_name}. The exact model ID is {model_id}."
+        "You are powered by the model named {}. The exact model ID is {}.",
+        identity.model_short_name, identity.model_id
     );
     let has_existing_model_identity = content.lines().any(|line| {
         let trimmed = line.trim_start();
-        trimmed.contains("You are powered by the model named")
-            && trimmed.contains("The exact model ID is")
+        trimmed.contains(MODEL_IDENTITY_PREFIX) && trimmed.contains(MODEL_IDENTITY_DELIMITER)
     });
     let mut replaced_existing = false;
     let mut inserted_after_identity = false;
@@ -104,8 +266,7 @@ pub fn normalize_claude_code_model_identity(content: String, requested_model: &s
         .lines()
         .map(|line| {
             let trimmed = line.trim_start();
-            if trimmed.contains("You are powered by the model named")
-                && trimmed.contains("The exact model ID is")
+            if trimmed.contains(MODEL_IDENTITY_PREFIX) && trimmed.contains(MODEL_IDENTITY_DELIMITER)
             {
                 replaced_existing = true;
                 let indent = &line[..line.len() - trimmed.len()];

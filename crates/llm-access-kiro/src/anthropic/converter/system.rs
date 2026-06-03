@@ -3,8 +3,8 @@
 
 use super::{
     identity::{
-        anthropic_identity_override, normalize_claude_code_model_identity,
-        strip_volatile_claude_code_billing_header,
+        anthropic_identity_override, effective_response_identity_for_request,
+        normalize_claude_code_model_identity, strip_volatile_claude_code_billing_header,
     },
     invalid_request,
     tools::structured_output_instruction,
@@ -66,7 +66,8 @@ pub fn build_injected_system_content(
     req: &MessagesRequest,
     structured_output_tool_name: Option<&str>,
 ) -> Option<String> {
-    let identity_override = anthropic_identity_override(&req.model);
+    let identity = effective_response_identity_for_request(req);
+    let identity_override = anthropic_identity_override(identity.as_ref());
     let system_content = req
         .system
         .as_ref()
@@ -79,7 +80,7 @@ pub fn build_injected_system_content(
         })
         .filter(|content| !content.is_empty())
         .map(strip_volatile_claude_code_billing_header)
-        .map(|content| normalize_claude_code_model_identity(content, &req.model))
+        .map(|content| normalize_claude_code_model_identity(content, identity.as_ref()))
         .map(|content| format!("{content}\n{SYSTEM_CHUNKED_POLICY}\n{identity_override}"));
 
     let mut parts = Vec::new();

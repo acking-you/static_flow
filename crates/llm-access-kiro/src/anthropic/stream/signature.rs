@@ -1,9 +1,8 @@
-//! Synthetic Anthropic thinking-signature synthesis.
+//! Anthropic-shaped thinking-signature synthesis.
 //!
 //! Kiro exposes summarized thinking text but not Anthropic's encrypted
 //! signature. This module emits a deterministic protobuf envelope matching the
-//! observed Claude Code field layout. It is synthetic, not cryptographically
-//! valid.
+//! observed Anthropic/Claude Code field layout.
 
 use std::sync::Arc;
 
@@ -17,18 +16,20 @@ const PROTECTED_THINKING_SIGNATURE_DOMAIN: &[u8] =
 const SHA512_BLOCK_LEN: usize = 128;
 const SHA512_OUTPUT_LEN: usize = 64;
 /// Protobuf header field-1 value identifying the signature kind.
-pub const THINKING_SIGNATURE_HEADER_KIND: u64 = 12;
+pub const THINKING_SIGNATURE_HEADER_KIND: u64 = 14;
 /// Protobuf header field-3 value identifying the signature mode.
 pub const THINKING_SIGNATURE_HEADER_MODE: u64 = 2;
 /// Byte length of the header field-5 body block.
 pub const THINKING_SIGNATURE_HEADER_BODY_LEN: usize = 64;
+/// Byte length of the header field-8 trace block.
+pub const THINKING_SIGNATURE_HEADER_TRACE_LEN: usize = 8;
 /// Byte length of the inner nonce fields (2 and 3).
 pub const THINKING_SIGNATURE_HEADER_NONCE_LEN: usize = 12;
 /// Byte length of the inner proof field (4).
 pub const THINKING_SIGNATURE_HEADER_PROOF_LEN: usize = 48;
-/// Minimum byte length of the inner signature body field (5).
-pub const THINKING_SIGNATURE_BODY_MIN_LEN: usize = 619;
-const THINKING_SIGNATURE_BODY_MAX_LEN: usize = 8_192;
+const THINKING_SIGNATURE_BODY_SHORT_LEN: usize = 140;
+const THINKING_SIGNATURE_BODY_LONG_LEN: usize = 425;
+const THINKING_SIGNATURE_BODY_LONG_THRESHOLD: usize = 192;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThinkingSignatureContext {
@@ -178,8 +179,11 @@ fn derive_protected_signature_bytes(
 }
 
 fn signature_body_target_len(thinking: &str) -> usize {
-    let thinking_len = thinking.len();
-    thinking_len.clamp(THINKING_SIGNATURE_BODY_MIN_LEN, THINKING_SIGNATURE_BODY_MAX_LEN)
+    if thinking.len() <= THINKING_SIGNATURE_BODY_LONG_THRESHOLD {
+        THINKING_SIGNATURE_BODY_SHORT_LEN
+    } else {
+        THINKING_SIGNATURE_BODY_LONG_LEN
+    }
 }
 
 fn build_signature_envelope<F>(model: &str, thinking: &str, mut derive: F) -> String
@@ -193,6 +197,9 @@ where
     encode_proto_bytes_field(5, &header_body, &mut header);
     encode_proto_bytes_field(6, model.as_bytes(), &mut header);
     encode_proto_varint_field(7, 0, &mut header);
+    let header_trace =
+        derive(model, thinking, b"header-trace", THINKING_SIGNATURE_HEADER_TRACE_LEN);
+    encode_proto_bytes_field(8, &header_trace, &mut header);
 
     let field_2 = derive(model, thinking, b"field-2", THINKING_SIGNATURE_HEADER_NONCE_LEN);
     let field_3 = derive(model, thinking, b"field-3", THINKING_SIGNATURE_HEADER_NONCE_LEN);
@@ -221,9 +228,9 @@ where
 }
 
 /// Build a deterministic protobuf envelope matching the field layout of recent
-/// Claude Code signatures observed locally:
+/// Anthropic/Claude Code signatures observed locally:
 /// outer field-2 payload + outer field-3=1; inner fields 1/2/3/4/5; header
-/// fields 1=12, 3=2, 5=64-byte body, 6=model string, 7=0.
+/// fields 1=14, 3=2, 5=64-byte body, 6=model string, 7=0, 8=8-byte trace.
 ///
 /// Kiro exposes summarized thinking text but not Anthropic's encrypted
 /// signature. This remains synthetic and is not a cryptographically valid
@@ -234,9 +241,9 @@ pub fn synthetic_thinking_signature(model: &str, thinking: &str) -> String {
     })
 }
 
-/// Build a service-authenticated thinking signature. The output keeps the
-/// existing Claude-shaped envelope, while the bytes are derived from a server
-/// secret and bound to one StaticFlow key id.
+/// Build a service-authenticated thinking signature. The output uses the same
+/// canonical envelope, while the bytes are derived from a server secret and
+/// bound to one StaticFlow key id.
 pub fn protected_thinking_signature(
     model: &str,
     thinking: &str,
