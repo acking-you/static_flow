@@ -41,6 +41,28 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
 
+env_file_has_nonempty_var() {
+  local file="$1"
+  local name="$2"
+  (
+    set -a
+    # shellcheck source=/dev/null
+    source "$file"
+    set +a
+    local value="${!name:-}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    [[ -n "$value" ]]
+  )
+}
+
+require_env_file_var() {
+  local file="$1"
+  local name="$2"
+  local label="$3"
+  env_file_has_nonempty_var "$file" "$name" || fail "$label does not define $name: $file"
+}
+
 manifest_value() {
   local key="$1"
   [[ -f "$MANIFEST" ]] || return 0
@@ -193,20 +215,20 @@ systemctl is-active juicefs-llm-access.service >/dev/null || fail "juicefs-llm-a
 findmnt -T /mnt/llm-access >/dev/null || fail "/mnt/llm-access is not mounted"
 sudo install -d -m 0755 "$BACKUP_DIR"
 if [[ -e "$STAGED_NEON_ENV" ]]; then
-  [[ -r "$STAGED_NEON_ENV" ]] || fail "staged Neon config is not readable: $STAGED_NEON_ENV"
-  grep -q '^LLM_ACCESS_CONTROL_DATABASE_URL=' "$STAGED_NEON_ENV" \
-    || fail "staged Neon config does not define LLM_ACCESS_CONTROL_DATABASE_URL: $STAGED_NEON_ENV"
+  [[ -r "$STAGED_NEON_ENV" ]] || fail "staged llm-access runtime env is not readable: $STAGED_NEON_ENV"
+  require_env_file_var "$STAGED_NEON_ENV" LLM_ACCESS_CONTROL_DATABASE_URL "staged llm-access runtime env"
+  require_env_file_var "$STAGED_NEON_ENV" KIRO_THINKING_SIGNATURE_SECRET "staged llm-access runtime env"
   install -d -m 0755 "$(dirname "$NEON_ENV_PATH")"
   if sudo test -e "$NEON_ENV_PATH"; then
-    log "backing up shared Neon config to $BACKUP_DIR/neon.env.preinstall"
+    log "backing up shared llm-access runtime env to $BACKUP_DIR/neon.env.preinstall"
     sudo cp -a "$NEON_ENV_PATH" "$BACKUP_DIR/neon.env.preinstall"
   fi
-  log "installing staged Neon config to $NEON_ENV_PATH"
+  log "installing staged llm-access runtime env to $NEON_ENV_PATH"
   sudo install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0600 "$STAGED_NEON_ENV" "$NEON_ENV_PATH"
 fi
-sudo test -r "$NEON_ENV_PATH" || fail "missing shared Neon config: $NEON_ENV_PATH"
-sudo grep -q '^LLM_ACCESS_CONTROL_DATABASE_URL=' "$NEON_ENV_PATH" \
-  || fail "shared Neon config does not define LLM_ACCESS_CONTROL_DATABASE_URL: $NEON_ENV_PATH"
+sudo test -r "$NEON_ENV_PATH" || fail "missing shared llm-access runtime env: $NEON_ENV_PATH"
+require_env_file_var "$NEON_ENV_PATH" LLM_ACCESS_CONTROL_DATABASE_URL "shared llm-access runtime env"
+require_env_file_var "$NEON_ENV_PATH" KIRO_THINKING_SIGNATURE_SECRET "shared llm-access runtime env"
 if [[ "$ACTIVATE_TARGET" == "worker" || "$ACTIVATE_TARGET" == "both" ]]; then
   if findmnt -T /mnt/llm-access-usage >/dev/null; then
     log "/mnt/llm-access-usage is mounted before activation"

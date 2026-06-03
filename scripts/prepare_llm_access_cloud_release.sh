@@ -62,6 +62,28 @@ require_var() {
   [[ -n "${!name:-}" ]] || fail "missing required config value: $name in $CONFIG_FILE"
 }
 
+env_file_has_nonempty_var() {
+  local file="$1"
+  local name="$2"
+  (
+    set -a
+    # shellcheck source=/dev/null
+    source "$file"
+    set +a
+    local value="${!name:-}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    [[ -n "$value" ]]
+  )
+}
+
+require_env_file_var() {
+  local file="$1"
+  local name="$2"
+  local label="$3"
+  env_file_has_nonempty_var "$file" "$name" || fail "$label does not define $name: $file"
+}
+
 for cmd in cargo curl df git scp sha256sum ssh; do
   require_cmd "$cmd"
 done
@@ -87,9 +109,9 @@ LOCAL_NEON_ENV_FILE="$(expand_path "$LOCAL_NEON_ENV_FILE")"
 [[ -x "$REMOTE_SCRIPT" ]] || fail "remote activation script is not executable: $REMOTE_SCRIPT"
 [[ -x "$RENDER_SCRIPT" ]] || fail "render script is not executable: $RENDER_SCRIPT"
 [[ -r "$GCP_SSH_KEY" ]] || fail "SSH key is not readable: $GCP_SSH_KEY"
-[[ -r "$LOCAL_NEON_ENV_FILE" ]] || fail "local Neon config is not readable: $LOCAL_NEON_ENV_FILE"
-grep -q '^LLM_ACCESS_CONTROL_DATABASE_URL=' "$LOCAL_NEON_ENV_FILE" \
-  || fail "local Neon config does not define LLM_ACCESS_CONTROL_DATABASE_URL: $LOCAL_NEON_ENV_FILE"
+[[ -r "$LOCAL_NEON_ENV_FILE" ]] || fail "local llm-access runtime env is not readable: $LOCAL_NEON_ENV_FILE"
+require_env_file_var "$LOCAL_NEON_ENV_FILE" LLM_ACCESS_CONTROL_DATABASE_URL "local llm-access runtime env"
+require_env_file_var "$LOCAL_NEON_ENV_FILE" KIRO_THINKING_SIGNATURE_SECRET "local llm-access runtime env"
 
 cd "$ROOT_DIR"
 
@@ -160,6 +182,7 @@ api_binary=llm-access.$RELEASE_ID
 usage_worker_sha256=$WORKER_BIN_SHA
 usage_worker_binary=llm-access-usage-worker.$RELEASE_ID
 control_neon_env=llm-access-neon.env.$RELEASE_ID
+runtime_env=llm-access-neon.env.$RELEASE_ID
 EOF
 
 SSH_OPTS=(-i "$GCP_SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes)
@@ -207,7 +230,7 @@ Prepared llm-access cloud release:
   git_commit: $GIT_COMMIT
   api_sha256: $API_BIN_SHA
   usage_worker_sha256: $WORKER_BIN_SHA
-  local_neon_env: $LOCAL_NEON_ENV_FILE
+  local_runtime_env: $LOCAL_NEON_ENV_FILE
   remote_dir: $REMOTE_RELEASE_DIR
 
 Run this on GCP to activate it:
