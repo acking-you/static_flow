@@ -5,6 +5,7 @@ use std::fmt;
 use serde_json::Value;
 
 use crate::anthropic::{
+    converter::{extract_tool_result_content, web_search_tool_result_text},
     stream::{find_real_thinking_start_tag, verify_protected_thinking_signature},
     types::{Message, MessagesRequest},
 };
@@ -69,15 +70,11 @@ fn validate_message(
         if message.role != "assistant" || block_type != "thinking" {
             continue;
         }
-        let thinking = obj
-            .get("thinking")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| {
-                protected_error(format!(
-                    "message {message_index} thinking block {block_index} is missing thinking"
-                ))
-            })?;
+        let thinking = obj.get("thinking").and_then(Value::as_str).ok_or_else(|| {
+            protected_error(format!(
+                "message {message_index} thinking block {block_index} is missing thinking"
+            ))
+        })?;
         let signature = obj
             .get("signature")
             .and_then(Value::as_str)
@@ -113,6 +110,7 @@ fn reject_raw_assistant_thinking_tags(
                     continue;
                 };
                 if obj.get("type").and_then(Value::as_str) != Some("text") {
+                    reject_raw_thinking_tags_in_normalized_assistant_block(obj, message_index)?;
                     continue;
                 }
                 if let Some(text) = obj.get("text").and_then(Value::as_str) {
@@ -130,6 +128,27 @@ fn reject_raw_thinking_text(text: &str, message_index: usize) -> Result<(), Prot
         return Err(protected_error(format!(
             "message {message_index} contains unsigned thinking tags"
         )));
+    }
+    Ok(())
+}
+
+fn reject_raw_thinking_tags_in_normalized_assistant_block(
+    obj: &serde_json::Map<String, Value>,
+    message_index: usize,
+) -> Result<(), ProtectedContentError> {
+    match obj.get("type").and_then(Value::as_str) {
+        Some("web_search_tool_result") => {
+            if let Some(text) = web_search_tool_result_text(obj) {
+                reject_raw_thinking_text(&text, message_index)?;
+            }
+        },
+        Some("tool_result") => {
+            let text = extract_tool_result_content(&obj.get("content").cloned());
+            if !text.is_empty() {
+                reject_raw_thinking_text(&text, message_index)?;
+            }
+        },
+        _ => {},
     }
     Ok(())
 }
@@ -289,6 +308,70 @@ mod tests {
 
         validate_protected_content(&req, "kiro-key-1", "claude-opus-4-8", "server-secret")
             .expect("gateway web-search history should pass");
+    }
+
+    #[test]
+    fn rejects_raw_thinking_tags_in_gateway_web_search_snippet() {
+        let req = request_with_messages(json!([
+            {"role": "user", "content": "search"},
+            {"role": "assistant", "content": [
+                {
+                    "type": "web_search_tool_result",
+                    "content": [{
+                        "type": "web_search_result",
+                        "title": "result",
+                        "url": "https://example.com",
+                        "encrypted_content": "<thinking>unsigned</thinking>"
+                    }]
+                }
+            ]},
+            {"role": "user", "content": "continue"}
+        ]));
+
+        let err =
+            validate_protected_content(&req, "kiro-key-1", "claude-opus-4-8", "server-secret")
+                .expect_err("web-search thinking tags should fail");
+        assert!(err.to_string().contains("unsigned thinking tags"));
+    }
+
+    #[test]
+    fn rejects_raw_thinking_tags_in_assistant_tool_result_content() {
+        let req = request_with_messages(json!([
+            {"role": "user", "content": "use tool"},
+            {"role": "assistant", "content": [
+                {
+                    "type": "tool_result",
+                    "content": "<thinking>unsigned</thinking>"
+                }
+            ]},
+            {"role": "user", "content": "continue"}
+        ]));
+
+        let err =
+            validate_protected_content(&req, "kiro-key-1", "claude-opus-4-8", "server-secret")
+                .expect_err("tool-result thinking tags should fail");
+        assert!(err.to_string().contains("unsigned thinking tags"));
+    }
+
+    #[test]
+    fn accepts_signed_placeholder_thinking_history() {
+        let signature =
+            protected_thinking_signature("claude-opus-4-8", " ", "kiro-key-1", "server-secret");
+        let req = request_with_messages(json!([
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": [
+                {
+                    "type": "thinking",
+                    "thinking": " ",
+                    "signature": signature
+                },
+                {"type": "text", "text": "answer"}
+            ]},
+            {"role": "user", "content": "continue"}
+        ]));
+
+        validate_protected_content(&req, "kiro-key-1", "claude-opus-4-8", "server-secret")
+            .expect("signed placeholder thinking should pass");
     }
 
     #[test]
