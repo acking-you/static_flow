@@ -144,6 +144,8 @@ pub(crate) struct CachedKiroRequestSnapshot {
     pub remote_media_resolution_enabled: bool,
     #[serde(default = "default_true")]
     pub latency_routing_enabled: bool,
+    #[serde(default)]
+    pub protected_content_validation_enabled: bool,
     pub model_name_map_json: String,
     pub cache_kmodels_json: String,
     pub cache_policy_json: String,

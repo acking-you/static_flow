@@ -14,11 +14,11 @@ use uuid::Uuid;
 
 use super::{
     inline_thinking::{
-        build_inline_thinking_content_blocks, find_real_thinking_end_tag,
+        build_inline_thinking_content_blocks_with_signature_context, find_real_thinking_end_tag,
         find_real_thinking_end_tag_at_buffer_end, find_real_thinking_start_tag,
         strip_inline_thinking_content,
     },
-    signature::synthetic_thinking_signature,
+    signature::{synthetic_thinking_signature, ThinkingSignatureContext},
     sse_event::SseEvent,
     state::SseStateManager,
     usage::{
@@ -85,6 +85,7 @@ pub struct StreamContext {
     open_thinking_content: String,
     completed_thinking_content: Option<String>,
     completed_thinking_signature: Option<String>,
+    thinking_signature_context: Option<ThinkingSignatureContext>,
     hidden_thinking_enabled: bool,
     response_identity: Option<ResponseModelIdentity>,
     response_identity_applied: bool,
@@ -130,6 +131,7 @@ impl StreamContext {
             open_thinking_content: String::new(),
             completed_thinking_content: None,
             completed_thinking_signature: None,
+            thinking_signature_context: None,
             hidden_thinking_enabled: false,
             response_identity: None,
             response_identity_applied: false,
@@ -184,6 +186,14 @@ impl StreamContext {
 
     pub fn with_context_usage_min_request_tokens(mut self, threshold: u64) -> Self {
         self.context_usage_min_request_tokens = threshold;
+        self
+    }
+
+    pub fn with_thinking_signature_context(
+        mut self,
+        context: Option<ThinkingSignatureContext>,
+    ) -> Self {
+        self.thinking_signature_context = context;
         self
     }
 
@@ -250,6 +260,13 @@ impl StreamContext {
             .map(ResponseModelIdentity::canonical_thinking)
     }
 
+    fn thinking_signature(&self, thinking: &str) -> String {
+        self.thinking_signature_context
+            .as_ref()
+            .map(|context| context.signature(&self.model, thinking))
+            .unwrap_or_else(|| synthetic_thinking_signature(&self.model, thinking))
+    }
+
     fn should_synthesize_thinking_block(&self) -> bool {
         self.thinking_enabled
             && !self.structured_output_mode()
@@ -303,7 +320,7 @@ impl StreamContext {
         let assistant_content = self.final_assistant_text();
         if self.thinking_enabled {
             if let Some(thinking) = self.completed_thinking_content.as_ref() {
-                let signature = synthetic_thinking_signature(&self.model, thinking);
+                let signature = self.thinking_signature(thinking);
                 let mut blocks = vec![json!({
                     "type": "thinking",
                     "thinking": thinking,
@@ -319,7 +336,12 @@ impl StreamContext {
             }
         }
 
-        build_inline_thinking_content_blocks(&assistant_content, &self.model, self.thinking_enabled)
+        build_inline_thinking_content_blocks_with_signature_context(
+            &assistant_content,
+            &self.model,
+            self.thinking_enabled,
+            self.thinking_signature_context.as_ref(),
+        )
     }
 
     pub fn create_message_start_event(&self) -> serde_json::Value {
@@ -682,7 +704,7 @@ impl StreamContext {
         };
 
         let thinking = self.open_thinking_content.clone();
-        let signature = synthetic_thinking_signature(&self.model, &thinking);
+        let signature = self.thinking_signature(&thinking);
         self.completed_thinking_content = Some(thinking);
         self.completed_thinking_signature = Some(signature.clone());
         if let Some(event) = self.state_manager.handle_content_block_delta(
@@ -1074,8 +1096,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        build_inline_thinking_content_blocks, synthetic_thinking_signature, BufferedStreamContext,
-        ResponseModelIdentity, SseEvent, StreamContext,
+        super::inline_thinking::build_inline_thinking_content_blocks, synthetic_thinking_signature,
+        BufferedStreamContext, ResponseModelIdentity, SseEvent, StreamContext,
     };
     use crate::{
         anthropic::stream::signature::{

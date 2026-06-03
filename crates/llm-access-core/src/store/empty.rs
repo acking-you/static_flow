@@ -342,6 +342,7 @@ impl AdminKeyStore for EmptyAdminKeyStore {
             kiro_full_request_logging_enabled: false,
             kiro_remote_media_resolution_enabled: false,
             kiro_latency_routing_enabled: true,
+            kiro_protected_content_validation_enabled: false,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
             effective_kiro_cache_policy_json: default_kiro_cache_policy_json(),

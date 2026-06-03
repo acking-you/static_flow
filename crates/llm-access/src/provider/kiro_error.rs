@@ -3,6 +3,8 @@ use std::time::Duration;
 use axum::{body::Bytes, http::StatusCode, response::Response};
 use llm_access_kiro::anthropic::converter::ConversionError;
 
+use super::errors::anthropic_json_error_body;
+
 #[derive(Debug, Clone, Copy)]
 pub(super) enum KiroRouteFailureKind {
     RetryNext,
@@ -131,6 +133,36 @@ pub(super) fn kiro_json_error(status: StatusCode, error_type: &str, message: &st
         status,
         kiro_error_type_for_status(status),
         &kiro_user_visible_message(status, message),
+    )
+}
+
+fn kiro_bedrock_exception_message(exception_type: &str, message: &str) -> String {
+    let exception_type = exception_type.trim();
+    let message = message.trim();
+    if message.is_empty() {
+        return format!("Bedrock {exception_type}");
+    }
+    format!("Bedrock {exception_type}: {message}")
+}
+
+pub(super) fn kiro_bedrock_anthropic_error_body(
+    error_type: &str,
+    exception_type: &str,
+    message: &str,
+) -> String {
+    anthropic_json_error_body(error_type, &kiro_bedrock_exception_message(exception_type, message))
+}
+
+pub(super) fn kiro_bedrock_anthropic_error(
+    status: StatusCode,
+    error_type: &str,
+    exception_type: &str,
+    message: &str,
+) -> Response {
+    super::anthropic_json_error(
+        status,
+        error_type,
+        &kiro_bedrock_exception_message(exception_type, message),
     )
 }
 

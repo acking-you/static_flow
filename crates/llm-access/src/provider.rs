@@ -340,6 +340,7 @@ struct KiroResponseContext {
     request_input_tokens: i32,
     thinking_enabled: bool,
     hidden_thinking_enabled: bool,
+    protected_thinking_signature_secret: Option<String>,
     tool_name_map: std::collections::HashMap<String, String>,
     structured_output_tool_name: Option<String>,
     response_identity: Option<ResponseModelIdentity>,

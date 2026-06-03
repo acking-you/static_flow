@@ -168,6 +168,9 @@ pub struct ProviderKiroRoute {
     pub remote_media_resolution_enabled: bool,
     /// Whether recent Kiro latency metrics may influence route ordering.
     pub latency_routing_enabled: bool,
+    /// Whether client-supplied protected thinking/encrypted content must be
+    /// authenticated by the gateway.
+    pub protected_content_validation_enabled: bool,
     /// JSON object mapping public model names to upstream Kiro model names.
     pub model_name_map_json: String,
     /// Effective Kiro cache k-model JSON for this key.

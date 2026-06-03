@@ -83,6 +83,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "kiro_compact_trigger",
         sql: include_str!("../migrations/postgres/0019_kiro_compact_trigger.sql"),
     },
+    SqlMigration {
+        version: 20,
+        name: "kiro_protected_content_validation",
+        sql: include_str!("../migrations/postgres/0020_kiro_protected_content_validation.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.
@@ -284,5 +289,20 @@ mod tests {
             .sql
             .contains("kiro_context_usage_min_request_tokens"));
         assert!(migration.sql.contains("DEFAULT 15000"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_kiro_protected_content_validation_toggle() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "kiro_protected_content_validation")
+            .expect("kiro protected content validation migration exists");
+
+        assert_eq!(migration.version, 20);
+        assert!(migration
+            .sql
+            .contains("kiro_protected_content_validation_enabled"));
+        assert!(migration.sql.contains("DEFAULT FALSE"));
     }
 }
