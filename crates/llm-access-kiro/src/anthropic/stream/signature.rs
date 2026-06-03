@@ -5,6 +5,8 @@
 //! observed Claude Code field layout. It is synthetic, not cryptographically
 //! valid.
 
+use std::sync::Arc;
+
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::{Digest, Sha512};
 
@@ -30,12 +32,12 @@ const THINKING_SIGNATURE_BODY_MAX_LEN: usize = 8_192;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThinkingSignatureContext {
-    key_id: String,
-    secret: String,
+    key_id: Arc<str>,
+    secret: Arc<str>,
 }
 
 impl ThinkingSignatureContext {
-    pub fn new(key_id: impl Into<String>, secret: impl Into<String>) -> Self {
+    pub fn new(key_id: impl Into<Arc<str>>, secret: impl Into<Arc<str>>) -> Self {
         Self {
             key_id: key_id.into(),
             secret: secret.into(),
@@ -43,7 +45,7 @@ impl ThinkingSignatureContext {
     }
 
     pub fn signature(&self, model: &str, thinking: &str) -> String {
-        protected_thinking_signature(model, thinking, &self.key_id, &self.secret)
+        protected_thinking_signature(model, thinking, self.key_id.as_ref(), self.secret.as_ref())
     }
 }
 
@@ -258,12 +260,12 @@ pub fn verify_protected_thinking_signature(
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    let mut diff = left.len() ^ right.len();
-    let max_len = left.len().max(right.len());
-    for index in 0..max_len {
-        let left_byte = left.get(index).copied().unwrap_or(0);
-        let right_byte = right.get(index).copied().unwrap_or(0);
-        diff |= usize::from(left_byte ^ right_byte);
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (left_byte, right_byte) in left.iter().zip(right.iter()) {
+        diff |= left_byte ^ right_byte;
     }
     diff == 0
 }

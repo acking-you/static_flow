@@ -76,15 +76,6 @@ use super::{
 };
 use crate::kiro_refresh;
 
-const KIRO_THINKING_SIGNATURE_SECRET_ENV: &str = "KIRO_THINKING_SIGNATURE_SECRET";
-
-fn protected_thinking_signature_secret() -> Option<String> {
-    std::env::var(KIRO_THINKING_SIGNATURE_SECRET_ENV)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
 pub async fn dispatch_kiro_proxy(
     key: AuthenticatedKey,
     request: Request<Body>,
@@ -99,6 +90,7 @@ pub async fn dispatch_kiro_proxy(
         kiro_request_scheduler,
         kiro_session_affinity,
         kiro_latency_ranker,
+        protected_thinking_signature_secret,
         ..
     } = deps;
     if request.uri().path() == "/v1/models" {
@@ -241,7 +233,7 @@ pub async fn dispatch_kiro_proxy(
     ) as i32;
     override_kiro_thinking_from_model_name(&mut payload);
     let protected_thinking_signature_secret = if routes[0].protected_content_validation_enabled {
-        let Some(secret) = protected_thinking_signature_secret() else {
+        let Some(secret) = protected_thinking_signature_secret.clone() else {
             return kiro_bedrock_anthropic_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "api_error",
@@ -251,7 +243,7 @@ pub async fn dispatch_kiro_proxy(
             );
         };
         if let Err(err) =
-            validate_protected_content(&payload, &key.key_id, &effective_model, &secret)
+            validate_protected_content(&payload, &key.key_id, &effective_model, secret.as_ref())
         {
             let message = err.to_string();
             let response = kiro_bedrock_anthropic_error(

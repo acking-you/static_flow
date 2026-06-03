@@ -5767,12 +5767,9 @@ async fn kiro_dispatch_rejects_encrypted_content_when_protected_content_validati
             {"role": "user", "content": "hello"},
             {"role": "assistant", "content": [
                 {
-                    "type": "web_search_tool_result",
-                    "content": [{
-                        "type": "web_search_result",
-                        "title": "result",
-                        "encrypted_content": "opaque"
-                    }]
+                    "type": "text",
+                    "text": "answer",
+                    "encrypted_content": "opaque"
                 }
             ]},
             {"role": "user", "content": "continue"}
