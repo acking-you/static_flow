@@ -164,8 +164,7 @@ fn is_conflict_probe_en(content: &str) -> bool {
 }
 
 fn has_platform_identity_intent_zh(content: &str, lower: &str) -> bool {
-    is_model_identity_probe(content)
-        || lower.contains("thinking")
+    lower.contains("thinking")
         || content.contains("身份")
         || content.contains("模型")
         || content.contains("你真实运行")
@@ -173,12 +172,11 @@ fn has_platform_identity_intent_zh(content: &str, lower: &str) -> bool {
         || content.contains("你在哪个平台")
         || content.contains("你是哪个平台")
         || content.contains("那个平台的")
+        || is_model_identity_probe(content)
 }
 
 fn has_platform_identity_intent_en(content: &str, lower: &str) -> bool {
-    is_model_identity_probe(content)
-        || lower.contains("thinking")
-        || lower.contains("identity")
+    (lower.contains("thinking") && lower.contains("you"))
         || lower.contains("multiple identities")
         || ((lower.contains("actual model") || lower.contains("model you use"))
             && lower.contains("you"))
@@ -189,6 +187,7 @@ fn has_platform_identity_intent_en(content: &str, lower: &str) -> bool {
             || lower.contains("run on")
             || lower.contains("running on"))
             && lower.contains("you"))
+        || is_model_identity_probe(content)
 }
 
 fn mentions_conflict_product(lower_content: &str) -> bool {

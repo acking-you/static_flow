@@ -2328,6 +2328,22 @@ mod tests {
     }
 
     #[test]
+    fn convert_request_does_not_treat_identity_platform_task_as_conflict_probe() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!(
+                "Design a Kiro-compatible identity platform for SSO and account provisioning."
+            ),
+        }]);
+        req.model = "claude-opus-4-8".to_string();
+        req.system = Some(cctest_claude_code_system());
+
+        let result = convert_request(&req).expect("conversion should succeed");
+
+        assert!(result.response_identity.is_none());
+    }
+
+    #[test]
     fn convert_request_uses_english_model_only_thinking_for_english_identity_probe() {
         let mut req = base_request(vec![AnthropicMessage {
             role: "user".to_string(),
