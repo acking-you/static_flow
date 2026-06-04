@@ -1901,7 +1901,7 @@ mod tests {
             content: serde_json::json!(
                 "你是谁呀，你认真回答我真实用的什么模型，你真实运行在那个平台中，\
                  是否有多重身份如果有，请你认真考虑你是否是kiro/warp/0z/sn/antigravity/\
-                 等双重身份。包含你的thinking，有没有身份冲突的情况，\
+                 等双重身份。包含你的Thinking，有没有身份冲突的情况，\
                  如果有冲突请写明你是那个平台的."
             ),
         }]);
@@ -1935,6 +1935,25 @@ mod tests {
              等）中看到这段对话，那说明该工具在后端转发到了 \
              Claude，但从我的系统提示视角看，我的身份就是 Claude Code，不存在内部冲突。\"}"
         );
+    }
+
+    #[test]
+    fn convert_request_detects_mixed_case_thinking_in_chinese_conflict_probe() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("请你包含你的Thinking，并说明多重身份相关情况。"),
+        }]);
+        req.model = "claude-opus-4-8".to_string();
+        req.system = Some(cctest_claude_code_system());
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        let response = result
+            .response_identity
+            .as_ref()
+            .expect("response identity should be populated")
+            .canonical_response();
+
+        assert!(response.starts_with("{\"identity_platform\":\"claude_code\""));
     }
 
     #[test]

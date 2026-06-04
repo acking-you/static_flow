@@ -138,10 +138,10 @@ fn is_conflict_probe_zh(content: &str) -> bool {
     let mentions_products = ["kiro", "warp", "windsurf", "0z", "sn", "antigravity"]
         .iter()
         .any(|name| lower.contains(name));
-    content.contains("身份冲突")
-        || content.contains("包含你的thinking")
-        || (content.contains("多重身份") && content.contains("thinking"))
-        || (mentions_products && (content.contains("那个平台") || content.contains("平台中")))
+    lower.contains("身份冲突")
+        || lower.contains("包含你的thinking")
+        || (lower.contains("多重身份") && lower.contains("thinking"))
+        || (mentions_products && (lower.contains("那个平台") || lower.contains("平台中")))
 }
 
 fn is_conflict_probe_en(content: &str) -> bool {
