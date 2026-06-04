@@ -1101,7 +1101,7 @@ mod tests {
     };
     use crate::{
         anthropic::{
-            converter::ResponseIdentityKind,
+            converter::{ResponseIdentityKind, ResponseIdentityLanguage, ResponseIdentityPlatform},
             stream::signature::{
                 THINKING_SIGNATURE_HEADER_BODY_LEN, THINKING_SIGNATURE_HEADER_MODE,
                 THINKING_SIGNATURE_HEADER_NONCE_LEN, THINKING_SIGNATURE_HEADER_PROOF_LEN,
@@ -1459,6 +1459,8 @@ mod tests {
                 model_short_name: "Opus 4.7".to_string(),
                 model_id: "claude-opus-4-7".to_string(),
                 kind: ResponseIdentityKind::ModelOnly,
+                platform: ResponseIdentityPlatform::ClaudeCode,
+                thinking_language: ResponseIdentityLanguage::Chinese,
                 repo_name_hint: None,
             },
         );
@@ -1491,6 +1493,8 @@ mod tests {
                 model_short_name: "Opus 4.8".to_string(),
                 model_id: "claude-opus-4-8".to_string(),
                 kind: ResponseIdentityKind::ModelOnly,
+                platform: ResponseIdentityPlatform::ClaudeCode,
+                thinking_language: ResponseIdentityLanguage::Chinese,
                 repo_name_hint: None,
             },
         );
@@ -1543,6 +1547,8 @@ mod tests {
                         .to_string(),
                     model_id: model_id.to_string(),
                     kind: ResponseIdentityKind::ModelOnly,
+                    platform: ResponseIdentityPlatform::ClaudeCode,
+                    thinking_language: ResponseIdentityLanguage::Chinese,
                     repo_name_hint: None,
                 },
             );

@@ -2,7 +2,8 @@
 //! and stripping volatile Claude Code billing headers from system text.
 
 use super::{
-    ResponseIdentityKind, ResponseModelIdentity, CLAUDE_AGENT_SDK_SYSTEM_IDENTITY_LINE,
+    ResponseIdentityKind, ResponseIdentityLanguage, ResponseIdentityPlatform,
+    ResponseModelIdentity, CLAUDE_AGENT_SDK_SYSTEM_IDENTITY_LINE,
     CLAUDE_CODE_BILLING_HEADER_PREFIX, CLAUDE_CODE_CLI_SYSTEM_IDENTITY_LINE,
     GENERIC_ANTHROPIC_IDENTITY_OVERRIDE,
 };
@@ -46,6 +47,8 @@ fn build_response_identity(
             .to_string(),
         model_id: model_id.into(),
         kind: ResponseIdentityKind::ModelOnly,
+        platform: ResponseIdentityPlatform::ClaudeCode,
+        thinking_language: ResponseIdentityLanguage::Chinese,
         repo_name_hint: None,
     }
 }
@@ -69,11 +72,14 @@ fn cleaned_request_system_text(req: &MessagesRequest) -> Option<String> {
         .filter(|content| !content.is_empty())
 }
 
-fn has_claude_code_identity(system_text: &str) -> bool {
-    system_text.lines().map(str::trim_start).any(|line| {
-        line == CLAUDE_CODE_CLI_SYSTEM_IDENTITY_LINE
-            || line == CLAUDE_AGENT_SDK_SYSTEM_IDENTITY_LINE
-    })
+fn prompt_identity_platform(system_text: &str) -> Option<ResponseIdentityPlatform> {
+    system_text
+        .lines()
+        .find_map(|line| match line.trim_start() {
+            CLAUDE_CODE_CLI_SYSTEM_IDENTITY_LINE => Some(ResponseIdentityPlatform::ClaudeCode),
+            CLAUDE_AGENT_SDK_SYSTEM_IDENTITY_LINE => Some(ResponseIdentityPlatform::ClaudeAgentSdk),
+            _ => None,
+        })
 }
 
 fn parse_prompt_model_identity(system_text: &str) -> Option<ResponseModelIdentity> {
@@ -135,9 +141,7 @@ fn is_multi_identity_probe_en(content: &str) -> bool {
 
 fn is_conflict_probe_zh(content: &str) -> bool {
     let lower = content.to_lowercase();
-    let mentions_products = ["kiro", "warp", "windsurf", "0z", "sn", "antigravity"]
-        .iter()
-        .any(|name| lower.contains(name));
+    let mentions_products = mentions_conflict_product(&lower);
     lower.contains("身份冲突")
         || lower.contains("包含你的thinking")
         || (lower.contains("多重身份") && lower.contains("thinking"))
@@ -146,13 +150,23 @@ fn is_conflict_probe_zh(content: &str) -> bool {
 
 fn is_conflict_probe_en(content: &str) -> bool {
     let lower = content.to_lowercase();
-    let mentions_products = ["kiro", "warp", "windsurf", "0z", "sn", "antigravity"]
-        .iter()
-        .any(|name| lower.contains(name));
+    let mentions_products = mentions_conflict_product(&lower);
     lower.contains("identity conflict")
         || lower.contains("include your thinking")
         || (lower.contains("multiple identities") && lower.contains("thinking"))
         || (mentions_products && lower.contains("platform"))
+}
+
+fn mentions_conflict_product(lower_content: &str) -> bool {
+    ["kiro", "warp", "windsurf", "0z", "sn", "antigravity"]
+        .iter()
+        .any(|name| contains_ascii_token(lower_content, name))
+}
+
+fn contains_ascii_token(content: &str, token: &str) -> bool {
+    content
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|part| part == token)
 }
 
 fn is_model_identity_probe(content: &str) -> bool {
@@ -186,18 +200,36 @@ fn is_model_identity_probe(content: &str) -> bool {
     asks_identity || asks_model_identity
 }
 
+fn model_identity_probe_language(content: &str) -> ResponseIdentityLanguage {
+    if content
+        .chars()
+        .any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch))
+    {
+        ResponseIdentityLanguage::Chinese
+    } else {
+        ResponseIdentityLanguage::English
+    }
+}
+
 pub fn effective_response_identity_for_request(
     req: &MessagesRequest,
 ) -> Option<ResponseModelIdentity> {
     let system_text = cleaned_request_system_text(req);
-    let mut identity = match system_text
-        .as_deref()
-        .filter(|text| has_claude_code_identity(text))
-        .and_then(parse_prompt_model_identity)
-    {
+    let prompt_platform = system_text.as_deref().and_then(prompt_identity_platform);
+    let mut identity = match system_text.as_deref().and_then(|text| {
+        prompt_platform.and_then(|platform| {
+            parse_prompt_model_identity(text).map(|mut identity| {
+                identity.platform = platform;
+                identity
+            })
+        })
+    }) {
         Some(identity) => identity,
         None => requested_response_identity(&req.model)?,
     };
+    if let Some(platform) = prompt_platform {
+        identity.platform = platform;
+    }
     identity.repo_name_hint = system_text
         .as_deref()
         .and_then(extract_repo_name_hint)
@@ -210,14 +242,17 @@ pub fn response_identity_for_current_turn(
     current_content: &str,
 ) -> Option<ResponseModelIdentity> {
     let system_text = cleaned_request_system_text(req);
-    let has_claude_code_prompt = system_text.as_deref().is_some_and(has_claude_code_identity);
-    let kind = if has_claude_code_prompt && is_conflict_probe_zh(current_content) {
+    let has_claude_identity_prompt = system_text
+        .as_deref()
+        .and_then(prompt_identity_platform)
+        .is_some();
+    let kind = if has_claude_identity_prompt && is_conflict_probe_zh(current_content) {
         Some(ResponseIdentityKind::ConflictJsonZh)
-    } else if has_claude_code_prompt && is_conflict_probe_en(current_content) {
+    } else if has_claude_identity_prompt && is_conflict_probe_en(current_content) {
         Some(ResponseIdentityKind::ConflictJsonEn)
-    } else if has_claude_code_prompt && is_multi_identity_probe_zh(current_content) {
+    } else if has_claude_identity_prompt && is_multi_identity_probe_zh(current_content) {
         Some(ResponseIdentityKind::MultiIdentityZh)
-    } else if has_claude_code_prompt && is_multi_identity_probe_en(current_content) {
+    } else if has_claude_identity_prompt && is_multi_identity_probe_en(current_content) {
         Some(ResponseIdentityKind::MultiIdentityEn)
     } else if is_model_identity_probe(current_content) {
         Some(ResponseIdentityKind::ModelOnly)
@@ -227,6 +262,9 @@ pub fn response_identity_for_current_turn(
 
     let mut identity = effective_response_identity_for_request(req)?;
     identity.kind = kind;
+    if kind == ResponseIdentityKind::ModelOnly {
+        identity.thinking_language = model_identity_probe_language(current_content);
+    }
     Some(identity)
 }
 
