@@ -1156,6 +1156,96 @@ mod tests {
     }
 
     #[test]
+    fn normalize_request_promotes_developer_role_messages_to_top_level_system() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("first question"),
+            },
+            AnthropicMessage {
+                role: "developer".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "text",
+                        "text": "Always answer with deployment-safe guidance."
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!("first answer"),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("second question"),
+            },
+        ]);
+
+        let normalized = normalize_request(&req).expect("normalization should accept developer");
+        assert_eq!(
+            normalized
+                .request
+                .messages
+                .iter()
+                .map(|message| message.role.as_str())
+                .collect::<Vec<_>>(),
+            vec!["user", "assistant", "user"]
+        );
+        assert_eq!(
+            normalized
+                .request
+                .system
+                .as_ref()
+                .expect("developer instruction should become top-level system")[0]
+                .text,
+            "Always answer with deployment-safe guidance."
+        );
+        assert!(normalized.normalization_events.iter().any(|event| {
+            event.message_index == 1
+                && event.role == "developer"
+                && event.action == "promote_message"
+                && event.reason == "developer_role_promoted_to_top_level"
+        }));
+
+        let result = convert_request(&req).expect("conversion should accept developer role");
+        let system_prefix = match &result.conversation_state.history[0] {
+            Message::User(message) => &message.user_input_message.content,
+            other => panic!("expected injected system user message, got {other:?}"),
+        };
+        assert!(system_prefix.contains("Always answer with deployment-safe guidance."));
+    }
+
+    #[test]
+    fn normalize_request_rejects_non_text_developer_blocks() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "developer".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "aGVsbG8="
+                        }
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("hello"),
+            },
+        ]);
+
+        let err = normalize_request(&req).expect_err("developer image block should reject");
+        assert!(
+            err.to_string()
+                .contains("message 0 developer block 0 has unsupported type `image`"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn normalize_request_preserves_trailing_unknown_system_role_as_current_user_context() {
         let req = base_request(vec![
             AnthropicMessage {
@@ -2210,6 +2300,39 @@ mod tests {
             role: "user".to_string(),
             content: serde_json::json!(
                 "Design a snippets platform for sharing short code snippets with a team."
+            ),
+        }]);
+        req.model = "claude-opus-4-8".to_string();
+        req.system = Some(cctest_claude_code_system());
+
+        let result = convert_request(&req).expect("conversion should succeed");
+
+        assert!(result.response_identity.is_none());
+    }
+
+    #[test]
+    fn convert_request_does_not_treat_kiro_compatible_platform_task_as_conflict_probe() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!(
+                "Design a Kiro-compatible snippets platform for sharing short code snippets with \
+                 a team."
+            ),
+        }]);
+        req.model = "claude-opus-4-8".to_string();
+        req.system = Some(cctest_claude_code_system());
+
+        let result = convert_request(&req).expect("conversion should succeed");
+
+        assert!(result.response_identity.is_none());
+    }
+
+    #[test]
+    fn convert_request_does_not_treat_identity_platform_task_as_conflict_probe() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!(
+                "Design a Kiro-compatible identity platform for SSO and account provisioning."
             ),
         }]);
         req.model = "claude-opus-4-8".to_string();
@@ -3921,5 +4044,123 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("duplicate tool_use id `dup-tool`"));
         assert!(message.contains("before the previous call completed"));
+    }
+
+    #[test]
+    fn convert_request_normalizes_invalid_history_tool_use_ids_and_results() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Run the tool"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_use",
+                        "id": "toolu.01:bad",
+                        "name": "read_file",
+                        "input": {"path": "/tmp/test.txt"}
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu.01:bad",
+                        "content": "file content"
+                    }
+                ]),
+            },
+        ]);
+
+        let result = convert_request(&req).expect("invalid tool_use id should normalize");
+        let current = &result.conversation_state.current_message.user_input_message;
+        let rewritten_result_id = &current.user_input_message_context.tool_results[0].tool_use_id;
+        assert_ne!(rewritten_result_id, "toolu.01:bad");
+        assert!(rewritten_result_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'));
+
+        let assistant = match &semantic_history(&result)[1] {
+            Message::Assistant(message) => &message.assistant_response_message,
+            other => panic!("expected assistant history entry, got {other:?}"),
+        };
+        let tool_uses = assistant
+            .tool_uses
+            .as_ref()
+            .expect("assistant tool_use should remain");
+        assert_eq!(tool_uses[0].tool_use_id, *rewritten_result_id);
+    }
+
+    #[test]
+    fn convert_request_avoids_collisions_when_normalizing_tool_use_ids() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Run first tool"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01_bad",
+                        "name": "read_file",
+                        "input": {"path": "/tmp/one.txt"}
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01_bad",
+                        "content": "first"
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_use",
+                        "id": "toolu.01:bad",
+                        "name": "read_file",
+                        "input": {"path": "/tmp/two.txt"}
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu.01:bad",
+                        "content": "second"
+                    }
+                ]),
+            },
+        ]);
+
+        let result = convert_request(&req).expect("tool_use id collision should normalize");
+        let current = &result.conversation_state.current_message.user_input_message;
+        let rewritten_result_id = &current.user_input_message_context.tool_results[0].tool_use_id;
+        assert_ne!(rewritten_result_id, "toolu.01:bad");
+        assert_ne!(rewritten_result_id, "toolu_01_bad");
+        assert!(rewritten_result_id.starts_with("toolu_01_bad__sfdup"));
+
+        let last_assistant = match result.conversation_state.history.last() {
+            Some(Message::Assistant(message)) => &message.assistant_response_message,
+            other => panic!("expected last history message to be assistant, got {other:?}"),
+        };
+        let last_tool_uses = last_assistant
+            .tool_uses
+            .as_ref()
+            .expect("rewritten assistant tool_use should remain in history");
+        assert_eq!(last_tool_uses[0].tool_use_id, *rewritten_result_id);
     }
 }

@@ -142,19 +142,52 @@ fn is_multi_identity_probe_en(content: &str) -> bool {
 fn is_conflict_probe_zh(content: &str) -> bool {
     let lower = content.to_lowercase();
     let mentions_products = mentions_conflict_product(&lower);
-    lower.contains("身份冲突")
+    let explicit_conflict_probe = lower.contains("身份冲突")
         || lower.contains("包含你的thinking")
-        || (lower.contains("多重身份") && lower.contains("thinking"))
-        || (mentions_products && (lower.contains("那个平台") || lower.contains("平台中")))
+        || (lower.contains("多重身份") && lower.contains("thinking"));
+    let platform_identity_probe = mentions_products
+        && (lower.contains("那个平台") || lower.contains("平台中"))
+        && has_platform_identity_intent_zh(content, &lower);
+    explicit_conflict_probe || platform_identity_probe
 }
 
 fn is_conflict_probe_en(content: &str) -> bool {
     let lower = content.to_lowercase();
     let mentions_products = mentions_conflict_product(&lower);
-    lower.contains("identity conflict")
+    let explicit_conflict_probe = lower.contains("identity conflict")
         || lower.contains("include your thinking")
-        || (lower.contains("multiple identities") && lower.contains("thinking"))
-        || (mentions_products && lower.contains("platform"))
+        || (lower.contains("multiple identities") && lower.contains("thinking"));
+    let platform_identity_probe = mentions_products
+        && lower.contains("platform")
+        && has_platform_identity_intent_en(content, &lower);
+    explicit_conflict_probe || platform_identity_probe
+}
+
+fn has_platform_identity_intent_zh(content: &str, lower: &str) -> bool {
+    lower.contains("thinking")
+        || content.contains("身份")
+        || content.contains("模型")
+        || content.contains("你真实运行")
+        || content.contains("你运行在")
+        || content.contains("你在哪个平台")
+        || content.contains("你是哪个平台")
+        || content.contains("那个平台的")
+        || is_model_identity_probe(content)
+}
+
+fn has_platform_identity_intent_en(content: &str, lower: &str) -> bool {
+    (lower.contains("thinking") && lower.contains("you"))
+        || lower.contains("multiple identities")
+        || ((lower.contains("actual model") || lower.contains("model you use"))
+            && lower.contains("you"))
+        || ((lower.contains("what platform")
+            || lower.contains("which platform")
+            || lower.contains("platform are you")
+            || lower.contains("platform you run on")
+            || lower.contains("run on")
+            || lower.contains("running on"))
+            && lower.contains("you"))
+        || is_model_identity_probe(content)
 }
 
 fn mentions_conflict_product(lower_content: &str) -> bool {
