@@ -16,6 +16,7 @@ pub fn system_message_from_role_message(
     message: &crate::anthropic::types::Message,
     message_index: usize,
 ) -> Result<SystemMessage, ConversionError> {
+    let role = message.role.as_str();
     let text = match &message.content {
         serde_json::Value::String(text) => text.clone(),
         serde_json::Value::Array(items) => {
@@ -23,23 +24,23 @@ pub fn system_message_from_role_message(
             for (block_index, item) in items.iter().enumerate() {
                 let Some(obj) = item.as_object() else {
                     return Err(invalid_request(format!(
-                        "message {message_index} system block {block_index} must be an object"
+                        "message {message_index} {role} block {block_index} must be an object"
                     )));
                 };
                 let Some(block_type) = obj.get("type").and_then(serde_json::Value::as_str) else {
                     return Err(invalid_request(format!(
-                        "message {message_index} system block {block_index} is missing type"
+                        "message {message_index} {role} block {block_index} is missing type"
                     )));
                 };
                 if block_type != "text" {
                     return Err(invalid_request(format!(
-                        "message {message_index} system block {block_index} has unsupported type \
+                        "message {message_index} {role} block {block_index} has unsupported type \
                          `{block_type}`"
                     )));
                 }
                 let Some(text) = obj.get("text").and_then(serde_json::Value::as_str) else {
                     return Err(invalid_request(format!(
-                        "message {message_index} system text block {block_index} is missing text"
+                        "message {message_index} {role} text block {block_index} is missing text"
                     )));
                 };
                 text_parts.push(text.to_string());
@@ -48,7 +49,7 @@ pub fn system_message_from_role_message(
         },
         _ => {
             return Err(invalid_request(format!(
-                "message {message_index} system content must be a string or array"
+                "message {message_index} {role} content must be a string or array"
             )));
         },
     };

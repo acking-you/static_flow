@@ -281,6 +281,9 @@ fn is_dynamic_system_noise(text: &str) -> bool {
 // - Keep stable SessionStart `system` role turns in the Anthropic top-level
 //   `system` field, drop known dynamic continuation noise, and preserve unknown
 //   `system` role turns in-order as user context.
+// - Promote OpenAI-style `developer` role turns into the Anthropic top-level
+//   `system` field because they are developer instructions, not conversation
+//   turns.
 // - Remove whitespace-only text/thinking blocks and any message that becomes an
 //   empty no-op after that cleanup.
 // - Keep malformed/unknown structures intact so the strict validator can still
@@ -299,15 +302,78 @@ pub fn normalize_request(req: &MessagesRequest) -> Result<NormalizedRequest, Con
     let mut system_messages = req.system.clone().unwrap_or_default();
 
     for (message_index, message) in req.messages.iter().enumerate() {
-        if message.role != "system" {
-            preprocessed_message_index_map.push(message_index);
-            preprocessed_messages.push(Cow::Borrowed(message));
-            continue;
-        }
-
-        match system_role_disposition(message, message_index)? {
-            SystemRoleDisposition::StableSystemPrefix(system_message) => {
-                system_messages.push(system_message);
+        match message.role.as_str() {
+            "system" => match system_role_disposition(message, message_index)? {
+                SystemRoleDisposition::StableSystemPrefix(system_message) => {
+                    system_messages.push(system_message);
+                    push_normalization_event(
+                        &mut events,
+                        message_index,
+                        &message.role,
+                        None,
+                        None,
+                        "promote_message",
+                        "stable_system_role_promoted_to_top_level",
+                    );
+                },
+                SystemRoleDisposition::DropDynamicNoise => {
+                    push_normalization_event(
+                        &mut events,
+                        message_index,
+                        &message.role,
+                        None,
+                        None,
+                        "drop_message",
+                        "dynamic_system_noise_for_cache_stability",
+                    );
+                },
+                SystemRoleDisposition::DropEmpty => {
+                    push_normalization_event(
+                        &mut events,
+                        message_index,
+                        &message.role,
+                        None,
+                        None,
+                        "drop_message",
+                        "empty_system_role_message",
+                    );
+                },
+                SystemRoleDisposition::PreserveInOrderUserContext {
+                    message: converted_message,
+                    reason,
+                } => {
+                    push_normalization_event(
+                        &mut events,
+                        message_index,
+                        &message.role,
+                        None,
+                        None,
+                        "convert_message",
+                        reason,
+                    );
+                    preprocessed_message_index_map.push(message_index);
+                    preprocessed_messages.push(Cow::Owned(converted_message));
+                },
+            },
+            "developer" => {
+                let Some(text) = cleaned_system_message_text(&system_message_from_role_message(
+                    message,
+                    message_index,
+                )?) else {
+                    push_normalization_event(
+                        &mut events,
+                        message_index,
+                        &message.role,
+                        None,
+                        None,
+                        "drop_message",
+                        "empty_developer_role_message",
+                    );
+                    continue;
+                };
+                system_messages.push(SystemMessage {
+                    text,
+                });
                 push_normalization_event(
                     &mut events,
                     message_index,
@@ -315,46 +381,12 @@ pub fn normalize_request(req: &MessagesRequest) -> Result<NormalizedRequest, Con
                     None,
                     None,
                     "promote_message",
-                    "stable_system_role_promoted_to_top_level",
+                    "developer_role_promoted_to_top_level",
                 );
             },
-            SystemRoleDisposition::DropDynamicNoise => {
-                push_normalization_event(
-                    &mut events,
-                    message_index,
-                    &message.role,
-                    None,
-                    None,
-                    "drop_message",
-                    "dynamic_system_noise_for_cache_stability",
-                );
-            },
-            SystemRoleDisposition::DropEmpty => {
-                push_normalization_event(
-                    &mut events,
-                    message_index,
-                    &message.role,
-                    None,
-                    None,
-                    "drop_message",
-                    "empty_system_role_message",
-                );
-            },
-            SystemRoleDisposition::PreserveInOrderUserContext {
-                message: converted_message,
-                reason,
-            } => {
-                push_normalization_event(
-                    &mut events,
-                    message_index,
-                    &message.role,
-                    None,
-                    None,
-                    "convert_message",
-                    reason,
-                );
+            _ => {
                 preprocessed_message_index_map.push(message_index);
-                preprocessed_messages.push(Cow::Owned(converted_message));
+                preprocessed_messages.push(Cow::Borrowed(message));
             },
         }
     }

@@ -55,11 +55,8 @@ pub fn rewrite_duplicate_tool_use_ids(
                     let seen_count = seen_counts.entry(original_id.clone()).or_insert(0);
                     *seen_count += 1;
 
-                    let normalized_id = if *seen_count == 1 {
-                        original_id.clone()
-                    } else {
-                        next_rewritten_tool_use_id(&original_id, *seen_count, &used_ids)
-                    };
+                    let normalized_id =
+                        normalize_tool_use_id_for_kiro(&original_id, *seen_count, &used_ids);
                     let rewrite_index = if normalized_id != original_id {
                         obj.insert(
                             "id".to_string(),
@@ -171,6 +168,46 @@ fn next_rewritten_tool_use_id(
             return candidate;
         }
         suffix += 1;
+    }
+}
+
+fn normalize_tool_use_id_for_kiro(
+    original_id: &str,
+    occurrence: usize,
+    used_ids: &HashSet<String>,
+) -> String {
+    if is_valid_kiro_tool_use_id(original_id) {
+        if occurrence == 1 {
+            original_id.to_string()
+        } else {
+            next_rewritten_tool_use_id(original_id, occurrence, used_ids)
+        }
+    } else {
+        let sanitized = sanitize_tool_use_id(original_id);
+        if occurrence == 1 && !used_ids.contains(&sanitized) {
+            sanitized
+        } else {
+            next_rewritten_tool_use_id(&sanitized, occurrence, used_ids)
+        }
+    }
+}
+
+fn is_valid_kiro_tool_use_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+}
+
+fn sanitize_tool_use_id(id: &str) -> String {
+    let sanitized = id
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' { ch } else { '_' })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "tool_use".to_string()
+    } else {
+        sanitized
     }
 }
 
