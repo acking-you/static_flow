@@ -747,9 +747,11 @@ mod tests {
 
     #[test]
     fn cached_runtime_config_lookup_round_trips_as_json() {
-        let mut record = crate::records::RuntimeConfigRecord::default();
-        record.kiro_cctest_proxy_base_url = Some("https://example.com/anthropic".to_string());
-        record.kiro_cctest_proxy_api_key = Some("sk-test".to_string());
+        let record = crate::records::RuntimeConfigRecord {
+            kiro_cctest_proxy_base_url: Some("https://example.com/anthropic".to_string()),
+            kiro_cctest_proxy_api_key: Some("sk-test".to_string()),
+            ..Default::default()
+        };
         let payload = super::CachedRuntimeConfigLookup {
             record: Some(record),
         };
