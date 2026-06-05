@@ -35,7 +35,7 @@ use llm_access_kiro::{
 
 use super::{
     cctest::{self, build_direct_replay_body, bytes_to_string, CctestProbeMatch},
-    client::provider_client,
+    client::{cctest_proxy_client, provider_client},
     errors::{
         anthropic_json_error, anthropic_json_error_body, daily_request_limit_cooldown,
         is_monthly_request_limit, kiro_chunk_contains_content_length_exceeded,
@@ -990,13 +990,16 @@ async fn forward_cctest_signature_probe(
 ) -> (StatusCode, String, Bytes, &'static str) {
     capture_upstream_request_body_json(usage_meta, body);
     let target_url = cctest::proxy_target_url(base_url, endpoint);
+    if let Err(message) = cctest::validate_proxy_target_url(&target_url) {
+        return cctest_proxy_config_error(usage_meta, message);
+    }
     tracing::info!(
         endpoint,
         target_url = %target_url,
         request_bytes = body.len(),
         "forwarding kiro cctest signature probe"
     );
-    let mut request = reqwest::Client::new()
+    let mut request = cctest_proxy_client()
         .post(&target_url)
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {api_key}"))

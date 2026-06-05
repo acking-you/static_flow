@@ -509,6 +509,16 @@ static KIRO_REMOTE_MEDIA_CLIENT: std::sync::LazyLock<reqwest::Client> =
             .build()
             .expect("kiro remote media client should build")
     });
+static CCTEST_PROXY_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .dns_resolver(Arc::new(kiro_media::PrivateFilteringDnsResolver))
+        .pool_idle_timeout(provider_client_pool_idle_timeout())
+        .pool_max_idle_per_host(provider_client_pool_max_idle_per_host())
+        .tcp_keepalive(Duration::from_secs(30))
+        .build()
+        .expect("cctest proxy client should build")
+});
 
 struct KiroUsageRecord<'a> {
     control_store: &'a dyn ControlStore,

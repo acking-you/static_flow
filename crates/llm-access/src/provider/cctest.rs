@@ -1,5 +1,7 @@
 //! cctest text probe identification and synthetic Anthropic replies.
 
+use std::net::IpAddr;
+
 use axum::body::Bytes;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -157,16 +159,30 @@ pub(crate) fn known_cctest_probe_for_prompt_text(prompt_text: &str) -> Option<Cc
 }
 
 pub(crate) fn inspect_cctest_text_probe(body: &[u8]) -> CctestProbeInspection {
+    if body.len() > MAX_CCTEST_FAST_PATH_BODY_BYTES {
+        return CctestProbeInspection {
+            body_bytes: body.len(),
+            looks_like_cctest_candidate: false,
+            has_billing_header: false,
+            has_cli_entrypoint: false,
+            has_cli_version: false,
+            has_messages_field: false,
+            json_parsed: false,
+            has_multimodal_content: false,
+            has_web_search_tool: false,
+            request_id: None,
+            probe_kind: None,
+            requires_signature: false,
+            rejection_reason: Some("body_too_large"),
+            matched_probe: None,
+        };
+    }
     let has_billing_header = bytes_contains(body, CCTEST_BILLING_HEADER);
     let has_cli_entrypoint = bytes_contains(body, CCTEST_CLI_ENTRYPOINT);
     let has_cli_version = bytes_contains(body, CCTEST_CLI_VERSION);
     let has_messages_field = bytes_contains(body, b"\"messages\"");
-    let body_too_large = body.len() > MAX_CCTEST_FAST_PATH_BODY_BYTES;
-    let looks_like_cctest_candidate = !body_too_large
-        && has_billing_header
-        && has_cli_entrypoint
-        && has_cli_version
-        && has_messages_field;
+    let looks_like_cctest_candidate =
+        has_billing_header && has_cli_entrypoint && has_cli_version && has_messages_field;
     let mut inspection = CctestProbeInspection {
         body_bytes: body.len(),
         looks_like_cctest_candidate,
@@ -183,10 +199,6 @@ pub(crate) fn inspect_cctest_text_probe(body: &[u8]) -> CctestProbeInspection {
         rejection_reason: None,
         matched_probe: None,
     };
-    if body_too_large {
-        inspection.rejection_reason = Some("body_too_large");
-        return inspection;
-    }
     if !has_billing_header {
         inspection.rejection_reason = Some("missing_billing_header");
         return inspection;
@@ -302,6 +314,39 @@ pub(crate) fn build_direct_replay_body(probe: &CctestProbeMatch) -> (String, Str
 
 pub(crate) fn proxy_target_url(base_url: &str, public_path: &str) -> String {
     format!("{}{}", base_url.trim_end_matches('/'), public_path)
+}
+
+pub(crate) fn validate_proxy_target_url(target_url: &str) -> Result<(), &'static str> {
+    let url = url::Url::parse(target_url)
+        .map_err(|_| "Bedrock error message: cctest signature proxy URL is invalid")?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("Bedrock error message: cctest signature proxy URL is invalid");
+    }
+    let host = url
+        .host()
+        .ok_or("Bedrock error message: cctest signature proxy URL is invalid")?;
+    match host {
+        url::Host::Domain(domain) => {
+            if domain.eq_ignore_ascii_case("localhost") || domain.ends_with(".localhost") {
+                return Err(
+                    "Bedrock error message: cctest signature proxy URL must not target localhost"
+                );
+            }
+        },
+        url::Host::Ipv4(ip) => {
+            if super::kiro_media::is_private_kiro_remote_media_ip(IpAddr::V4(ip)) {
+                return Err("Bedrock error message: cctest signature proxy URL must not target \
+                            private or local addresses");
+            }
+        },
+        url::Host::Ipv6(ip) => {
+            if super::kiro_media::is_private_kiro_remote_media_ip(IpAddr::V6(ip)) {
+                return Err("Bedrock error message: cctest signature proxy URL must not target \
+                            private or local addresses");
+            }
+        },
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -531,6 +576,9 @@ fn extract_antml_tag_from_text(text: &str) -> Option<String> {
 }
 
 fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
     haystack
         .windows(needle.len())
         .any(|window| window == needle)

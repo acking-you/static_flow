@@ -65,9 +65,13 @@ fn cctest_fast_path_rejects_large_multimodal_and_websearch_requests() {
         serde_json::to_vec(&cctest_tag_request_json("f03bc", "64ccfee3c339a9c8", "session-a"))
             .expect("encode request");
     large.resize(super::cctest::MAX_CCTEST_FAST_PATH_BODY_BYTES + 1, b' ');
-    assert!(super::cctest::inspect_cctest_text_probe(&large)
-        .matched_probe
-        .is_none());
+    let inspection = super::cctest::inspect_cctest_text_probe(&large);
+    assert!(inspection.matched_probe.is_none());
+    assert_eq!(inspection.rejection_reason, Some("body_too_large"));
+    assert!(!inspection.has_billing_header);
+    assert!(!inspection.has_cli_entrypoint);
+    assert!(!inspection.has_cli_version);
+    assert!(!inspection.has_messages_field);
 
     let mut multimodal = cctest_tag_request_json("f03bc", "64ccfee3c339a9c8", "session-a");
     multimodal["messages"][0]["content"] = json!([
@@ -87,6 +91,28 @@ fn cctest_fast_path_rejects_large_multimodal_and_websearch_requests() {
     )
     .matched_probe
     .is_none());
+}
+
+#[test]
+fn cctest_proxy_target_url_rejects_private_and_local_hosts() {
+    assert!(
+        super::cctest::validate_proxy_target_url("https://www.bytecatcode.org/v1/messages").is_ok()
+    );
+    let invalid = super::cctest::validate_proxy_target_url("ftp://www.bytecatcode.org/v1/messages")
+        .expect_err("invalid scheme rejected");
+    assert!(invalid.contains("is invalid"), "unexpected message: {invalid}");
+    for url in [
+        "https://localhost/v1/messages",
+        "https://sub.localhost/v1/messages",
+        "https://127.0.0.1/v1/messages",
+        "https://[::1]/v1/messages",
+        "https://10.0.0.1/v1/messages",
+        "https://169.254.169.254/v1/messages",
+    ] {
+        let err =
+            super::cctest::validate_proxy_target_url(url).expect_err("private target rejected");
+        assert!(err.contains("must not target"), "unexpected message: {err}");
+    }
 }
 
 #[test]
