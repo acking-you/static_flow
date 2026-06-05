@@ -790,6 +790,11 @@ fn normalized_usage_filter_text(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+fn normalize_optional_form_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 fn normalized_usage_status_kind(value: &str) -> Option<String> {
     match value.trim() {
         USAGE_STATUS_KIND_OK => Some(USAGE_STATUS_KIND_OK.to_string()),
@@ -1298,6 +1303,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     kiro_remote_media_resolution_enabled: None,
                     kiro_latency_routing_enabled: None,
                     kiro_protected_content_validation_enabled: None,
+                    kiro_cctest_text_handling_enabled: None,
                     kiro_cache_policy_override_json: None,
                     kiro_billable_model_multipliers_override_json: None,
                     request_max_concurrency_unlimited: request_max_concurrency_value.is_none(),
@@ -2456,6 +2462,8 @@ pub fn admin_llm_gateway_page() -> Html {
     let duckdb_usage_memory_limit_mib_input = use_state(|| "1024".to_string());
     let duckdb_usage_checkpoint_threshold_mib_input = use_state(|| "16".to_string());
     let usage_analytics_retention_days_input = use_state(|| "7".to_string());
+    let kiro_cctest_proxy_base_url_input = use_state(String::new);
+    let kiro_cctest_proxy_api_key_input = use_state(String::new);
     let proxy_configs = use_state(Vec::<AdminUpstreamProxyConfigView>::new);
     let proxy_config_scope = use_state(AdminUpstreamProxyConfigScopeView::default);
     let proxy_bindings = use_state(Vec::<AdminUpstreamProxyBindingView>::new);
@@ -2854,6 +2862,8 @@ pub fn admin_llm_gateway_page() -> Html {
         let duckdb_usage_checkpoint_threshold_mib_input =
             duckdb_usage_checkpoint_threshold_mib_input.clone();
         let usage_analytics_retention_days_input = usage_analytics_retention_days_input.clone();
+        let kiro_cctest_proxy_base_url_input = kiro_cctest_proxy_base_url_input.clone();
+        let kiro_cctest_proxy_api_key_input = kiro_cctest_proxy_api_key_input.clone();
         let codex_proxy_binding_input = codex_proxy_binding_input.clone();
         let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
         let usage_page = usage_page.clone();
@@ -2917,6 +2927,8 @@ pub fn admin_llm_gateway_page() -> Html {
             let duckdb_usage_checkpoint_threshold_mib_input =
                 duckdb_usage_checkpoint_threshold_mib_input.clone();
             let usage_analytics_retention_days_input = usage_analytics_retention_days_input.clone();
+            let kiro_cctest_proxy_base_url_input = kiro_cctest_proxy_base_url_input.clone();
+            let kiro_cctest_proxy_api_key_input = kiro_cctest_proxy_api_key_input.clone();
             let codex_proxy_binding_input = codex_proxy_binding_input.clone();
             let kiro_proxy_binding_input = kiro_proxy_binding_input.clone();
             let usage_page = usage_page.clone();
@@ -3132,6 +3144,10 @@ pub fn admin_llm_gateway_page() -> Html {
                             .set(cfg.duckdb_usage_checkpoint_threshold_mib.to_string());
                         usage_analytics_retention_days_input
                             .set(cfg.usage_analytics_retention_days.to_string());
+                        kiro_cctest_proxy_base_url_input
+                            .set(cfg.kiro_cctest_proxy_base_url.clone().unwrap_or_default());
+                        kiro_cctest_proxy_api_key_input
+                            .set(cfg.kiro_cctest_proxy_api_key.clone().unwrap_or_default());
                         config.set(Some(cfg));
                         keys_summary.set(key_summary_resp.summary);
                         accounts_summary.set(account_summary_resp.summary);
@@ -3424,6 +3440,8 @@ pub fn admin_llm_gateway_page() -> Html {
         let duckdb_usage_checkpoint_threshold_mib_input =
             duckdb_usage_checkpoint_threshold_mib_input.clone();
         let usage_analytics_retention_days_input = usage_analytics_retention_days_input.clone();
+        let kiro_cctest_proxy_base_url_input = kiro_cctest_proxy_base_url_input.clone();
+        let kiro_cctest_proxy_api_key_input = kiro_cctest_proxy_api_key_input.clone();
         let saving_runtime_config = saving_runtime_config.clone();
         let load_error = load_error.clone();
         let reload = reload.clone();
@@ -3465,6 +3483,10 @@ pub fn admin_llm_gateway_page() -> Html {
             let usage_analytics_retention_days = (*usage_analytics_retention_days_input)
                 .trim()
                 .parse::<u64>();
+            let kiro_cctest_proxy_base_url =
+                normalize_optional_form_string(kiro_cctest_proxy_base_url_input.as_str());
+            let kiro_cctest_proxy_api_key =
+                normalize_optional_form_string(kiro_cctest_proxy_api_key_input.as_str());
             let saving_runtime_config = saving_runtime_config.clone();
             let load_error = load_error.clone();
             let reload = reload.clone();
@@ -3675,6 +3697,8 @@ pub fn admin_llm_gateway_page() -> Html {
                         .as_ref()
                         .map(|current| current.kiro_conversation_anchor_ttl_seconds)
                         .unwrap_or(86_400),
+                    kiro_cctest_proxy_base_url,
+                    kiro_cctest_proxy_api_key,
                 };
                 saving_runtime_config.set(true);
                 match update_admin_llm_gateway_config(&runtime_config).await {
@@ -5370,6 +5394,7 @@ pub fn admin_llm_gateway_page() -> Html {
             .upstream_request_body_json
             .as_deref()
             .map(pretty_json_text);
+        let response_body_for_copy = event.response_body.as_deref().map(pretty_json_text);
         html! {
             <div
                 class={classes!(
@@ -5710,6 +5735,39 @@ pub fn admin_llm_gateway_page() -> Html {
                                 "break-words"
                             )}>
                                 { upstream_request_json_for_copy }
+                            </pre>
+                        </div>
+                    }
+
+                    if let Some(response_body_for_copy) = response_body_for_copy {
+                        <div class={classes!("mt-4")}>
+                            <div class={classes!("mb-2", "flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                                <div class={classes!("text-xs", "uppercase", "tracking-widest", "text-[var(--muted)]")}>{ "Response Body" }</div>
+                                <button
+                                    class={classes!("btn-terminal")}
+                                    onclick={{
+                                        let on_copy = on_copy.clone();
+                                        let response_body_for_copy = response_body_for_copy.clone();
+                                        Callback::from(move |_| on_copy.emit(("Response Body".to_string(), response_body_for_copy.clone())))
+                                    }}
+                                >
+                                    { "复制 Response Body" }
+                                </button>
+                            </div>
+                            <pre class={classes!(
+                                "max-h-[42vh]",
+                                "overflow-x-auto",
+                                "overflow-y-auto",
+                                "rounded-lg",
+                                "bg-slate-950",
+                                "p-3",
+                                "text-xs",
+                                "leading-6",
+                                "text-violet-100",
+                                "whitespace-pre-wrap",
+                                "break-words"
+                            )}>
+                                { response_body_for_copy }
                             </pre>
                         </div>
                     }
@@ -6760,6 +6818,43 @@ pub fn admin_llm_gateway_page() -> Html {
                                     }}
                                 />
                             </label>
+                            <label class={classes!("text-sm", "md:col-span-2")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "kiro_cctest_proxy_base_url" }</span>
+                                <input
+                                    type="text"
+                                    placeholder="https://example.com"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*kiro_cctest_proxy_base_url_input).clone()}
+                                    oninput={{
+                                        let kiro_cctest_proxy_base_url_input =
+                                            kiro_cctest_proxy_base_url_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                kiro_cctest_proxy_base_url_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "kiro_cctest_proxy_api_key" }</span>
+                                <input
+                                    type="password"
+                                    autocomplete="off"
+                                    placeholder="留空表示未配置"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*kiro_cctest_proxy_api_key_input).clone()}
+                                    oninput={{
+                                        let kiro_cctest_proxy_api_key_input =
+                                            kiro_cctest_proxy_api_key_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                kiro_cctest_proxy_api_key_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
                             <h3 class={classes!("md:col-span-2", "xl:col-span-3", "m-0", "mt-2", "text-xs", "font-semibold", "uppercase", "tracking-wider", "text-[var(--muted)]")}>{ "Usage / DuckDB" }</h3>
                             <label class={classes!("text-sm")}>
                                 <span class={classes!("text-[var(--muted)]")}>{ "usage_event_flush_batch_size" }</span>
@@ -6920,6 +7015,13 @@ pub fn admin_llm_gateway_page() -> Html {
                                         cfg.kiro_status_refresh_min_interval_seconds,
                                         cfg.kiro_status_refresh_max_interval_seconds,
                                         cfg.kiro_status_account_jitter_max_seconds
+                                    ) }
+                                </p>
+                                <p class={classes!("m-0")}>
+                                    { format!(
+                                        "当前 cctest signature proxy：{}，API key：{}",
+                                        cfg.kiro_cctest_proxy_base_url.clone().unwrap_or_else(|| "-".to_string()),
+                                        if cfg.kiro_cctest_proxy_api_key.as_ref().is_some_and(|value| !value.is_empty()) { "已配置" } else { "未配置" }
                                     ) }
                                 </p>
                                 <p class={classes!("m-0")}>

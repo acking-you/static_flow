@@ -353,6 +353,7 @@ impl StreamContext {
                 "role":"assistant",
                 "content":[],
                 "model":self.model,
+                "stop_details":null,
                 "stop_reason":null,
                 "stop_sequence":null,
                 "usage": anthropic_usage_json(self.input_tokens, 1, 0)
@@ -1476,6 +1477,38 @@ mod tests {
         let final_events = ctx.generate_final_events();
         let text = collect_delta_text(&final_events, "text_delta", "text");
         assert!(text.contains("Claude Opus 4.7"));
+        assert!(text.contains("Anthropic"));
+        assert!(text.contains("claude-opus-4-7"));
+        assert!(!text.contains("Kiro"));
+    }
+
+    #[test]
+    fn identity_probe_english_response_mentions_anthropic() {
+        let mut ctx = StreamContext::new_with_identity(
+            "claude-opus-4-7",
+            1,
+            false,
+            HashMap::new(),
+            None,
+            ResponseModelIdentity {
+                model_name: "Claude Opus 4.7".to_string(),
+                model_short_name: "Opus 4.7".to_string(),
+                model_id: "claude-opus-4-7".to_string(),
+                kind: ResponseIdentityKind::ModelOnly,
+                platform: ResponseIdentityPlatform::ClaudeCode,
+                thinking_language: ResponseIdentityLanguage::English,
+                repo_name_hint: None,
+            },
+        );
+
+        let _ = ctx.generate_initial_events();
+        let deltas = ctx.process_assistant_response("I am Kiro.");
+        assert!(deltas.is_empty());
+
+        let final_events = ctx.generate_final_events();
+        let text = collect_delta_text(&final_events, "text_delta", "text");
+        assert!(text.contains("Claude Opus 4.7"));
+        assert!(text.contains("Anthropic"));
         assert!(text.contains("claude-opus-4-7"));
         assert!(!text.contains("Kiro"));
     }
@@ -1922,13 +1955,19 @@ mod tests {
     }
 
     #[test]
-    fn message_start_marks_half_input_as_cache_creation_when_cache_read_is_zero() {
+    fn message_start_reports_total_input_tokens_without_synthetic_cache_breakdown() {
         let ctx =
             StreamContext::new_with_thinking("claude-sonnet-4-6", 123, false, HashMap::new(), None);
         let event = ctx.create_message_start_event();
-        assert_eq!(event["message"]["usage"]["input_tokens"], serde_json::json!(62));
-        assert_eq!(event["message"]["usage"]["cache_creation_input_tokens"], serde_json::json!(61));
+        assert_eq!(event["message"]["stop_details"], serde_json::json!(null));
+        assert_eq!(event["message"]["usage"]["input_tokens"], serde_json::json!(123));
+        assert_eq!(event["message"]["usage"]["cache_creation_input_tokens"], serde_json::json!(0));
         assert_eq!(event["message"]["usage"]["cache_read_input_tokens"], serde_json::json!(0));
+        assert_eq!(
+            event["message"]["usage"]["cache_creation"]["ephemeral_5m_input_tokens"],
+            serde_json::json!(0)
+        );
+        assert_eq!(event["message"]["usage"]["service_tier"], "standard");
     }
 
     #[test]

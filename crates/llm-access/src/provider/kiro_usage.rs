@@ -21,8 +21,8 @@ use super::{
     kiro_model::{build_kiro_cache_context, parse_kiro_billable_model_multipliers_json},
     usage_meta::captured_body_json,
     util::{clamp_u64_to_i64, now_millis},
-    KiroCacheContext, KiroPreflightFailureRecord, KiroUsageInputs, KiroUsageRecord,
-    KiroUsageSummary, KiroWebsearchUsageRecord,
+    KiroCacheContext, KiroCctestUsageRecord, KiroPreflightFailureRecord, KiroUsageInputs,
+    KiroUsageRecord, KiroUsageSummary, KiroWebsearchUsageRecord,
 };
 
 pub fn build_kiro_usage_summary(
@@ -71,32 +71,28 @@ pub fn build_kiro_usage_summary(
     }
 }
 pub fn anthropic_usage_json_with_policy(
-    policy: &KiroCachePolicy,
+    _policy: &KiroCachePolicy,
     input_tokens_total: i32,
     output_tokens: i32,
-    cache_read_input_tokens: i32,
+    _cache_read_input_tokens: i32,
 ) -> serde_json::Value {
     let input_tokens_total = input_tokens_total.max(0);
-    let cache_read_input_tokens = cache_read_input_tokens.max(0).min(input_tokens_total);
-    let non_cached_input_tokens_total = input_tokens_total.saturating_sub(cache_read_input_tokens);
-    let cache_creation_input_tokens = if cache_read_input_tokens == 0 {
-        non_cached_input_tokens_total / 2
-    } else {
-        let ratio = policy.anthropic_cache_creation_input_ratio;
-        if !ratio.is_finite() || ratio <= 0.0 {
-            0
-        } else {
-            (((non_cached_input_tokens_total as f64) * ratio).floor() as i32)
-                .max(0)
-                .min(non_cached_input_tokens_total)
-        }
-    };
-    let input_tokens = non_cached_input_tokens_total.saturating_sub(cache_creation_input_tokens);
+    // The runtime usage summary may estimate cache hits for billing, but the
+    // public Anthropic surface should not expose synthetic cache token splits.
     serde_json::json!({
-        "input_tokens": input_tokens,
+        "input_tokens": input_tokens_total,
         "output_tokens": output_tokens.max(0),
-        "cache_creation_input_tokens": cache_creation_input_tokens,
-        "cache_read_input_tokens": cache_read_input_tokens,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens_details": {
+            "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "not_available",
     })
 }
 pub fn anthropic_usage_json_from_summary_with_policy(
@@ -273,6 +269,7 @@ pub async fn record_kiro_usage(record: KiroUsageRecord<'_>) -> anyhow::Result<()
         full_request_json,
         error_message: record.meta.error_message.clone(),
         error_body: record.meta.error_body.clone(),
+        response_body: record.meta.response_body.clone(),
         timing: record.meta.to_timing(),
         stream: record.meta.to_stream_details(),
     };
@@ -332,6 +329,59 @@ pub async fn record_kiro_websearch_usage(
             .flatten(),
         error_message: record.meta.error_message.clone(),
         error_body: record.meta.error_body.clone(),
+        response_body: record.meta.response_body.clone(),
+        timing: record.meta.to_timing(),
+        stream: record.meta.to_stream_details(),
+    };
+    record.control_store.apply_usage_rollup_owned(event).await
+}
+
+pub async fn record_kiro_cctest_usage(record: KiroCctestUsageRecord<'_>) -> anyhow::Result<()> {
+    let diagnostics = serde_json::json!({
+        "special_request_type": "cctest_text",
+        "cctest_request_id": record.request_id,
+        "cctest_probe_kind": record.probe_kind,
+        "cctest_handling_mode": record.handling_mode,
+        "requires_signature": record.requires_signature,
+    })
+    .to_string();
+    let event = UsageEvent {
+        event_id: format!("llm-usage-{}", uuid::Uuid::new_v4()),
+        created_at_ms: now_millis(),
+        provider_type: ProviderType::Kiro,
+        protocol_family: ProtocolFamily::Anthropic,
+        key_id: record.key.key_id.clone(),
+        key_name: record.key.key_name.clone(),
+        account_name: Some(record.route.account_name.clone()),
+        account_group_id_at_event: record.route.account_group_id_at_event.clone(),
+        route_strategy_at_event: Some(record.route.route_strategy_at_event),
+        request_method: record.meta.request_method.clone(),
+        request_url: record.meta.request_url.clone(),
+        endpoint: record.endpoint.to_string(),
+        model: record.model.map(ToString::to_string),
+        mapped_model: None,
+        status_code: record.status.as_u16() as i64,
+        request_body_bytes: record.meta.request_body_bytes,
+        quota_failover_count: record.meta.quota_failover_count,
+        routing_diagnostics_json: Some(diagnostics),
+        input_uncached_tokens: 0,
+        input_cached_tokens: 0,
+        output_tokens: 0,
+        billable_tokens: 0,
+        credit_usage: None,
+        usage_missing: false,
+        credit_usage_missing: false,
+        client_ip: record.meta.client_ip.clone(),
+        ip_region: record.meta.ip_region.clone(),
+        request_headers_json: record.meta.request_headers_json.clone(),
+        last_message_content: record.meta.last_message_content.clone(),
+        client_request_body_json: captured_body_json(&record.meta.client_request_body_json),
+        upstream_request_body_json: captured_body_json(&record.meta.upstream_request_body_json),
+        full_request_json: captured_body_json(&record.meta.full_request_json)
+            .or_else(|| captured_body_json(&record.meta.client_request_body_json)),
+        error_message: record.meta.error_message.clone(),
+        error_body: record.meta.error_body.clone(),
+        response_body: record.meta.response_body.clone(),
         timing: record.meta.to_timing(),
         stream: record.meta.to_stream_details(),
     };

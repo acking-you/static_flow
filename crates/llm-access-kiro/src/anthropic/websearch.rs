@@ -233,7 +233,9 @@ pub fn generate_websearch_events(
                 "role": "assistant",
                 "model": model,
                 "content": [],
+                "stop_details": null,
                 "stop_reason": null,
+                "stop_sequence": null,
                 "usage": anthropic_usage_json(input_tokens, 3, 0)
             }
         }),
@@ -344,8 +346,9 @@ pub fn generate_websearch_events(
         "message_delta",
         json!({
             "type": "message_delta",
-            "delta": {"stop_reason": "end_turn", "stop_sequence": null},
-            "usage": final_usage
+            "delta": {"stop_reason": "end_turn", "stop_sequence": null, "stop_details": null},
+            "usage": final_usage,
+            "context_management": {"applied_edits": []}
         }),
     ));
     events.push(SseEvent::new("message_stop", json!({"type": "message_stop"})));
@@ -707,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn websearch_stream_message_start_marks_half_input_as_cache_creation() {
+    fn websearch_stream_message_start_reports_total_input_tokens_without_cache_breakdown() {
         let events = generate_websearch_events(
             "claude-sonnet-4-6",
             "static flow kiro",
@@ -721,14 +724,18 @@ mod tests {
             .iter()
             .find(|event| event.event == "message_start")
             .expect("should include message_start");
+        assert_eq!(message_start.data["message"]["usage"]["input_tokens"], serde_json::json!(125));
         assert_eq!(
             message_start.data["message"]["usage"]["cache_creation_input_tokens"],
-            serde_json::json!(62)
+            serde_json::json!(0)
         );
         assert_eq!(
             message_start.data["message"]["usage"]["cache_read_input_tokens"],
             serde_json::json!(0)
         );
+        assert_eq!(message_start.data["message"]["stop_details"], serde_json::json!(null));
+        assert_eq!(message_start.data["message"]["stop_sequence"], serde_json::json!(null));
+        assert_eq!(message_start.data["message"]["usage"]["service_tier"], "standard");
     }
 
     #[test]

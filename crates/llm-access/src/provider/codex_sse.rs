@@ -258,6 +258,7 @@ pub async fn record_codex_preflight_failure(record: CodexPreflightFailureRecord<
         full_request_json: captured_body_json(&record.meta.full_request_json),
         error_message: record.meta.error_message.clone(),
         error_body: record.meta.error_body.clone(),
+        response_body: record.meta.response_body.clone(),
         timing: record.meta.to_timing(),
         stream: record.meta.to_stream_details(),
     };
@@ -332,6 +333,7 @@ pub async fn record_codex_usage(
             .flatten(),
         error_message: meta.error_message.clone(),
         error_body: meta.error_body.clone(),
+        response_body: meta.response_body.clone(),
         timing: meta.to_timing(),
         stream: meta.to_stream_details(),
     };

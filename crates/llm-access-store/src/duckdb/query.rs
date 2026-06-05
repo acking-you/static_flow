@@ -397,6 +397,7 @@ fn merge_usage_event_detail_payloads(event: &mut UsageEvent, detail: &UsageEvent
     event.full_request_json = detail.full_request_json.clone();
     event.error_message = detail.error_message.clone();
     event.error_body = detail.error_body.clone();
+    event.response_body = detail.response_body.clone();
 }
 #[cfg(feature = "duckdb-runtime")]
 fn get_usage_event_from_active_paths(
@@ -734,6 +735,7 @@ fn decode_usage_event_row(
         full_request_json: if include_detail_payload { row.get(44)? } else { None },
         error_message: if include_detail_payload { row.get(45)? } else { None },
         error_body: if include_detail_payload { row.get(46)? } else { None },
+        response_body: if include_detail_payload { row.get(47)? } else { None },
         timing: UsageTiming {
             latency_ms: row.get(25)?,
             routing_wait_ms: row.get(26)?,

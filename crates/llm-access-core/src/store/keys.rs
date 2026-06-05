@@ -76,6 +76,8 @@ pub struct AdminKey {
     pub kiro_latency_routing_enabled: bool,
     /// Whether Kiro thinking signatures and encrypted content are validated.
     pub kiro_protected_content_validation_enabled: bool,
+    /// Whether stable cctest text probes may bypass the normal Kiro path.
+    pub kiro_cctest_text_handling_enabled: bool,
     /// Kiro cache policy override JSON.
     pub kiro_cache_policy_override_json: Option<String>,
     /// Kiro billable multiplier override JSON.
@@ -350,6 +352,8 @@ pub struct AdminKeyPatch {
     pub kiro_latency_routing_enabled: Option<bool>,
     /// New Kiro protected-content validation toggle.
     pub kiro_protected_content_validation_enabled: Option<bool>,
+    /// New Kiro cctest text handling toggle.
+    pub kiro_cctest_text_handling_enabled: Option<bool>,
     /// New Kiro cache policy override JSON.
     pub kiro_cache_policy_override_json: Option<Option<String>>,
     /// New Kiro billable model multiplier override JSON.

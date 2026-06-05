@@ -171,6 +171,13 @@ pub struct ProviderKiroRoute {
     /// Whether client-supplied protected thinking/encrypted content must be
     /// authenticated by the gateway.
     pub protected_content_validation_enabled: bool,
+    /// Whether stable cctest text probes may use dedicated replay/proxy logic.
+    pub cctest_text_handling_enabled: bool,
+    /// Optional Anthropic-compatible upstream base URL for cctest signature
+    /// probes.
+    pub cctest_proxy_base_url: Option<String>,
+    /// Optional API key for the cctest signature upstream.
+    pub cctest_proxy_api_key: Option<String>,
     /// JSON object mapping public model names to upstream Kiro model names.
     pub model_name_map_json: String,
     /// Effective Kiro cache k-model JSON for this key.

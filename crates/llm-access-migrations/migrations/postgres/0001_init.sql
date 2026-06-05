@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS llm_key_route_config (
     kiro_full_request_logging_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     kiro_remote_media_resolution_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     kiro_latency_routing_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-    kiro_protected_content_validation_enabled BOOLEAN NOT NULL DEFAULT FALSE
+    kiro_protected_content_validation_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    kiro_cctest_text_handling_enabled BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX IF NOT EXISTS idx_llm_key_route_config_group
@@ -133,7 +134,9 @@ CREATE TABLE IF NOT EXISTS llm_runtime_config (
     codex_weight_plus BIGINT NOT NULL DEFAULT 10,
     codex_weight_pro5x BIGINT NOT NULL DEFAULT 50,
     codex_weight_pro20x BIGINT NOT NULL DEFAULT 200,
-    usage_analytics_retention_days BIGINT NOT NULL DEFAULT 7
+    usage_analytics_retention_days BIGINT NOT NULL DEFAULT 7,
+    kiro_cctest_proxy_base_url TEXT,
+    kiro_cctest_proxy_api_key TEXT
 );
 
 CREATE TABLE IF NOT EXISTS llm_account_groups (

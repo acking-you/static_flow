@@ -1,5 +1,6 @@
 //! Provider-facing HTTP entrypoints for `llm-access`.
 
+mod cctest;
 mod client;
 mod codex_auth;
 mod codex_dispatch;
@@ -158,6 +159,7 @@ struct ProviderUsageMetadata {
     full_request_json: Option<Bytes>,
     error_message: Option<String>,
     error_body: Option<String>,
+    response_body: Option<String>,
 }
 
 /// Shared provider request state.
@@ -540,6 +542,20 @@ struct KiroWebsearchUsageRecord<'a> {
     usage: KiroUsageSummary,
     meta: &'a ProviderUsageMetadata,
     capture_request_details: bool,
+}
+
+struct KiroCctestUsageRecord<'a> {
+    control_store: &'a dyn ControlStore,
+    key: &'a AuthenticatedKey,
+    route: &'a ProviderKiroRoute,
+    endpoint: &'a str,
+    model: Option<&'a str>,
+    status: StatusCode,
+    request_id: &'a str,
+    probe_kind: &'a str,
+    handling_mode: &'a str,
+    requires_signature: bool,
+    meta: &'a ProviderUsageMetadata,
 }
 
 #[derive(Debug, Clone)]

@@ -88,6 +88,16 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "kiro_protected_content_validation",
         sql: include_str!("../migrations/postgres/0020_kiro_protected_content_validation.sql"),
     },
+    SqlMigration {
+        version: 21,
+        name: "kiro_cctest_text_handling",
+        sql: include_str!("../migrations/postgres/0021_kiro_cctest_text_handling.sql"),
+    },
+    SqlMigration {
+        version: 22,
+        name: "kiro_cctest_proxy_config",
+        sql: include_str!("../migrations/postgres/0022_kiro_cctest_proxy_config.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.
@@ -304,5 +314,31 @@ mod tests {
             .sql
             .contains("kiro_protected_content_validation_enabled"));
         assert!(migration.sql.contains("DEFAULT FALSE"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_kiro_cctest_text_handling() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "kiro_cctest_text_handling")
+            .expect("kiro cctest text handling migration exists");
+
+        assert_eq!(migration.version, 21);
+        assert!(migration.sql.contains("kiro_cctest_text_handling_enabled"));
+        assert!(migration.sql.contains("DEFAULT FALSE"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_kiro_cctest_proxy_config() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "kiro_cctest_proxy_config")
+            .expect("kiro cctest proxy config migration exists");
+
+        assert_eq!(migration.version, 22);
+        assert!(migration.sql.contains("kiro_cctest_proxy_base_url"));
+        assert!(migration.sql.contains("kiro_cctest_proxy_api_key"));
     }
 }

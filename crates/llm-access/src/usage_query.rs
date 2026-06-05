@@ -163,6 +163,7 @@ struct AdminUsageEventDetailView {
     full_request_json: Option<String>,
     error_message: Option<String>,
     error_body: Option<String>,
+    response_body: Option<String>,
 }
 
 /// Chart query options.
@@ -456,6 +457,7 @@ fn detail_from_event(event: &UsageEvent) -> AdminUsageEventDetailView {
         full_request_json: event.full_request_json.clone(),
         error_message: event.error_message.clone(),
         error_body: event.error_body.clone(),
+        response_body: event.response_body.clone(),
     }
 }
 

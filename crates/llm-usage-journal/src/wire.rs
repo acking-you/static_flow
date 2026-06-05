@@ -151,6 +151,9 @@ pub struct JournalUsageEventV1 {
     /// Raw error response body surfaced for failed requests.
     #[serde(default)]
     pub error_body: Option<String>,
+    /// Raw response body captured for explicit diagnostic events.
+    #[serde(default)]
+    pub response_body: Option<String>,
     /// Provider timing fields.
     pub timing: UsageTiming,
     /// Downstream stream outcome fields.
@@ -240,6 +243,7 @@ impl JournalUsageEventV1 {
             full_request_json: event.full_request_json.clone(),
             error_message: event.error_message.clone(),
             error_body: event.error_body.clone(),
+            response_body: event.response_body.clone(),
             timing: event.timing.clone(),
             stream: event.stream.clone(),
         }
@@ -282,6 +286,7 @@ impl JournalUsageEventV1 {
             full_request_json: self.full_request_json,
             error_message: self.error_message,
             error_body: self.error_body,
+            response_body: self.response_body,
             timing: self.timing,
             stream: self.stream,
         }
@@ -326,6 +331,7 @@ impl LegacyJournalUsageEventV1 {
             full_request_json: self.full_request_json,
             error_message: None,
             error_body: None,
+            response_body: None,
             timing: self.timing,
             stream: self.stream,
         }
@@ -476,6 +482,7 @@ mod tests {
             full_request_json: Some("{\"model\":\"m\"}".to_string()),
             error_message: None,
             error_body: None,
+            response_body: None,
             timing: UsageTiming {
                 latency_ms: Some(123),
                 routing_wait_ms: Some(1),

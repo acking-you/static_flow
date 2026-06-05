@@ -586,6 +586,7 @@ mod tests {
             full_request_json: Some("{\"model\":\"m\"}".to_string()),
             error_message: None,
             error_body: None,
+            response_body: None,
             timing: UsageTiming {
                 latency_ms: Some(123),
                 routing_wait_ms: Some(1),

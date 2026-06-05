@@ -146,6 +146,12 @@ pub(crate) struct CachedKiroRequestSnapshot {
     pub latency_routing_enabled: bool,
     #[serde(default)]
     pub protected_content_validation_enabled: bool,
+    #[serde(default)]
+    pub cctest_text_handling_enabled: bool,
+    #[serde(default)]
+    pub cctest_proxy_base_url: Option<String>,
+    #[serde(default)]
+    pub cctest_proxy_api_key: Option<String>,
     pub model_name_map_json: String,
     pub cache_kmodels_json: String,
     pub cache_policy_json: String,
@@ -741,8 +747,11 @@ mod tests {
 
     #[test]
     fn cached_runtime_config_lookup_round_trips_as_json() {
+        let mut record = crate::records::RuntimeConfigRecord::default();
+        record.kiro_cctest_proxy_base_url = Some("https://example.com/anthropic".to_string());
+        record.kiro_cctest_proxy_api_key = Some("sk-test".to_string());
         let payload = super::CachedRuntimeConfigLookup {
-            record: Some(crate::records::RuntimeConfigRecord::default()),
+            record: Some(record),
         };
 
         let json = serde_json::to_string(&payload).expect("serialize runtime config payload");
@@ -750,6 +759,12 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize runtime config payload");
 
         assert_eq!(decoded, payload);
+        let record = decoded.record.expect("runtime config record");
+        assert_eq!(
+            record.kiro_cctest_proxy_base_url.as_deref(),
+            Some("https://example.com/anthropic")
+        );
+        assert_eq!(record.kiro_cctest_proxy_api_key.as_deref(), Some("sk-test"));
     }
 
     #[test]

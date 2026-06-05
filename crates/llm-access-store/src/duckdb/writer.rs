@@ -33,6 +33,7 @@ impl UsageEventDetailRow {
             full_request_json: row.full_request_json.clone(),
             error_message: row.error_message.clone(),
             error_body: row.error_body.clone(),
+            response_body: row.response_body.clone(),
         }
     }
 
@@ -42,6 +43,7 @@ impl UsageEventDetailRow {
             self.upstream_request_body_json.as_deref(),
             self.full_request_json.as_deref(),
             self.error_body.as_deref(),
+            self.response_body.as_deref(),
         )
     }
 }
@@ -57,6 +59,7 @@ impl UsageEventDetailBlob {
             full_request_json: row.full_request_json.clone(),
             error_message: row.error_message.clone(),
             error_body: row.error_body.clone(),
+            response_body: row.response_body.clone(),
         }
     }
 
@@ -71,6 +74,7 @@ impl UsageEventDetailBlob {
             full_request_json: self.full_request_json,
             error_message: self.error_message,
             error_body: self.error_body,
+            response_body: self.response_body,
         }
     }
 }
@@ -402,6 +406,7 @@ fn execute_usage_event_detail_insert(
         row.full_request_json.as_deref(),
         row.error_message.as_deref(),
         row.error_body.as_deref(),
+        row.response_body.as_deref(),
     ])?;
     Ok(())
 }

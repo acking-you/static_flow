@@ -116,6 +116,13 @@ pub struct AdminRuntimeConfig {
     pub kiro_conversation_anchor_max_entries: u64,
     /// Kiro conversation anchor TTL.
     pub kiro_conversation_anchor_ttl_seconds: u64,
+    /// Optional Anthropic-compatible upstream base URL for cctest signature
+    /// probes.
+    #[serde(default)]
+    pub kiro_cctest_proxy_base_url: Option<String>,
+    /// Optional API key for the cctest signature upstream.
+    #[serde(default)]
+    pub kiro_cctest_proxy_api_key: Option<String>,
 }
 
 impl Default for AdminRuntimeConfig {
@@ -169,6 +176,8 @@ impl Default for AdminRuntimeConfig {
             kiro_prefix_cache_entry_ttl_seconds: DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS,
             kiro_conversation_anchor_max_entries: DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
             kiro_conversation_anchor_ttl_seconds: DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS,
+            kiro_cctest_proxy_base_url: None,
+            kiro_cctest_proxy_api_key: None,
         }
     }
 }
@@ -302,6 +311,12 @@ pub struct UpdateAdminRuntimeConfig {
     /// Kiro conversation anchor TTL.
     #[serde(default)]
     pub kiro_conversation_anchor_ttl_seconds: Option<u64>,
+    /// Anthropic-compatible upstream base URL for cctest signature probes.
+    #[serde(default)]
+    pub kiro_cctest_proxy_base_url: Option<String>,
+    /// API key for the cctest signature upstream.
+    #[serde(default)]
+    pub kiro_cctest_proxy_api_key: Option<String>,
 }
 
 /// Return the default Kiro cache k-model JSON.
