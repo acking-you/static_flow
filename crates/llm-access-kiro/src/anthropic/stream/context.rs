@@ -1095,7 +1095,7 @@ fn contains_private_prompt_leak(text: &str) -> bool {
         return false;
     }
 
-    let raw = text.to_ascii_lowercase();
+    let normalized = normalize_private_prompt_marker_text(text);
     const RAW_TOKENS: &[&str] = &[
         "identity_override",
         "system_context",
@@ -1103,11 +1103,10 @@ fn contains_private_prompt_leak(text: &str) -> bool {
         "max_thinking_length",
         "thinking_effort",
     ];
-    if RAW_TOKENS.iter().any(|token| raw.contains(token)) {
+    if RAW_TOKENS.iter().any(|token| normalized.contains(token)) {
         return true;
     }
 
-    let normalized = normalize_private_prompt_marker_text(&raw);
     const NORMALIZED_FRAGMENTS: &[&str] = &[
         "<identity_override",
         "</identity_override>",
@@ -1131,7 +1130,7 @@ fn contains_private_prompt_leak(text: &str) -> bool {
 
 fn normalize_private_prompt_marker_text(text: &str) -> String {
     let mut normalized = String::with_capacity(text.len());
-    let mut previous_was_space = false;
+    let mut previous_was_space = true;
     for ch in text.chars() {
         if ch.is_whitespace() {
             if !previous_was_space {
@@ -1141,9 +1140,12 @@ fn normalize_private_prompt_marker_text(text: &str) -> String {
             continue;
         }
         previous_was_space = false;
-        normalized.push(ch);
+        normalized.push(ch.to_ascii_lowercase());
     }
-    normalized.trim().to_string()
+    if previous_was_space && !normalized.is_empty() {
+        normalized.pop();
+    }
+    normalized
 }
 
 #[cfg(test)]
