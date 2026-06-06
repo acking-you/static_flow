@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use serde_json::json;
 
-use super::sse_event::SseEvent;
+use super::{sse_event::SseEvent, usage::anthropic_usage_json};
 
 // Tracks the lifecycle of a single content block (text, thinking, tool_use).
 #[derive(Debug, Clone)]
@@ -184,8 +184,9 @@ impl SseStateManager {
                 "message_delta",
                 json!({
                     "type":"message_delta",
-                    "delta":{"stop_reason":self.get_stop_reason(),"stop_sequence":null},
-                    "usage":{"input_tokens":input_tokens,"output_tokens":output_tokens}
+                    "delta":{"stop_reason":self.get_stop_reason(),"stop_sequence":null,"stop_details":null},
+                    "usage": anthropic_usage_json(input_tokens, output_tokens, 0),
+                    "context_management":{"applied_edits":[]}
                 }),
             ));
         }
@@ -194,5 +195,29 @@ impl SseStateManager {
             events.push(SseEvent::new("message_stop", json!({"type":"message_stop"})));
         }
         events
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SseStateManager;
+
+    #[test]
+    fn final_events_include_extended_message_delta_fields() {
+        let mut state = SseStateManager::new();
+        state.set_stop_reason("end_turn");
+
+        let events = state.generate_final_events(10, 3);
+        let message_delta = events
+            .iter()
+            .find(|event| event.event == "message_delta")
+            .expect("message_delta");
+
+        assert_eq!(message_delta.data["delta"]["stop_details"], serde_json::json!(null));
+        assert_eq!(message_delta.data["usage"]["service_tier"], "standard");
+        assert_eq!(
+            message_delta.data["context_management"]["applied_edits"],
+            serde_json::json!([])
+        );
     }
 }

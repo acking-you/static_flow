@@ -484,6 +484,9 @@ impl PostgresControlRepository {
             protected_content_validation_enabled: bundle
                 .route
                 .kiro_protected_content_validation_enabled,
+            cctest_text_handling_enabled: bundle.route.kiro_cctest_text_handling_enabled,
+            cctest_proxy_base_url: runtime_config.kiro_cctest_proxy_base_url.clone(),
+            cctest_proxy_api_key: runtime_config.kiro_cctest_proxy_api_key.clone(),
             model_name_map_json: bundle
                 .route
                 .model_name_map_json

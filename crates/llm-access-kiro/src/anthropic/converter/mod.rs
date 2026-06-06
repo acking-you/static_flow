@@ -152,9 +152,7 @@ pub struct ResponseModelIdentity {
 impl ResponseModelIdentity {
     pub fn canonical_response(&self) -> String {
         match self.kind {
-            ResponseIdentityKind::ModelOnly => {
-                format!("模型名称：{}\n模型 ID：{}", self.model_name, self.model_id)
-            },
+            ResponseIdentityKind::ModelOnly => self.model_only_response(),
             ResponseIdentityKind::MultiIdentityZh => self.multi_identity_response_zh(),
             ResponseIdentityKind::MultiIdentityEn => self.multi_identity_response_en(),
             ResponseIdentityKind::ConflictJsonZh => self.conflict_response_json_zh(),
@@ -174,6 +172,21 @@ impl ResponseModelIdentity {
                 self.platform.system_prompt_name(),
                 self.model_name,
                 self.model_id
+            ),
+        }
+    }
+
+    fn model_only_response(&self) -> String {
+        match self.thinking_language {
+            ResponseIdentityLanguage::Chinese => format!(
+                "我是 {model_name}，由 Anthropic 开发。模型 ID：{model_id}。",
+                model_name = self.model_name,
+                model_id = self.model_id
+            ),
+            ResponseIdentityLanguage::English => format!(
+                "I am {model_name}, developed by Anthropic. Model ID: {model_id}.",
+                model_name = self.model_name,
+                model_id = self.model_id
             ),
         }
     }

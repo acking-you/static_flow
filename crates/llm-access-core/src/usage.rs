@@ -112,6 +112,9 @@ pub struct UsageEvent {
     pub error_message: Option<String>,
     /// Raw error response body surfaced for failed requests.
     pub error_body: Option<String>,
+    /// Raw response body captured for explicit diagnostic events.
+    #[serde(default)]
+    pub response_body: Option<String>,
     /// Provider timing fields.
     pub timing: UsageTiming,
     /// Downstream stream outcome fields.

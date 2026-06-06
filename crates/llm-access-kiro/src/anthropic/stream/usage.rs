@@ -22,19 +22,27 @@ pub const KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS: u64 =
 pub fn anthropic_usage_json(
     input_tokens_total: i32,
     output_tokens: i32,
-    cache_read_input_tokens: i32,
+    _cache_read_input_tokens: i32,
 ) -> serde_json::Value {
     let input_tokens_total = input_tokens_total.max(0);
-    let cache_read_input_tokens = cache_read_input_tokens.max(0).min(input_tokens_total);
-    let non_cached_input_tokens_total = input_tokens_total.saturating_sub(cache_read_input_tokens);
-    let cache_creation_input_tokens =
-        if cache_read_input_tokens == 0 { non_cached_input_tokens_total / 2 } else { 0 };
-    let input_tokens = non_cached_input_tokens_total.saturating_sub(cache_creation_input_tokens);
+    // Kiro does not expose Anthropic-native prompt-cache metadata. Public
+    // Anthropic responses should therefore report the resolved total input
+    // tokens and leave cache breakdown fields at zero instead of inventing a
+    // synthetic split.
     json!({
-        "input_tokens": input_tokens,
+        "input_tokens": input_tokens_total,
         "output_tokens": output_tokens.max(0),
-        "cache_creation_input_tokens": cache_creation_input_tokens,
-        "cache_read_input_tokens": cache_read_input_tokens,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens_details": {
+            "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "not_available",
     })
 }
 
@@ -127,5 +135,19 @@ mod tests {
 
         assert_eq!(input_tokens, 123);
         assert_eq!(source, KiroInputTokenSource::LocalRequestEstimateFallback);
+    }
+
+    #[test]
+    fn anthropic_usage_json_exposes_extended_anthropic_fields() {
+        let usage = super::anthropic_usage_json(125, 16, 0);
+
+        assert_eq!(usage["input_tokens"], 125);
+        assert_eq!(usage["cache_creation_input_tokens"], 0);
+        assert_eq!(usage["cache_read_input_tokens"], 0);
+        assert_eq!(usage["cache_creation"]["ephemeral_5m_input_tokens"], 0);
+        assert_eq!(usage["cache_creation"]["ephemeral_1h_input_tokens"], 0);
+        assert_eq!(usage["output_tokens_details"]["thinking_tokens"], 0);
+        assert_eq!(usage["service_tier"], "standard");
+        assert_eq!(usage["inference_geo"], "not_available");
     }
 }

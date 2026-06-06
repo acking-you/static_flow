@@ -69,7 +69,9 @@ pub fn decode_runtime_config_row(row: PgRow) -> anyhow::Result<RuntimeConfigReco
         kiro_prefix_cache_entry_ttl_seconds: row.get(45),
         kiro_conversation_anchor_max_entries: row.get(46),
         kiro_conversation_anchor_ttl_seconds: row.get(47),
-        updated_at_ms: row.get(48),
+        kiro_cctest_proxy_base_url: row.get(48),
+        kiro_cctest_proxy_api_key: row.get(49),
+        updated_at_ms: row.get(50),
     })
 }
 
@@ -113,6 +115,9 @@ fn decode_key_bundle(row: &PgRow) -> anyhow::Result<KeyBundle> {
                 .unwrap_or(true),
             kiro_protected_content_validation_enabled: row
                 .get_optional_bool("kiro_protected_content_validation_enabled")
+                .unwrap_or(false),
+            kiro_cctest_text_handling_enabled: row
+                .get_optional_bool("kiro_cctest_text_handling_enabled")
                 .unwrap_or(false),
             kiro_cache_policy_override_json: row.get(24),
             kiro_billable_model_multipliers_override_json: row.get(25),
@@ -179,6 +184,7 @@ pub fn admin_key_from_bundle(bundle: &KeyBundle) -> AdminKey {
         kiro_protected_content_validation_enabled: bundle
             .route
             .kiro_protected_content_validation_enabled,
+        kiro_cctest_text_handling_enabled: bundle.route.kiro_cctest_text_handling_enabled,
         kiro_cache_policy_override_json: bundle.route.kiro_cache_policy_override_json.clone(),
         kiro_billable_model_multipliers_override_json: bundle
             .route

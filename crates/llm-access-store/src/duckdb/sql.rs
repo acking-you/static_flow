@@ -17,9 +17,9 @@ pub fn insert_usage_event_detail_sql() -> &'static str {
         event_id, request_headers_json, routing_diagnostics_json,
         last_message_content, client_request_body_json,
         upstream_request_body_json, full_request_json, error_message,
-        error_body
+        error_body, response_body
      ) VALUES (
-        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
      )
      ON CONFLICT DO NOTHING"
 }
@@ -246,7 +246,11 @@ pub fn usage_event_totals_sql(conn: &duckdb::Connection) -> anyhow::Result<Strin
 pub fn get_usage_event_detail_sql(conn: &duckdb::Connection) -> anyhow::Result<String> {
     let columns = duckdb_table_columns(conn, "usage_events")?;
     let detail_table_exists = duckdb_relation_exists(conn, "usage_event_details");
-    let select = usage_event_detail_select_exprs(&columns, detail_table_exists).join(",\n        ");
+    let detail_columns = detail_table_exists
+        .then(|| duckdb_table_columns(conn, "usage_event_details"))
+        .transpose()?;
+    let select =
+        usage_event_detail_select_exprs(&columns, detail_columns.as_ref()).join(",\n        ");
     let from_sql = if detail_table_exists {
         "FROM usage_events e
     LEFT JOIN usage_event_details d ON d.event_id = e.event_id"
@@ -289,56 +293,62 @@ pub fn duckdb_relation_has_rows(conn: &duckdb::Connection, relation_name: &str) 
 }
 #[cfg(feature = "duckdb-runtime")]
 fn usage_event_summary_select_exprs(columns: &HashSet<String>) -> Vec<String> {
-    let mut exprs = usage_event_base_select_exprs(columns, false, false);
+    let mut exprs = usage_event_base_select_exprs(columns, false, None);
     exprs.push("CAST(NULL AS VARCHAR) AS last_message_content".to_string());
     exprs
 }
 #[cfg(feature = "duckdb-runtime")]
 fn usage_event_detail_select_exprs(
     columns: &HashSet<String>,
-    detail_table_exists: bool,
+    detail_columns: Option<&HashSet<String>>,
 ) -> Vec<String> {
-    let mut exprs = usage_event_base_select_exprs(columns, true, detail_table_exists);
+    let mut exprs = usage_event_base_select_exprs(columns, true, detail_columns);
     exprs.push(usage_event_detail_payload_expr(
         columns,
-        detail_table_exists,
+        detail_columns,
         "last_message_content",
         "CAST(NULL AS VARCHAR)",
     ));
     exprs.push(usage_event_detail_payload_expr(
         columns,
-        detail_table_exists,
+        detail_columns,
         "request_headers_json",
         "'{}'",
     ));
     exprs.push(usage_event_detail_payload_expr(
         columns,
-        detail_table_exists,
+        detail_columns,
         "client_request_body_json",
         "CAST(NULL AS VARCHAR)",
     ));
     exprs.push(usage_event_detail_payload_expr(
         columns,
-        detail_table_exists,
+        detail_columns,
         "upstream_request_body_json",
         "CAST(NULL AS VARCHAR)",
     ));
     exprs.push(usage_event_detail_payload_expr(
         columns,
-        detail_table_exists,
+        detail_columns,
         "full_request_json",
         "CAST(NULL AS VARCHAR)",
     ));
     exprs.push(usage_event_detail_payload_expr(
         columns,
-        detail_table_exists,
+        detail_columns,
         "error_message",
         "CAST(NULL AS VARCHAR)",
     ));
     exprs.push(usage_event_detail_payload_expr(
         columns,
-        detail_table_exists,
+        detail_columns,
         "error_body",
+        "CAST(NULL AS VARCHAR)",
+    ));
+    exprs.push(usage_event_detail_payload_expr(
+        columns,
+        detail_columns,
+        "response_body",
         "CAST(NULL AS VARCHAR)",
     ));
     exprs.push(usage_event_column_expr(columns, "detail_object_path", "CAST(NULL AS VARCHAR)"));
@@ -351,7 +361,7 @@ fn usage_event_detail_select_exprs(
 fn usage_event_base_select_exprs(
     columns: &HashSet<String>,
     include_detail_payload: bool,
-    detail_table_exists: bool,
+    detail_columns: Option<&HashSet<String>>,
 ) -> Vec<String> {
     vec![
         usage_event_required_expr("event_id"),
@@ -374,7 +384,7 @@ fn usage_event_base_select_exprs(
         if include_detail_payload {
             usage_event_detail_payload_expr(
                 columns,
-                detail_table_exists,
+                detail_columns,
                 "routing_diagnostics_json",
                 "CAST(NULL AS VARCHAR)",
             )
@@ -435,11 +445,12 @@ pub fn usage_event_expr(
 #[cfg(feature = "duckdb-runtime")]
 fn usage_event_detail_payload_expr(
     event_columns: &HashSet<String>,
-    detail_table_exists: bool,
+    detail_columns: Option<&HashSet<String>>,
     column: &'static str,
     missing_sql: &'static str,
 ) -> String {
-    let sql = match (detail_table_exists, event_columns.contains(column)) {
+    let detail_has_column = detail_columns.is_some_and(|columns| columns.contains(column));
+    let sql = match (detail_has_column, event_columns.contains(column)) {
         (true, true) => format!("COALESCE(d.{column}, e.{column})"),
         (true, false) => format!("d.{column}"),
         (false, true) => format!("e.{column}"),

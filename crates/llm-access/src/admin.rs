@@ -547,6 +547,8 @@ pub(crate) struct PatchLlmGatewayKeyRequest {
     #[serde(default)]
     kiro_protected_content_validation_enabled: Option<bool>,
     #[serde(default)]
+    kiro_cctest_text_handling_enabled: Option<bool>,
+    #[serde(default)]
     kiro_cache_policy_override_json: Option<Option<String>>,
     #[serde(default)]
     kiro_billable_model_multipliers_override_json: Option<Option<String>>,
@@ -3977,6 +3979,15 @@ fn apply_runtime_config_update(
         "kiro_conversation_anchor_ttl_seconds",
         kiro_conversation_anchor_ttl_seconds,
     )?;
+    let kiro_cctest_proxy_base_url = match request.kiro_cctest_proxy_base_url.as_deref() {
+        Some(value) => normalize_cctest_proxy_base_url(value)?,
+        None => current.kiro_cctest_proxy_base_url,
+    };
+    let kiro_cctest_proxy_api_key = request
+        .kiro_cctest_proxy_api_key
+        .as_deref()
+        .map(normalize_optional_string)
+        .unwrap_or(current.kiro_cctest_proxy_api_key);
 
     Ok(AdminRuntimeConfig {
         auth_cache_ttl_seconds,
@@ -4021,6 +4032,8 @@ fn apply_runtime_config_update(
         kiro_prefix_cache_entry_ttl_seconds,
         kiro_conversation_anchor_max_entries,
         kiro_conversation_anchor_ttl_seconds,
+        kiro_cctest_proxy_base_url,
+        kiro_cctest_proxy_api_key,
     })
 }
 
@@ -5479,6 +5492,22 @@ fn normalize_usage_query_base_url(value: &str) -> Result<String, AdminHttpError>
     }
 }
 
+fn normalize_cctest_proxy_base_url(value: &str) -> Result<Option<String>, AdminHttpError> {
+    let trimmed = value.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let parsed = url::Url::parse(trimmed)
+        .map_err(|_| bad_request("kiro_cctest_proxy_base_url is invalid"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(bad_request("kiro_cctest_proxy_base_url is invalid"));
+    }
+    if parsed.host_str().is_none() {
+        return Err(bad_request("kiro_cctest_proxy_base_url is invalid"));
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
 fn validate_runtime_refresh_window(
     min_seconds: u64,
     max_seconds: u64,
@@ -5737,6 +5766,7 @@ fn normalize_key_patch(
         kiro_latency_routing_enabled: request.kiro_latency_routing_enabled,
         kiro_protected_content_validation_enabled: request
             .kiro_protected_content_validation_enabled,
+        kiro_cctest_text_handling_enabled: request.kiro_cctest_text_handling_enabled,
         kiro_cache_policy_override_json: request.kiro_cache_policy_override_json,
         kiro_billable_model_multipliers_override_json,
         updated_at_ms: now_ms(),
@@ -6722,6 +6752,7 @@ mod tests {
             kiro_remote_media_resolution_enabled: None,
             kiro_latency_routing_enabled: None,
             kiro_protected_content_validation_enabled: None,
+            kiro_cctest_text_handling_enabled: None,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
         }
@@ -6761,6 +6792,7 @@ mod tests {
             kiro_remote_media_resolution_enabled: false,
             kiro_latency_routing_enabled: true,
             kiro_protected_content_validation_enabled: false,
+            kiro_cctest_text_handling_enabled: false,
             kiro_cache_policy_override_json: policy_override_json,
             kiro_billable_model_multipliers_override_json: None,
             effective_kiro_cache_policy_json: "{}".to_string(),
@@ -7169,6 +7201,36 @@ mod tests {
             .expect("kiro compact trigger should be valid");
 
         assert_eq!(updated.kiro_compact_trigger_tokens, 640_000);
+    }
+
+    #[test]
+    fn runtime_config_update_accepts_cctest_proxy_config() {
+        let updated =
+            apply_runtime_config_update(AdminRuntimeConfig::default(), UpdateAdminRuntimeConfig {
+                kiro_cctest_proxy_base_url: Some(" https://example.com/anthropic/ ".to_string()),
+                kiro_cctest_proxy_api_key: Some(" sk-test ".to_string()),
+                ..UpdateAdminRuntimeConfig::default()
+            })
+            .expect("cctest proxy config should be valid");
+
+        assert_eq!(
+            updated.kiro_cctest_proxy_base_url.as_deref(),
+            Some("https://example.com/anthropic")
+        );
+        assert_eq!(updated.kiro_cctest_proxy_api_key.as_deref(), Some("sk-test"));
+    }
+
+    #[test]
+    fn runtime_config_update_rejects_invalid_cctest_proxy_url() {
+        let err =
+            apply_runtime_config_update(AdminRuntimeConfig::default(), UpdateAdminRuntimeConfig {
+                kiro_cctest_proxy_base_url: Some("ftp://example.com".to_string()),
+                ..UpdateAdminRuntimeConfig::default()
+            })
+            .expect_err("unsupported cctest proxy URL scheme should be rejected");
+
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("kiro_cctest_proxy_base_url"));
     }
 
     #[test]

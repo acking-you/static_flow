@@ -6069,6 +6069,8 @@ pub struct AdminLlmGatewayKeyView {
     #[serde(default)]
     pub kiro_protected_content_validation_enabled: bool,
     #[serde(default)]
+    pub kiro_cctest_text_handling_enabled: bool,
+    #[serde(default)]
     pub kiro_cache_policy_override_json: Option<String>,
     #[serde(default)]
     pub kiro_billable_model_multipliers_override_json: Option<String>,
@@ -6311,6 +6313,7 @@ pub struct AdminLlmGatewayUsageEventDetailView {
     pub full_request_json: Option<String>,
     pub error_message: Option<String>,
     pub error_body: Option<String>,
+    pub response_body: Option<String>,
     pub created_at: i64,
 }
 
@@ -6937,6 +6940,10 @@ pub struct LlmGatewayRuntimeConfig {
     pub kiro_prefix_cache_entry_ttl_seconds: u64,
     pub kiro_conversation_anchor_max_entries: u64,
     pub kiro_conversation_anchor_ttl_seconds: u64,
+    #[serde(default)]
+    pub kiro_cctest_proxy_base_url: Option<String>,
+    #[serde(default)]
+    pub kiro_cctest_proxy_api_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -7744,6 +7751,8 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             kiro_prefix_cache_entry_ttl_seconds: 21_600,
             kiro_conversation_anchor_max_entries: 20_000,
             kiro_conversation_anchor_ttl_seconds: 86_400,
+            kiro_cctest_proxy_base_url: None,
+            kiro_cctest_proxy_api_key: None,
         })
     }
 
@@ -8734,6 +8743,7 @@ pub async fn create_admin_llm_gateway_key(
             kiro_remote_media_resolution_enabled: false,
             kiro_latency_routing_enabled: true,
             kiro_protected_content_validation_enabled: false,
+            kiro_cctest_text_handling_enabled: false,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
             effective_kiro_cache_policy_json: String::new(),
@@ -8792,6 +8802,7 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub kiro_remote_media_resolution_enabled: Option<bool>,
     pub kiro_latency_routing_enabled: Option<bool>,
     pub kiro_protected_content_validation_enabled: Option<bool>,
+    pub kiro_cctest_text_handling_enabled: Option<bool>,
     pub kiro_cache_policy_override_json: Option<Option<&'a str>>,
     pub kiro_billable_model_multipliers_override_json: Option<Option<&'a str>>,
     pub request_max_concurrency_unlimited: bool,
@@ -8825,6 +8836,7 @@ pub async fn patch_admin_llm_gateway_key(
             request.kiro_remote_media_resolution_enabled,
             request.kiro_latency_routing_enabled,
             request.kiro_protected_content_validation_enabled,
+            request.kiro_cctest_text_handling_enabled,
             request.kiro_cache_policy_override_json,
             request.kiro_billable_model_multipliers_override_json,
             request.request_max_concurrency_unlimited,
@@ -8960,6 +8972,12 @@ pub async fn patch_admin_llm_gateway_key(
             body.insert(
                 "kiro_protected_content_validation_enabled".to_string(),
                 serde_json::Value::Bool(kiro_protected_content_validation_enabled),
+            );
+        }
+        if let Some(kiro_cctest_text_handling_enabled) = request.kiro_cctest_text_handling_enabled {
+            body.insert(
+                "kiro_cctest_text_handling_enabled".to_string(),
+                serde_json::Value::Bool(kiro_cctest_text_handling_enabled),
             );
         }
         if let Some(kiro_cache_policy_override_json) = request.kiro_cache_policy_override_json {
@@ -10797,6 +10815,7 @@ pub async fn create_admin_kiro_key(
             kiro_remote_media_resolution_enabled: false,
             kiro_latency_routing_enabled: true,
             kiro_protected_content_validation_enabled: false,
+            kiro_cctest_text_handling_enabled: false,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
             effective_kiro_cache_policy_json: String::new(),
@@ -10856,6 +10875,7 @@ pub async fn patch_admin_kiro_key(
             request.kiro_remote_media_resolution_enabled,
             request.kiro_latency_routing_enabled,
             request.kiro_protected_content_validation_enabled,
+            request.kiro_cctest_text_handling_enabled,
             request.kiro_cache_policy_override_json,
             request.kiro_billable_model_multipliers_override_json,
             request.request_max_concurrency_unlimited,
@@ -10973,6 +10993,12 @@ pub async fn patch_admin_kiro_key(
             body.insert(
                 "kiro_protected_content_validation_enabled".to_string(),
                 serde_json::Value::Bool(kiro_protected_content_validation_enabled),
+            );
+        }
+        if let Some(kiro_cctest_text_handling_enabled) = request.kiro_cctest_text_handling_enabled {
+            body.insert(
+                "kiro_cctest_text_handling_enabled".to_string(),
+                serde_json::Value::Bool(kiro_cctest_text_handling_enabled),
             );
         }
         if let Some(kiro_cache_policy_override_json) = request.kiro_cache_policy_override_json {

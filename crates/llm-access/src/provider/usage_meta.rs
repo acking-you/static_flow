@@ -55,6 +55,7 @@ impl ProviderUsageMetadata {
             full_request_json: None,
             error_message: None,
             error_body: None,
+            response_body: None,
         }
     }
 
@@ -193,6 +194,12 @@ pub fn capture_error_bytes(meta: &mut ProviderUsageMetadata, bytes: &Bytes) {
     capture_error_message(meta, &summarize_error_bytes(bytes));
     let body = String::from_utf8_lossy(bytes.as_ref());
     capture_error_body(meta, &body);
+}
+pub fn capture_response_body(meta: &mut ProviderUsageMetadata, body: &str) {
+    if meta.response_body.is_some() {
+        return;
+    }
+    meta.response_body = Some(body.to_string());
 }
 pub fn capture_codex_dispatch_request_json(
     meta: &mut ProviderUsageMetadata,

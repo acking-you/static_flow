@@ -76,6 +76,8 @@ pub struct KeyRouteConfig {
     pub kiro_latency_routing_enabled: bool,
     /// Whether Kiro thinking signatures and encrypted content are validated.
     pub kiro_protected_content_validation_enabled: bool,
+    /// Whether stable cctest text probes may use dedicated replay/proxy logic.
+    pub kiro_cctest_text_handling_enabled: bool,
     /// Optional Kiro cache policy override JSON.
     pub kiro_cache_policy_override_json: Option<String>,
     /// Optional Kiro billable multiplier override JSON.
@@ -206,6 +208,13 @@ pub struct RuntimeConfigRecord {
     pub kiro_conversation_anchor_max_entries: i64,
     /// Kiro conversation anchor TTL.
     pub kiro_conversation_anchor_ttl_seconds: i64,
+    /// Optional Anthropic-compatible upstream base URL for cctest signature
+    /// probes.
+    #[serde(default)]
+    pub kiro_cctest_proxy_base_url: Option<String>,
+    /// Optional API key for the cctest signature upstream.
+    #[serde(default)]
+    pub kiro_cctest_proxy_api_key: Option<String>,
     /// Update timestamp in Unix milliseconds.
     pub updated_at_ms: i64,
 }
@@ -356,6 +365,8 @@ impl Default for RuntimeConfigRecord {
                 core_store::DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES as i64,
             kiro_conversation_anchor_ttl_seconds:
                 core_store::DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS as i64,
+            kiro_cctest_proxy_base_url: None,
+            kiro_cctest_proxy_api_key: None,
             updated_at_ms: now_ms(),
         }
     }
@@ -419,6 +430,8 @@ impl RuntimeConfigRecord {
             kiro_prefix_cache_entry_ttl_seconds: self.kiro_prefix_cache_entry_ttl_seconds as u64,
             kiro_conversation_anchor_max_entries: self.kiro_conversation_anchor_max_entries as u64,
             kiro_conversation_anchor_ttl_seconds: self.kiro_conversation_anchor_ttl_seconds as u64,
+            kiro_cctest_proxy_base_url: self.kiro_cctest_proxy_base_url.clone(),
+            kiro_cctest_proxy_api_key: self.kiro_cctest_proxy_api_key.clone(),
         }
     }
 
@@ -480,6 +493,8 @@ impl RuntimeConfigRecord {
             config.kiro_conversation_anchor_max_entries as i64;
         self.kiro_conversation_anchor_ttl_seconds =
             config.kiro_conversation_anchor_ttl_seconds as i64;
+        self.kiro_cctest_proxy_base_url = config.kiro_cctest_proxy_base_url.clone();
+        self.kiro_cctest_proxy_api_key = config.kiro_cctest_proxy_api_key.clone();
         self.updated_at_ms = now_ms();
     }
 }

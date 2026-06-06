@@ -89,10 +89,12 @@ CREATE TABLE IF NOT EXISTS usage_event_details (
     upstream_request_body_json VARCHAR,
     full_request_json VARCHAR,
     error_message VARCHAR,
-    error_body VARCHAR
+    error_body VARCHAR,
+    response_body VARCHAR
 );
 ALTER TABLE usage_event_details ADD COLUMN IF NOT EXISTS error_message VARCHAR;
 ALTER TABLE usage_event_details ADD COLUMN IF NOT EXISTS error_body VARCHAR;
+ALTER TABLE usage_event_details ADD COLUMN IF NOT EXISTS response_body VARCHAR;
 
 CREATE TABLE IF NOT EXISTS usage_rollups_hourly (
     bucket_hour TIMESTAMP NOT NULL,

@@ -182,6 +182,8 @@ pub struct UsageEventRow {
     pub error_message: Option<String>,
     /// Raw error response body surfaced for failed requests.
     pub error_body: Option<String>,
+    /// Raw response body captured for explicit diagnostic events.
+    pub response_body: Option<String>,
     /// Whether heavyweight request payload details were externalized.
     pub detail_object_payload_present: bool,
     /// External detail pack object path relative to the configured detail root.
@@ -262,11 +264,13 @@ impl UsageEventRow {
             full_request_json: event.full_request_json.clone(),
             error_message: event.error_message.clone(),
             error_body: event.error_body.clone(),
+            response_body: event.response_body.clone(),
             detail_object_payload_present: has_external_detail_payloads(
                 event.client_request_body_json.as_deref(),
                 event.upstream_request_body_json.as_deref(),
                 event.full_request_json.as_deref(),
                 event.error_body.as_deref(),
+                event.response_body.as_deref(),
             ),
             detail_object_path: None,
             detail_object_offset: None,
@@ -295,11 +299,18 @@ fn has_external_detail_payloads(
     upstream_request_body_json: Option<&str>,
     full_request_json: Option<&str>,
     error_body: Option<&str>,
+    response_body: Option<&str>,
 ) -> bool {
-    [client_request_body_json, upstream_request_body_json, full_request_json, error_body]
-        .into_iter()
-        .flatten()
-        .any(|value| !value.trim().is_empty())
+    [
+        client_request_body_json,
+        upstream_request_body_json,
+        full_request_json,
+        error_body,
+        response_body,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| !value.trim().is_empty())
 }
 
 /// Return the insert statement for the DuckDB `usage_events` fact table.
@@ -395,6 +406,7 @@ struct UsageEventDetailRow {
     full_request_json: Option<String>,
     error_message: Option<String>,
     error_body: Option<String>,
+    response_body: Option<String>,
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -408,6 +420,8 @@ struct UsageEventDetailBlob {
     full_request_json: Option<String>,
     error_message: Option<String>,
     error_body: Option<String>,
+    #[serde(default)]
+    response_body: Option<String>,
 }
 
 #[cfg(feature = "duckdb-runtime")]

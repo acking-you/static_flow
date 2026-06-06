@@ -5,8 +5,8 @@ use std::{num::NonZeroUsize, time::Duration};
 use llm_access_core::store::ProviderProxyConfig;
 
 use super::{
-    ProviderClientCacheKey, DEFAULT_PROVIDER_CLIENT, DEFAULT_PROVIDER_CLIENT_CACHE_CAPACITY,
-    DEFAULT_PROVIDER_CLIENT_POOL_IDLE_TIMEOUT_SECONDS,
+    ProviderClientCacheKey, CCTEST_PROXY_CLIENT, DEFAULT_PROVIDER_CLIENT,
+    DEFAULT_PROVIDER_CLIENT_CACHE_CAPACITY, DEFAULT_PROVIDER_CLIENT_POOL_IDLE_TIMEOUT_SECONDS,
     DEFAULT_PROVIDER_CLIENT_POOL_MAX_IDLE_PER_HOST, MAX_PROVIDER_CLIENT_CACHE_CAPACITY,
     MAX_PROVIDER_CLIENT_POOL_IDLE_TIMEOUT_SECONDS, MAX_PROVIDER_CLIENT_POOL_MAX_IDLE_PER_HOST,
     MIN_PROVIDER_CLIENT_POOL_IDLE_TIMEOUT_SECONDS, PROVIDER_CLIENT_CACHE,
@@ -53,6 +53,11 @@ pub fn provider_client(proxy: Option<&ProviderProxyConfig>) -> anyhow::Result<re
         .put(cache_key, client.clone());
     Ok(client)
 }
+
+pub fn cctest_proxy_client() -> reqwest::Client {
+    CCTEST_PROXY_CLIENT.clone()
+}
+
 pub fn provider_client_cache_capacity() -> NonZeroUsize {
     let capacity = std::env::var("LLM_ACCESS_PROVIDER_CLIENT_CACHE_CAPACITY")
         .ok()

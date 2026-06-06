@@ -63,6 +63,8 @@ impl PostgresControlRepository {
                     kiro_prefix_cache_entry_ttl_seconds,
                     kiro_conversation_anchor_max_entries,
                     kiro_conversation_anchor_ttl_seconds,
+                    kiro_cctest_proxy_base_url,
+                    kiro_cctest_proxy_api_key,
                     updated_at_ms
                  FROM llm_runtime_config
                  WHERE id = 'default'",
@@ -167,13 +169,15 @@ impl PostgresControlRepository {
                     kiro_prefix_cache_mode, kiro_prefix_cache_max_tokens,
                     kiro_prefix_cache_entry_ttl_seconds,
                     kiro_conversation_anchor_max_entries,
-                    kiro_conversation_anchor_ttl_seconds, updated_at_ms
+                    kiro_conversation_anchor_ttl_seconds,
+                    kiro_cctest_proxy_base_url, kiro_cctest_proxy_api_key,
+                    updated_at_ms
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
                     $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
                     $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35,
                     $36, $37, $38, $39::jsonb, $40::jsonb, $41::jsonb, $42,
-                    $43, $44, $45, $46, $47, $48, $49
+                    $43, $44, $45, $46, $47, $48, $49, $50, $51
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     auth_cache_ttl_seconds = EXCLUDED.auth_cache_ttl_seconds,
@@ -248,6 +252,10 @@ impl PostgresControlRepository {
                         EXCLUDED.kiro_conversation_anchor_max_entries,
                     kiro_conversation_anchor_ttl_seconds =
                         EXCLUDED.kiro_conversation_anchor_ttl_seconds,
+                    kiro_cctest_proxy_base_url =
+                        EXCLUDED.kiro_cctest_proxy_base_url,
+                    kiro_cctest_proxy_api_key =
+                        EXCLUDED.kiro_cctest_proxy_api_key,
                     updated_at_ms = EXCLUDED.updated_at_ms",
                 &[
                     &record.id,
@@ -298,6 +306,8 @@ impl PostgresControlRepository {
                     &record.kiro_prefix_cache_entry_ttl_seconds,
                     &record.kiro_conversation_anchor_max_entries,
                     &record.kiro_conversation_anchor_ttl_seconds,
+                    &record.kiro_cctest_proxy_base_url,
+                    &record.kiro_cctest_proxy_api_key,
                     &record.updated_at_ms,
                 ],
             )

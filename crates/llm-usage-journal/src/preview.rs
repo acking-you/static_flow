@@ -250,6 +250,7 @@ mod tests {
             full_request_json: None,
             error_message: None,
             error_body: None,
+            response_body: None,
             timing: UsageTiming::default(),
             stream: UsageStreamDetails::default(),
         }

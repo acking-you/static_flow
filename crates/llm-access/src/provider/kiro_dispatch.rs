@@ -9,7 +9,7 @@ use std::{
 use anyhow::{bail, Context};
 use axum::{
     body::{to_bytes, Body, Bytes},
-    http::{header, Method, Request, StatusCode},
+    http::{header, HeaderMap, Method, Request, StatusCode},
     response::{IntoResponse, Response},
 };
 use futures_util::StreamExt;
@@ -34,13 +34,14 @@ use llm_access_kiro::{
 };
 
 use super::{
-    client::provider_client,
+    cctest::{self, build_direct_replay_body, bytes_to_string, CctestProbeMatch},
+    client::{cctest_proxy_client, provider_client},
     errors::{
-        anthropic_json_error_body, daily_request_limit_cooldown, is_monthly_request_limit,
-        kiro_chunk_contains_content_length_exceeded, kiro_proactive_compact_message,
-        kiro_proactive_compact_response, kiro_prompt_too_long_message,
-        kiro_prompt_too_long_response_for_body, proxy_cooldown_key_for_route,
-        transient_invalid_model_cooldown,
+        anthropic_json_error, anthropic_json_error_body, daily_request_limit_cooldown,
+        is_monthly_request_limit, kiro_chunk_contains_content_length_exceeded,
+        kiro_proactive_compact_message, kiro_proactive_compact_response,
+        kiro_prompt_too_long_message, kiro_prompt_too_long_response_for_body,
+        proxy_cooldown_key_for_route, transient_invalid_model_cooldown,
     },
     kiro_error::{
         kiro_bedrock_anthropic_error, kiro_bedrock_anthropic_error_body,
@@ -58,20 +59,21 @@ use super::{
     },
     kiro_summary::extract_last_message_from_kiro_messages,
     kiro_usage::{
-        build_kiro_usage_summary, record_kiro_preflight_failure, record_kiro_usage,
-        record_kiro_websearch_usage,
+        build_kiro_usage_summary, record_kiro_cctest_usage, record_kiro_preflight_failure,
+        record_kiro_usage, record_kiro_websearch_usage,
     },
     limiter::{kiro_key_limit_response, try_acquire_key_permit},
     route_selection::{hydrate_kiro_route_for_dispatch, select_kiro_route_with_account_permit},
     stream_guards::{non_stream_kiro_response, stream_kiro_upstream_response},
     usage_meta::{
         capture_client_request_body_json, capture_error_body, capture_error_bytes,
-        capture_error_message, capture_upstream_request_body_json,
+        capture_error_message, capture_response_body, capture_upstream_request_body_json,
     },
     util::{clamp_duration_ms, now_millis},
-    KiroPeekedStream, KiroPreflightFailureRecord, KiroResponseAffinityUpdate, KiroResponseContext,
-    KiroStreamPeekError, KiroUsageInputs, KiroUsageRecord, KiroUsageSummary, KiroWebsearchDispatch,
-    KiroWebsearchUsageRecord, ProviderDispatchDeps, ProviderUsageMetadata, WebsearchResponseInput,
+    KiroCctestUsageRecord, KiroPeekedStream, KiroPreflightFailureRecord,
+    KiroResponseAffinityUpdate, KiroResponseContext, KiroStreamPeekError, KiroUsageInputs,
+    KiroUsageRecord, KiroUsageSummary, KiroWebsearchDispatch, KiroWebsearchUsageRecord,
+    ProviderDispatchDeps, ProviderUsageMetadata, WebsearchResponseInput,
     KIRO_EMPTY_STREAM_MAX_RETRIES, MAX_PROVIDER_PROXY_BODY_BYTES,
 };
 use crate::kiro_refresh;
@@ -158,6 +160,50 @@ pub async fn dispatch_kiro_proxy(
     };
     usage_meta =
         usage_meta.with_request_body(&body, clamp_duration_ms(body_read_started.elapsed()));
+    if routes[0].cctest_text_handling_enabled {
+        let cctest_started = Instant::now();
+        let inspection = cctest::inspect_cctest_text_probe(&body);
+        if inspection.should_log_debug() {
+            capture_client_request_body_json(&mut usage_meta, &body);
+            usage_meta.full_request_json = Some(body.clone());
+            usage_meta.routing_diagnostics_json = Some(inspection.diagnostics_json());
+            tracing::info!(
+                key_id = %key.key_id,
+                key_name = %key.key_name,
+                endpoint = %public_path,
+                request_url = %usage_meta.request_url,
+                cctest_body_bytes = inspection.body_bytes,
+                cctest_candidate = inspection.looks_like_cctest_candidate,
+                cctest_has_billing_header = inspection.has_billing_header,
+                cctest_has_cli_entrypoint = inspection.has_cli_entrypoint,
+                cctest_has_cli_version = inspection.has_cli_version,
+                cctest_has_messages_field = inspection.has_messages_field,
+                cctest_json_parsed = inspection.json_parsed,
+                cctest_has_multimodal_content = inspection.has_multimodal_content,
+                cctest_has_web_search_tool = inspection.has_web_search_tool,
+                cctest_request_id = inspection.request_id.as_deref().unwrap_or(""),
+                cctest_probe_kind = inspection.probe_kind.unwrap_or(""),
+                cctest_requires_signature = inspection.requires_signature,
+                cctest_rejection_reason = inspection.rejection_reason.unwrap_or(""),
+                cctest_matched = inspection.matched_probe.is_some(),
+                "kiro cctest probe inspection"
+            );
+        }
+        if let Some(probe) = inspection.matched_probe {
+            usage_meta.mark_pre_handler_done(clamp_duration_ms(cctest_started.elapsed()));
+            return handle_cctest_text_probe(CctestTextProbeDispatch {
+                key,
+                route: routes[0].clone(),
+                endpoint: public_path,
+                request_headers,
+                body,
+                probe,
+                control_store,
+                usage_meta,
+            })
+            .await;
+        }
+    }
     let parse_started = Instant::now();
     let mut payload = match serde_json::from_slice::<MessagesRequest>(&body) {
         Ok(payload) => payload,
@@ -829,6 +875,233 @@ pub async fn dispatch_kiro_proxy(
         return non_stream_kiro_response(response, response_ctx).await;
     }
 }
+struct CctestTextProbeDispatch {
+    key: AuthenticatedKey,
+    route: ProviderKiroRoute,
+    endpoint: &'static str,
+    request_headers: HeaderMap,
+    body: Bytes,
+    probe: CctestProbeMatch,
+    control_store: Arc<dyn llm_access_core::store::ControlStore>,
+    usage_meta: ProviderUsageMetadata,
+}
+
+async fn handle_cctest_text_probe(input: CctestTextProbeDispatch) -> Response {
+    let CctestTextProbeDispatch {
+        key,
+        route,
+        endpoint,
+        request_headers,
+        body,
+        probe,
+        control_store,
+        mut usage_meta,
+    } = input;
+    capture_client_request_body_json(&mut usage_meta, &body);
+    usage_meta.full_request_json = Some(body.clone());
+    let proxy_base_url = route.cctest_proxy_base_url.clone();
+    let proxy_api_key = route.cctest_proxy_api_key.clone();
+    tracing::info!(
+        key_id = %key.key_id,
+        key_name = %key.key_name,
+        account = %route.account_name,
+        endpoint,
+        cctest_request_id = %probe.request_id,
+        cctest_probe_kind = %probe.kind.as_str(),
+        cctest_requires_signature = probe.requires_signature,
+        "handling kiro cctest probe"
+    );
+    let (status, content_type, response_body, handling_mode) = if probe.requires_signature {
+        match (proxy_base_url.as_deref(), proxy_api_key.as_deref()) {
+            (Some(base_url), Some(api_key)) => {
+                forward_cctest_signature_probe(
+                    &request_headers,
+                    &body,
+                    base_url,
+                    api_key,
+                    endpoint,
+                    &mut usage_meta,
+                )
+                .await
+            },
+            (None, _) => cctest_proxy_config_error(
+                &mut usage_meta,
+                "Bedrock error message: cctest signature proxy base URL is not configured",
+            ),
+            (_, None) => cctest_proxy_config_error(
+                &mut usage_meta,
+                "Bedrock error message: cctest signature proxy API key is not configured",
+            ),
+        }
+    } else {
+        let (content_type, response_text) = build_direct_replay_body(&probe);
+        let response_body = Bytes::from(response_text);
+        (StatusCode::OK, content_type, response_body, "replay")
+    };
+    capture_response_body(&mut usage_meta, &bytes_to_string(&response_body));
+    mark_cctest_response_stream_details(&mut usage_meta, &content_type, response_body.len());
+    tracing::info!(
+        key_id = %key.key_id,
+        key_name = %key.key_name,
+        account = %route.account_name,
+        endpoint,
+        cctest_request_id = %probe.request_id,
+        cctest_probe_kind = %probe.kind.as_str(),
+        cctest_handling_mode = handling_mode,
+        status = status.as_u16(),
+        content_type = %content_type,
+        response_bytes = response_body.len(),
+        "completed kiro cctest probe"
+    );
+    let response = response_with_body(status, &content_type, response_body.clone());
+    if let Err(err) = record_kiro_cctest_usage(KiroCctestUsageRecord {
+        control_store: control_store.as_ref(),
+        key: &key,
+        route: &route,
+        endpoint,
+        model: probe.model.as_deref(),
+        status,
+        request_id: &probe.request_id,
+        probe_kind: probe.kind.as_str(),
+        handling_mode,
+        requires_signature: probe.requires_signature,
+        meta: &usage_meta,
+    })
+    .await
+    {
+        tracing::warn!(
+            key_id = %key.key_id,
+            account = %route.account_name,
+            request_id = %probe.request_id,
+            error = %err,
+            "failed to record kiro cctest usage"
+        );
+    }
+    response
+}
+
+async fn forward_cctest_signature_probe(
+    request_headers: &HeaderMap,
+    body: &Bytes,
+    base_url: &str,
+    api_key: &str,
+    endpoint: &str,
+    usage_meta: &mut ProviderUsageMetadata,
+) -> (StatusCode, String, Bytes, &'static str) {
+    capture_upstream_request_body_json(usage_meta, body);
+    let target_url = cctest::proxy_target_url(base_url, endpoint);
+    if let Err(message) = cctest::validate_proxy_target_url(&target_url) {
+        return cctest_proxy_config_error(usage_meta, message);
+    }
+    tracing::info!(
+        endpoint,
+        target_url = %target_url,
+        request_bytes = body.len(),
+        "forwarding kiro cctest signature probe"
+    );
+    let mut request = cctest_proxy_client()
+        .post(&target_url)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {api_key}"))
+        .header("x-api-key", api_key)
+        .body(body.clone());
+    for header_name in ["anthropic-version", "anthropic-beta", "user-agent"] {
+        if let Some(value) = request_headers.get(header_name) {
+            request = request.header(header_name, value.clone());
+        }
+    }
+    match request.send().await {
+        Ok(response) => {
+            usage_meta.mark_upstream_headers();
+            let status =
+                StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("application/json")
+                .to_string();
+            let bytes = response.bytes().await.unwrap_or_else(|_| Bytes::new());
+            usage_meta.mark_post_headers_body();
+            if !status.is_success() {
+                capture_error_bytes(usage_meta, &bytes);
+            }
+            tracing::info!(
+                endpoint,
+                target_url = %target_url,
+                status = status.as_u16(),
+                content_type = %content_type,
+                response_bytes = bytes.len(),
+                "received kiro cctest signature proxy response"
+            );
+            (status, content_type, bytes, "proxy")
+        },
+        Err(err) => {
+            let message =
+                format!("Bedrock error message: cctest signature proxy request failed: {err}");
+            let body = anthropic_json_error_body("api_error", &message);
+            capture_error_message(usage_meta, &message);
+            capture_error_body(usage_meta, &body);
+            tracing::warn!(
+                endpoint,
+                target_url = %target_url,
+                error = %err,
+                "kiro cctest signature proxy request failed"
+            );
+            (
+                StatusCode::BAD_GATEWAY,
+                "application/json".to_string(),
+                Bytes::from(body),
+                "proxy_error",
+            )
+        },
+    }
+}
+
+fn response_with_body(status: StatusCode, content_type: &str, body: Bytes) -> Response {
+    Response::builder()
+        .status(status)
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(body))
+        .unwrap_or_else(|_| {
+            anthropic_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "api_error",
+                "failed to build response",
+            )
+        })
+}
+
+fn mark_cctest_response_stream_details(
+    usage_meta: &mut ProviderUsageMetadata,
+    content_type: &str,
+    bytes_len: usize,
+) {
+    if content_type.starts_with("text/event-stream") {
+        usage_meta.observe_stream_write(bytes_len, Some("message_stop"));
+        usage_meta.mark_stream_completed_cleanly();
+    } else {
+        usage_meta.mark_stream_finish();
+    }
+}
+
+fn cctest_proxy_config_error(
+    usage_meta: &mut ProviderUsageMetadata,
+    message: &str,
+) -> (StatusCode, String, Bytes, &'static str) {
+    let body = anthropic_json_error_body("api_error", message);
+    capture_error_message(usage_meta, message);
+    capture_error_body(usage_meta, &body);
+    tracing::warn!(error_message = %message, "kiro cctest proxy configuration is incomplete");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "application/json".to_string(),
+        Bytes::from(body),
+        "proxy_config_error",
+    )
+}
+
 async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
     let KiroWebsearchDispatch {
         key,
@@ -1061,6 +1334,7 @@ async fn build_kiro_websearch_response(input: WebsearchResponseInput) -> Respons
             &summary,
         ),
         "model": input.payload.model,
+        "stop_details": null,
         "stop_reason": "end_turn",
         "stop_sequence": null,
         "usage": anthropic_usage_json(input.request_input_tokens, output_tokens, 0),

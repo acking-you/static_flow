@@ -45,6 +45,7 @@ fn test_usage_event() -> UsageEvent {
         full_request_json: Some(r#"{"model":"claude-sonnet-4-5"}"#.to_string()),
         error_message: None,
         error_body: None,
+        response_body: None,
         timing: UsageTiming {
             latency_ms: Some(55),
             routing_wait_ms: Some(5),

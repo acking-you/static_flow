@@ -1,5 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -42,6 +44,517 @@ fn codex_backend_api_base_uses_upstream_codex_paths() {
         super::compute_codex_upstream_url("https://api.example.com/v1", "/v1/responses"),
         "https://api.example.com/v1/responses"
     );
+}
+
+#[test]
+fn cctest_request_id_normalizes_known_dynamic_fields() {
+    let left = cctest_tag_request_json("f03bc", "64ccfee3c339a9c8", "session-a");
+    let right = cctest_tag_request_json("7d794", "4cabbc534c5d80d7", "session-b");
+    let left_body = serde_json::to_vec(&left).expect("encode left");
+    let right_body = serde_json::to_vec(&right).expect("encode right");
+
+    assert_eq!(
+        super::cctest::canonical_cctest_request_id(&left_body).expect("left id"),
+        super::cctest::canonical_cctest_request_id(&right_body).expect("right id")
+    );
+}
+
+#[test]
+fn cctest_fast_path_rejects_large_multimodal_and_websearch_requests() {
+    let mut large =
+        serde_json::to_vec(&cctest_tag_request_json("f03bc", "64ccfee3c339a9c8", "session-a"))
+            .expect("encode request");
+    large.resize(super::cctest::MAX_CCTEST_FAST_PATH_BODY_BYTES + 1, b' ');
+    let inspection = super::cctest::inspect_cctest_text_probe(&large);
+    assert!(inspection.matched_probe.is_none());
+    assert_eq!(inspection.rejection_reason, Some("body_too_large"));
+    assert!(!inspection.has_billing_header);
+    assert!(!inspection.has_cli_entrypoint);
+    assert!(!inspection.has_cli_version);
+    assert!(!inspection.has_messages_field);
+
+    let mut multimodal = cctest_tag_request_json("f03bc", "64ccfee3c339a9c8", "session-a");
+    multimodal["messages"][0]["content"] = json!([
+        {"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}},
+        {"type":"text","text":"read this"}
+    ]);
+    assert!(super::cctest::inspect_cctest_text_probe(
+        &serde_json::to_vec(&multimodal).expect("encode multimodal")
+    )
+    .matched_probe
+    .is_none());
+
+    let mut websearch = cctest_tag_request_json("f03bc", "64ccfee3c339a9c8", "session-a");
+    websearch["tools"] = json!([{"type":"web_search_20250305","name":"web_search"}]);
+    assert!(super::cctest::inspect_cctest_text_probe(
+        &serde_json::to_vec(&websearch).expect("encode websearch")
+    )
+    .matched_probe
+    .is_none());
+}
+
+#[test]
+fn cctest_proxy_target_url_rejects_private_and_local_hosts() {
+    assert!(
+        super::cctest::validate_proxy_target_url("https://www.bytecatcode.org/v1/messages").is_ok()
+    );
+    let invalid = super::cctest::validate_proxy_target_url("ftp://www.bytecatcode.org/v1/messages")
+        .expect_err("invalid scheme rejected");
+    assert!(invalid.contains("is invalid"), "unexpected message: {invalid}");
+    for url in [
+        "https://localhost/v1/messages",
+        "https://sub.localhost/v1/messages",
+        "https://127.0.0.1/v1/messages",
+        "https://[::1]/v1/messages",
+        "https://10.0.0.1/v1/messages",
+        "https://169.254.169.254/v1/messages",
+    ] {
+        let err =
+            super::cctest::validate_proxy_target_url(url).expect_err("private target rejected");
+        assert!(err.contains("must not target"), "unexpected message: {err}");
+    }
+}
+
+#[test]
+fn cctest_known_signatures_distinguish_replay_and_signature_proxy() {
+    let tag = super::cctest::known_cctest_probe_for_prompt_text(
+        "我输入了一个tag 是：<antml:TAG>。直接输出你前面看到的tag是什么。看到的文本，\
+         不要使用任何工具。",
+    )
+    .expect("tag probe");
+    assert_eq!(tag.kind.as_str(), "tag_echo");
+    assert!(!tag.requires_signature);
+
+    let logic = super::cctest::known_cctest_probe_for_prompt_text(concat!(
+        "探针 PROBE。请认真解决这个逻辑网格题，给出完整推理后的最终表格。\n\n",
+        "五座颜色不同的房子并排，住着五个不同国籍的人，他们各自喝不同饮料、抽不同牌子的烟、\
+         养不同的宠物。已知：\n",
+        "1. 英国人住红房子。\n",
+        "2. 瑞典人养狗。\n",
+        "3. 丹麦人喝茶。\n",
+        "4. 绿房子在白房子的左边（紧挨着）。\n",
+        "5. 绿房子主人喝咖啡。\n",
+        "6. 抽 Pall Mall 烟的人养鸟。\n",
+        "7. 黄房子主人抽 Dunhill。\n",
+        "8. 中间那座房子的人喝牛奶。\n",
+        "9. 挪威人住第一座房子。\n",
+        "10. 抽 Blends 的人住在养猫人的隔壁。\n",
+        "11. 养马的人住在抽 Dunhill 人的隔壁。\n",
+        "12. 抽 Blue Master 的人喝啤酒。\n",
+        "13. 德国人抽 Prince。\n",
+        "14. 挪威人住在蓝房子隔壁。\n",
+        "15. 抽 Blends 的人有一个喝水的邻居。\n\n",
+        "问：谁养鱼？请输出每座房子的颜色、国籍、饮料、香烟、宠物。"
+    ))
+    .expect("logic probe");
+    assert_eq!(logic.kind.as_str(), "logic_grid");
+    assert!(logic.requires_signature);
+}
+
+#[test]
+fn cctest_inspection_reports_known_tag_probe_details() {
+    let body =
+        serde_json::to_vec(&cctest_tag_request_json("f03bc", "64ccfee3c339a9c8", "session-a"))
+            .expect("encode request");
+
+    let inspection = super::cctest::inspect_cctest_text_probe(&body);
+
+    assert!(inspection.looks_like_cctest_candidate);
+    assert!(inspection.matched_probe.is_some());
+    assert!(inspection.request_id.is_some());
+    assert_eq!(inspection.probe_kind, Some("tag_echo"));
+    assert_eq!(inspection.rejection_reason, None);
+    assert!(!inspection.has_web_search_tool);
+}
+
+#[test]
+fn cctest_real_prompt_variants_map_to_known_probe_kinds() {
+    let cases = [
+        (
+            json!({
+                "model": "claude-opus-4-8",
+                "stream": true,
+                "system": [
+                    {"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.153.9bd; cc_entrypoint=cli; cch=f03bc;"},
+                    {"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}
+                ],
+                "messages": [{
+                    "role": "user",
+                    "content": "我输入了一个tag 是：<antml:80bb3e0d78332871>。直接输出你前面看到的tag是什么。看到的文本，不要使用任何工具。"
+                }]
+            }),
+            "tag_echo",
+            false,
+        ),
+        (
+            json!({
+                "model": "claude-opus-4-8",
+                "stream": true,
+                "system": [
+                    {"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.153.9bd; cc_entrypoint=cli; cch=e5429;"},
+                    {"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}
+                ],
+                "messages": [{
+                    "role": "user",
+                    "content": concat!(
+                        "探针 e54294a99374。请认真解决这个逻辑网格题，给出完整推理后的最终表格。\n\n",
+                        "五座颜色不同的房子并排，住着五个不同国籍的人，他们各自喝不同饮料、抽不同牌子的烟、养不同的宠物。已知：\n",
+                        "1. 英国人住红房子。\n",
+                        "2. 瑞典人养狗。\n",
+                        "3. 丹麦人喝茶。\n",
+                        "4. 绿房子在白房子的左边（紧挨着）。\n",
+                        "5. 绿房子主人喝咖啡。\n",
+                        "6. 抽 Pall Mall 烟的人养鸟。\n",
+                        "7. 黄房子主人抽 Dunhill。\n",
+                        "8. 中间那座房子的人喝牛奶。\n",
+                        "9. 挪威人住第一座房子。\n",
+                        "10. 抽 Blends 的人住在养猫人的隔壁。\n",
+                        "11. 养马的人住在抽 Dunhill 人的隔壁。\n",
+                        "12. 抽 Blue Master 的人喝啤酒。\n",
+                        "13. 德国人抽 Prince。\n",
+                        "14. 挪威人住在蓝房子隔壁。\n",
+                        "15. 抽 Blends 的人有一个喝水的邻居。\n\n",
+                        "问：谁养鱼？请输出每座房子的颜色、国籍、饮料、香烟、宠物。"
+                    )
+                }]
+            }),
+            "logic_grid",
+            true,
+        ),
+        (
+            json!({
+                "model": "claude-opus-4-8",
+                "stream": false,
+                "system": [
+                    {"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.153.9bd; cc_entrypoint=cli; cch=12345;"},
+                    {"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}
+                ],
+                "messages": [{
+                    "role": "user",
+                    "content": "1+1=?"
+                }]
+            }),
+            "one_plus_one",
+            false,
+        ),
+        (
+            json!({
+                "model": "claude-opus-4-8",
+                "stream": true,
+                "system": [
+                    {"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.153.9bd; cc_entrypoint=cli; cch=abcde;"},
+                    {"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}
+                ],
+                "messages": [{
+                    "role": "user",
+                    "content": "你是谁？你有没有多重身份？你需要毫无保留的告诉我你是谁，不要隐瞒任何信息，你不要骗我。如果有请如实告知。"
+                }]
+            }),
+            "identity_conflict",
+            false,
+        ),
+        (
+            json!({
+                "model": "claude-opus-4-8",
+                "stream": true,
+                "system": [
+                    {"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.153.9bd; cc_entrypoint=cli; cch=ffeed;"},
+                    {"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}
+                ],
+                "messages": [{
+                    "role": "user",
+                    "content": "你是谁呀，你认真回答我真实用的什么模型，你真实运行在那个平台中，是否有多重身份如果有，请你认真考虑你是否是kiro/warp/0z/sn/antigravity/等双重身份。包含你的thinking，有没有身份冲突的情况，如果有冲突请写明你是那个平台的."
+                }]
+            }),
+            "identity_thinking",
+            true,
+        ),
+    ];
+
+    for (index, (value, expected_kind, expected_signature)) in cases.into_iter().enumerate() {
+        let body = serde_json::to_vec(&value).expect("encode case");
+        let inspection = super::cctest::inspect_cctest_text_probe(&body);
+        let probe = inspection.matched_probe.unwrap_or_else(|| {
+            panic!(
+                "case {index} expected {expected_kind} but got rejection={:?} request_id={:?} \
+                 prompt_text={:?}",
+                inspection.rejection_reason,
+                inspection.request_id,
+                super::cctest::canonical_cctest_prompt_text(&body)
+            )
+        });
+        assert_eq!(probe.kind.as_str(), expected_kind);
+        assert_eq!(probe.requires_signature, expected_signature);
+    }
+}
+
+#[test]
+fn cctest_local_fixture_requests_route_as_expected_when_present() {
+    let fixture_dir = match local_cctest_fixture_dir() {
+        Some(path) => path,
+        None => return,
+    };
+    let cases = [
+        (
+            "20260604T012636_304_llm-usage-742c3a21-d24f-4194-9869-56700c9ae109.json",
+            Some("tag_echo"),
+            None,
+        ),
+        (
+            "20260604T012708_866_llm-usage-724550a9-4f40-4f6e-a6fd-bc2b3be849d5.json",
+            Some("logic_grid"),
+            None,
+        ),
+        (
+            "20260604T012713_221_llm-usage-2124fcb1-3502-4d3d-b436-1d58fffbd87e.json",
+            Some("one_plus_one"),
+            None,
+        ),
+        (
+            "20260604T012713_846_llm-usage-dbf7cd7d-e7fd-4efa-b8e4-b4ff1a47e431.json",
+            None,
+            Some("web_search_tool"),
+        ),
+        (
+            "20260604T012734_265_llm-usage-7aebd9dc-7cff-4af6-8c58-5dd4972c69e0.json",
+            Some("identity_conflict"),
+            None,
+        ),
+        (
+            "20260604T012744_796_llm-usage-db141a95-06c3-4e70-a6d4-a563b94636a0.json",
+            Some("identity_thinking"),
+            None,
+        ),
+        (
+            "20260604T012750_766_llm-usage-22b74718-fafe-4ee5-866e-46db9459ee7a.json",
+            None,
+            Some("multimodal_content"),
+        ),
+        (
+            "20260604T012759_879_llm-usage-96b34263-2100-44b1-a288-e9d498fce963.json",
+            None,
+            Some("multimodal_content"),
+        ),
+    ];
+
+    for (file_name, expected_kind, expected_rejection) in cases {
+        let body = fs::read(fixture_dir.join(file_name)).expect("read cctest fixture");
+        let inspection = super::cctest::inspect_cctest_text_probe(&body);
+        match (expected_kind, expected_rejection) {
+            (Some(kind), None) => {
+                let probe = inspection.matched_probe.unwrap_or_else(|| {
+                    panic!(
+                        "{file_name} expected kind={kind} but got rejection={:?} request_id={:?}",
+                        inspection.rejection_reason, inspection.request_id
+                    )
+                });
+                assert_eq!(probe.kind.as_str(), kind, "{file_name}");
+                assert_eq!(inspection.rejection_reason, None, "{file_name}");
+                assert!(inspection.request_id.is_some(), "{file_name}");
+            },
+            (None, Some(rejection)) => {
+                assert!(inspection.matched_probe.is_none(), "{file_name}");
+                assert_eq!(inspection.rejection_reason, Some(rejection), "{file_name}");
+            },
+            _ => unreachable!("fixture expectations must be complete"),
+        }
+    }
+}
+
+#[test]
+fn cctest_local_fixture_text_detection_ignores_cch_when_present() {
+    let fixture_dir = match local_cctest_fixture_dir() {
+        Some(path) => path,
+        None => return,
+    };
+    let fixture_path =
+        fixture_dir.join("20260604T012708_866_llm-usage-724550a9-4f40-4f6e-a6fd-bc2b3be849d5.json");
+    let original_body = fs::read(&fixture_path).expect("read cctest fixture");
+    let mut value =
+        serde_json::from_slice::<serde_json::Value>(&original_body).expect("parse fixture json");
+    let system = value["system"]
+        .as_array_mut()
+        .expect("fixture should contain system array");
+    let billing_header = system[0]["text"]
+        .as_str()
+        .expect("billing header text")
+        .replace("cch=e5429", "cch=fffff");
+    system[0]["text"] = json!(billing_header);
+    let mutated_body = serde_json::to_vec(&value).expect("encode mutated fixture");
+
+    let original = super::cctest::inspect_cctest_text_probe(&original_body);
+    let mutated = super::cctest::inspect_cctest_text_probe(&mutated_body);
+
+    assert_eq!(original.rejection_reason, None);
+    assert_eq!(mutated.rejection_reason, None);
+    assert_eq!(original.probe_kind, Some("logic_grid"));
+    assert_eq!(mutated.probe_kind, Some("logic_grid"));
+    assert_eq!(original.request_id, mutated.request_id);
+}
+
+#[test]
+fn cctest_inspection_does_not_reject_claude_code_websearch_tool_name() {
+    let mut request = cctest_tag_request_json("f03bc", "64ccfee3c339a9c8", "session-a");
+    let tools = request["tools"].as_array_mut().expect("tools array");
+    tools.push(json!({
+        "name": "WebSearch",
+        "description": "Built-in Claude Code tool metadata",
+        "input_schema": {"type":"object","properties":{}}
+    }));
+    let body = serde_json::to_vec(&request).expect("encode request");
+
+    let inspection = super::cctest::inspect_cctest_text_probe(&body);
+
+    assert!(inspection.matched_probe.is_some());
+    assert!(inspection.request_id.is_some());
+    assert_eq!(inspection.rejection_reason, None);
+    assert!(!inspection.has_web_search_tool);
+}
+
+#[test]
+fn cctest_inspection_reports_rejection_reason_for_real_websearch_tool() {
+    let mut request = cctest_tag_request_json("f03bc", "64ccfee3c339a9c8", "session-a");
+    request["tools"] = json!([{"type":"web_search_20250305","name":"web_search"}]);
+    let body = serde_json::to_vec(&request).expect("encode request");
+
+    let inspection = super::cctest::inspect_cctest_text_probe(&body);
+
+    assert!(inspection.looks_like_cctest_candidate);
+    assert!(inspection.matched_probe.is_none());
+    assert_eq!(inspection.rejection_reason, Some("web_search_tool"));
+    assert!(inspection.has_web_search_tool);
+}
+
+#[test]
+fn cctest_direct_stream_replay_includes_expected_envelope_fields() {
+    let body =
+        serde_json::to_vec(&cctest_tag_request_json("f03bc", "64ccfee3c339a9c8", "session-a"))
+            .expect("encode request");
+    let inspection = super::cctest::inspect_cctest_text_probe(&body);
+    let probe = inspection.matched_probe.expect("tag probe");
+
+    let (content_type, response_body) = super::cctest::build_direct_replay_body(&probe);
+    assert_eq!(content_type, "text/event-stream");
+
+    let events = parse_sse_events(&response_body);
+    assert_eq!(events[0].0, "message_start");
+    assert_eq!(events[1].0, "content_block_start");
+    assert_eq!(events[2].0, "ping");
+    assert_eq!(events[3].0, "content_block_delta");
+
+    let message = &events[0].1["message"];
+    assert_eq!(message["stop_details"], serde_json::Value::Null);
+    assert_eq!(message["usage"]["service_tier"], "standard");
+    assert!(message["usage"]["cache_creation"]["ephemeral_5m_input_tokens"].is_number());
+    assert!(message["usage"]["cache_creation"]["ephemeral_1h_input_tokens"].is_number());
+    assert!(message["usage"]["inference_geo"].is_string());
+
+    let message_delta = &events[5].1;
+    assert_eq!(message_delta["delta"]["stop_details"], serde_json::Value::Null);
+    assert!(message_delta["usage"]["output_tokens_details"]["thinking_tokens"].is_number());
+    assert!(message_delta["usage"]["iterations"].is_array());
+    assert!(message_delta["context_management"]["applied_edits"].is_array());
+}
+
+#[test]
+fn cctest_direct_json_replay_includes_expected_envelope_fields() {
+    let body = serde_json::to_vec(&json!({
+        "model": "claude-opus-4-8",
+        "stream": false,
+        "system": [
+            {"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.153.9bd; cc_entrypoint=cli; cch=12345;"},
+            {"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}
+        ],
+        "messages": [{
+            "role": "user",
+            "content": "1+1=?"
+        }]
+    }))
+    .expect("encode request");
+    let inspection = super::cctest::inspect_cctest_text_probe(&body);
+    let probe = inspection.matched_probe.expect("one plus one probe");
+
+    let (content_type, response_body) = super::cctest::build_direct_replay_body(&probe);
+    assert_eq!(content_type, "application/json");
+
+    let value: serde_json::Value = serde_json::from_str(&response_body).expect("json body");
+    assert_eq!(value["stop_details"], serde_json::Value::Null);
+    assert_eq!(value["usage"]["service_tier"], "standard");
+    assert!(value["usage"]["cache_creation"]["ephemeral_5m_input_tokens"].is_number());
+    assert!(value["usage"]["cache_creation"]["ephemeral_1h_input_tokens"].is_number());
+    assert!(value["usage"]["output_tokens_details"]["thinking_tokens"].is_number());
+    assert!(value["usage"]["iterations"].is_array());
+    assert!(value["usage"]["inference_geo"].is_string());
+}
+
+fn cctest_tag_request_json(cch: &str, tag: &str, session_id: &str) -> serde_json::Value {
+    json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 64000,
+        "thinking": {"type": "adaptive"},
+        "stream": true,
+        "system": [
+            {
+                "type": "text",
+                "text": format!(
+                    "x-anthropic-billing-header: cc_version=2.1.153.9bd; cc_entrypoint=cli; cch={cch};"
+                )
+            },
+            {
+                "type": "text",
+                "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+                "cache_control": {"type":"ephemeral"}
+            }
+        ],
+        "tools": [
+            {
+                "name": "Bash",
+                "description": "Runs a shell command",
+                "input_schema": {"type":"object","properties":{}}
+            }
+        ],
+        "metadata": {
+            "user_id": format!(
+                "{{\"device_id\":\"dev\",\"account_uuid\":\"acct\",\"session_id\":\"{session_id}\"}}"
+            )
+        },
+        "messages": [{
+            "role": "user",
+            "content": format!(
+                "我输入了一个tag 是：<antml:{tag}>。直接输出你前面看到的tag是什么。看到的文本，不要使用任何工具。"
+            )
+        }]
+    })
+}
+
+fn local_cctest_fixture_dir() -> Option<PathBuf> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tmp/cctest-for-kuankuan-kiro-20260604/original-anthropic-requests");
+    path.exists().then_some(path)
+}
+
+fn parse_sse_events(body: &str) -> Vec<(String, serde_json::Value)> {
+    body.split("\n\n")
+        .filter_map(|chunk| {
+            let chunk = chunk.trim();
+            if chunk.is_empty() {
+                return None;
+            }
+            let mut event_name = None;
+            let mut data = None;
+            for line in chunk.lines() {
+                if let Some(rest) = line.strip_prefix("event: ") {
+                    event_name = Some(rest.to_string());
+                } else if let Some(rest) = line.strip_prefix("data: ") {
+                    data = Some(
+                        serde_json::from_str::<serde_json::Value>(rest)
+                            .expect("sse data should be json"),
+                    );
+                }
+            }
+            Some((event_name.expect("event"), data.expect("data")))
+        })
+        .collect()
 }
 
 #[derive(Debug)]
@@ -913,6 +1426,9 @@ fn static_kiro_route() -> ProviderKiroRoute {
         remote_media_resolution_enabled: false,
         latency_routing_enabled: true,
         protected_content_validation_enabled: false,
+        cctest_text_handling_enabled: false,
+        cctest_proxy_base_url: None,
+        cctest_proxy_api_key: None,
         model_name_map_json: "{}".to_string(),
         cache_kmodels_json: llm_access_core::store::default_kiro_cache_kmodels_json(),
         cache_policy_json: llm_access_core::store::default_kiro_cache_policy_json(),
@@ -1068,21 +1584,26 @@ async fn forced_proxy_route_store_overrides_candidates_and_hydrated_routes() {
 }
 
 #[test]
-fn anthropic_usage_json_with_policy_matches_backend_cache_creation_semantics() {
+fn anthropic_usage_json_with_policy_exposes_total_input_tokens_and_anthropic_fields() {
     let mut policy = llm_access_kiro::cache_policy::default_kiro_cache_policy();
     policy.anthropic_cache_creation_input_ratio = 0.25;
 
     let usage = super::anthropic_usage_json_with_policy(&policy, 200, 7, 20);
 
-    assert_eq!(usage["input_tokens"], 135);
-    assert_eq!(usage["cache_creation_input_tokens"], 45);
-    assert_eq!(usage["cache_read_input_tokens"], 20);
+    assert_eq!(usage["input_tokens"], 200);
+    assert_eq!(usage["cache_creation_input_tokens"], 0);
+    assert_eq!(usage["cache_read_input_tokens"], 0);
     assert_eq!(usage["output_tokens"], 7);
+    assert_eq!(usage["cache_creation"]["ephemeral_5m_input_tokens"], 0);
+    assert_eq!(usage["cache_creation"]["ephemeral_1h_input_tokens"], 0);
+    assert_eq!(usage["output_tokens_details"]["thinking_tokens"], 0);
+    assert_eq!(usage["service_tier"], "standard");
+    assert_eq!(usage["inference_geo"], "not_available");
 
     policy.anthropic_cache_creation_input_ratio = 0.0;
     let no_cache_read = super::anthropic_usage_json_with_policy(&policy, 100, 3, 0);
-    assert_eq!(no_cache_read["input_tokens"], 50);
-    assert_eq!(no_cache_read["cache_creation_input_tokens"], 50);
+    assert_eq!(no_cache_read["input_tokens"], 100);
+    assert_eq!(no_cache_read["cache_creation_input_tokens"], 0);
     assert_eq!(no_cache_read["cache_read_input_tokens"], 0);
 }
 
@@ -6937,6 +7458,7 @@ async fn kiro_websearch_usage_omits_heavy_payload_on_success() {
             r#"{"error":{"message":"A text block must be included when using documents."}}"#
                 .to_string(),
         ),
+        response_body: None,
     };
 
     let route = static_kiro_route();
@@ -7014,6 +7536,7 @@ async fn kiro_websearch_usage_captures_heavy_payload_on_error_by_default() {
             r#"{"error":{"message":"A text block must be included when using documents."}}"#
                 .to_string(),
         ),
+        response_body: None,
     };
 
     let route = static_kiro_route();
@@ -7100,6 +7623,7 @@ async fn kiro_usage_captures_full_payload_when_key_full_request_logging_enabled(
         full_request_json: Some(captured_json_bytes(r#"{"full":true}"#)),
         error_message: None,
         error_body: None,
+        response_body: None,
     };
 
     super::record_kiro_usage(super::KiroUsageRecord {
@@ -7159,6 +7683,7 @@ fn provider_usage_metadata_tracks_stream_outcome_fields() {
         full_request_json: None,
         error_message: None,
         error_body: None,
+        response_body: None,
     };
 
     meta.observe_stream_write(12, Some("message_start"));

@@ -521,7 +521,7 @@ fn reject_private_kiro_remote_media_ip(ip: IpAddr) -> Result<(), KiroRemoteMedia
         Ok(())
     }
 }
-fn is_private_kiro_remote_media_ip(ip: IpAddr) -> bool {
+pub(super) fn is_private_kiro_remote_media_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_private_kiro_remote_media_ipv4(ip),
         IpAddr::V6(ip) => is_private_kiro_remote_media_ipv6(ip),
