@@ -756,6 +756,7 @@ impl ProviderRouteStore for PostgresControlRepository {
         let Some(mut record) = self.get_codex_account_row(&update.account_name).await? else {
             anyhow::bail!("codex account `{}` is not configured", update.account_name);
         };
+        let previous_principal_id = core_store::codex_auth_principal_id(&record.auth_json);
         record.auth_json = update.auth_json.clone();
         if update.account_id.is_some() {
             record.account_id = update.account_id.clone();
@@ -765,6 +766,11 @@ impl ProviderRouteStore for PostgresControlRepository {
         record.last_error = update.last_error.clone();
         record.updated_at_ms = update.refreshed_at_ms;
         self.upsert_codex_account(&record).await?;
+        let mut principal_ids = previous_principal_id.into_iter().collect::<Vec<_>>();
+        if let Some(principal_id) = core_store::codex_auth_principal_id(&record.auth_json) {
+            principal_ids.push(principal_id);
+        }
+        self.invalidate_codex_principal_cache(&principal_ids).await;
         self.invalidate_account_cache(core_store::PROVIDER_CODEX, &record.account_name)
             .await;
         Ok(())
