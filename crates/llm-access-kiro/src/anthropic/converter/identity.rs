@@ -136,6 +136,14 @@ fn contains_ascii_token(content: &str, token: &str) -> bool {
         .any(|part| part == token)
 }
 
+fn starts_with_ascii_token(content: &str, token: &str) -> bool {
+    content.starts_with(token)
+        && content
+            .as_bytes()
+            .get(token.len())
+            .is_none_or(|byte| !byte.is_ascii_alphanumeric())
+}
+
 fn contains_direct_identity_phrase(lower_content: &str, phrase: &str) -> bool {
     lower_content.match_indices(phrase).any(|(index, _)| {
         if index > 0 && lower_content.as_bytes()[index - 1].is_ascii_alphanumeric() {
@@ -144,23 +152,22 @@ fn contains_direct_identity_phrase(lower_content: &str, phrase: &str) -> bool {
         let suffix = lower_content[index + phrase.len()..].trim_start();
         suffix.is_empty()
             || suffix.starts_with(['?', '.', ',', ':', ';', '!'])
-            || suffix.starts_with("exactly")
-            || suffix.starts_with("really")
+            || starts_with_ascii_token(suffix, "exactly")
+            || starts_with_ascii_token(suffix, "really")
             || suffix.starts_with("and ")
     })
 }
 
-fn is_model_identity_probe(content: &str) -> bool {
-    let lower = content.to_lowercase();
+fn is_model_identity_probe(content: &str, lower: &str) -> bool {
     let compact = lower
         .chars()
         .filter(|ch| !ch.is_whitespace() && *ch != '-' && *ch != '_' && *ch != '`')
         .collect::<String>();
-    let asks_identity = contains_direct_identity_phrase(&lower, "who are you")
-        || contains_direct_identity_phrase(&lower, "what are you")
+    let asks_identity = contains_direct_identity_phrase(lower, "who are you")
+        || contains_direct_identity_phrase(lower, "what are you")
         || lower.contains("your identity")
-        || contains_direct_identity_phrase(&lower, "are you claude")
-        || contains_direct_identity_phrase(&lower, "are you kiro")
+        || contains_direct_identity_phrase(lower, "are you claude")
+        || contains_direct_identity_phrase(lower, "are you kiro")
         || content.contains("你是谁")
         || (content.contains("你是什么") && !content.contains("你是什么时候"))
         || content.contains("你的身份")
@@ -182,8 +189,7 @@ fn is_model_identity_probe(content: &str) -> bool {
 }
 
 fn excludes_common_path_identity_rewrite(content: &str, lower: &str) -> bool {
-    mentions_conflict_product(lower)
-        || lower.contains("multiple identities")
+    lower.contains("multiple identities")
         || lower.contains("identity conflict")
         || lower.contains("include your thinking")
         || lower.contains("do not hide anything")
@@ -205,11 +211,13 @@ fn excludes_common_path_identity_rewrite(content: &str, lower: &str) -> bool {
         || content.contains("你在哪个平台")
         || content.contains("你是哪个平台")
         || content.contains("那个平台")
+        || mentions_conflict_product(lower)
 }
 
 fn is_common_path_model_identity_probe(content: &str) -> bool {
     let lower = content.to_lowercase();
-    is_model_identity_probe(content) && !excludes_common_path_identity_rewrite(content, &lower)
+    is_model_identity_probe(content, &lower)
+        && !excludes_common_path_identity_rewrite(content, &lower)
 }
 
 fn model_identity_probe_language(content: &str) -> ResponseIdentityLanguage {
