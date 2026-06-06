@@ -34,6 +34,7 @@ pub async fn select_codex_route_with_account_permit(
     codex_account_cooldowns: &Arc<CodexAccountCooldowns>,
     routes: &[ProviderCodexRoute],
     failed_accounts: &HashSet<String>,
+    preferred_account_name: Option<&str>,
 ) -> Result<(ProviderCodexRoute, LimitPermit), Response> {
     if routes.is_empty() {
         return Err(
@@ -45,6 +46,32 @@ pub async fn select_codex_route_with_account_permit(
         let mut saw_account_cooldown = false;
         let mut saw_terminal_auth_error = false;
         let mut shortest_wait: Option<LimitRejection> = None;
+        if let Some(preferred_route) = preferred_account_name.and_then(|account_name| {
+            routes.iter().find(|route| {
+                route.account_name == account_name && !failed_accounts.contains(&route.account_name)
+            })
+        }) {
+            let has_terminal_auth_error = preferred_route
+                .cached_error_message
+                .as_deref()
+                .is_some_and(is_terminal_codex_auth_error);
+            let has_cooldown = codex_account_cooldowns
+                .cooldown_for_account(&preferred_route.account_name)
+                .is_some();
+            if !has_terminal_auth_error && !has_cooldown {
+                if let Ok(permit) = limiter.try_acquire(
+                    format!(
+                        "account:{}:{}",
+                        ProviderType::Codex.as_storage_str(),
+                        preferred_route.account_name
+                    ),
+                    preferred_route.account_request_max_concurrency,
+                    preferred_route.account_request_min_start_interval_ms,
+                ) {
+                    return Ok((preferred_route.clone(), permit));
+                }
+            }
+        }
         for route in routes {
             if failed_accounts.contains(&route.account_name) {
                 continue;

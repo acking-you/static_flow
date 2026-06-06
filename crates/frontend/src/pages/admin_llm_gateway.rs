@@ -2453,6 +2453,13 @@ pub fn admin_llm_gateway_page() -> Html {
     let codex_weight_plus_input = use_state(|| "10".to_string());
     let codex_weight_pro5x_input = use_state(|| "50".to_string());
     let codex_weight_pro20x_input = use_state(|| "200".to_string());
+    let codex_session_affinity_enabled_input = use_state(|| true);
+    let codex_session_affinity_max_entries_input = use_state(|| "20000".to_string());
+    let codex_session_affinity_ttl_seconds_input = use_state(|| "21600".to_string());
+    let codex_fallback_affinity_enabled_input = use_state(|| true);
+    let codex_fallback_affinity_ttl_seconds_input = use_state(|| "1800".to_string());
+    let codex_fallback_affinity_prefix_bytes_input = use_state(|| "4096".to_string());
+    let codex_fallback_affinity_min_body_bytes_input = use_state(|| "128".to_string());
     let kiro_refresh_min_input = use_state(|| "240".to_string());
     let kiro_refresh_max_input = use_state(|| "300".to_string());
     let kiro_account_jitter_max_input = use_state(|| "10".to_string());
@@ -2852,6 +2859,18 @@ pub fn admin_llm_gateway_page() -> Html {
         let codex_weight_plus_input = codex_weight_plus_input.clone();
         let codex_weight_pro5x_input = codex_weight_pro5x_input.clone();
         let codex_weight_pro20x_input = codex_weight_pro20x_input.clone();
+        let codex_session_affinity_enabled_input = codex_session_affinity_enabled_input.clone();
+        let codex_session_affinity_max_entries_input =
+            codex_session_affinity_max_entries_input.clone();
+        let codex_session_affinity_ttl_seconds_input =
+            codex_session_affinity_ttl_seconds_input.clone();
+        let codex_fallback_affinity_enabled_input = codex_fallback_affinity_enabled_input.clone();
+        let codex_fallback_affinity_ttl_seconds_input =
+            codex_fallback_affinity_ttl_seconds_input.clone();
+        let codex_fallback_affinity_prefix_bytes_input =
+            codex_fallback_affinity_prefix_bytes_input.clone();
+        let codex_fallback_affinity_min_body_bytes_input =
+            codex_fallback_affinity_min_body_bytes_input.clone();
         let kiro_refresh_min_input = kiro_refresh_min_input.clone();
         let kiro_refresh_max_input = kiro_refresh_max_input.clone();
         let kiro_account_jitter_max_input = kiro_account_jitter_max_input.clone();
@@ -2917,6 +2936,19 @@ pub fn admin_llm_gateway_page() -> Html {
             let codex_weight_plus_input = codex_weight_plus_input.clone();
             let codex_weight_pro5x_input = codex_weight_pro5x_input.clone();
             let codex_weight_pro20x_input = codex_weight_pro20x_input.clone();
+            let codex_session_affinity_enabled_input = codex_session_affinity_enabled_input.clone();
+            let codex_session_affinity_max_entries_input =
+                codex_session_affinity_max_entries_input.clone();
+            let codex_session_affinity_ttl_seconds_input =
+                codex_session_affinity_ttl_seconds_input.clone();
+            let codex_fallback_affinity_enabled_input =
+                codex_fallback_affinity_enabled_input.clone();
+            let codex_fallback_affinity_ttl_seconds_input =
+                codex_fallback_affinity_ttl_seconds_input.clone();
+            let codex_fallback_affinity_prefix_bytes_input =
+                codex_fallback_affinity_prefix_bytes_input.clone();
+            let codex_fallback_affinity_min_body_bytes_input =
+                codex_fallback_affinity_min_body_bytes_input.clone();
             let kiro_refresh_min_input = kiro_refresh_min_input.clone();
             let kiro_refresh_max_input = kiro_refresh_max_input.clone();
             let kiro_account_jitter_max_input = kiro_account_jitter_max_input.clone();
@@ -3126,6 +3158,20 @@ pub fn admin_llm_gateway_page() -> Html {
                         codex_weight_plus_input.set(cfg.codex_weight_plus.to_string());
                         codex_weight_pro5x_input.set(cfg.codex_weight_pro5x.to_string());
                         codex_weight_pro20x_input.set(cfg.codex_weight_pro20x.to_string());
+                        codex_session_affinity_enabled_input
+                            .set(cfg.codex_session_affinity_enabled);
+                        codex_session_affinity_max_entries_input
+                            .set(cfg.codex_session_affinity_max_entries.to_string());
+                        codex_session_affinity_ttl_seconds_input
+                            .set(cfg.codex_session_affinity_ttl_seconds.to_string());
+                        codex_fallback_affinity_enabled_input
+                            .set(cfg.codex_fallback_affinity_enabled);
+                        codex_fallback_affinity_ttl_seconds_input
+                            .set(cfg.codex_fallback_affinity_ttl_seconds.to_string());
+                        codex_fallback_affinity_prefix_bytes_input
+                            .set(cfg.codex_fallback_affinity_prefix_bytes.to_string());
+                        codex_fallback_affinity_min_body_bytes_input
+                            .set(cfg.codex_fallback_affinity_min_body_bytes.to_string());
                         kiro_refresh_min_input
                             .set(cfg.kiro_status_refresh_min_interval_seconds.to_string());
                         kiro_refresh_max_input
@@ -3430,6 +3476,18 @@ pub fn admin_llm_gateway_page() -> Html {
         let codex_weight_plus_input = codex_weight_plus_input.clone();
         let codex_weight_pro5x_input = codex_weight_pro5x_input.clone();
         let codex_weight_pro20x_input = codex_weight_pro20x_input.clone();
+        let codex_session_affinity_enabled_input = codex_session_affinity_enabled_input.clone();
+        let codex_session_affinity_max_entries_input =
+            codex_session_affinity_max_entries_input.clone();
+        let codex_session_affinity_ttl_seconds_input =
+            codex_session_affinity_ttl_seconds_input.clone();
+        let codex_fallback_affinity_enabled_input = codex_fallback_affinity_enabled_input.clone();
+        let codex_fallback_affinity_ttl_seconds_input =
+            codex_fallback_affinity_ttl_seconds_input.clone();
+        let codex_fallback_affinity_prefix_bytes_input =
+            codex_fallback_affinity_prefix_bytes_input.clone();
+        let codex_fallback_affinity_min_body_bytes_input =
+            codex_fallback_affinity_min_body_bytes_input.clone();
         let kiro_refresh_min_input = kiro_refresh_min_input.clone();
         let kiro_refresh_max_input = kiro_refresh_max_input.clone();
         let kiro_account_jitter_max_input = kiro_account_jitter_max_input.clone();
@@ -3462,6 +3520,25 @@ pub fn admin_llm_gateway_page() -> Html {
             let codex_weight_plus = (*codex_weight_plus_input).trim().parse::<u64>();
             let codex_weight_pro5x = (*codex_weight_pro5x_input).trim().parse::<u64>();
             let codex_weight_pro20x = (*codex_weight_pro20x_input).trim().parse::<u64>();
+            let codex_session_affinity_enabled = *codex_session_affinity_enabled_input;
+            let codex_session_affinity_max_entries = (*codex_session_affinity_max_entries_input)
+                .trim()
+                .parse::<u64>();
+            let codex_session_affinity_ttl_seconds = (*codex_session_affinity_ttl_seconds_input)
+                .trim()
+                .parse::<u64>();
+            let codex_fallback_affinity_enabled = *codex_fallback_affinity_enabled_input;
+            let codex_fallback_affinity_ttl_seconds = (*codex_fallback_affinity_ttl_seconds_input)
+                .trim()
+                .parse::<u64>();
+            let codex_fallback_affinity_prefix_bytes =
+                (*codex_fallback_affinity_prefix_bytes_input)
+                    .trim()
+                    .parse::<u64>();
+            let codex_fallback_affinity_min_body_bytes =
+                (*codex_fallback_affinity_min_body_bytes_input)
+                    .trim()
+                    .parse::<u64>();
             let kiro_status_refresh_min_interval_seconds =
                 (*kiro_refresh_min_input).trim().parse::<u64>();
             let kiro_status_refresh_max_interval_seconds =
@@ -3541,6 +3618,32 @@ pub fn admin_llm_gateway_page() -> Html {
                     load_error.set(Some("Codex pro20x 权重必须是非负整数".to_string()));
                     return;
                 };
+                let Ok(codex_session_affinity_max_entries) = codex_session_affinity_max_entries
+                else {
+                    load_error.set(Some("Codex 亲和 LRU 容量必须是非负整数".to_string()));
+                    return;
+                };
+                let Ok(codex_session_affinity_ttl_seconds) = codex_session_affinity_ttl_seconds
+                else {
+                    load_error.set(Some("Codex 显式 session TTL 必须是非负整数".to_string()));
+                    return;
+                };
+                let Ok(codex_fallback_affinity_ttl_seconds) = codex_fallback_affinity_ttl_seconds
+                else {
+                    load_error.set(Some("Codex 前缀兜底 TTL 必须是非负整数".to_string()));
+                    return;
+                };
+                let Ok(codex_fallback_affinity_prefix_bytes) = codex_fallback_affinity_prefix_bytes
+                else {
+                    load_error.set(Some("Codex 前缀取样字节必须是非负整数".to_string()));
+                    return;
+                };
+                let Ok(codex_fallback_affinity_min_body_bytes) =
+                    codex_fallback_affinity_min_body_bytes
+                else {
+                    load_error.set(Some("Codex 兜底最小请求体必须是非负整数".to_string()));
+                    return;
+                };
                 let Ok(kiro_status_refresh_min_interval_seconds) =
                     kiro_status_refresh_min_interval_seconds
                 else {
@@ -3600,6 +3703,13 @@ pub fn admin_llm_gateway_page() -> Html {
                     codex_weight_plus,
                     codex_weight_pro5x,
                     codex_weight_pro20x,
+                    codex_session_affinity_enabled,
+                    codex_session_affinity_max_entries,
+                    codex_session_affinity_ttl_seconds,
+                    codex_fallback_affinity_enabled,
+                    codex_fallback_affinity_ttl_seconds,
+                    codex_fallback_affinity_prefix_bytes,
+                    codex_fallback_affinity_min_body_bytes,
                     kiro_status_refresh_min_interval_seconds,
                     kiro_status_refresh_max_interval_seconds,
                     kiro_status_account_jitter_max_seconds,
@@ -6761,6 +6871,122 @@ pub fn admin_llm_gateway_page() -> Html {
                                         Callback::from(move |event: InputEvent| {
                                             if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
                                                 codex_weight_pro20x_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <h3 class={classes!("md:col-span-2", "xl:col-span-3", "m-0", "mt-2", "text-xs", "font-semibold", "uppercase", "tracking-wider", "text-[var(--muted)]")}>{ "Codex Affinity" }</h3>
+                            <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
+                                <input
+                                    type="checkbox"
+                                    checked={*codex_session_affinity_enabled_input}
+                                    onchange={{
+                                        let codex_session_affinity_enabled_input = codex_session_affinity_enabled_input.clone();
+                                        Callback::from(move |event: Event| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                codex_session_affinity_enabled_input.set(target.checked());
+                                            }
+                                        })
+                                    }}
+                                />
+                                <span>{ "启用 Codex 账号亲和" }</span>
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "codex_session_affinity_max_entries" }</span>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*codex_session_affinity_max_entries_input).clone()}
+                                    oninput={{
+                                        let codex_session_affinity_max_entries_input = codex_session_affinity_max_entries_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                codex_session_affinity_max_entries_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "codex_session_affinity_ttl_seconds" }</span>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*codex_session_affinity_ttl_seconds_input).clone()}
+                                    oninput={{
+                                        let codex_session_affinity_ttl_seconds_input = codex_session_affinity_ttl_seconds_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                codex_session_affinity_ttl_seconds_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
+                                <input
+                                    type="checkbox"
+                                    checked={*codex_fallback_affinity_enabled_input}
+                                    onchange={{
+                                        let codex_fallback_affinity_enabled_input = codex_fallback_affinity_enabled_input.clone();
+                                        Callback::from(move |event: Event| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                codex_fallback_affinity_enabled_input.set(target.checked());
+                                            }
+                                        })
+                                    }}
+                                />
+                                <span>{ "无 session 时启用请求体前缀兜底" }</span>
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "codex_fallback_affinity_ttl_seconds" }</span>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*codex_fallback_affinity_ttl_seconds_input).clone()}
+                                    oninput={{
+                                        let codex_fallback_affinity_ttl_seconds_input = codex_fallback_affinity_ttl_seconds_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                codex_fallback_affinity_ttl_seconds_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "codex_fallback_affinity_prefix_bytes" }</span>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*codex_fallback_affinity_prefix_bytes_input).clone()}
+                                    oninput={{
+                                        let codex_fallback_affinity_prefix_bytes_input = codex_fallback_affinity_prefix_bytes_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                codex_fallback_affinity_prefix_bytes_input.set(target.value());
+                                            }
+                                        })
+                                    }}
+                                />
+                            </label>
+                            <label class={classes!("text-sm")}>
+                                <span class={classes!("text-[var(--muted)]")}>{ "codex_fallback_affinity_min_body_bytes" }</span>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2")}
+                                    value={(*codex_fallback_affinity_min_body_bytes_input).clone()}
+                                    oninput={{
+                                        let codex_fallback_affinity_min_body_bytes_input = codex_fallback_affinity_min_body_bytes_input.clone();
+                                        Callback::from(move |event: InputEvent| {
+                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                codex_fallback_affinity_min_body_bytes_input.set(target.value());
                                             }
                                         })
                                     }}

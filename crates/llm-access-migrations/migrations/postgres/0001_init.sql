@@ -134,6 +134,23 @@ CREATE TABLE IF NOT EXISTS llm_runtime_config (
     codex_weight_plus BIGINT NOT NULL DEFAULT 10,
     codex_weight_pro5x BIGINT NOT NULL DEFAULT 50,
     codex_weight_pro20x BIGINT NOT NULL DEFAULT 200,
+    codex_session_affinity_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    codex_session_affinity_max_entries BIGINT NOT NULL DEFAULT 20000 CHECK (
+        codex_session_affinity_max_entries >= 0
+    ),
+    codex_session_affinity_ttl_seconds BIGINT NOT NULL DEFAULT 21600 CHECK (
+        codex_session_affinity_ttl_seconds >= 0
+    ),
+    codex_fallback_affinity_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    codex_fallback_affinity_ttl_seconds BIGINT NOT NULL DEFAULT 1800 CHECK (
+        codex_fallback_affinity_ttl_seconds >= 0
+    ),
+    codex_fallback_affinity_prefix_bytes BIGINT NOT NULL DEFAULT 4096 CHECK (
+        codex_fallback_affinity_prefix_bytes >= 0
+    ),
+    codex_fallback_affinity_min_body_bytes BIGINT NOT NULL DEFAULT 128 CHECK (
+        codex_fallback_affinity_min_body_bytes >= 0
+    ),
     usage_analytics_retention_days BIGINT NOT NULL DEFAULT 7,
     kiro_cctest_proxy_base_url TEXT,
     kiro_cctest_proxy_api_key TEXT

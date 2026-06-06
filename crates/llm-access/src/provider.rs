@@ -5,6 +5,7 @@ mod client;
 mod codex_auth;
 mod codex_dispatch;
 mod codex_models;
+mod codex_session_affinity;
 mod codex_sse;
 mod entry;
 mod errors;
@@ -48,6 +49,11 @@ pub(crate) use codex_auth::{
 use codex_auth::{header_value, normalized_codex_gateway_path};
 pub(crate) use codex_models::{
     codex_public_model_catalog_response, default_codex_public_model_catalog_response,
+};
+#[cfg(test)]
+pub(crate) use codex_session_affinity::CodexAffinitySource;
+pub(crate) use codex_session_affinity::{
+    build_codex_affinity_id, CodexAffinityId, CodexAffinityRuntimeConfig, CodexSessionAffinity,
 };
 pub use entry::{provider_entry, provider_entry_handler};
 use errors::{anthropic_json_error, summarize_error_bytes};
@@ -128,6 +134,7 @@ const KIRO_THINKING_SIGNATURE_SECRET_ENV: &str = "KIRO_THINKING_SIGNATURE_SECRET
 struct CodexDispatchRuntimeConfig {
     client_version: String,
     account_attempt_limit: usize,
+    affinity: CodexAffinityRuntimeConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +180,7 @@ pub struct ProviderState {
     kiro_cache_simulator: Arc<KiroCacheSimulator>,
     request_limiter: Arc<RequestLimiter>,
     codex_account_cooldowns: Arc<CodexAccountCooldowns>,
+    codex_session_affinity: Arc<CodexSessionAffinity>,
     kiro_request_scheduler: Arc<KiroRequestScheduler>,
     kiro_session_affinity: Arc<KiroSessionAffinity>,
     kiro_latency_ranker: Arc<KiroLatencyRanker>,
@@ -191,6 +199,7 @@ pub struct ProviderDispatchDeps {
     kiro_cache_simulator: Arc<KiroCacheSimulator>,
     request_limiter: Arc<RequestLimiter>,
     codex_account_cooldowns: Arc<CodexAccountCooldowns>,
+    codex_session_affinity: Arc<CodexSessionAffinity>,
     kiro_request_scheduler: Arc<KiroRequestScheduler>,
     kiro_session_affinity: Arc<KiroSessionAffinity>,
     kiro_latency_ranker: Arc<KiroLatencyRanker>,

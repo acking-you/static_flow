@@ -12,9 +12,9 @@ use llm_access_core::{provider::ProtocolFamily, store::AdminConfigStore};
 use serde_json::Value;
 
 use super::{
-    errors::extract_error_message_from_json_value, CodexAuthSnapshot, CodexDispatchRuntimeConfig,
-    CodexTurnMetadataHeader, CodexUpstreamSessionHeaders, DEFAULT_WIRE_ORIGINATOR,
-    MAX_CODEX_CLIENT_VERSION_LEN,
+    errors::extract_error_message_from_json_value, CodexAffinityRuntimeConfig, CodexAuthSnapshot,
+    CodexDispatchRuntimeConfig, CodexTurnMetadataHeader, CodexUpstreamSessionHeaders,
+    DEFAULT_WIRE_ORIGINATOR, MAX_CODEX_CLIENT_VERSION_LEN,
 };
 
 pub fn normalized_codex_gateway_path(path: &str) -> Option<&str> {
@@ -92,6 +92,7 @@ pub async fn load_codex_dispatch_runtime_config(
             account_attempt_limit: resolve_codex_account_attempt_limit(
                 config.account_failure_retry_limit,
             ),
+            affinity: CodexAffinityRuntimeConfig::from_admin_config(&config),
         }),
         Err(_) => {
             Err((StatusCode::INTERNAL_SERVER_ERROR, "runtime config store error").into_response())

@@ -108,6 +108,20 @@ pub const DEFAULT_CODEX_WEIGHT_PLUS: u64 = 10;
 pub const DEFAULT_CODEX_WEIGHT_PRO5X: u64 = 50;
 /// Default weighted auto-routing multiplier for Pro 20x Codex accounts.
 pub const DEFAULT_CODEX_WEIGHT_PRO20X: u64 = 200;
+/// Whether Codex account affinity is enabled by default.
+pub const DEFAULT_CODEX_SESSION_AFFINITY_ENABLED: bool = true;
+/// Default in-process Codex account affinity LRU capacity.
+pub const DEFAULT_CODEX_SESSION_AFFINITY_MAX_ENTRIES: u64 = 20_000;
+/// Default TTL for explicit Codex session affinity entries.
+pub const DEFAULT_CODEX_SESSION_AFFINITY_TTL_SECONDS: u64 = 6 * 60 * 60;
+/// Whether body-prefix fallback affinity is enabled by default.
+pub const DEFAULT_CODEX_FALLBACK_AFFINITY_ENABLED: bool = true;
+/// Default TTL for body-prefix fallback Codex affinity entries.
+pub const DEFAULT_CODEX_FALLBACK_AFFINITY_TTL_SECONDS: u64 = 30 * 60;
+/// Default byte count sampled from request bodies for fallback affinity.
+pub const DEFAULT_CODEX_FALLBACK_AFFINITY_PREFIX_BYTES: u64 = 4_096;
+/// Default minimum request body size before fallback affinity is used.
+pub const DEFAULT_CODEX_FALLBACK_AFFINITY_MIN_BODY_BYTES: u64 = 128;
 /// Default lower bound for randomized Kiro status refresh.
 pub const DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS: u64 = 240;
 /// Default upper bound for randomized Kiro status refresh.

@@ -71,7 +71,14 @@ pub fn decode_runtime_config_row(row: PgRow) -> anyhow::Result<RuntimeConfigReco
         kiro_conversation_anchor_ttl_seconds: row.get(47),
         kiro_cctest_proxy_base_url: row.get(48),
         kiro_cctest_proxy_api_key: row.get(49),
-        updated_at_ms: row.get(50),
+        codex_session_affinity_enabled: row.get(50),
+        codex_session_affinity_max_entries: row.get(51),
+        codex_session_affinity_ttl_seconds: row.get(52),
+        codex_fallback_affinity_enabled: row.get(53),
+        codex_fallback_affinity_ttl_seconds: row.get(54),
+        codex_fallback_affinity_prefix_bytes: row.get(55),
+        codex_fallback_affinity_min_body_bytes: row.get(56),
+        updated_at_ms: row.get(57),
     })
 }
 

@@ -38,6 +38,7 @@ use rand::Rng;
 use serde_json::{json, Value};
 
 use super::{
+    build_codex_affinity_id,
     client::provider_client,
     codex_auth::{
         add_codex_upstream_headers, codex_upstream_base_url, compute_codex_upstream_url,
@@ -62,12 +63,12 @@ use super::{
         capture_error_message, extract_model_from_json_body, strip_codex_stream_request_bodies,
     },
     util::clamp_duration_ms,
-    CodexAccountCooldowns, CodexAuthSnapshot, CodexCompletedResponseContext,
-    CodexPreflightFailureRecord, CodexStreamContext, CodexStreamRecordGuard,
-    CodexUpstreamResponseContext, CodexUpstreamResponseParts, ProviderDispatchDeps,
-    ProviderUsageMetadata, StreamRecordState, CODEX_QUOTA_EXHAUSTION_COOLDOWN,
-    CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MAX, CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MIN,
-    MAX_PROVIDER_PROXY_BODY_BYTES,
+    CodexAccountCooldowns, CodexAffinityId, CodexAffinityRuntimeConfig, CodexAuthSnapshot,
+    CodexCompletedResponseContext, CodexPreflightFailureRecord, CodexSessionAffinity,
+    CodexStreamContext, CodexStreamRecordGuard, CodexUpstreamResponseContext,
+    CodexUpstreamResponseParts, ProviderDispatchDeps, ProviderUsageMetadata, StreamRecordState,
+    CODEX_QUOTA_EXHAUSTION_COOLDOWN, CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MAX,
+    CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MIN, MAX_PROVIDER_PROXY_BODY_BYTES,
 };
 use crate::codex_refresh;
 
@@ -83,6 +84,7 @@ pub async fn dispatch_codex_proxy(
         admin_config_store,
         request_limiter,
         codex_account_cooldowns,
+        codex_session_affinity,
         ..
     } = deps;
     let mut usage_meta = ProviderUsageMetadata::from_request_parts(
@@ -212,6 +214,17 @@ pub async fn dispatch_codex_proxy(
     };
     usage_meta.mark_pre_handler_done(clamp_duration_ms(parse_started.elapsed()));
     usage_meta.last_message_content = prepared.last_message_content.clone();
+    let codex_affinity_id = build_codex_affinity_id(
+        &key.key_id,
+        &gateway_path,
+        &request_headers,
+        prepared.thread_anchor.as_deref(),
+        &body,
+        &runtime_config.affinity,
+    );
+    let preferred_account_name = codex_affinity_id.as_ref().and_then(|affinity_id| {
+        codex_session_affinity.lookup(affinity_id, &runtime_config.affinity)
+    });
     let method = match reqwest::Method::from_bytes(prepared.method.as_str().as_bytes()) {
         Ok(method) => method,
         Err(_) => return (StatusCode::METHOD_NOT_ALLOWED, "unsupported method").into_response(),
@@ -236,6 +249,7 @@ pub async fn dispatch_codex_proxy(
             &codex_account_cooldowns,
             &routes,
             &failed_accounts,
+            preferred_account_name.as_deref(),
         )
         .await
         {
@@ -474,6 +488,12 @@ pub async fn dispatch_codex_proxy(
             .await;
         }
         if response.status().is_success() {
+            remember_codex_affinity(
+                codex_session_affinity.as_ref(),
+                codex_affinity_id.as_ref(),
+                &route.account_name,
+                &runtime_config.affinity,
+            );
             let permits = vec![
                 key_permit
                     .take()
@@ -537,6 +557,12 @@ pub async fn dispatch_codex_proxy(
                     },
                 };
                 if response.status().is_success() {
+                    remember_codex_affinity(
+                        codex_session_affinity.as_ref(),
+                        codex_affinity_id.as_ref(),
+                        &route.account_name,
+                        &runtime_config.affinity,
+                    );
                     let permits = vec![
                         key_permit
                             .take()
@@ -609,6 +635,17 @@ pub async fn dispatch_codex_proxy(
             },
         )
         .await;
+    }
+}
+
+fn remember_codex_affinity(
+    affinity: &CodexSessionAffinity,
+    affinity_id: Option<&CodexAffinityId>,
+    account_name: &str,
+    config: &CodexAffinityRuntimeConfig,
+) {
+    if let Some(affinity_id) = affinity_id {
+        affinity.remember(affinity_id, account_name, config);
     }
 }
 async fn adapt_codex_upstream_response(
