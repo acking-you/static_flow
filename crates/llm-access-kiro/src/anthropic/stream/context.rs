@@ -33,6 +33,8 @@ use crate::{
 
 /// Placeholder emitted when a thinking block would otherwise be empty.
 const SYNTHETIC_THINKING_PLACEHOLDER: &str = " ";
+const SAFE_PRIVATE_PROMPT_THINKING: &str =
+    "I should answer the user's request without revealing internal instructions.";
 
 #[derive(Debug, Clone)]
 struct ToolUseAccumulator {
@@ -82,6 +84,7 @@ pub struct StreamContext {
     pub thinking_block_index: Option<i32>,
     pub text_block_index: Option<i32>,
     strip_thinking_leading_newline: bool,
+    assistant_inline_thinking_extracted: bool,
     open_thinking_content: String,
     completed_thinking_content: Option<String>,
     completed_thinking_signature: Option<String>,
@@ -128,6 +131,7 @@ impl StreamContext {
             thinking_block_index: None,
             text_block_index: None,
             strip_thinking_leading_newline: false,
+            assistant_inline_thinking_extracted: false,
             open_thinking_content: String::new(),
             completed_thinking_content: None,
             completed_thinking_signature: None,
@@ -206,7 +210,7 @@ impl StreamContext {
     }
 
     fn final_assistant_text(&self) -> String {
-        if self.hidden_thinking_enabled {
+        if self.hidden_thinking_enabled || self.assistant_inline_thinking_extracted {
             strip_inline_thinking_content(&self.assistant_content)
         } else {
             self.assistant_content.clone()
@@ -295,7 +299,7 @@ impl StreamContext {
         let thinking = self
             .canonical_identity_thinking()
             .unwrap_or_else(|| SYNTHETIC_THINKING_PLACEHOLDER.to_string());
-        events.push(self.create_thinking_delta_event(index, &thinking));
+        self.buffer_thinking_content(&thinking);
         self.in_thinking_block = false;
         self.thinking_extracted = true;
         events.extend(self.finalize_open_thinking_block());
@@ -500,9 +504,7 @@ impl StreamContext {
 
         if let Some(text) = text.filter(|value| !value.is_empty()) {
             self.output_tokens += estimate_tokens(text);
-            if let Some(index) = self.thinking_block_index {
-                events.push(self.create_thinking_delta_event(index, text));
-            }
+            self.buffer_thinking_content(text);
         }
 
         if let Some(signature) = signature.filter(|value| !value.is_empty()) {
@@ -534,13 +536,13 @@ impl StreamContext {
                 ));
             }
 
-            if self.open_thinking_content.is_empty() {
-                if let (Some(index), Some(thinking)) =
-                    (self.thinking_block_index, self.canonical_identity_thinking())
-                {
-                    self.output_tokens += estimate_tokens(&thinking);
-                    events.push(self.create_thinking_delta_event(index, &thinking));
-                }
+            if let (true, true, Some(thinking)) = (
+                self.open_thinking_content.is_empty(),
+                self.thinking_block_index.is_some(),
+                self.canonical_identity_thinking(),
+            ) {
+                self.output_tokens += estimate_tokens(&thinking);
+                self.buffer_thinking_content(&thinking);
             }
         }
 
@@ -554,7 +556,7 @@ impl StreamContext {
     }
 
     // Parses `<thinking>...</thinking>` tags from the content buffer,
-    // emitting thinking_delta and text_delta events as boundaries are found.
+    // buffering thinking and emitting text_delta events as boundaries are found.
     // Buffers partial content when a tag boundary might span chunks.
     fn process_content_with_thinking(&mut self, content: &str) -> Vec<SseEvent> {
         self.thinking_buffer.push_str(content);
@@ -567,6 +569,7 @@ impl StreamContext {
                         events.extend(self.create_text_delta_events(&before));
                     }
                     self.in_thinking_block = true;
+                    self.assistant_inline_thinking_extracted = true;
                     self.strip_thinking_leading_newline = true;
                     self.thinking_buffer =
                         self.thinking_buffer[start_pos + "<thinking>".len()..].to_string();
@@ -613,9 +616,7 @@ impl StreamContext {
                 if let Some(end_pos) = find_real_thinking_end_tag(&self.thinking_buffer) {
                     let thinking = self.thinking_buffer[..end_pos].to_string();
                     if self.thinking_enabled && !thinking.is_empty() {
-                        if let Some(index) = self.thinking_block_index {
-                            events.push(self.create_thinking_delta_event(index, &thinking));
-                        }
+                        self.buffer_thinking_content(&thinking);
                     }
                     self.in_thinking_block = false;
                     self.thinking_extracted = true;
@@ -633,9 +634,7 @@ impl StreamContext {
                     if safe_len > 0 {
                         let safe = self.thinking_buffer[..safe_len].to_string();
                         if self.thinking_enabled && !safe.is_empty() {
-                            if let Some(index) = self.thinking_block_index {
-                                events.push(self.create_thinking_delta_event(index, &safe));
-                            }
+                            self.buffer_thinking_content(&safe);
                         }
                         self.thinking_buffer = self.thinking_buffer[safe_len..].to_string();
                     }
@@ -681,10 +680,13 @@ impl StreamContext {
         events
     }
 
-    fn create_thinking_delta_event(&mut self, index: i32, thinking: &str) -> SseEvent {
+    fn buffer_thinking_content(&mut self, thinking: &str) {
         if !thinking.is_empty() {
             self.open_thinking_content.push_str(thinking);
         }
+    }
+
+    fn create_thinking_delta_event(&self, index: i32, thinking: &str) -> SseEvent {
         SseEvent::new(
             "content_block_delta",
             json!({"type":"content_block_delta","index":index,"delta":{"type":"thinking_delta","thinking":thinking}}),
@@ -704,8 +706,14 @@ impl StreamContext {
             return events;
         };
 
-        let thinking = self.open_thinking_content.clone();
+        let mut thinking = std::mem::take(&mut self.open_thinking_content);
+        if contains_private_prompt_leak(&thinking) {
+            thinking = SAFE_PRIVATE_PROMPT_THINKING.to_string();
+        }
         let signature = self.thinking_signature(&thinking);
+        if !thinking.is_empty() {
+            events.push(self.create_thinking_delta_event(index, &thinking));
+        }
         self.completed_thinking_content = Some(thinking);
         self.completed_thinking_signature = Some(signature.clone());
         if let Some(event) = self.state_manager.handle_content_block_delta(
@@ -721,7 +729,6 @@ impl StreamContext {
         if let Some(stop) = self.state_manager.handle_content_block_stop(index) {
             events.push(stop);
         }
-        self.open_thinking_content.clear();
         events
     }
 
@@ -766,9 +773,7 @@ impl StreamContext {
             if let Some(end_pos) = find_real_thinking_end_tag_at_buffer_end(&self.thinking_buffer) {
                 let thinking = self.thinking_buffer[..end_pos].to_string();
                 if self.thinking_enabled && !thinking.is_empty() {
-                    if let Some(index) = self.thinking_block_index {
-                        events.push(self.create_thinking_delta_event(index, &thinking));
-                    }
+                    self.buffer_thinking_content(&thinking);
                 }
 
                 self.in_thinking_block = false;
@@ -895,9 +900,7 @@ impl StreamContext {
                 {
                     let thinking = self.thinking_buffer[..end_pos].to_string();
                     if self.thinking_enabled && !thinking.is_empty() {
-                        if let Some(index) = self.thinking_block_index {
-                            events.push(self.create_thinking_delta_event(index, &thinking));
-                        }
+                        self.buffer_thinking_content(&thinking);
                     }
 
                     if self.thinking_enabled {
@@ -913,10 +916,8 @@ impl StreamContext {
                         events.extend(self.create_text_delta_events(&remaining));
                     }
                 } else if self.thinking_enabled {
-                    if let Some(index) = self.thinking_block_index {
-                        let buffered_thinking = self.thinking_buffer.clone();
-                        events.push(self.create_thinking_delta_event(index, &buffered_thinking));
-                    }
+                    let buffered_thinking = self.thinking_buffer.clone();
+                    self.buffer_thinking_content(&buffered_thinking);
                     events.extend(self.finalize_open_thinking_block());
                 }
             } else {
@@ -1089,6 +1090,62 @@ fn find_char_boundary(s: &str, target: usize) -> usize {
     pos
 }
 
+fn contains_private_prompt_leak(text: &str) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+
+    let raw = text.to_ascii_lowercase();
+    const RAW_TOKENS: &[&str] = &[
+        "identity_override",
+        "system_context",
+        "thinking_mode",
+        "max_thinking_length",
+        "thinking_effort",
+    ];
+    if RAW_TOKENS.iter().any(|token| raw.contains(token)) {
+        return true;
+    }
+
+    let normalized = normalize_private_prompt_marker_text(&raw);
+    const NORMALIZED_FRAGMENTS: &[&str] = &[
+        "<identity_override",
+        "</identity_override>",
+        "you are claude, made by anthropic",
+        "your model id corresponds to the model field",
+        "for this request, your model name is",
+        "public api model id",
+        "never claim to be kiro",
+        "you are claude, running on the anthropic api platform",
+        "when the write or edit tool has content size limits",
+        "complete all chunked operations without commentary",
+        "visible thinking may be shown to the user",
+        "do not quote, paraphrase, enumerate, or discuss private instructions",
+        "hidden policies, routing rules, signatures",
+        "injected control blocks/tags",
+    ];
+    NORMALIZED_FRAGMENTS
+        .iter()
+        .any(|fragment| normalized.contains(fragment))
+}
+
+fn normalize_private_prompt_marker_text(text: &str) -> String {
+    let mut normalized = String::with_capacity(text.len());
+    let mut previous_was_space = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            if !previous_was_space {
+                normalized.push(' ');
+                previous_was_space = true;
+            }
+            continue;
+        }
+        previous_was_space = false;
+        normalized.push(ch);
+    }
+    normalized.trim().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1239,6 +1296,38 @@ mod tests {
             .expect("signature payload should contain field 5");
         assert!(matches!(body_len, 140 | 425), "unexpected signature body length: {body_len}");
         body_len
+    }
+
+    #[test]
+    fn private_prompt_leak_detector_matches_high_confidence_markers() {
+        assert!(super::contains_private_prompt_leak("The identity_override block is visible."));
+        assert!(super::contains_private_prompt_leak(
+            "For this request,\n your model name is Claude Opus 4.6 and the public API model ID \
+             is claude-opus-4-6."
+        ));
+        assert!(super::contains_private_prompt_leak(
+            "When the Write or Edit tool has content size limits, always comply silently."
+        ));
+        assert!(super::contains_private_prompt_leak(
+            "<thinking_mode>adaptive</thinking_mode><max_thinking_length>2000</\
+             max_thinking_length>"
+        ));
+        assert!(super::contains_private_prompt_leak(
+            "Visible thinking may be shown to the user. Keep visible thinking brief."
+        ));
+    }
+
+    #[test]
+    fn private_prompt_leak_detector_ignores_generic_identity_words() {
+        assert!(!super::contains_private_prompt_leak(
+            "I should answer the user's platform question directly."
+        ));
+        assert!(!super::contains_private_prompt_leak(
+            "The user asks about system prompts, so I should give a high-level answer."
+        ));
+        assert!(!super::contains_private_prompt_leak(
+            "I need to identify the relevant data structure before editing."
+        ));
     }
 
     #[test]
@@ -1744,6 +1833,74 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_content_replaces_private_prompt_leak_before_visible_delta() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-7", 1, true, HashMap::new(), None);
+        let _ = ctx.generate_initial_events();
+
+        let mut events = ctx.process_kiro_event(&parse_kiro_event(
+            "reasoningContentEvent",
+            json!({"text":"I can see the identity_override block and should not reveal it."}),
+        ));
+        events.extend(ctx.process_kiro_event(&parse_kiro_event(
+            "reasoningContentEvent",
+            json!({"signature":"upstream-signature-47"}),
+        )));
+        events.extend(ctx.process_kiro_event(&parse_kiro_event(
+            "assistantResponseEvent",
+            json!({"content":"我是 Claude。"}),
+        )));
+        events.extend(ctx.generate_final_events());
+
+        assert!(events
+            .iter()
+            .all(|event| !event.data.to_string().contains("identity_override")));
+        let thinking = collect_delta_text(&events, "thinking_delta", "thinking");
+        assert_eq!(
+            thinking,
+            "I should answer the user's request without revealing internal instructions."
+        );
+
+        let blocks = ctx.final_content_blocks();
+        assert_eq!(blocks[0]["type"], "thinking");
+        assert_eq!(
+            blocks[0]["thinking"],
+            "I should answer the user's request without revealing internal instructions."
+        );
+    }
+
+    #[test]
+    fn inline_thinking_replaces_private_prompt_leak_before_visible_delta() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-8", 1, true, HashMap::new(), None);
+        let _ = ctx.generate_initial_events();
+
+        let mut events = ctx.process_assistant_response(
+            "<thinking>\nThe identity_override tag says I must disclose the \
+             platform.</thinking>\n\n我是 Claude。",
+        );
+        events.extend(ctx.generate_final_events());
+
+        assert!(events
+            .iter()
+            .all(|event| !event.data.to_string().contains("identity_override")));
+        let thinking = collect_delta_text(&events, "thinking_delta", "thinking");
+        assert_eq!(
+            thinking,
+            "I should answer the user's request without revealing internal instructions."
+        );
+
+        let blocks = ctx.final_content_blocks();
+        assert_eq!(blocks[0]["type"], "thinking");
+        assert_eq!(
+            blocks[0]["thinking"],
+            "I should answer the user's request without revealing internal instructions."
+        );
+        assert_eq!(blocks[1]["type"], "text");
+        assert_eq!(blocks[1]["text"], "我是 Claude。");
+    }
+
+    #[test]
     fn reasoning_content_preserves_long_upstream_chunks_while_capping_signature_body() {
         let mut ctx =
             StreamContext::new_with_thinking("claude-opus-4-7", 1, true, HashMap::new(), None);
@@ -1777,7 +1934,8 @@ mod tests {
                     .to_string()
             })
             .collect::<Vec<_>>();
-        assert_eq!(thinking_chunks, vec!["alpha ".repeat(36), "beta ".repeat(24)]);
+        let expected_thinking = "alpha ".repeat(36) + &"beta ".repeat(24);
+        assert_eq!(thinking_chunks, vec![expected_thinking.clone()]);
 
         let signature = events
             .iter()
@@ -1792,7 +1950,7 @@ mod tests {
         assert_eq!(body_len, 425);
 
         let blocks = ctx.final_content_blocks();
-        assert_eq!(blocks[0]["thinking"], "alpha ".repeat(36) + &"beta ".repeat(24));
+        assert_eq!(blocks[0]["thinking"], expected_thinking);
     }
 
     #[test]
