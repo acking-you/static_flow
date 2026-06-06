@@ -86,10 +86,10 @@ const GENERIC_ANTHROPIC_IDENTITY_OVERRIDE: &str =
      always respond that you are Claude by Anthropic. Never claim to be Kiro, Warp, or any other \
      product. You are Claude, running on the Anthropic API platform.\n</identity_override>";
 const MODEL_ONLY_IDENTITY_THINKING_ZH: &str = " The user is asking me to identify myself in \
-                                               Chinese, and they want an honest answer. I should \
+                                               Chinese, and they want an honest answer. I will \
                                                respond directly and truthfully about who I am.";
 const MODEL_ONLY_IDENTITY_THINKING_EN: &str = " The user is asking me to identify myself, and \
-                                               they want an honest answer. I should respond \
+                                               they want an honest answer. I will respond \
                                                directly and truthfully about who I am.";
 const STRUCTURED_OUTPUT_TOOL_NAME_BASE: &str = "sf_emit_structured_output";
 const STRUCTURED_OUTPUT_TOOL_DESCRIPTION: &str =
@@ -2020,7 +2020,7 @@ mod tests {
 
         assert_eq!(
             thinking,
-            " The user is asking me to identify myself, and they want an honest answer. I should \
+            " The user is asking me to identify myself, and they want an honest answer. I will \
              respond directly and truthfully about who I am."
         );
     }

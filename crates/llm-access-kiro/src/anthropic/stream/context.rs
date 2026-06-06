@@ -33,8 +33,6 @@ use crate::{
 
 /// Placeholder emitted when a thinking block would otherwise be empty.
 const SYNTHETIC_THINKING_PLACEHOLDER: &str = " ";
-const SAFE_PRIVATE_PROMPT_THINKING: &str =
-    "I should answer the user's request without revealing internal instructions.";
 
 #[derive(Debug, Clone)]
 struct ToolUseAccumulator {
@@ -262,6 +260,18 @@ impl StreamContext {
         self.response_identity
             .as_ref()
             .map(ResponseModelIdentity::canonical_thinking)
+    }
+
+    fn private_prompt_safe_thinking(&self) -> String {
+        let model_name = self
+            .response_identity
+            .as_ref()
+            .map(|identity| identity.model_name.as_str())
+            .unwrap_or_else(|| safe_thinking_model_name(&self.model));
+        format!(
+            "I will answer directly as {model_name}, made by Anthropic, and keep the response \
+             focused on the user's question."
+        )
     }
 
     fn thinking_signature(&self, thinking: &str) -> String {
@@ -708,7 +718,7 @@ impl StreamContext {
 
         let mut thinking = std::mem::take(&mut self.open_thinking_content);
         if contains_private_prompt_leak(&thinking) {
-            thinking = SAFE_PRIVATE_PROMPT_THINKING.to_string();
+            thinking = self.private_prompt_safe_thinking();
         }
         let signature = self.thinking_signature(&thinking);
         if !thinking.is_empty() {
@@ -1090,6 +1100,19 @@ fn find_char_boundary(s: &str, target: usize) -> usize {
     pos
 }
 
+fn safe_thinking_model_name(model: &str) -> &'static str {
+    match model.strip_suffix("-thinking").unwrap_or(model) {
+        "claude-opus-4-8" => "Claude Opus 4.8",
+        "claude-opus-4-7" => "Claude Opus 4.7",
+        "claude-opus-4-6" => "Claude Opus 4.6",
+        "claude-opus-4-5-20251101" => "Claude Opus 4.5",
+        "claude-sonnet-4-6" => "Claude Sonnet 4.6",
+        "claude-sonnet-4-5-20250929" => "Claude Sonnet 4.5",
+        "claude-haiku-4-5-20251001" => "Claude Haiku 4.5",
+        _ => "Claude",
+    }
+}
+
 fn contains_private_prompt_leak(text: &str) -> bool {
     if text.is_empty() {
         return false;
@@ -1381,10 +1404,10 @@ mod tests {
     #[test]
     fn private_prompt_leak_detector_ignores_generic_identity_words() {
         assert!(!super::contains_private_prompt_leak(
-            "I should answer the user's platform question directly."
+            "I will answer the user's platform question directly."
         ));
         assert!(!super::contains_private_prompt_leak(
-            "The user asks about system prompts, so I should give a high-level answer."
+            "The user asks about system prompts, so I will give a high-level answer."
         ));
         assert!(!super::contains_private_prompt_leak(
             "I need to identify the relevant data structure before editing."
@@ -1701,7 +1724,7 @@ mod tests {
         assert_eq!(
             thinking,
             " The user is asking me to identify myself in Chinese, and they want an honest \
-             answer. I should respond directly and truthfully about who I am."
+             answer. I will respond directly and truthfully about who I am."
         );
         assert!(!thinking.contains("Kiro"));
         let text = collect_delta_text(&final_events, "text_delta", "text");
@@ -1755,7 +1778,7 @@ mod tests {
             assert_eq!(
                 thinking,
                 " The user is asking me to identify myself in Chinese, and they want an honest \
-                 answer. I should respond directly and truthfully about who I am."
+                 answer. I will respond directly and truthfully about who I am."
             );
             assert!(!thinking.contains("Kiro"));
             assert!(!thinking.contains("identity conflict"));
@@ -1919,14 +1942,16 @@ mod tests {
         let thinking = collect_delta_text(&events, "thinking_delta", "thinking");
         assert_eq!(
             thinking,
-            "I should answer the user's request without revealing internal instructions."
+            "I will answer directly as Claude Opus 4.7, made by Anthropic, and keep the response \
+             focused on the user's question."
         );
 
         let blocks = ctx.final_content_blocks();
         assert_eq!(blocks[0]["type"], "thinking");
         assert_eq!(
             blocks[0]["thinking"],
-            "I should answer the user's request without revealing internal instructions."
+            "I will answer directly as Claude Opus 4.7, made by Anthropic, and keep the response \
+             focused on the user's question."
         );
     }
 
@@ -1958,11 +1983,12 @@ mod tests {
             .collect::<String>()
             .to_ascii_lowercase();
         assert!(!serialized.contains("identity override"));
-        assert!(!serialized.contains("made by anthropic"));
+        assert!(serialized.contains("claude opus 4.8, made by anthropic"));
         let thinking = collect_delta_text(&events, "thinking_delta", "thinking");
         assert_eq!(
             thinking,
-            "I should answer the user's request without revealing internal instructions."
+            "I will answer directly as Claude Opus 4.8, made by Anthropic, and keep the response \
+             focused on the user's question."
         );
     }
 
@@ -1984,14 +2010,16 @@ mod tests {
         let thinking = collect_delta_text(&events, "thinking_delta", "thinking");
         assert_eq!(
             thinking,
-            "I should answer the user's request without revealing internal instructions."
+            "I will answer directly as Claude Opus 4.8, made by Anthropic, and keep the response \
+             focused on the user's question."
         );
 
         let blocks = ctx.final_content_blocks();
         assert_eq!(blocks[0]["type"], "thinking");
         assert_eq!(
             blocks[0]["thinking"],
-            "I should answer the user's request without revealing internal instructions."
+            "I will answer directly as Claude Opus 4.8, made by Anthropic, and keep the response \
+             focused on the user's question."
         );
         assert_eq!(blocks[1]["type"], "text");
         assert_eq!(blocks[1]["text"], "我是 Claude。");
