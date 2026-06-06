@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
     extract::State,
-    http::{header, HeaderMap, Request, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Request, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -30,8 +30,9 @@ use serde_json::json;
 use tokio::sync::Notify;
 
 use super::{
-    select_codex_route_with_account_permit, CodexAccountCooldowns, ProviderDispatcher,
-    RequestLimiter,
+    build_codex_affinity_id, select_codex_route_with_account_permit, CodexAccountCooldowns,
+    CodexAffinityId, CodexAffinityRuntimeConfig, CodexAffinitySource, CodexSessionAffinity,
+    ProviderDispatcher, RequestLimiter,
 };
 
 #[test]
@@ -5717,11 +5718,88 @@ async fn codex_route_selection_skips_terminal_auth_error_routes() {
         &cooldowns,
         &[blocked, healthy],
         &HashSet::new(),
+        None,
     )
     .await
     .expect("healthy route should still be selected");
 
     assert_eq!(route.account_name, "codex-b");
+}
+
+#[tokio::test]
+async fn codex_route_selection_prefers_affinity_account_when_usable() {
+    let limiter = Arc::new(RequestLimiter::default());
+    let cooldowns = Arc::new(CodexAccountCooldowns::default());
+    let first = codex_route_for_account("codex-a", "upstream-token-a");
+    let preferred = codex_route_for_account("codex-b", "upstream-token-b");
+
+    let (route, _permit) = select_codex_route_with_account_permit(
+        &limiter,
+        &cooldowns,
+        &[first, preferred],
+        &HashSet::new(),
+        Some("codex-b"),
+    )
+    .await
+    .expect("preferred route should be selected");
+
+    assert_eq!(route.account_name, "codex-b");
+}
+
+#[test]
+fn codex_affinity_id_uses_explicit_session_before_body_fallback() {
+    let mut headers = HeaderMap::new();
+    headers.insert("session_id", HeaderValue::from_static("session-a"));
+    let config = CodexAffinityRuntimeConfig::default();
+
+    let affinity = build_codex_affinity_id(
+        "key-a",
+        "/v1/responses",
+        &headers,
+        Some("thread-anchor"),
+        br#"{"input":"body that should not affect explicit affinity"}"#,
+        &config,
+    )
+    .expect("explicit affinity id");
+
+    assert_eq!(affinity.source, CodexAffinitySource::Explicit);
+    assert_eq!(affinity.key.as_str(), "key-a:explicit:session-a");
+}
+
+#[test]
+fn codex_affinity_id_hashes_body_prefix_when_explicit_session_is_missing() {
+    let headers = HeaderMap::new();
+    let mut config = CodexAffinityRuntimeConfig::default();
+    config.fallback_prefix_bytes = 16;
+    config.fallback_min_body_bytes = 8;
+    let body_a = b"same-prefix-1234567890 trailing-a";
+    let body_b = b"same-prefix-1234567890 trailing-b";
+
+    let first = build_codex_affinity_id("key-a", "/v1/responses", &headers, None, body_a, &config)
+        .expect("fallback affinity id");
+    let second = build_codex_affinity_id("key-a", "/v1/responses", &headers, None, body_b, &config)
+        .expect("fallback affinity id");
+
+    assert_eq!(first.source, CodexAffinitySource::FallbackBodyPrefix);
+    assert_eq!(first.key, second.key);
+    assert!(first.key.starts_with("key-a:fallback-body-prefix:"));
+}
+
+#[test]
+fn codex_session_affinity_remembers_and_expires_entries() {
+    let affinity = CodexSessionAffinity::default();
+    let mut config = CodexAffinityRuntimeConfig::default();
+    config.session_ttl = Duration::from_millis(1);
+    let affinity_id = CodexAffinityId {
+        key: "key-a:explicit:session-a".to_string(),
+        source: CodexAffinitySource::Explicit,
+    };
+
+    affinity.remember(&affinity_id, "codex-a", &config);
+    assert_eq!(affinity.lookup(&affinity_id, &config).as_deref(), Some("codex-a"));
+
+    std::thread::sleep(Duration::from_millis(5));
+    assert!(affinity.lookup(&affinity_id, &config).is_none());
 }
 
 #[tokio::test]
@@ -5746,6 +5824,7 @@ async fn codex_route_selection_returns_bad_gateway_when_all_routes_have_terminal
         &cooldowns,
         &[blocked_a, blocked_b],
         &HashSet::new(),
+        None,
     )
     .await
     {

@@ -8,7 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     DEFAULT_ACCOUNT_FAILURE_RETRY_LIMIT, DEFAULT_AUTH_CACHE_TTL_SECONDS,
-    DEFAULT_CODEX_CLIENT_VERSION, DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+    DEFAULT_CODEX_CLIENT_VERSION, DEFAULT_CODEX_FALLBACK_AFFINITY_ENABLED,
+    DEFAULT_CODEX_FALLBACK_AFFINITY_MIN_BODY_BYTES, DEFAULT_CODEX_FALLBACK_AFFINITY_PREFIX_BYTES,
+    DEFAULT_CODEX_FALLBACK_AFFINITY_TTL_SECONDS, DEFAULT_CODEX_SESSION_AFFINITY_ENABLED,
+    DEFAULT_CODEX_SESSION_AFFINITY_MAX_ENTRIES, DEFAULT_CODEX_SESSION_AFFINITY_TTL_SECONDS,
+    DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
     DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
     DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_CODEX_WEIGHT_FREE,
     DEFAULT_CODEX_WEIGHT_PLUS, DEFAULT_CODEX_WEIGHT_PRO20X, DEFAULT_CODEX_WEIGHT_PRO5X,
@@ -54,6 +58,21 @@ pub struct AdminRuntimeConfig {
     pub codex_weight_pro5x: u64,
     /// Weight multiplier applied to Pro 20x Codex accounts during auto routing.
     pub codex_weight_pro20x: u64,
+    /// Whether Codex account affinity is enabled.
+    pub codex_session_affinity_enabled: bool,
+    /// In-process Codex account affinity LRU capacity.
+    pub codex_session_affinity_max_entries: u64,
+    /// TTL for explicit Codex session affinity entries.
+    pub codex_session_affinity_ttl_seconds: u64,
+    /// Whether body-prefix fallback affinity is enabled when no session id is
+    /// available.
+    pub codex_fallback_affinity_enabled: bool,
+    /// TTL for fallback body-prefix affinity entries.
+    pub codex_fallback_affinity_ttl_seconds: u64,
+    /// Number of request-body prefix bytes sampled for fallback affinity.
+    pub codex_fallback_affinity_prefix_bytes: u64,
+    /// Minimum request-body size before fallback affinity is used.
+    pub codex_fallback_affinity_min_body_bytes: u64,
     /// Kiro minimum status refresh interval.
     pub kiro_status_refresh_min_interval_seconds: u64,
     /// Kiro maximum status refresh interval.
@@ -142,6 +161,13 @@ impl Default for AdminRuntimeConfig {
             codex_weight_plus: DEFAULT_CODEX_WEIGHT_PLUS,
             codex_weight_pro5x: DEFAULT_CODEX_WEIGHT_PRO5X,
             codex_weight_pro20x: DEFAULT_CODEX_WEIGHT_PRO20X,
+            codex_session_affinity_enabled: DEFAULT_CODEX_SESSION_AFFINITY_ENABLED,
+            codex_session_affinity_max_entries: DEFAULT_CODEX_SESSION_AFFINITY_MAX_ENTRIES,
+            codex_session_affinity_ttl_seconds: DEFAULT_CODEX_SESSION_AFFINITY_TTL_SECONDS,
+            codex_fallback_affinity_enabled: DEFAULT_CODEX_FALLBACK_AFFINITY_ENABLED,
+            codex_fallback_affinity_ttl_seconds: DEFAULT_CODEX_FALLBACK_AFFINITY_TTL_SECONDS,
+            codex_fallback_affinity_prefix_bytes: DEFAULT_CODEX_FALLBACK_AFFINITY_PREFIX_BYTES,
+            codex_fallback_affinity_min_body_bytes: DEFAULT_CODEX_FALLBACK_AFFINITY_MIN_BODY_BYTES,
             kiro_status_refresh_min_interval_seconds:
                 DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS,
             kiro_status_refresh_max_interval_seconds:
@@ -218,6 +244,27 @@ pub struct UpdateAdminRuntimeConfig {
     /// Pro 20x Codex routing weight.
     #[serde(default)]
     pub codex_weight_pro20x: Option<u64>,
+    /// Codex account-affinity toggle.
+    #[serde(default)]
+    pub codex_session_affinity_enabled: Option<bool>,
+    /// Codex account-affinity LRU capacity.
+    #[serde(default)]
+    pub codex_session_affinity_max_entries: Option<u64>,
+    /// Explicit Codex session-affinity TTL.
+    #[serde(default)]
+    pub codex_session_affinity_ttl_seconds: Option<u64>,
+    /// Body-prefix fallback affinity toggle.
+    #[serde(default)]
+    pub codex_fallback_affinity_enabled: Option<bool>,
+    /// Body-prefix fallback affinity TTL.
+    #[serde(default)]
+    pub codex_fallback_affinity_ttl_seconds: Option<u64>,
+    /// Body-prefix fallback sample bytes.
+    #[serde(default)]
+    pub codex_fallback_affinity_prefix_bytes: Option<u64>,
+    /// Body-prefix fallback minimum body bytes.
+    #[serde(default)]
+    pub codex_fallback_affinity_min_body_bytes: Option<u64>,
     /// Kiro minimum status refresh interval.
     #[serde(default)]
     pub kiro_status_refresh_min_interval_seconds: Option<u64>,
@@ -461,5 +508,18 @@ mod tests {
         assert_eq!(config.kiro_conversation_anchor_ttl_seconds, 6 * 60 * 60);
         assert_eq!(config.kiro_context_usage_min_request_tokens, 15_000);
         assert_eq!(config.kiro_compact_trigger_tokens, 780_000);
+    }
+
+    #[test]
+    fn admin_runtime_config_uses_codex_affinity_defaults() {
+        let config = super::AdminRuntimeConfig::default();
+
+        assert!(config.codex_session_affinity_enabled);
+        assert_eq!(config.codex_session_affinity_max_entries, 20_000);
+        assert_eq!(config.codex_session_affinity_ttl_seconds, 6 * 60 * 60);
+        assert!(config.codex_fallback_affinity_enabled);
+        assert_eq!(config.codex_fallback_affinity_ttl_seconds, 30 * 60);
+        assert_eq!(config.codex_fallback_affinity_prefix_bytes, 4_096);
+        assert_eq!(config.codex_fallback_affinity_min_body_bytes, 128);
     }
 }

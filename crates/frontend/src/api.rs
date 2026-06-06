@@ -47,6 +47,34 @@ fn default_codex_weight_pro20x() -> u64 {
     200
 }
 
+fn default_codex_session_affinity_enabled() -> bool {
+    true
+}
+
+fn default_codex_session_affinity_max_entries() -> u64 {
+    20_000
+}
+
+fn default_codex_session_affinity_ttl_seconds() -> u64 {
+    6 * 60 * 60
+}
+
+fn default_codex_fallback_affinity_enabled() -> bool {
+    true
+}
+
+fn default_codex_fallback_affinity_ttl_seconds() -> u64 {
+    30 * 60
+}
+
+fn default_codex_fallback_affinity_prefix_bytes() -> u64 {
+    4_096
+}
+
+fn default_codex_fallback_affinity_min_body_bytes() -> u64 {
+    128
+}
+
 fn default_usage_journal_max_file_bytes() -> u64 {
     64 * 1024 * 1024
 }
@@ -6890,6 +6918,20 @@ pub struct LlmGatewayRuntimeConfig {
     pub codex_weight_pro5x: u64,
     #[serde(default = "default_codex_weight_pro20x")]
     pub codex_weight_pro20x: u64,
+    #[serde(default = "default_codex_session_affinity_enabled")]
+    pub codex_session_affinity_enabled: bool,
+    #[serde(default = "default_codex_session_affinity_max_entries")]
+    pub codex_session_affinity_max_entries: u64,
+    #[serde(default = "default_codex_session_affinity_ttl_seconds")]
+    pub codex_session_affinity_ttl_seconds: u64,
+    #[serde(default = "default_codex_fallback_affinity_enabled")]
+    pub codex_fallback_affinity_enabled: bool,
+    #[serde(default = "default_codex_fallback_affinity_ttl_seconds")]
+    pub codex_fallback_affinity_ttl_seconds: u64,
+    #[serde(default = "default_codex_fallback_affinity_prefix_bytes")]
+    pub codex_fallback_affinity_prefix_bytes: u64,
+    #[serde(default = "default_codex_fallback_affinity_min_body_bytes")]
+    pub codex_fallback_affinity_min_body_bytes: u64,
     pub kiro_status_refresh_min_interval_seconds: u64,
     pub kiro_status_refresh_max_interval_seconds: u64,
     pub kiro_status_account_jitter_max_seconds: u64,
@@ -7718,6 +7760,14 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             codex_weight_plus: default_codex_weight_plus(),
             codex_weight_pro5x: default_codex_weight_pro5x(),
             codex_weight_pro20x: default_codex_weight_pro20x(),
+            codex_session_affinity_enabled: default_codex_session_affinity_enabled(),
+            codex_session_affinity_max_entries: default_codex_session_affinity_max_entries(),
+            codex_session_affinity_ttl_seconds: default_codex_session_affinity_ttl_seconds(),
+            codex_fallback_affinity_enabled: default_codex_fallback_affinity_enabled(),
+            codex_fallback_affinity_ttl_seconds: default_codex_fallback_affinity_ttl_seconds(),
+            codex_fallback_affinity_prefix_bytes: default_codex_fallback_affinity_prefix_bytes(),
+            codex_fallback_affinity_min_body_bytes:
+                default_codex_fallback_affinity_min_body_bytes(),
             kiro_status_refresh_min_interval_seconds: 240,
             kiro_status_refresh_max_interval_seconds: 300,
             kiro_status_account_jitter_max_seconds: 10,
@@ -11855,6 +11905,13 @@ mod tests {
         assert_eq!(config.usage_query_bind_addr, "127.0.0.1:19081");
         assert_eq!(config.usage_query_base_url, "http://127.0.0.1:19081");
         assert_eq!(config.usage_analytics_retention_days, 14);
+        assert!(config.codex_session_affinity_enabled);
+        assert_eq!(config.codex_session_affinity_max_entries, 20_000);
+        assert_eq!(config.codex_session_affinity_ttl_seconds, 21_600);
+        assert!(config.codex_fallback_affinity_enabled);
+        assert_eq!(config.codex_fallback_affinity_ttl_seconds, 1_800);
+        assert_eq!(config.codex_fallback_affinity_prefix_bytes, 4_096);
+        assert_eq!(config.codex_fallback_affinity_min_body_bytes, 128);
     }
 
     #[test]

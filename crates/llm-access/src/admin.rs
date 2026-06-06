@@ -62,6 +62,9 @@ const MIN_RUNTIME_ACCOUNT_FAILURE_RETRY_LIMIT: u64 = 0;
 const MIN_RUNTIME_STATUS_REFRESH_INTERVAL_SECONDS: u64 = 240;
 const MAX_RUNTIME_STATUS_REFRESH_INTERVAL_SECONDS: u64 = 3_600;
 const MAX_RUNTIME_STATUS_ACCOUNT_JITTER_SECONDS: u64 = 60;
+const MAX_RUNTIME_CODEX_AFFINITY_MAX_ENTRIES: u64 = 1_000_000;
+const MAX_RUNTIME_CODEX_AFFINITY_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
+const MAX_RUNTIME_CODEX_FALLBACK_PREFIX_BYTES: u64 = 1024 * 1024;
 const MIN_RUNTIME_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 1;
 const MAX_RUNTIME_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 16_384;
 const MIN_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 1;
@@ -3748,6 +3751,53 @@ fn apply_runtime_config_update(
     validate_max("codex_weight_pro5x", codex_weight_pro5x, u64::MAX)?;
     validate_max("codex_weight_pro20x", codex_weight_pro20x, u64::MAX)?;
 
+    let codex_session_affinity_enabled = request
+        .codex_session_affinity_enabled
+        .unwrap_or(current.codex_session_affinity_enabled);
+    let codex_session_affinity_max_entries = request
+        .codex_session_affinity_max_entries
+        .unwrap_or(current.codex_session_affinity_max_entries);
+    validate_max(
+        "codex_session_affinity_max_entries",
+        codex_session_affinity_max_entries,
+        MAX_RUNTIME_CODEX_AFFINITY_MAX_ENTRIES,
+    )?;
+    let codex_session_affinity_ttl_seconds = request
+        .codex_session_affinity_ttl_seconds
+        .unwrap_or(current.codex_session_affinity_ttl_seconds);
+    validate_max(
+        "codex_session_affinity_ttl_seconds",
+        codex_session_affinity_ttl_seconds,
+        MAX_RUNTIME_CODEX_AFFINITY_TTL_SECONDS,
+    )?;
+    let codex_fallback_affinity_enabled = request
+        .codex_fallback_affinity_enabled
+        .unwrap_or(current.codex_fallback_affinity_enabled);
+    let codex_fallback_affinity_ttl_seconds = request
+        .codex_fallback_affinity_ttl_seconds
+        .unwrap_or(current.codex_fallback_affinity_ttl_seconds);
+    validate_max(
+        "codex_fallback_affinity_ttl_seconds",
+        codex_fallback_affinity_ttl_seconds,
+        MAX_RUNTIME_CODEX_AFFINITY_TTL_SECONDS,
+    )?;
+    let codex_fallback_affinity_prefix_bytes = request
+        .codex_fallback_affinity_prefix_bytes
+        .unwrap_or(current.codex_fallback_affinity_prefix_bytes);
+    validate_max(
+        "codex_fallback_affinity_prefix_bytes",
+        codex_fallback_affinity_prefix_bytes,
+        MAX_RUNTIME_CODEX_FALLBACK_PREFIX_BYTES,
+    )?;
+    let codex_fallback_affinity_min_body_bytes = request
+        .codex_fallback_affinity_min_body_bytes
+        .unwrap_or(current.codex_fallback_affinity_min_body_bytes);
+    validate_max(
+        "codex_fallback_affinity_min_body_bytes",
+        codex_fallback_affinity_min_body_bytes,
+        MAX_RUNTIME_CODEX_FALLBACK_PREFIX_BYTES,
+    )?;
+
     let kiro_status_refresh_min_interval_seconds = request
         .kiro_status_refresh_min_interval_seconds
         .unwrap_or(current.kiro_status_refresh_min_interval_seconds);
@@ -4001,6 +4051,13 @@ fn apply_runtime_config_update(
         codex_weight_plus,
         codex_weight_pro5x,
         codex_weight_pro20x,
+        codex_session_affinity_enabled,
+        codex_session_affinity_max_entries,
+        codex_session_affinity_ttl_seconds,
+        codex_fallback_affinity_enabled,
+        codex_fallback_affinity_ttl_seconds,
+        codex_fallback_affinity_prefix_bytes,
+        codex_fallback_affinity_min_body_bytes,
         kiro_status_refresh_min_interval_seconds,
         kiro_status_refresh_max_interval_seconds,
         kiro_status_account_jitter_max_seconds,
@@ -7162,6 +7219,30 @@ mod tests {
 
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(err.message.contains("usage_analytics_retention_days"));
+    }
+
+    #[test]
+    fn runtime_config_update_accepts_codex_affinity_settings() {
+        let updated =
+            apply_runtime_config_update(AdminRuntimeConfig::default(), UpdateAdminRuntimeConfig {
+                codex_session_affinity_enabled: Some(false),
+                codex_session_affinity_max_entries: Some(12_345),
+                codex_session_affinity_ttl_seconds: Some(7_200),
+                codex_fallback_affinity_enabled: Some(false),
+                codex_fallback_affinity_ttl_seconds: Some(900),
+                codex_fallback_affinity_prefix_bytes: Some(2_048),
+                codex_fallback_affinity_min_body_bytes: Some(64),
+                ..UpdateAdminRuntimeConfig::default()
+            })
+            .expect("codex affinity settings should be valid");
+
+        assert!(!updated.codex_session_affinity_enabled);
+        assert_eq!(updated.codex_session_affinity_max_entries, 12_345);
+        assert_eq!(updated.codex_session_affinity_ttl_seconds, 7_200);
+        assert!(!updated.codex_fallback_affinity_enabled);
+        assert_eq!(updated.codex_fallback_affinity_ttl_seconds, 900);
+        assert_eq!(updated.codex_fallback_affinity_prefix_bytes, 2_048);
+        assert_eq!(updated.codex_fallback_affinity_min_body_bytes, 64);
     }
 
     #[test]

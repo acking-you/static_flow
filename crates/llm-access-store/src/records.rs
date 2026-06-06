@@ -138,6 +138,27 @@ pub struct RuntimeConfigRecord {
     pub codex_weight_pro5x: i64,
     /// Pro 20x Codex routing weight.
     pub codex_weight_pro20x: i64,
+    /// Codex account-affinity toggle.
+    #[serde(default = "default_codex_session_affinity_enabled")]
+    pub codex_session_affinity_enabled: bool,
+    /// Codex account-affinity LRU capacity.
+    #[serde(default = "default_codex_session_affinity_max_entries_i64")]
+    pub codex_session_affinity_max_entries: i64,
+    /// Explicit Codex session-affinity TTL.
+    #[serde(default = "default_codex_session_affinity_ttl_seconds_i64")]
+    pub codex_session_affinity_ttl_seconds: i64,
+    /// Body-prefix fallback affinity toggle.
+    #[serde(default = "default_codex_fallback_affinity_enabled")]
+    pub codex_fallback_affinity_enabled: bool,
+    /// Body-prefix fallback affinity TTL.
+    #[serde(default = "default_codex_fallback_affinity_ttl_seconds_i64")]
+    pub codex_fallback_affinity_ttl_seconds: i64,
+    /// Body-prefix fallback sample bytes.
+    #[serde(default = "default_codex_fallback_affinity_prefix_bytes_i64")]
+    pub codex_fallback_affinity_prefix_bytes: i64,
+    /// Body-prefix fallback minimum body bytes.
+    #[serde(default = "default_codex_fallback_affinity_min_body_bytes_i64")]
+    pub codex_fallback_affinity_min_body_bytes: i64,
     /// Kiro minimum status refresh interval.
     pub kiro_status_refresh_min_interval_seconds: i64,
     /// Kiro maximum status refresh interval.
@@ -292,6 +313,34 @@ fn default_kiro_compact_trigger_tokens_i64() -> i64 {
     core_store::DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS as i64
 }
 
+fn default_codex_session_affinity_enabled() -> bool {
+    core_store::DEFAULT_CODEX_SESSION_AFFINITY_ENABLED
+}
+
+fn default_codex_session_affinity_max_entries_i64() -> i64 {
+    core_store::DEFAULT_CODEX_SESSION_AFFINITY_MAX_ENTRIES as i64
+}
+
+fn default_codex_session_affinity_ttl_seconds_i64() -> i64 {
+    core_store::DEFAULT_CODEX_SESSION_AFFINITY_TTL_SECONDS as i64
+}
+
+fn default_codex_fallback_affinity_enabled() -> bool {
+    core_store::DEFAULT_CODEX_FALLBACK_AFFINITY_ENABLED
+}
+
+fn default_codex_fallback_affinity_ttl_seconds_i64() -> i64 {
+    core_store::DEFAULT_CODEX_FALLBACK_AFFINITY_TTL_SECONDS as i64
+}
+
+fn default_codex_fallback_affinity_prefix_bytes_i64() -> i64 {
+    core_store::DEFAULT_CODEX_FALLBACK_AFFINITY_PREFIX_BYTES as i64
+}
+
+fn default_codex_fallback_affinity_min_body_bytes_i64() -> i64 {
+    core_store::DEFAULT_CODEX_FALLBACK_AFFINITY_MIN_BODY_BYTES as i64
+}
+
 impl Default for RuntimeConfigRecord {
     fn default() -> Self {
         Self {
@@ -313,6 +362,15 @@ impl Default for RuntimeConfigRecord {
             codex_weight_plus: core_store::DEFAULT_CODEX_WEIGHT_PLUS as i64,
             codex_weight_pro5x: core_store::DEFAULT_CODEX_WEIGHT_PRO5X as i64,
             codex_weight_pro20x: core_store::DEFAULT_CODEX_WEIGHT_PRO20X as i64,
+            codex_session_affinity_enabled: default_codex_session_affinity_enabled(),
+            codex_session_affinity_max_entries: default_codex_session_affinity_max_entries_i64(),
+            codex_session_affinity_ttl_seconds: default_codex_session_affinity_ttl_seconds_i64(),
+            codex_fallback_affinity_enabled: default_codex_fallback_affinity_enabled(),
+            codex_fallback_affinity_ttl_seconds: default_codex_fallback_affinity_ttl_seconds_i64(),
+            codex_fallback_affinity_prefix_bytes: default_codex_fallback_affinity_prefix_bytes_i64(
+            ),
+            codex_fallback_affinity_min_body_bytes:
+                default_codex_fallback_affinity_min_body_bytes_i64(),
             kiro_status_refresh_min_interval_seconds:
                 core_store::DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS as i64,
             kiro_status_refresh_max_interval_seconds:
@@ -392,6 +450,14 @@ impl RuntimeConfigRecord {
             codex_weight_plus: self.codex_weight_plus as u64,
             codex_weight_pro5x: self.codex_weight_pro5x as u64,
             codex_weight_pro20x: self.codex_weight_pro20x as u64,
+            codex_session_affinity_enabled: self.codex_session_affinity_enabled,
+            codex_session_affinity_max_entries: self.codex_session_affinity_max_entries as u64,
+            codex_session_affinity_ttl_seconds: self.codex_session_affinity_ttl_seconds as u64,
+            codex_fallback_affinity_enabled: self.codex_fallback_affinity_enabled,
+            codex_fallback_affinity_ttl_seconds: self.codex_fallback_affinity_ttl_seconds as u64,
+            codex_fallback_affinity_prefix_bytes: self.codex_fallback_affinity_prefix_bytes as u64,
+            codex_fallback_affinity_min_body_bytes: self.codex_fallback_affinity_min_body_bytes
+                as u64,
             kiro_status_refresh_min_interval_seconds: self.kiro_status_refresh_min_interval_seconds
                 as u64,
             kiro_status_refresh_max_interval_seconds: self.kiro_status_refresh_max_interval_seconds
@@ -452,6 +518,16 @@ impl RuntimeConfigRecord {
         self.codex_weight_plus = config.codex_weight_plus as i64;
         self.codex_weight_pro5x = config.codex_weight_pro5x as i64;
         self.codex_weight_pro20x = config.codex_weight_pro20x as i64;
+        self.codex_session_affinity_enabled = config.codex_session_affinity_enabled;
+        self.codex_session_affinity_max_entries = config.codex_session_affinity_max_entries as i64;
+        self.codex_session_affinity_ttl_seconds = config.codex_session_affinity_ttl_seconds as i64;
+        self.codex_fallback_affinity_enabled = config.codex_fallback_affinity_enabled;
+        self.codex_fallback_affinity_ttl_seconds =
+            config.codex_fallback_affinity_ttl_seconds as i64;
+        self.codex_fallback_affinity_prefix_bytes =
+            config.codex_fallback_affinity_prefix_bytes as i64;
+        self.codex_fallback_affinity_min_body_bytes =
+            config.codex_fallback_affinity_min_body_bytes as i64;
         self.kiro_status_refresh_min_interval_seconds =
             config.kiro_status_refresh_min_interval_seconds as i64;
         self.kiro_status_refresh_max_interval_seconds =

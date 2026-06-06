@@ -98,6 +98,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "kiro_cctest_proxy_config",
         sql: include_str!("../migrations/postgres/0022_kiro_cctest_proxy_config.sql"),
     },
+    SqlMigration {
+        version: 23,
+        name: "codex_session_affinity_config",
+        sql: include_str!("../migrations/postgres/0023_codex_session_affinity_config.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.
@@ -340,5 +345,20 @@ mod tests {
         assert_eq!(migration.version, 22);
         assert!(migration.sql.contains("kiro_cctest_proxy_base_url"));
         assert!(migration.sql.contains("kiro_cctest_proxy_api_key"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_codex_session_affinity_config() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "codex_session_affinity_config")
+            .expect("codex session affinity config migration exists");
+
+        assert_eq!(migration.version, 23);
+        assert!(migration.sql.contains("codex_session_affinity_enabled"));
+        assert!(migration
+            .sql
+            .contains("codex_fallback_affinity_prefix_bytes"));
     }
 }

@@ -750,6 +750,8 @@ mod tests {
         let record = crate::records::RuntimeConfigRecord {
             kiro_cctest_proxy_base_url: Some("https://example.com/anthropic".to_string()),
             kiro_cctest_proxy_api_key: Some("sk-test".to_string()),
+            codex_session_affinity_max_entries: 123,
+            codex_fallback_affinity_prefix_bytes: 456,
             ..Default::default()
         };
         let payload = super::CachedRuntimeConfigLookup {
@@ -767,6 +769,8 @@ mod tests {
             Some("https://example.com/anthropic")
         );
         assert_eq!(record.kiro_cctest_proxy_api_key.as_deref(), Some("sk-test"));
+        assert_eq!(record.codex_session_affinity_max_entries, 123);
+        assert_eq!(record.codex_fallback_affinity_prefix_bytes, 456);
     }
 
     #[test]
