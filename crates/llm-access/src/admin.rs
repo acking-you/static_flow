@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     fs,
     net::{IpAddr, SocketAddr},
+    num::NonZeroUsize,
     path::{Path as FsPath, PathBuf},
     time::{Duration, Instant},
 };
@@ -41,6 +42,7 @@ use llm_usage_journal::{
     collect_journal_file_lists, JournalFileListsSnapshot, JournalFileSnapshot,
     JournalPreviewReader, JournalPreviewReport, JournalStatusSnapshot, WorkerProgressSnapshot,
 };
+use lru::LruCache;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::OwnedSemaphorePermit;
@@ -53,6 +55,7 @@ use crate::{
 };
 
 const MAX_CODEX_CLIENT_VERSION_LEN: usize = 64;
+const CODEX_IMPORT_PRINCIPAL_CACHE_MAX_ENTRIES: usize = 4_096;
 const MAX_RUNTIME_CACHE_TTL_SECONDS: u64 = 86_400;
 const MIN_RUNTIME_CACHE_TTL_SECONDS: u64 = 1;
 const MAX_RUNTIME_REQUEST_BODY_BYTES: u64 = 256 * 1024 * 1024;
@@ -4691,6 +4694,10 @@ async fn run_codex_batch_import_job(
         .await
         .with_context(|| format!("mark codex import job `{job_id}` running"))?;
 
+    let mut principal_lookup_cache = LruCache::new(
+        NonZeroUsize::new(CODEX_IMPORT_PRINCIPAL_CACHE_MAX_ENTRIES)
+            .expect("codex import principal cache capacity is non-zero"),
+    );
     let mut seen_names = HashSet::new();
     for item in request.items {
         let item_updated_at_ms = now_ms();
@@ -4756,38 +4763,36 @@ async fn run_codex_batch_import_job(
             continue;
         }
 
-        if let Some(account_id) = item.requested_account_id.as_deref() {
-            if let Some(existing_name) = state
+        if let Some(existing_name) = lookup_conflicting_codex_principal_name(
+            &state,
+            &mut principal_lookup_cache,
+            item.auth.principal_id.as_deref(),
+            &item.requested_name,
+        )
+        .await?
+        {
+            state
                 .admin_codex_account_store
-                .find_admin_codex_account_name_by_account_id(account_id)
+                .complete_admin_codex_import_job_item(
+                    &job_id,
+                    codex_import_job_failure_result(
+                        item.item_index,
+                        "conflict",
+                        Some("codex principal already belongs to another account".to_string()),
+                        item.requested_account_id.clone(),
+                        None,
+                        None,
+                    ),
+                )
                 .await
-                .with_context(|| format!("lookup codex account id `{account_id}`"))?
-            {
-                if existing_name != item.requested_name {
-                    state
-                        .admin_codex_account_store
-                        .complete_admin_codex_import_job_item(
-                            &job_id,
-                            codex_import_job_failure_result(
-                                item.item_index,
-                                "conflict",
-                                Some("account_id already belongs to another account".to_string()),
-                                Some(account_id.to_string()),
-                                None,
-                                None,
-                            ),
-                        )
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "complete account-id conflict for codex import job `{job_id}` \
-                                 item {}",
-                                item.item_index
-                            )
-                        })?;
-                    continue;
-                }
-            }
+                .with_context(|| {
+                    format!(
+                        "complete principal conflict for codex import job `{job_id}` item {} \
+                         against `{existing_name}`",
+                        item.item_index
+                    )
+                })?;
+            continue;
         }
 
         let (auth, validated_at_ms) = if request.validate_before_import {
@@ -4822,41 +4827,39 @@ async fn run_codex_batch_import_job(
             (item.auth.clone(), None)
         };
 
-        if let Some(account_id) = auth.account_id.as_deref() {
-            if let Some(existing_name) = state
+        if let Some(existing_name) = lookup_conflicting_codex_principal_name(
+            &state,
+            &mut principal_lookup_cache,
+            auth.principal_id.as_deref(),
+            &item.requested_name,
+        )
+        .await?
+        {
+            state
                 .admin_codex_account_store
-                .find_admin_codex_account_name_by_account_id(account_id)
+                .complete_admin_codex_import_job_item(
+                    &job_id,
+                    codex_import_job_failure_result(
+                        item.item_index,
+                        "conflict",
+                        Some(
+                            "validated codex principal already belongs to another account"
+                                .to_string(),
+                        ),
+                        auth.account_id.clone(),
+                        validated_at_ms,
+                        None,
+                    ),
+                )
                 .await
-                .with_context(|| format!("lookup refreshed codex account id `{account_id}`"))?
-            {
-                if existing_name != item.requested_name {
-                    state
-                        .admin_codex_account_store
-                        .complete_admin_codex_import_job_item(
-                            &job_id,
-                            codex_import_job_failure_result(
-                                item.item_index,
-                                "conflict",
-                                Some(
-                                    "validated account_id already belongs to another account"
-                                        .to_string(),
-                                ),
-                                Some(account_id.to_string()),
-                                validated_at_ms,
-                                None,
-                            ),
-                        )
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "complete validated account-id conflict for codex import job \
-                                 `{job_id}` item {}",
-                                item.item_index
-                            )
-                        })?;
-                    continue;
-                }
-            }
+                .with_context(|| {
+                    format!(
+                        "complete validated principal conflict for codex import job `{job_id}` \
+                         item {} against `{existing_name}`",
+                        item.item_index
+                    )
+                })?;
+            continue;
         }
 
         let imported_at_ms = now_ms();
@@ -4874,6 +4877,9 @@ async fn run_codex_batch_import_job(
             .await
         {
             Ok(account) => {
+                if let Some(principal_id) = auth.principal_id.as_ref() {
+                    principal_lookup_cache.put(principal_id.clone(), Some(account.name.clone()));
+                }
                 state
                     .admin_codex_account_store
                     .complete_admin_codex_import_job_item(
@@ -4920,6 +4926,34 @@ async fn run_codex_batch_import_job(
     }
 
     Ok(())
+}
+
+async fn lookup_conflicting_codex_principal_name(
+    state: &HttpState,
+    principal_lookup_cache: &mut LruCache<String, Option<String>>,
+    principal_id: Option<&str>,
+    requested_name: &str,
+) -> anyhow::Result<Option<String>> {
+    let principal_id = principal_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let Some(principal_id) = principal_id else {
+        return Ok(None);
+    };
+    let existing_name = match principal_lookup_cache.get(&principal_id) {
+        Some(cached) => cached.clone(),
+        None => {
+            let loaded = state
+                .admin_codex_account_store
+                .find_admin_codex_account_name_by_principal_id(&principal_id)
+                .await
+                .with_context(|| format!("lookup codex principal `{principal_id}`"))?;
+            principal_lookup_cache.put(principal_id, loaded.clone());
+            loaded
+        },
+    };
+    Ok(existing_name.filter(|name| name != requested_name))
 }
 
 async fn validate_codex_batch_import_auth(
@@ -5895,6 +5929,7 @@ fn normalize_optional_string_option(raw: Option<&str>) -> Option<String> {
 struct NormalizedCodexAuth {
     auth_json: String,
     account_id: Option<String>,
+    principal_id: Option<String>,
     id_token: Option<String>,
     access_token: Option<String>,
     refresh_token: Option<String>,
@@ -6031,9 +6066,11 @@ fn normalize_codex_auth_value(
     }
     let auth_json = serde_json::to_string(&value)
         .map_err(|_| internal_error("Failed to encode account auth"))?;
+    let principal_id = core_store::codex_auth_principal_id(&auth_json);
     Ok(NormalizedCodexAuth {
         auth_json,
         account_id,
+        principal_id,
         id_token,
         access_token,
         refresh_token,
@@ -6756,7 +6793,15 @@ fn internal_error(message: &str) -> AdminHttpError {
 
 #[cfg(test)]
 mod tests {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+
     use super::*;
+
+    fn test_jwt(payload: serde_json::Value) -> String {
+        let encoded = URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&payload).expect("serialize test jwt payload"));
+        format!("header.{encoded}.sig")
+    }
 
     fn sample_account_contribution_request(
         requester_email: &str,
@@ -7664,6 +7709,25 @@ mod tests {
     }
 
     #[test]
+    fn imported_codex_auth_extracts_principal_id_from_jwt_claims() {
+        let auth = normalize_imported_codex_auth(
+            Some(serde_json::json!({
+                "id_token": test_jwt(serde_json::json!({
+                    "sub": "subject-1"
+                })),
+                "access_token": test_jwt(serde_json::json!({
+                    "sub": "subject-2"
+                })),
+                "account_id": "acct-1"
+            })),
+            None,
+        )
+        .expect("normalize auth json");
+
+        assert_eq!(auth.principal_id.as_deref(), Some("subject-1"));
+    }
+
+    #[test]
     fn codex_import_validation_prefers_present_access_token() {
         let auth = normalize_imported_codex_auth(
             Some(serde_json::json!({
@@ -7728,6 +7792,43 @@ mod tests {
         assert_eq!(normalized.items[0].requested_name, "codex_primary");
         assert_eq!(normalized.items[0].requested_account_id.as_deref(), Some("acct-1"));
         assert!(normalized.items[0].raw_auth_json.contains("device_id"));
+    }
+
+    #[test]
+    fn codex_batch_import_normalization_distinguishes_same_account_id_by_principal() {
+        let normalized = normalize_codex_batch_import_request(CreateCodexBatchImportJobRequest {
+            provider_type: "codex".to_string(),
+            source_type: "local_json".to_string(),
+            validate_before_import: false,
+            items: vec![
+                CreateCodexBatchImportJobItemRequest {
+                    name: "codex_alpha".to_string(),
+                    tokens: None,
+                    auth_json: Some(serde_json::json!({
+                        "account_id": "acct-shared",
+                        "access_token": test_jwt(serde_json::json!({
+                            "sub": "subject-alpha"
+                        }))
+                    })),
+                },
+                CreateCodexBatchImportJobItemRequest {
+                    name: "codex_beta".to_string(),
+                    tokens: None,
+                    auth_json: Some(serde_json::json!({
+                        "account_id": "acct-shared",
+                        "access_token": test_jwt(serde_json::json!({
+                            "sub": "subject-beta"
+                        }))
+                    })),
+                },
+            ],
+        })
+        .expect("normalize batch request");
+
+        assert_eq!(normalized.items[0].requested_account_id.as_deref(), Some("acct-shared"));
+        assert_eq!(normalized.items[1].requested_account_id.as_deref(), Some("acct-shared"));
+        assert_eq!(normalized.items[0].auth.principal_id.as_deref(), Some("subject-alpha"));
+        assert_eq!(normalized.items[1].auth.principal_id.as_deref(), Some("subject-beta"));
     }
 
     #[test]

@@ -525,9 +525,9 @@ impl AdminCodexAccountStore for EmptyAdminCodexAccountStore {
         Ok(None)
     }
 
-    async fn find_admin_codex_account_name_by_account_id(
+    async fn find_admin_codex_account_name_by_principal_id(
         &self,
-        _account_id: &str,
+        _principal_id: &str,
     ) -> anyhow::Result<Option<String>> {
         Ok(None)
     }

@@ -105,11 +105,30 @@ pub fn is_terminal_codex_auth_error(message: &str) -> bool {
 
 /// Decode the JWT `exp` claim from one access token into Unix milliseconds.
 pub fn jwt_expiry_unix_ms(token: &str) -> Option<i64> {
-    let payload = token.split('.').nth(1)?;
-    let decoded = URL_SAFE_NO_PAD.decode(payload.as_bytes()).ok()?;
-    let value: Value = serde_json::from_slice(&decoded).ok()?;
+    let value = jwt_payload_json(token)?;
     let exp_seconds = value.get("exp")?.as_i64()?;
     exp_seconds.checked_mul(1000)
+}
+
+/// Extract the most convincing upstream Codex principal identifier from one
+/// persisted auth JSON payload. Prefer the OIDC `sub` claim and fall back to
+/// nested OpenAI user-id claims when a subject claim is unavailable.
+pub fn codex_auth_principal_id(auth_json: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(auth_json).ok()?;
+    let id_token = json_string_any(&value, &["id_token", "idToken"]).or_else(|| {
+        value
+            .get("tokens")
+            .and_then(|tokens| json_string_any(tokens, &["id_token", "idToken"]))
+    });
+    let access_token = json_string_any(&value, &["access_token", "accessToken"]).or_else(|| {
+        value
+            .get("tokens")
+            .and_then(|tokens| json_string_any(tokens, &["access_token", "accessToken"]))
+    });
+    id_token
+        .as_deref()
+        .and_then(codex_token_principal_id)
+        .or_else(|| access_token.as_deref().and_then(codex_token_principal_id))
 }
 
 /// Extract the current Codex access token expiry timestamp from persisted auth
@@ -139,6 +158,26 @@ fn json_string_any(value: &Value, fields: &[&str]) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+fn codex_token_principal_id(token: &str) -> Option<String> {
+    let value = jwt_payload_json(token)?;
+    json_string_any(&value, &["sub"]).or_else(|| {
+        jwt_auth_claims(&value)
+            .and_then(|auth| json_string_any(auth, &["user_id", "chatgpt_user_id"]))
+    })
+}
+
+fn jwt_auth_claims(value: &Value) -> Option<&Value> {
+    value
+        .get("https://api.openai.com/auth")
+        .or_else(|| value.get("https://chatgpt.com"))
+}
+
+fn jwt_payload_json(token: &str) -> Option<Value> {
+    let payload = token.split('.').nth(1)?;
+    let decoded = URL_SAFE_NO_PAD.decode(payload.as_bytes()).ok()?;
+    serde_json::from_slice(&decoded).ok()
 }
 
 /// Resolved Kiro account selected for one provider request.
@@ -256,5 +295,55 @@ impl AuthenticatedKey {
     pub fn remaining_billable(&self) -> i64 {
         self.quota_billable_limit
             .saturating_sub(self.billable_tokens_used)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn test_jwt(payload: serde_json::Value) -> String {
+        let encoded = URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&payload).expect("serialize test jwt payload"));
+        format!("header.{encoded}.sig")
+    }
+
+    #[test]
+    fn codex_auth_principal_id_prefers_id_token_subject_claim() {
+        let auth_json = json!({
+            "id_token": test_jwt(json!({
+                "sub": "subject-from-id-token",
+                "https://api.openai.com/auth": {
+                    "user_id": "user-from-id-token"
+                }
+            })),
+            "access_token": test_jwt(json!({
+                "sub": "subject-from-access-token",
+                "https://api.openai.com/auth": {
+                    "user_id": "user-from-access-token"
+                }
+            }))
+        })
+        .to_string();
+
+        assert_eq!(codex_auth_principal_id(&auth_json).as_deref(), Some("subject-from-id-token"));
+    }
+
+    #[test]
+    fn codex_auth_principal_id_falls_back_to_nested_user_id() {
+        let auth_json = json!({
+            "tokens": {
+                "accessToken": test_jwt(json!({
+                    "https://api.openai.com/auth": {
+                        "chatgpt_user_id": "user-from-nested-claim"
+                    }
+                }))
+            }
+        })
+        .to_string();
+
+        assert_eq!(codex_auth_principal_id(&auth_json).as_deref(), Some("user-from-nested-claim"));
     }
 }

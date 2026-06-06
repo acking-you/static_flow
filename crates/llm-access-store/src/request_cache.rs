@@ -17,6 +17,7 @@ const RUNTIME_CONFIG_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const REQUEST_SNAPSHOT_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const ACCOUNT_VIEW_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const ACCOUNT_AUTH_TTL: Duration = Duration::from_secs(4 * 60 * 60);
+const ACCOUNT_PRINCIPAL_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const CODEX_STATUS_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const PROXY_METADATA_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const USAGE_PROXY_ATTRIBUTION_TTL: Duration = Duration::from_secs(30 * 60);
@@ -212,6 +213,13 @@ pub(crate) struct CachedCodexAccountView {
     pub proxy: Option<CachedProxyConfig>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct CachedCodexPrincipalLookup {
+    #[serde(default)]
+    pub generation: i64,
+    pub account_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct CachedKiroAccountView {
     #[serde(default)]
@@ -285,6 +293,15 @@ impl RequestCache {
         format!("{}:acct:auth:{provider}:{account_name}", self.key_prefix)
     }
 
+    pub(crate) fn codex_principal_key(&self, principal_hash: &str) -> String {
+        format!("{}:acct:principal:codex:{principal_hash}", self.key_prefix)
+    }
+
+    pub(crate) fn codex_principal_lookup_key(&self, principal_id: &str) -> String {
+        let principal_hash = format!("{:x}", Sha256::digest(principal_id.as_bytes()));
+        self.codex_principal_key(&principal_hash)
+    }
+
     pub(crate) fn dispatch_generation_key(&self, provider: &str) -> String {
         format!("{}:gen:dispatch:{provider}", self.key_prefix)
     }
@@ -336,6 +353,20 @@ impl RequestCache {
 
     pub(crate) fn runtime_config_ttl(&self) -> Duration {
         deterministic_jitter_ttl(&self.runtime_config_key(), RUNTIME_CONFIG_TTL, 0.8, 1.2)
+    }
+
+    pub(crate) fn codex_principal_ttl(&self, principal_hash: &str) -> Duration {
+        deterministic_jitter_ttl(
+            &self.codex_principal_key(principal_hash),
+            ACCOUNT_PRINCIPAL_TTL,
+            0.8,
+            1.2,
+        )
+    }
+
+    pub(crate) fn codex_principal_lookup_ttl(&self, principal_id: &str) -> Duration {
+        let principal_hash = format!("{:x}", Sha256::digest(principal_id.as_bytes()));
+        self.codex_principal_ttl(&principal_hash)
     }
 
     pub(crate) fn request_snapshot_ttl(&self, provider: &str, key_id: &str) -> Duration {

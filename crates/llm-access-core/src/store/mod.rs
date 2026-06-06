@@ -67,8 +67,9 @@ pub use public::{
 };
 pub use routes::{
     codex_access_token_expires_at_ms, codex_auth_access_token_expires_at_ms,
-    is_terminal_codex_auth_error, jwt_expiry_unix_ms, AuthenticatedKey, ProviderCodexAuthUpdate,
-    ProviderCodexRoute, ProviderKiroAuthUpdate, ProviderKiroRoute, ProviderProxyConfig,
+    codex_auth_principal_id, is_terminal_codex_auth_error, jwt_expiry_unix_ms, AuthenticatedKey,
+    ProviderCodexAuthUpdate, ProviderCodexRoute, ProviderKiroAuthUpdate, ProviderKiroRoute,
+    ProviderProxyConfig,
 };
 pub use traits::{
     AdminAccountGroupStore, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,

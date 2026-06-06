@@ -238,6 +238,28 @@ impl PostgresControlRepository {
         }
     }
 
+    pub(super) async fn invalidate_codex_principal_cache(&self, principal_ids: &[String]) {
+        let Some(cache) = self.request_cache.as_ref() else {
+            return;
+        };
+        let mut cache_keys = principal_ids
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|principal_id| !principal_id.is_empty())
+            .map(|principal_id| cache.codex_principal_lookup_key(principal_id))
+            .collect::<Vec<_>>();
+        cache_keys.sort();
+        cache_keys.dedup();
+        if cache_keys.is_empty() {
+            return;
+        }
+        let cache_key_refs = cache_keys.iter().map(String::as_str).collect::<Vec<_>>();
+        if let Err(err) = cache.delete_many(cache_key_refs).await {
+            tracing::warn!(error = %err, "failed to invalidate codex principal cache entries");
+        }
+    }
+
     pub(super) async fn invalidate_all_account_views_for_provider(&self, provider: &str) {
         let Some(cache) = self.request_cache.as_ref() else {
             return;
@@ -636,6 +658,54 @@ impl PostgresControlRepository {
             views_by_name.insert(row.account_name, view);
         }
         Ok(views_by_name)
+    }
+
+    pub(super) async fn find_codex_account_name_by_principal_id_cached(
+        &self,
+        principal_id: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let Some(cache) = self.request_cache.as_ref() else {
+            return self
+                .find_codex_account_name_by_principal_id_uncached(principal_id)
+                .await;
+        };
+        let generation = self
+            .current_dispatch_generation(core_store::PROVIDER_CODEX)
+            .await;
+        let cache_key = cache.codex_principal_lookup_key(principal_id);
+        match cache
+            .get_json::<crate::request_cache::CachedCodexPrincipalLookup>(&cache_key)
+            .await
+        {
+            Ok(Some(lookup)) if lookup.generation == generation => return Ok(lookup.account_name),
+            Ok(Some(_)) => {},
+            Ok(None) => {},
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "request cache codex principal read failed; falling back to postgres"
+                );
+            },
+        }
+
+        let account_name = self
+            .find_codex_account_name_by_principal_id_uncached(principal_id)
+            .await?;
+        let lookup = crate::request_cache::CachedCodexPrincipalLookup {
+            generation,
+            account_name: account_name.clone(),
+        };
+        if let Err(err) = cache
+            .set_json(&cache_key, &lookup, cache.codex_principal_lookup_ttl(principal_id))
+            .await
+        {
+            tracing::warn!(
+                key = %cache_key,
+                error = %err,
+                "request cache codex principal write failed"
+            );
+        }
+        Ok(account_name)
     }
 
     pub(super) async fn load_kiro_account_views_cached(
