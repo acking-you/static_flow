@@ -162,8 +162,9 @@ impl CodexSessionAffinity {
         let mut inner = self.inner.lock().expect("codex session affinity mutex");
         if inner.capacity != capacity {
             inner.capacity = capacity;
-            inner.entries =
-                LruCache::new(NonZeroUsize::new(capacity).expect("capacity is non-zero"));
+            inner
+                .entries
+                .resize(NonZeroUsize::new(capacity).expect("capacity is non-zero"));
         }
         inner
     }
@@ -212,18 +213,25 @@ fn explicit_affinity_value(
     request_headers: &HeaderMap,
     thread_anchor: Option<&str>,
 ) -> Option<String> {
+    if let Some(value) = first_header_value(request_headers, &["session_id", "session-id"]) {
+        return Some(value);
+    }
     let metadata = parse_codex_turn_metadata_header(request_headers);
-    first_header_value(request_headers, &["session_id", "session-id"])
-        .or(metadata.session_id)
-        .or_else(|| first_header_value(request_headers, &["thread_id", "thread-id"]))
-        .or(metadata.thread_id)
-        .or_else(|| header_value(request_headers, "conversation_id"))
-        .or_else(|| {
-            thread_anchor
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-        })
+    if let Some(value) = metadata.session_id {
+        return Some(value);
+    }
+    if let Some(value) = first_header_value(request_headers, &["thread_id", "thread-id"]) {
+        return Some(value);
+    }
+    if let Some(value) = metadata.thread_id {
+        return Some(value);
+    }
+    header_value(request_headers, "conversation_id").or_else(|| {
+        thread_anchor
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    })
 }
 
 fn first_header_value(headers: &HeaderMap, names: &[&str]) -> Option<String> {

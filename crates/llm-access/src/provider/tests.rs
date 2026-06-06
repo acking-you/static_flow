@@ -5769,9 +5769,11 @@ fn codex_affinity_id_uses_explicit_session_before_body_fallback() {
 #[test]
 fn codex_affinity_id_hashes_body_prefix_when_explicit_session_is_missing() {
     let headers = HeaderMap::new();
-    let mut config = CodexAffinityRuntimeConfig::default();
-    config.fallback_prefix_bytes = 16;
-    config.fallback_min_body_bytes = 8;
+    let config = CodexAffinityRuntimeConfig {
+        fallback_prefix_bytes: 16,
+        fallback_min_body_bytes: 8,
+        ..CodexAffinityRuntimeConfig::default()
+    };
     let body_a = b"same-prefix-1234567890 trailing-a";
     let body_b = b"same-prefix-1234567890 trailing-b";
 
@@ -5788,8 +5790,10 @@ fn codex_affinity_id_hashes_body_prefix_when_explicit_session_is_missing() {
 #[test]
 fn codex_session_affinity_remembers_and_expires_entries() {
     let affinity = CodexSessionAffinity::default();
-    let mut config = CodexAffinityRuntimeConfig::default();
-    config.session_ttl = Duration::from_millis(1);
+    let config = CodexAffinityRuntimeConfig {
+        session_ttl: Duration::from_millis(1),
+        ..CodexAffinityRuntimeConfig::default()
+    };
     let affinity_id = CodexAffinityId {
         key: "key-a:explicit:session-a".to_string(),
         source: CodexAffinitySource::Explicit,
@@ -5800,6 +5804,27 @@ fn codex_session_affinity_remembers_and_expires_entries() {
 
     std::thread::sleep(Duration::from_millis(5));
     assert!(affinity.lookup(&affinity_id, &config).is_none());
+}
+
+#[test]
+fn codex_session_affinity_preserves_entries_when_capacity_changes() {
+    let affinity = CodexSessionAffinity::default();
+    let initial_config = CodexAffinityRuntimeConfig {
+        max_entries: 2,
+        ..CodexAffinityRuntimeConfig::default()
+    };
+    let expanded_config = CodexAffinityRuntimeConfig {
+        max_entries: 4,
+        ..CodexAffinityRuntimeConfig::default()
+    };
+    let affinity_id = CodexAffinityId {
+        key: "key-a:explicit:session-a".to_string(),
+        source: CodexAffinitySource::Explicit,
+    };
+
+    affinity.remember(&affinity_id, "codex-a", &initial_config);
+
+    assert_eq!(affinity.lookup(&affinity_id, &expanded_config).as_deref(), Some("codex-a"));
 }
 
 #[tokio::test]
