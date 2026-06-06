@@ -4934,22 +4934,21 @@ async fn lookup_conflicting_codex_principal_name(
     principal_id: Option<&str>,
     requested_name: &str,
 ) -> anyhow::Result<Option<String>> {
-    let principal_id = principal_id
+    let Some(principal_id) = principal_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(ToString::to_string);
-    let Some(principal_id) = principal_id else {
+    else {
         return Ok(None);
     };
-    let existing_name = match principal_lookup_cache.get(&principal_id) {
+    let existing_name = match principal_lookup_cache.get(principal_id) {
         Some(cached) => cached.clone(),
         None => {
             let loaded = state
                 .admin_codex_account_store
-                .find_admin_codex_account_name_by_principal_id(&principal_id)
+                .find_admin_codex_account_name_by_principal_id(principal_id)
                 .await
                 .with_context(|| format!("lookup codex principal `{principal_id}`"))?;
-            principal_lookup_cache.put(principal_id, loaded.clone());
+            principal_lookup_cache.put(principal_id.to_string(), loaded.clone());
             loaded
         },
     };

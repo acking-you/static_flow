@@ -239,6 +239,9 @@ impl PostgresControlRepository {
     }
 
     pub(super) async fn invalidate_codex_principal_cache(&self, principal_ids: &[String]) {
+        if principal_ids.is_empty() {
+            return;
+        }
         let Some(cache) = self.request_cache.as_ref() else {
             return;
         };
@@ -664,6 +667,10 @@ impl PostgresControlRepository {
         &self,
         principal_id: &str,
     ) -> anyhow::Result<Option<String>> {
+        let principal_id = principal_id.trim();
+        if principal_id.is_empty() {
+            return Ok(None);
+        }
         let Some(cache) = self.request_cache.as_ref() else {
             return self
                 .find_codex_account_name_by_principal_id_uncached(principal_id)

@@ -120,6 +120,10 @@ impl PostgresControlRepository {
         &self,
         principal_id: &str,
     ) -> anyhow::Result<Option<String>> {
+        let principal_id = principal_id.trim();
+        if principal_id.is_empty() {
+            return Ok(None);
+        }
         self.ensure_connection_alive()?;
         let rows = self
             .client
