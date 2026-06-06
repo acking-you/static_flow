@@ -79,6 +79,11 @@ pub fn decode_runtime_config_row(row: PgRow) -> anyhow::Result<RuntimeConfigReco
         codex_fallback_affinity_prefix_bytes: row.get(55),
         codex_fallback_affinity_min_body_bytes: row.get(56),
         updated_at_ms: row.get(57),
+        kiro_cache_snapshot_enabled: row.get(58),
+        kiro_cache_snapshot_interval_seconds: row.get(59),
+        kiro_cache_snapshot_ttl_seconds: row.get(60),
+        kiro_cache_snapshot_max_tokens: row.get(61),
+        kiro_cache_snapshot_max_anchor_entries: row.get(62),
     })
 }
 

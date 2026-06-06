@@ -6,12 +6,17 @@
 
 use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use serde::Serialize;
 
 use super::{
     anchor_index::{AnchorTokenCounts, ConversationAnchorIndex, ConversationAnchorRuntimeStats},
-    prefix_tree::{PrefixCacheMatch, PrefixTree, PrefixTreeRuntimeStats},
+    prefix_tree::{skip_prefix_section, PrefixCacheMatch, PrefixTree, PrefixTreeRuntimeStats},
     projection::{PromptProjection, RuntimePromptProjection, PREFIX_CACHE_PAGE_SIZE},
+    snapshot::{
+        decode_frame, finalize_frame, union_anchor_rows, write_varint, DecodedFrame,
+        KiroSnapshotImportOutcome, SnapshotCaps, SnapshotHeader, SnapshotReader,
+    },
 };
 use crate::wire::AssistantMessage;
 
@@ -222,5 +227,155 @@ impl KiroCacheSimulator {
             prefix_tree,
             conversation_anchors,
         }
+    }
+
+    /// Serialize the live simulator state into a gzip-framed snapshot blob.
+    ///
+    /// TTL pruning runs first so stale state is never persisted. Returns `None`
+    /// only when there is nothing worth saving (Formula mode with no anchors);
+    /// anchors are persisted even in Formula mode because they drive the
+    /// proactive-compaction gate.
+    pub fn export_snapshot(
+        &self,
+        config: KiroCacheSimulationConfig,
+        caps: SnapshotCaps,
+        now: Instant,
+    ) -> Option<Vec<u8>> {
+        let prefix_tree_mode = matches!(config.mode, KiroCacheSimulationMode::PrefixTree);
+        let mut raw = Vec::new();
+        let mut prefix_section = Vec::new();
+        let resident_tokens = {
+            let mut tree = self.prefix_tree.lock();
+            tree.prune_expired(now, config.prefix_cache_entry_ttl);
+            if prefix_tree_mode {
+                tree.encode_section(&mut prefix_section, now, caps.max_tokens);
+                tree.resident_tokens()
+            } else {
+                // Empty prefix section (root with zero children).
+                write_varint(&mut prefix_section, 0);
+                0
+            }
+        };
+        let mut anchor_section = Vec::new();
+        let anchors_empty = {
+            let mut index = self.anchor_index.lock();
+            index.remove_expired(now, config.conversation_anchor_ttl);
+            index.encode_section(&mut anchor_section, now, caps.max_anchor_entries);
+            index.is_empty()
+        };
+        if !prefix_tree_mode && anchors_empty {
+            return None;
+        }
+        SnapshotHeader {
+            snapshot_unix_ms: Utc::now().timestamp_millis(),
+            resident_tokens,
+        }
+        .write(&mut raw);
+        raw.extend_from_slice(&prefix_section);
+        raw.extend_from_slice(&anchor_section);
+        match finalize_frame(raw) {
+            Ok(blob) => Some(blob),
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to finalize kiro cache snapshot");
+                None
+            },
+        }
+    }
+
+    /// Restore simulator state from this node's snapshot plus peer snapshots.
+    ///
+    /// Prefix tree: own snapshot wins; otherwise the newest decodable peer
+    /// seeds it (single source, no page-level merge). Anchors: union across own
+    /// and all peers (newest-touch wins), then capped. Every decode failure is
+    /// counted and skipped; this never panics and never fails startup.
+    pub fn import_snapshot(
+        &self,
+        own: Option<&[u8]>,
+        peers: &[Vec<u8>],
+        config: KiroCacheSimulationConfig,
+        caps: SnapshotCaps,
+        now: Instant,
+    ) -> KiroSnapshotImportOutcome {
+        let now_unix_ms = Utc::now().timestamp_millis();
+        let ttl = config.prefix_cache_entry_ttl;
+        let anchor_ttl = config.conversation_anchor_ttl;
+        let max_tokens = caps.max_tokens.unwrap_or(config.prefix_cache_max_tokens);
+        let max_anchor_entries = caps
+            .max_anchor_entries
+            .unwrap_or(config.conversation_anchor_max_entries);
+
+        let mut outcome = KiroSnapshotImportOutcome::default();
+        let own_frame = decode_blob(own, &mut outcome.decode_errors);
+        let mut peer_frames: Vec<DecodedFrame> = Vec::new();
+        for peer in peers {
+            if let Some(frame) = decode_blob(Some(peer.as_slice()), &mut outcome.decode_errors) {
+                peer_frames.push(frame);
+            }
+        }
+
+        // Prefix tree: own first, else newest decodable peer.
+        let from_own = own_frame.is_some();
+        let prefix_source = own_frame.as_ref().or_else(|| {
+            peer_frames
+                .iter()
+                .max_by_key(|frame| frame.header.snapshot_unix_ms)
+        });
+        if let Some(frame) = prefix_source {
+            let mut reader = SnapshotReader::new(&frame.sections);
+            match PrefixTree::decode_section(
+                &mut reader,
+                frame.header.snapshot_unix_ms,
+                now,
+                now_unix_ms,
+                ttl,
+            ) {
+                Ok(mut tree) => {
+                    tree.enforce_token_budget(max_tokens);
+                    outcome.prefix_resident_tokens = tree.resident_tokens();
+                    outcome.prefix_from_own = from_own;
+                    outcome.prefix_from_peer = !from_own;
+                    *self.prefix_tree.lock() = tree;
+                },
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to decode kiro prefix snapshot section");
+                },
+            }
+        }
+
+        // Anchors: union across own + all peers.
+        let mut rows = Vec::new();
+        let frames = own_frame.iter().chain(peer_frames.iter());
+        for frame in frames {
+            let mut reader = SnapshotReader::new(&frame.sections);
+            if skip_prefix_section(&mut reader).is_err() {
+                continue;
+            }
+            match ConversationAnchorIndex::decode_section(
+                &mut reader,
+                frame.header.snapshot_unix_ms,
+            ) {
+                Ok(decoded) => rows.extend(decoded),
+                Err(_) => continue,
+            }
+        }
+        let merged = union_anchor_rows(rows, now_unix_ms, anchor_ttl, max_anchor_entries);
+        {
+            let mut index = self.anchor_index.lock();
+            index.rebuild_from_rows(merged, now, anchor_ttl, max_anchor_entries);
+            outcome.anchor_entries = index.len();
+        }
+        outcome
+    }
+}
+
+fn decode_blob(blob: Option<&[u8]>, errors: &mut usize) -> Option<DecodedFrame> {
+    let blob = blob?;
+    match decode_frame(blob) {
+        Ok(frame) => Some(frame),
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to decode kiro cache snapshot blob");
+            *errors += 1;
+            None
+        },
     }
 }

@@ -13,6 +13,7 @@ base64 = "0.22.1"
 bytes = { workspace = true }
 chrono = { workspace = true }
 crc = "3.3"
+flate2 = "1.1"
 hex = "0.4"
 llm-access-core = { path = "../llm-access-core" }
 lru = "0.12"

@@ -17,10 +17,13 @@ use super::{
     DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_CODEX_WEIGHT_FREE,
     DEFAULT_CODEX_WEIGHT_PLUS, DEFAULT_CODEX_WEIGHT_PRO20X, DEFAULT_CODEX_WEIGHT_PRO5X,
     DEFAULT_DUCKDB_USAGE_CHECKPOINT_THRESHOLD_MIB, DEFAULT_DUCKDB_USAGE_MEMORY_LIMIT_MIB,
-    DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS, DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
-    DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES, DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS,
-    DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS, DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS,
-    DEFAULT_KIRO_PREFIX_CACHE_MODE, DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
+    DEFAULT_KIRO_CACHE_SNAPSHOT_ENABLED, DEFAULT_KIRO_CACHE_SNAPSHOT_INTERVAL_SECONDS,
+    DEFAULT_KIRO_CACHE_SNAPSHOT_MAX_ANCHOR_ENTRIES, DEFAULT_KIRO_CACHE_SNAPSHOT_MAX_TOKENS,
+    DEFAULT_KIRO_CACHE_SNAPSHOT_TTL_SECONDS, DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS,
+    DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS, DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
+    DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS, DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS,
+    DEFAULT_KIRO_PREFIX_CACHE_MAX_TOKENS, DEFAULT_KIRO_PREFIX_CACHE_MODE,
+    DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS,
     DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
     DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_MAX_REQUEST_BODY_BYTES,
     DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS, DEFAULT_USAGE_EVENT_FLUSH_BATCH_SIZE,
@@ -135,6 +138,16 @@ pub struct AdminRuntimeConfig {
     pub kiro_conversation_anchor_max_entries: u64,
     /// Kiro conversation anchor TTL.
     pub kiro_conversation_anchor_ttl_seconds: u64,
+    /// Whether the Kiro cache simulator persists snapshots to Valkey.
+    pub kiro_cache_snapshot_enabled: bool,
+    /// Interval between Kiro cache snapshot flushes, in seconds.
+    pub kiro_cache_snapshot_interval_seconds: u64,
+    /// Retention TTL applied to persisted Kiro cache snapshots, in seconds.
+    pub kiro_cache_snapshot_ttl_seconds: u64,
+    /// Snapshot prefix-token cap (0 = follow the live prefix-cache budget).
+    pub kiro_cache_snapshot_max_tokens: u64,
+    /// Snapshot anchor-entry cap (0 = follow the live anchor budget).
+    pub kiro_cache_snapshot_max_anchor_entries: u64,
     /// Optional Anthropic-compatible upstream base URL for cctest signature
     /// probes.
     #[serde(default)]
@@ -202,6 +215,11 @@ impl Default for AdminRuntimeConfig {
             kiro_prefix_cache_entry_ttl_seconds: DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS,
             kiro_conversation_anchor_max_entries: DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES,
             kiro_conversation_anchor_ttl_seconds: DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS,
+            kiro_cache_snapshot_enabled: DEFAULT_KIRO_CACHE_SNAPSHOT_ENABLED,
+            kiro_cache_snapshot_interval_seconds: DEFAULT_KIRO_CACHE_SNAPSHOT_INTERVAL_SECONDS,
+            kiro_cache_snapshot_ttl_seconds: DEFAULT_KIRO_CACHE_SNAPSHOT_TTL_SECONDS,
+            kiro_cache_snapshot_max_tokens: DEFAULT_KIRO_CACHE_SNAPSHOT_MAX_TOKENS,
+            kiro_cache_snapshot_max_anchor_entries: DEFAULT_KIRO_CACHE_SNAPSHOT_MAX_ANCHOR_ENTRIES,
             kiro_cctest_proxy_base_url: None,
             kiro_cctest_proxy_api_key: None,
         }
@@ -358,6 +376,21 @@ pub struct UpdateAdminRuntimeConfig {
     /// Kiro conversation anchor TTL.
     #[serde(default)]
     pub kiro_conversation_anchor_ttl_seconds: Option<u64>,
+    /// Whether the Kiro cache simulator persists snapshots to Valkey.
+    #[serde(default)]
+    pub kiro_cache_snapshot_enabled: Option<bool>,
+    /// Interval between Kiro cache snapshot flushes, in seconds.
+    #[serde(default)]
+    pub kiro_cache_snapshot_interval_seconds: Option<u64>,
+    /// Retention TTL applied to persisted Kiro cache snapshots, in seconds.
+    #[serde(default)]
+    pub kiro_cache_snapshot_ttl_seconds: Option<u64>,
+    /// Snapshot prefix-token cap (0 = follow the live prefix-cache budget).
+    #[serde(default)]
+    pub kiro_cache_snapshot_max_tokens: Option<u64>,
+    /// Snapshot anchor-entry cap (0 = follow the live anchor budget).
+    #[serde(default)]
+    pub kiro_cache_snapshot_max_anchor_entries: Option<u64>,
     /// Anthropic-compatible upstream base URL for cctest signature probes.
     #[serde(default)]
     pub kiro_cctest_proxy_base_url: Option<String>,

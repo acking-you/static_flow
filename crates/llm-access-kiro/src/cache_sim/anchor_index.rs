@@ -12,6 +12,10 @@ use std::{
 use lru::LruCache;
 use serde::Serialize;
 
+use super::snapshot::{
+    write_varint, write_zigzag, DecodedAnchor, RebuildRow, SnapshotError, SnapshotReader,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub struct ConversationAnchorRuntimeStats {
     pub entries: usize,
@@ -165,6 +169,125 @@ impl ConversationAnchorIndex {
             estimated_memory_bytes: estimate_anchor_index_memory_bytes(entries),
         }
     }
+
+    /// Whether the backing cache holds no entries.
+    pub(super) fn is_empty(&self) -> bool {
+        match self.cache.as_ref() {
+            Some(cache) => cache.is_empty(),
+            None => true,
+        }
+    }
+
+    /// Current entry count.
+    pub(super) fn len(&self) -> usize {
+        self.cache.as_ref().map_or(0, LruCache::len)
+    }
+
+    /// Serialize the index as a flat anchor section into `out`, most-recently
+    /// used first. With `cap_entries`, only the hottest `cap_entries` rows are
+    /// written. The 64-hex key is stored as its raw 32 bytes to halve its size.
+    pub(super) fn encode_section(
+        &self,
+        out: &mut Vec<u8>,
+        now: Instant,
+        cap_entries: Option<usize>,
+    ) {
+        let mut rows: Vec<u8> = Vec::new();
+        let mut count = 0u64;
+        if let Some(cache) = self.cache.as_ref() {
+            for (hex_key, entry) in cache.iter() {
+                if cap_entries.is_some_and(|max| count as usize >= max) {
+                    break;
+                }
+                let Ok(raw) = hex::decode(hex_key) else {
+                    continue;
+                };
+                if raw.len() != 32 {
+                    continue;
+                }
+                rows.extend_from_slice(&raw);
+                write_varint(&mut rows, entry.conversation_id.len() as u64);
+                rows.extend_from_slice(entry.conversation_id.as_bytes());
+                match entry.token_counts {
+                    Some(counts) => {
+                        rows.push(1);
+                        write_zigzag(&mut rows, i64::from(counts.real_input_tokens));
+                        write_zigzag(&mut rows, i64::from(counts.local_input_tokens));
+                    },
+                    None => rows.push(0),
+                }
+                let age_secs = now
+                    .saturating_duration_since(entry.last_touched_at)
+                    .as_secs();
+                write_varint(&mut rows, age_secs);
+                count += 1;
+            }
+        }
+        write_varint(out, count);
+        out.extend_from_slice(&rows);
+    }
+
+    /// Decode a flat anchor section into source rows. No TTL filtering or
+    /// insertion happens here; the cross-node union owns recency and capacity.
+    pub(super) fn decode_section(
+        reader: &mut SnapshotReader<'_>,
+        snapshot_unix_ms: i64,
+    ) -> Result<Vec<DecodedAnchor>, SnapshotError> {
+        let count = reader.read_varint()?;
+        let mut rows = Vec::with_capacity((count as usize).min(reader.remaining()));
+        for _ in 0..count {
+            let hex_key = hex::encode(reader.read_bytes(32)?);
+            let conv_len = reader.read_varint()? as usize;
+            let conv_bytes = reader.read_bytes(conv_len)?;
+            let conversation_id =
+                String::from_utf8(conv_bytes.to_vec()).map_err(|_| SnapshotError::Malformed)?;
+            let token_counts = if reader.read_u8()? == 1 {
+                Some(AnchorTokenCounts {
+                    real_input_tokens: reader.read_zigzag()? as i32,
+                    local_input_tokens: reader.read_zigzag()? as i32,
+                })
+            } else {
+                None
+            };
+            let age_secs = reader.read_varint()?;
+            rows.push(DecodedAnchor {
+                hex: hex_key,
+                conversation_id,
+                token_counts,
+                age_secs,
+                snapshot_unix_ms,
+            });
+        }
+        Ok(rows)
+    }
+
+    /// Replace the index contents from union rows (ordered oldest-first), then
+    /// drop anything already past `ttl`.
+    pub(super) fn rebuild_from_rows(
+        &mut self,
+        rows: Vec<RebuildRow>,
+        now: Instant,
+        ttl: Duration,
+        max_entries: usize,
+    ) {
+        self.ensure_capacity(max_entries);
+        if let Some(cache) = self.cache.as_mut() {
+            cache.clear();
+        }
+        for row in rows {
+            let last_touched_at = now
+                .checked_sub(Duration::from_secs(row.eff_age_secs))
+                .unwrap_or(now);
+            if let Some(cache) = self.cache.as_mut() {
+                cache.put(row.hex, ConversationAnchorEntry {
+                    conversation_id: row.conversation_id,
+                    token_counts: row.token_counts,
+                    last_touched_at,
+                });
+            }
+        }
+        self.remove_expired(now, ttl);
+    }
 }
 
 fn estimate_anchor_index_memory_bytes(entries: usize) -> u64 {
@@ -187,6 +310,47 @@ mod tests {
             real_input_tokens: real,
             local_input_tokens: local,
         }
+    }
+
+    #[test]
+    fn anchor_section_round_trip_recovers_entries() {
+        use crate::cache_sim::snapshot::{union_anchor_rows, SnapshotReader};
+
+        let key_a = "a".repeat(64);
+        let key_b = "b".repeat(64);
+        let mut index = ConversationAnchorIndex::default();
+        let now = Instant::now();
+        index.insert(
+            key_a.clone(),
+            "conv-a".to_string(),
+            Some(counts(812_345, 760_000)),
+            now,
+            TTL,
+            MAX,
+        );
+        index.insert(key_b.clone(), "conv-b".to_string(), None, now, TTL, MAX);
+
+        let snapshot_unix_ms = 1_700_000_000_000i64;
+        let mut buf = Vec::new();
+        index.encode_section(&mut buf, now, None);
+
+        let mut reader = SnapshotReader::new(&buf);
+        let rows = ConversationAnchorIndex::decode_section(&mut reader, snapshot_unix_ms)
+            .expect("decode anchor section");
+        assert_eq!(rows.len(), 2);
+        let merged = union_anchor_rows(rows, snapshot_unix_ms, TTL, MAX);
+
+        let mut restored = ConversationAnchorIndex::default();
+        let restore_now = Instant::now();
+        restored.rebuild_from_rows(merged, restore_now, TTL, MAX);
+
+        assert_eq!(restored.get(&key_a, restore_now, TTL, MAX), Some("conv-a".to_string()));
+        assert_eq!(
+            restored.recover_token_counts(&key_a, restore_now, TTL),
+            Some(counts(812_345, 760_000))
+        );
+        assert_eq!(restored.get(&key_b, restore_now, TTL, MAX), Some("conv-b".to_string()));
+        assert_eq!(restored.recover_token_counts(&key_b, restore_now, TTL), None);
     }
 
     #[test]

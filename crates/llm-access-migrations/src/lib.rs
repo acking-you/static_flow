@@ -103,6 +103,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "codex_session_affinity_config",
         sql: include_str!("../migrations/postgres/0023_codex_session_affinity_config.sql"),
     },
+    SqlMigration {
+        version: 24,
+        name: "kiro_cache_snapshot_config",
+        sql: include_str!("../migrations/postgres/0024_kiro_cache_snapshot_config.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.

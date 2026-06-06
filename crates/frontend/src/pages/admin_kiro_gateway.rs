@@ -2986,6 +2986,11 @@ pub fn admin_kiro_gateway_page() -> Html {
     let kiro_prefix_cache_entry_ttl_seconds = use_state(String::new);
     let kiro_conversation_anchor_max_entries = use_state(String::new);
     let kiro_conversation_anchor_ttl_seconds = use_state(String::new);
+    let kiro_cache_snapshot_enabled = use_state(|| false);
+    let kiro_cache_snapshot_interval_seconds = use_state(String::new);
+    let kiro_cache_snapshot_ttl_seconds = use_state(String::new);
+    let kiro_cache_snapshot_max_tokens = use_state(String::new);
+    let kiro_cache_snapshot_max_anchor_entries = use_state(String::new);
     let loading = use_state(|| true);
     let error = use_state(|| None::<String>);
     let inventory_loading = use_state(|| false);
@@ -3140,6 +3145,11 @@ pub fn admin_kiro_gateway_page() -> Html {
         let kiro_prefix_cache_entry_ttl_seconds = kiro_prefix_cache_entry_ttl_seconds.clone();
         let kiro_conversation_anchor_max_entries = kiro_conversation_anchor_max_entries.clone();
         let kiro_conversation_anchor_ttl_seconds = kiro_conversation_anchor_ttl_seconds.clone();
+        let kiro_cache_snapshot_enabled = kiro_cache_snapshot_enabled.clone();
+        let kiro_cache_snapshot_interval_seconds = kiro_cache_snapshot_interval_seconds.clone();
+        let kiro_cache_snapshot_ttl_seconds = kiro_cache_snapshot_ttl_seconds.clone();
+        let kiro_cache_snapshot_max_tokens = kiro_cache_snapshot_max_tokens.clone();
+        let kiro_cache_snapshot_max_anchor_entries = kiro_cache_snapshot_max_anchor_entries.clone();
         let loading = loading.clone();
         let error = error.clone();
         use_effect_with(*refresh_tick, move |_| {
@@ -3242,6 +3252,18 @@ pub fn admin_kiro_gateway_page() -> Html {
                             .set(config_resp.kiro_conversation_anchor_max_entries.to_string());
                         kiro_conversation_anchor_ttl_seconds
                             .set(config_resp.kiro_conversation_anchor_ttl_seconds.to_string());
+                        kiro_cache_snapshot_enabled.set(config_resp.kiro_cache_snapshot_enabled);
+                        kiro_cache_snapshot_interval_seconds
+                            .set(config_resp.kiro_cache_snapshot_interval_seconds.to_string());
+                        kiro_cache_snapshot_ttl_seconds
+                            .set(config_resp.kiro_cache_snapshot_ttl_seconds.to_string());
+                        kiro_cache_snapshot_max_tokens
+                            .set(config_resp.kiro_cache_snapshot_max_tokens.to_string());
+                        kiro_cache_snapshot_max_anchor_entries.set(
+                            config_resp
+                                .kiro_cache_snapshot_max_anchor_entries
+                                .to_string(),
+                        );
                         runtime_config.set(Some(config_resp));
                         accounts_summary.set(accounts_summary_resp.summary);
                         keys_summary.set(keys_summary_resp.summary);
@@ -3510,6 +3532,13 @@ pub fn admin_kiro_gateway_page() -> Html {
             kiro_conversation_anchor_max_entries.clone();
         let kiro_conversation_anchor_ttl_seconds_input =
             kiro_conversation_anchor_ttl_seconds.clone();
+        let kiro_cache_snapshot_enabled_input = kiro_cache_snapshot_enabled.clone();
+        let kiro_cache_snapshot_interval_seconds_input =
+            kiro_cache_snapshot_interval_seconds.clone();
+        let kiro_cache_snapshot_ttl_seconds_input = kiro_cache_snapshot_ttl_seconds.clone();
+        let kiro_cache_snapshot_max_tokens_input = kiro_cache_snapshot_max_tokens.clone();
+        let kiro_cache_snapshot_max_anchor_entries_input =
+            kiro_cache_snapshot_max_anchor_entries.clone();
         let saving_kmodel_config = saving_kmodel_config.clone();
         let notify = notify.clone();
         let error = error.clone();
@@ -3539,6 +3568,15 @@ pub fn admin_kiro_gateway_page() -> Html {
                 (*kiro_conversation_anchor_max_entries_input).clone();
             let kiro_conversation_anchor_ttl_seconds_value =
                 (*kiro_conversation_anchor_ttl_seconds_input).clone();
+            let kiro_cache_snapshot_enabled_value = *kiro_cache_snapshot_enabled_input;
+            let kiro_cache_snapshot_interval_seconds_value =
+                (*kiro_cache_snapshot_interval_seconds_input).clone();
+            let kiro_cache_snapshot_ttl_seconds_value =
+                (*kiro_cache_snapshot_ttl_seconds_input).clone();
+            let kiro_cache_snapshot_max_tokens_value =
+                (*kiro_cache_snapshot_max_tokens_input).clone();
+            let kiro_cache_snapshot_max_anchor_entries_value =
+                (*kiro_cache_snapshot_max_anchor_entries_input).clone();
             let kiro_prefix_cache_mode_input = kiro_prefix_cache_mode_input.clone();
             let kiro_context_usage_min_request_tokens_input =
                 kiro_context_usage_min_request_tokens_input.clone();
@@ -3659,6 +3697,52 @@ pub fn admin_kiro_gateway_page() -> Html {
                 next_config.kiro_prefix_cache_entry_ttl_seconds = prefix_cache_entry_ttl_seconds;
                 next_config.kiro_conversation_anchor_max_entries = conversation_anchor_max_entries;
                 next_config.kiro_conversation_anchor_ttl_seconds = conversation_anchor_ttl_seconds;
+                let Ok(cache_snapshot_interval_seconds) =
+                    kiro_cache_snapshot_interval_seconds_value
+                        .trim()
+                        .parse::<u64>()
+                else {
+                    let message =
+                        "Kiro cache snapshot interval seconds must be a valid integer.".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                };
+                let Ok(cache_snapshot_ttl_seconds) =
+                    kiro_cache_snapshot_ttl_seconds_value.trim().parse::<u64>()
+                else {
+                    let message =
+                        "Kiro cache snapshot TTL seconds must be a valid integer.".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                };
+                let Ok(cache_snapshot_max_tokens) =
+                    kiro_cache_snapshot_max_tokens_value.trim().parse::<u64>()
+                else {
+                    let message =
+                        "Kiro cache snapshot max tokens must be a valid integer.".to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                };
+                let Ok(cache_snapshot_max_anchor_entries) =
+                    kiro_cache_snapshot_max_anchor_entries_value
+                        .trim()
+                        .parse::<u64>()
+                else {
+                    let message = "Kiro cache snapshot max anchor entries must be a valid integer."
+                        .to_string();
+                    error.set(Some(message.clone()));
+                    notify.emit((message, true));
+                    return;
+                };
+                next_config.kiro_cache_snapshot_enabled = kiro_cache_snapshot_enabled_value;
+                next_config.kiro_cache_snapshot_interval_seconds = cache_snapshot_interval_seconds;
+                next_config.kiro_cache_snapshot_ttl_seconds = cache_snapshot_ttl_seconds;
+                next_config.kiro_cache_snapshot_max_tokens = cache_snapshot_max_tokens;
+                next_config.kiro_cache_snapshot_max_anchor_entries =
+                    cache_snapshot_max_anchor_entries;
                 saving_kmodel_config.set(true);
                 match update_admin_llm_gateway_config(&next_config).await {
                     Ok(saved) => {
@@ -4404,6 +4488,76 @@ pub fn admin_kiro_gateway_page() -> Html {
                                 Callback::from(move |event: InputEvent| {
                                     let input: HtmlInputElement = event.target_unchecked_into();
                                     kiro_conversation_anchor_ttl_seconds.set(input.value());
+                                })
+                            }}
+                        />
+                    </label>
+                    <label class={classes!("flex", "items-center", "gap-2", "text-sm", "lg:col-span-2")}>
+                        <input
+                            type="checkbox"
+                            checked={*kiro_cache_snapshot_enabled}
+                            oninput={{
+                                let kiro_cache_snapshot_enabled = kiro_cache_snapshot_enabled.clone();
+                                Callback::from(move |event: InputEvent| {
+                                    let input: HtmlInputElement = event.target_unchecked_into();
+                                    kiro_cache_snapshot_enabled.set(input.checked());
+                                })
+                            }}
+                        />
+                        <span class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Snapshot Persistence (Valkey)" }</span>
+                    </label>
+                    <label class={classes!("block", "text-sm")}>
+                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Snapshot Interval Seconds" }</div>
+                        <input
+                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                            value={(*kiro_cache_snapshot_interval_seconds).clone()}
+                            oninput={{
+                                let kiro_cache_snapshot_interval_seconds = kiro_cache_snapshot_interval_seconds.clone();
+                                Callback::from(move |event: InputEvent| {
+                                    let input: HtmlInputElement = event.target_unchecked_into();
+                                    kiro_cache_snapshot_interval_seconds.set(input.value());
+                                })
+                            }}
+                        />
+                    </label>
+                    <label class={classes!("block", "text-sm")}>
+                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Snapshot TTL Seconds" }</div>
+                        <input
+                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                            value={(*kiro_cache_snapshot_ttl_seconds).clone()}
+                            oninput={{
+                                let kiro_cache_snapshot_ttl_seconds = kiro_cache_snapshot_ttl_seconds.clone();
+                                Callback::from(move |event: InputEvent| {
+                                    let input: HtmlInputElement = event.target_unchecked_into();
+                                    kiro_cache_snapshot_ttl_seconds.set(input.value());
+                                })
+                            }}
+                        />
+                    </label>
+                    <label class={classes!("block", "text-sm")}>
+                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Snapshot Max Tokens (0 = live)" }</div>
+                        <input
+                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                            value={(*kiro_cache_snapshot_max_tokens).clone()}
+                            oninput={{
+                                let kiro_cache_snapshot_max_tokens = kiro_cache_snapshot_max_tokens.clone();
+                                Callback::from(move |event: InputEvent| {
+                                    let input: HtmlInputElement = event.target_unchecked_into();
+                                    kiro_cache_snapshot_max_tokens.set(input.value());
+                                })
+                            }}
+                        />
+                    </label>
+                    <label class={classes!("block", "text-sm")}>
+                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Snapshot Max Anchor Entries (0 = live)" }</div>
+                        <input
+                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                            value={(*kiro_cache_snapshot_max_anchor_entries).clone()}
+                            oninput={{
+                                let kiro_cache_snapshot_max_anchor_entries = kiro_cache_snapshot_max_anchor_entries.clone();
+                                Callback::from(move |event: InputEvent| {
+                                    let input: HtmlInputElement = event.target_unchecked_into();
+                                    kiro_cache_snapshot_max_anchor_entries.set(input.value());
                                 })
                             }}
                         />

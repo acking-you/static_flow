@@ -16,6 +16,7 @@ mod anchor_index;
 mod prefix_tree;
 mod projection;
 mod simulator;
+mod snapshot;
 
 pub use anchor_index::{AnchorTokenCounts, ConversationAnchorRuntimeStats};
 pub use prefix_tree::{PrefixCacheMatch, PrefixTreeRuntimeStats};
@@ -23,6 +24,7 @@ pub use projection::{CanonicalTokenPage, PromptProjection, RuntimePromptProjecti
 pub use simulator::{
     KiroCacheRuntimeStats, KiroCacheSimulationConfig, KiroCacheSimulationMode, KiroCacheSimulator,
 };
+pub use snapshot::{peek_header, KiroSnapshotImportOutcome, SnapshotCaps, SnapshotError};
 
 #[cfg(test)]
 mod tests {
@@ -32,7 +34,7 @@ mod tests {
 
     use super::{
         projection::PREFIX_CACHE_PAGE_SIZE, KiroCacheSimulationConfig, KiroCacheSimulationMode,
-        KiroCacheSimulator, PrefixCacheMatch, PromptProjection,
+        KiroCacheSimulator, PrefixCacheMatch, PromptProjection, SnapshotCaps,
     };
     use crate::wire::{
         AssistantMessage, ConversationState, CurrentMessage, HistoryAssistantMessage,
@@ -220,5 +222,166 @@ mod tests {
             snapshot.conversation_anchors.max_entries,
             config.conversation_anchor_max_entries
         );
+    }
+
+    fn prefix_tree_config() -> KiroCacheSimulationConfig {
+        KiroCacheSimulationConfig {
+            mode: KiroCacheSimulationMode::PrefixTree,
+            prefix_cache_max_tokens: 100_000,
+            prefix_cache_entry_ttl: Duration::from_secs(300),
+            conversation_anchor_max_entries: 32,
+            conversation_anchor_ttl: Duration::from_secs(300),
+        }
+    }
+
+    fn warm_state() -> ConversationState {
+        ConversationState::new("conv-1")
+            .with_history(vec![history_user("existing history"), history_assistant("done")])
+            .with_current_message(CurrentMessage::new(
+                UserInputMessage::new("continue", "ignored-model").with_context(
+                    UserInputMessageContext::new().with_tools(vec![tool(
+                        "search_files",
+                        "Search files",
+                        json!({"type":"object","properties":{"query":{"type":"string"}}}),
+                    )]),
+                ),
+            ))
+    }
+
+    #[test]
+    fn snapshot_export_import_restores_prefix_and_anchor() {
+        let state = warm_state();
+        let projection = PromptProjection::from_conversation_state(&state);
+        let assistant = AssistantMessage::new("assistant reply");
+        let config = prefix_tree_config();
+        let caps = SnapshotCaps::default();
+        let now = Instant::now();
+
+        let warm = KiroCacheSimulator::default();
+        warm.record_success(&projection, &assistant, "real-conv", true, config, now);
+        let blob = warm
+            .export_snapshot(config, caps, now)
+            .expect("export produces a blob");
+
+        // Simulate a restart: a fresh simulator restores from the blob.
+        let restored = KiroCacheSimulator::default();
+        let outcome = restored.import_snapshot(Some(&blob), &[], config, caps, now);
+        assert!(outcome.prefix_from_own);
+        assert!(outcome.prefix_resident_tokens > 0);
+        assert_eq!(outcome.anchor_entries, 1);
+        assert_eq!(outcome.decode_errors, 0);
+
+        let matched = restored.match_prefix(&projection, config, now + Duration::from_secs(1));
+        assert_eq!(matched.matched_pages, projection.stable_prefix_pages.len());
+        assert!(matched.matched_tokens > 0);
+
+        // Recover the conversation id from the resumed follow-up turn.
+        let follow_up = ConversationState::new("new-conv")
+            .with_history(vec![
+                history_user("existing history"),
+                history_assistant("done"),
+                Message::User(HistoryUserMessage::new("continue", "ignored-model")),
+                Message::Assistant(HistoryAssistantMessage {
+                    assistant_response_message: assistant.clone(),
+                }),
+            ])
+            .with_current_message(CurrentMessage::new(UserInputMessage::new(
+                "next step",
+                "ignored-model",
+            )));
+        let follow_up_projection = PromptProjection::from_conversation_state(&follow_up);
+        assert_eq!(
+            restored.recover_conversation_id(
+                &follow_up_projection,
+                config,
+                now + Duration::from_secs(2)
+            ),
+            Some("real-conv".to_string())
+        );
+    }
+
+    #[test]
+    fn snapshot_peer_seeds_prefix_when_own_absent() {
+        let state = warm_state();
+        let projection = PromptProjection::from_conversation_state(&state);
+        let assistant = AssistantMessage::new("assistant reply");
+        let config = prefix_tree_config();
+        let caps = SnapshotCaps::default();
+        let now = Instant::now();
+
+        let peer = KiroCacheSimulator::default();
+        peer.record_success(&projection, &assistant, "peer-conv", true, config, now);
+        let peer_blob = peer.export_snapshot(config, caps, now).expect("peer blob");
+
+        let restored = KiroCacheSimulator::default();
+        let outcome = restored.import_snapshot(None, &[peer_blob], config, caps, now);
+        assert!(!outcome.prefix_from_own);
+        assert!(outcome.prefix_from_peer);
+        assert!(outcome.prefix_resident_tokens > 0);
+
+        let matched = restored.match_prefix(&projection, config, now + Duration::from_secs(1));
+        assert_eq!(matched.matched_pages, projection.stable_prefix_pages.len());
+    }
+
+    #[test]
+    fn snapshot_formula_mode_round_trips_anchor_only() {
+        let state = warm_state();
+        let projection = PromptProjection::from_conversation_state(&state);
+        let assistant = AssistantMessage::new("assistant reply");
+        let config = KiroCacheSimulationConfig {
+            mode: KiroCacheSimulationMode::Formula,
+            ..prefix_tree_config()
+        };
+        let caps = SnapshotCaps::default();
+        let now = Instant::now();
+
+        let warm = KiroCacheSimulator::default();
+        // record_success in Formula mode records the anchor but not the tree.
+        warm.record_success(&projection, &assistant, "real-conv", false, config, now);
+        let blob = warm
+            .export_snapshot(config, caps, now)
+            .expect("formula export still persists anchors");
+
+        let restored = KiroCacheSimulator::default();
+        let outcome = restored.import_snapshot(Some(&blob), &[], config, caps, now);
+        assert_eq!(outcome.anchor_entries, 1);
+        assert_eq!(outcome.prefix_resident_tokens, 0);
+
+        // No prefix matching in Formula mode, but the anchor recovers.
+        let follow_up = ConversationState::new("new-conv")
+            .with_history(vec![
+                history_user("existing history"),
+                history_assistant("done"),
+                Message::User(HistoryUserMessage::new("continue", "ignored-model")),
+                Message::Assistant(HistoryAssistantMessage {
+                    assistant_response_message: assistant.clone(),
+                }),
+            ])
+            .with_current_message(CurrentMessage::new(UserInputMessage::new(
+                "next step",
+                "ignored-model",
+            )));
+        let follow_up_projection = PromptProjection::from_conversation_state(&follow_up);
+        assert_eq!(
+            restored.recover_conversation_id(
+                &follow_up_projection,
+                config,
+                now + Duration::from_secs(1)
+            ),
+            Some("real-conv".to_string())
+        );
+    }
+
+    #[test]
+    fn snapshot_import_counts_decode_errors_and_stays_empty() {
+        let config = prefix_tree_config();
+        let caps = SnapshotCaps::default();
+        let now = Instant::now();
+        let restored = KiroCacheSimulator::default();
+        // Garbage that is neither valid gzip nor a valid frame.
+        let outcome = restored.import_snapshot(Some(b"not-a-snapshot"), &[], config, caps, now);
+        assert_eq!(outcome.decode_errors, 1);
+        assert_eq!(outcome.anchor_entries, 0);
+        assert_eq!(outcome.prefix_resident_tokens, 0);
     }
 }

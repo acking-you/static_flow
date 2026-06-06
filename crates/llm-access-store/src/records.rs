@@ -229,6 +229,21 @@ pub struct RuntimeConfigRecord {
     pub kiro_conversation_anchor_max_entries: i64,
     /// Kiro conversation anchor TTL.
     pub kiro_conversation_anchor_ttl_seconds: i64,
+    /// Whether the Kiro cache simulator persists snapshots to Valkey.
+    #[serde(default = "default_kiro_cache_snapshot_enabled")]
+    pub kiro_cache_snapshot_enabled: bool,
+    /// Interval between Kiro cache snapshot flushes, in seconds.
+    #[serde(default = "default_kiro_cache_snapshot_interval_seconds_i64")]
+    pub kiro_cache_snapshot_interval_seconds: i64,
+    /// Retention TTL applied to persisted Kiro cache snapshots, in seconds.
+    #[serde(default = "default_kiro_cache_snapshot_ttl_seconds_i64")]
+    pub kiro_cache_snapshot_ttl_seconds: i64,
+    /// Snapshot prefix-token cap (0 = follow the live prefix-cache budget).
+    #[serde(default = "default_kiro_cache_snapshot_max_tokens_i64")]
+    pub kiro_cache_snapshot_max_tokens: i64,
+    /// Snapshot anchor-entry cap (0 = follow the live anchor budget).
+    #[serde(default = "default_kiro_cache_snapshot_max_anchor_entries_i64")]
+    pub kiro_cache_snapshot_max_anchor_entries: i64,
     /// Optional Anthropic-compatible upstream base URL for cctest signature
     /// probes.
     #[serde(default)]
@@ -311,6 +326,26 @@ fn default_kiro_context_usage_min_request_tokens_i64() -> i64 {
 
 fn default_kiro_compact_trigger_tokens_i64() -> i64 {
     core_store::DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS as i64
+}
+
+fn default_kiro_cache_snapshot_enabled() -> bool {
+    core_store::DEFAULT_KIRO_CACHE_SNAPSHOT_ENABLED
+}
+
+fn default_kiro_cache_snapshot_interval_seconds_i64() -> i64 {
+    core_store::DEFAULT_KIRO_CACHE_SNAPSHOT_INTERVAL_SECONDS as i64
+}
+
+fn default_kiro_cache_snapshot_ttl_seconds_i64() -> i64 {
+    core_store::DEFAULT_KIRO_CACHE_SNAPSHOT_TTL_SECONDS as i64
+}
+
+fn default_kiro_cache_snapshot_max_tokens_i64() -> i64 {
+    core_store::DEFAULT_KIRO_CACHE_SNAPSHOT_MAX_TOKENS as i64
+}
+
+fn default_kiro_cache_snapshot_max_anchor_entries_i64() -> i64 {
+    core_store::DEFAULT_KIRO_CACHE_SNAPSHOT_MAX_ANCHOR_ENTRIES as i64
 }
 
 fn default_codex_session_affinity_enabled() -> bool {
@@ -423,6 +458,13 @@ impl Default for RuntimeConfigRecord {
                 core_store::DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES as i64,
             kiro_conversation_anchor_ttl_seconds:
                 core_store::DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS as i64,
+            kiro_cache_snapshot_enabled: default_kiro_cache_snapshot_enabled(),
+            kiro_cache_snapshot_interval_seconds: default_kiro_cache_snapshot_interval_seconds_i64(
+            ),
+            kiro_cache_snapshot_ttl_seconds: default_kiro_cache_snapshot_ttl_seconds_i64(),
+            kiro_cache_snapshot_max_tokens: default_kiro_cache_snapshot_max_tokens_i64(),
+            kiro_cache_snapshot_max_anchor_entries:
+                default_kiro_cache_snapshot_max_anchor_entries_i64(),
             kiro_cctest_proxy_base_url: None,
             kiro_cctest_proxy_api_key: None,
             updated_at_ms: now_ms(),
@@ -496,6 +538,12 @@ impl RuntimeConfigRecord {
             kiro_prefix_cache_entry_ttl_seconds: self.kiro_prefix_cache_entry_ttl_seconds as u64,
             kiro_conversation_anchor_max_entries: self.kiro_conversation_anchor_max_entries as u64,
             kiro_conversation_anchor_ttl_seconds: self.kiro_conversation_anchor_ttl_seconds as u64,
+            kiro_cache_snapshot_enabled: self.kiro_cache_snapshot_enabled,
+            kiro_cache_snapshot_interval_seconds: self.kiro_cache_snapshot_interval_seconds as u64,
+            kiro_cache_snapshot_ttl_seconds: self.kiro_cache_snapshot_ttl_seconds as u64,
+            kiro_cache_snapshot_max_tokens: self.kiro_cache_snapshot_max_tokens as u64,
+            kiro_cache_snapshot_max_anchor_entries: self.kiro_cache_snapshot_max_anchor_entries
+                as u64,
             kiro_cctest_proxy_base_url: self.kiro_cctest_proxy_base_url.clone(),
             kiro_cctest_proxy_api_key: self.kiro_cctest_proxy_api_key.clone(),
         }
@@ -569,6 +617,13 @@ impl RuntimeConfigRecord {
             config.kiro_conversation_anchor_max_entries as i64;
         self.kiro_conversation_anchor_ttl_seconds =
             config.kiro_conversation_anchor_ttl_seconds as i64;
+        self.kiro_cache_snapshot_enabled = config.kiro_cache_snapshot_enabled;
+        self.kiro_cache_snapshot_interval_seconds =
+            config.kiro_cache_snapshot_interval_seconds as i64;
+        self.kiro_cache_snapshot_ttl_seconds = config.kiro_cache_snapshot_ttl_seconds as i64;
+        self.kiro_cache_snapshot_max_tokens = config.kiro_cache_snapshot_max_tokens as i64;
+        self.kiro_cache_snapshot_max_anchor_entries =
+            config.kiro_cache_snapshot_max_anchor_entries as i64;
         self.kiro_cctest_proxy_base_url = config.kiro_cctest_proxy_base_url.clone();
         self.kiro_cctest_proxy_api_key = config.kiro_cctest_proxy_api_key.clone();
         self.updated_at_ms = now_ms();

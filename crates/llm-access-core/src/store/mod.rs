@@ -191,6 +191,16 @@ pub const DEFAULT_KIRO_PREFIX_CACHE_ENTRY_TTL_SECONDS: u64 = 2 * 60 * 60;
 pub const DEFAULT_KIRO_CONVERSATION_ANCHOR_MAX_ENTRIES: u64 = 4_096;
 /// Default Kiro conversation anchor TTL.
 pub const DEFAULT_KIRO_CONVERSATION_ANCHOR_TTL_SECONDS: u64 = 6 * 60 * 60;
+/// Whether Kiro cache snapshot persistence to Valkey is enabled by default.
+pub const DEFAULT_KIRO_CACHE_SNAPSHOT_ENABLED: bool = false;
+/// Default Kiro cache snapshot flush interval.
+pub const DEFAULT_KIRO_CACHE_SNAPSHOT_INTERVAL_SECONDS: u64 = 300;
+/// Default Kiro cache snapshot retention TTL.
+pub const DEFAULT_KIRO_CACHE_SNAPSHOT_TTL_SECONDS: u64 = 24 * 60 * 60;
+/// Default Kiro cache snapshot prefix-token cap (0 = follow the live budget).
+pub const DEFAULT_KIRO_CACHE_SNAPSHOT_MAX_TOKENS: u64 = 0;
+/// Default Kiro cache snapshot anchor-entry cap (0 = follow the live budget).
+pub const DEFAULT_KIRO_CACHE_SNAPSHOT_MAX_ANCHOR_ENTRIES: u64 = 0;
 /// Default Kiro account channel concurrency retained in storage.
 pub const DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 1;
 /// Default Kiro account request pacing interval retained in storage.

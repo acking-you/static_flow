@@ -3807,6 +3807,26 @@ pub fn admin_llm_gateway_page() -> Html {
                         .as_ref()
                         .map(|current| current.kiro_conversation_anchor_ttl_seconds)
                         .unwrap_or(86_400),
+                    kiro_cache_snapshot_enabled: config
+                        .as_ref()
+                        .map(|current| current.kiro_cache_snapshot_enabled)
+                        .unwrap_or(false),
+                    kiro_cache_snapshot_interval_seconds: config
+                        .as_ref()
+                        .map(|current| current.kiro_cache_snapshot_interval_seconds)
+                        .unwrap_or(300),
+                    kiro_cache_snapshot_ttl_seconds: config
+                        .as_ref()
+                        .map(|current| current.kiro_cache_snapshot_ttl_seconds)
+                        .unwrap_or(86_400),
+                    kiro_cache_snapshot_max_tokens: config
+                        .as_ref()
+                        .map(|current| current.kiro_cache_snapshot_max_tokens)
+                        .unwrap_or(0),
+                    kiro_cache_snapshot_max_anchor_entries: config
+                        .as_ref()
+                        .map(|current| current.kiro_cache_snapshot_max_anchor_entries)
+                        .unwrap_or(0),
                     kiro_cctest_proxy_base_url,
                     kiro_cctest_proxy_api_key,
                 };

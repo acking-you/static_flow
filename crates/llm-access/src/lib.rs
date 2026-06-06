@@ -13,6 +13,7 @@ mod email;
 mod geoip;
 /// Local Kiro endpoints.
 pub mod kiro;
+mod kiro_cache_snapshot;
 mod kiro_headers;
 mod kiro_latency;
 mod kiro_refresh;
@@ -175,8 +176,11 @@ fn duckdb_schema_output_path(config: &StorageConfig) -> PathBuf {
     config.duckdb.with_extension("schema.sql")
 }
 
-/// Build the HTTP router.
-pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
+/// Build the HTTP router and hand back the shared Kiro cache simulator so the
+/// serve loop can snapshot it to Valkey and restore it on startup.
+pub fn router_with_simulator(
+    runtime: runtime::LlmAccessRuntime,
+) -> (Router, Arc<llm_access_kiro::cache_sim::KiroCacheSimulator>) {
     let request_activity = Arc::new(activity::RequestActivityTracker::new());
     let geoip = runtime.geoip();
     let provider_state = provider::ProviderState::new_with_config_store_activity_and_latency(
@@ -187,6 +191,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         geoip.clone(),
         runtime.kiro_latency_ranker(),
     );
+    let kiro_cache_simulator = provider_state.kiro_cache_simulator();
     let state = HttpState {
         provider_state,
         cluster_state: runtime.cluster_state(),
@@ -211,7 +216,7 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         public_status_store: runtime.public_status_store(),
         email_notifier: runtime.email_notifier(),
     };
-    Router::new()
+    let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route(
@@ -443,7 +448,14 @@ pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
         .route("/api/llm-access/*path", any(provider_entry_handler))
         .layer(middleware::from_fn(request_context::request_context_middleware))
         .layer(cors_layer())
-        .with_state(state)
+        .with_state(state);
+    (app, kiro_cache_simulator)
+}
+
+/// Build the HTTP router, discarding the cache simulator handle. Retained for
+/// callers that do not need snapshot persistence (e.g. tests).
+pub fn router(runtime: runtime::LlmAccessRuntime) -> Router {
+    router_with_simulator(runtime).0
 }
 
 fn cors_layer() -> CorsLayer {
@@ -511,18 +523,67 @@ pub async fn serve(config: ServeConfig) -> anyhow::Result<()> {
         );
     }
     let shutdown_runtime = service_runtime.clone();
+    let admin_config_store = service_runtime.admin_config_store();
     let listener = tokio::net::TcpListener::bind(config.bind_addr)
         .await
         .with_context(|| format!("failed to bind {}", config.bind_addr))?;
     spawn_allocator_collector();
-    let app = router(service_runtime).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let (app, kiro_cache_simulator) = router_with_simulator(service_runtime);
+    let snapshot_handle =
+        setup_kiro_cache_snapshot(&config.storage, admin_config_store, kiro_cache_simulator).await;
+    let app = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
     allocator::collect_process_allocator();
     let result = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("llm-access server failed");
+    if let Some(handle) = snapshot_handle {
+        // Bound the final flush so a stuck Valkey cannot block process exit.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle.shutdown()).await;
+    }
     shutdown_runtime.shutdown_usage_events().await;
     result
+}
+
+/// Wire up cross-node Kiro cache snapshot persistence. Returns the periodic
+/// task handle when a request cache is configured, restoring the simulator
+/// before serving when the feature is enabled. Best-effort throughout: a
+/// missing or broken cache simply yields `None`.
+async fn setup_kiro_cache_snapshot(
+    storage: &StorageConfig,
+    admin_config_store: Arc<dyn AdminConfigStore>,
+    simulator: Arc<llm_access_kiro::cache_sim::KiroCacheSimulator>,
+) -> Option<kiro_cache_snapshot::KiroCacheSnapshotHandle> {
+    let cache_config = match config::resolve_request_cache_config(storage) {
+        Ok(Some(cache_config)) => cache_config,
+        Ok(None) => return None,
+        Err(error) => {
+            tracing::warn!(%error, "failed to resolve request cache for kiro cache snapshot");
+            return None;
+        },
+    };
+    let node_id = storage
+        .node_identity
+        .as_ref()
+        .map(|identity| identity.node_id.clone());
+    let store = match kiro_cache_snapshot::KiroCacheSnapshotStore::new(&cache_config, node_id) {
+        Ok(store) => store,
+        Err(error) => {
+            tracing::warn!(%error, "failed to open kiro cache snapshot store");
+            return None;
+        },
+    };
+    match admin_config_store.get_admin_runtime_config().await {
+        Ok(config) if config.kiro_cache_snapshot_enabled => {
+            let outcome = kiro_cache_snapshot::restore_simulator(&store, &simulator, &config).await;
+            tracing::info!(?outcome, "restored kiro cache snapshot from valkey");
+        },
+        Ok(_) => {},
+        Err(error) => {
+            tracing::warn!(%error, "failed to read runtime config for kiro cache snapshot restore");
+        },
+    }
+    Some(kiro_cache_snapshot::spawn(store, simulator, admin_config_store))
 }
 
 fn background_status_refresh_enabled_with_role(

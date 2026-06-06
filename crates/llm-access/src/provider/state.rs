@@ -146,6 +146,12 @@ impl ProviderState {
         Arc::clone(&self.route_store)
     }
 
+    /// Shared Kiro cache simulator, exposed so the serve loop can snapshot it
+    /// to Valkey and restore it on startup.
+    pub(crate) fn kiro_cache_simulator(&self) -> Arc<KiroCacheSimulator> {
+        Arc::clone(&self.kiro_cache_simulator)
+    }
+
     pub(crate) async fn authenticate_bearer_secret(
         &self,
         secret: &str,

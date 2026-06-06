@@ -51,6 +51,18 @@ fn default_codex_session_affinity_enabled() -> bool {
     true
 }
 
+fn default_kiro_cache_snapshot_enabled() -> bool {
+    false
+}
+
+fn default_kiro_cache_snapshot_interval_seconds() -> u64 {
+    300
+}
+
+fn default_kiro_cache_snapshot_ttl_seconds() -> u64 {
+    24 * 60 * 60
+}
+
 fn default_codex_session_affinity_max_entries() -> u64 {
     20_000
 }
@@ -6982,6 +6994,16 @@ pub struct LlmGatewayRuntimeConfig {
     pub kiro_prefix_cache_entry_ttl_seconds: u64,
     pub kiro_conversation_anchor_max_entries: u64,
     pub kiro_conversation_anchor_ttl_seconds: u64,
+    #[serde(default = "default_kiro_cache_snapshot_enabled")]
+    pub kiro_cache_snapshot_enabled: bool,
+    #[serde(default = "default_kiro_cache_snapshot_interval_seconds")]
+    pub kiro_cache_snapshot_interval_seconds: u64,
+    #[serde(default = "default_kiro_cache_snapshot_ttl_seconds")]
+    pub kiro_cache_snapshot_ttl_seconds: u64,
+    #[serde(default)]
+    pub kiro_cache_snapshot_max_tokens: u64,
+    #[serde(default)]
+    pub kiro_cache_snapshot_max_anchor_entries: u64,
     #[serde(default)]
     pub kiro_cctest_proxy_base_url: Option<String>,
     #[serde(default)]
@@ -7801,6 +7823,11 @@ pub async fn fetch_admin_llm_gateway_config() -> Result<LlmGatewayRuntimeConfig,
             kiro_prefix_cache_entry_ttl_seconds: 21_600,
             kiro_conversation_anchor_max_entries: 20_000,
             kiro_conversation_anchor_ttl_seconds: 86_400,
+            kiro_cache_snapshot_enabled: default_kiro_cache_snapshot_enabled(),
+            kiro_cache_snapshot_interval_seconds: default_kiro_cache_snapshot_interval_seconds(),
+            kiro_cache_snapshot_ttl_seconds: default_kiro_cache_snapshot_ttl_seconds(),
+            kiro_cache_snapshot_max_tokens: 0,
+            kiro_cache_snapshot_max_anchor_entries: 0,
             kiro_cctest_proxy_base_url: None,
             kiro_cctest_proxy_api_key: None,
         })
@@ -11912,6 +11939,12 @@ mod tests {
         assert_eq!(config.codex_fallback_affinity_ttl_seconds, 1_800);
         assert_eq!(config.codex_fallback_affinity_prefix_bytes, 4_096);
         assert_eq!(config.codex_fallback_affinity_min_body_bytes, 128);
+        // Snapshot fields are omitted from the JSON above; serde defaults apply.
+        assert!(!config.kiro_cache_snapshot_enabled);
+        assert_eq!(config.kiro_cache_snapshot_interval_seconds, 300);
+        assert_eq!(config.kiro_cache_snapshot_ttl_seconds, 86_400);
+        assert_eq!(config.kiro_cache_snapshot_max_tokens, 0);
+        assert_eq!(config.kiro_cache_snapshot_max_anchor_entries, 0);
     }
 
     #[test]
