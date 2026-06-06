@@ -515,10 +515,11 @@ pub trait AdminCodexAccountStore: Send + Sync {
         name: &str,
     ) -> anyhow::Result<Option<AdminCodexAccount>>;
 
-    /// Resolve one existing Codex account name by upstream account id.
-    async fn find_admin_codex_account_name_by_account_id(
+    /// Resolve one existing Codex account name by upstream principal identity
+    /// derived from auth JWT claims.
+    async fn find_admin_codex_account_name_by_principal_id(
         &self,
-        account_id: &str,
+        principal_id: &str,
     ) -> anyhow::Result<Option<String>>;
 
     /// Import one Codex account.

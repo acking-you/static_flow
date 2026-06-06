@@ -116,6 +116,29 @@ impl PostgresControlRepository {
             .collect())
     }
 
+    pub(super) async fn find_codex_account_name_by_principal_id_uncached(
+        &self,
+        principal_id: &str,
+    ) -> anyhow::Result<Option<String>> {
+        self.ensure_connection_alive()?;
+        let rows = self
+            .client
+            .query(
+                "SELECT account_name, auth_json::text
+                 FROM llm_codex_accounts
+                 ORDER BY account_name",
+                &[],
+            )
+            .await
+            .context("scan postgres codex account principals")?;
+        Ok(rows.into_iter().find_map(|row| {
+            let name: String = row.get(0);
+            let auth_json: String = row.get(1);
+            (core_store::codex_auth_principal_id(&auth_json).as_deref() == Some(principal_id))
+                .then_some(name)
+        }))
+    }
+
     async fn admin_codex_accounts_summary(
         &self,
     ) -> anyhow::Result<core_store::AdminAccountsSummary> {
@@ -743,24 +766,12 @@ impl AdminCodexAccountStore for PostgresControlRepository {
         }
     }
 
-    async fn find_admin_codex_account_name_by_account_id(
+    async fn find_admin_codex_account_name_by_principal_id(
         &self,
-        account_id: &str,
+        principal_id: &str,
     ) -> anyhow::Result<Option<String>> {
-        self.ensure_connection_alive()?;
-        let row = self
-            .client
-            .query_opt(
-                "SELECT account_name
-                 FROM llm_codex_accounts
-                 WHERE account_id = $1
-                 ORDER BY account_name
-                 LIMIT 1",
-                &[&account_id],
-            )
+        self.find_codex_account_name_by_principal_id_cached(principal_id)
             .await
-            .context("load codex account name by account id")?;
-        Ok(row.map(|row| row.get(0)))
     }
 
     async fn create_admin_codex_account(
@@ -787,6 +798,10 @@ impl AdminCodexAccountStore for PostgresControlRepository {
             updated_at_ms: account.created_at_ms,
         };
         self.upsert_codex_account(&record).await?;
+        if let Some(principal_id) = core_store::codex_auth_principal_id(&record.auth_json) {
+            let principal_ids = [principal_id];
+            self.invalidate_codex_principal_cache(&principal_ids).await;
+        }
         self.invalidate_account_cache(core_store::PROVIDER_CODEX, &account.name)
             .await;
         self.bump_dispatch_generation(core_store::PROVIDER_CODEX)
@@ -848,11 +863,16 @@ impl AdminCodexAccountStore for PostgresControlRepository {
             return Ok(None);
         };
         let view = self.admin_codex_account_from_record(&record).await?;
+        let principal_id = core_store::codex_auth_principal_id(&record.auth_json);
         self.ensure_connection_alive()?;
         self.client
             .execute("DELETE FROM llm_codex_accounts WHERE account_name = $1", &[&name])
             .await
             .context("delete postgres codex account")?;
+        if let Some(principal_id) = principal_id {
+            let principal_ids = [principal_id];
+            self.invalidate_codex_principal_cache(&principal_ids).await;
+        }
         self.invalidate_account_cache(core_store::PROVIDER_CODEX, &record.account_name)
             .await;
         self.bump_dispatch_generation(core_store::PROVIDER_CODEX)
