@@ -111,25 +111,12 @@ pub struct ConversionResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponseIdentityKind {
     ModelOnly,
-    MultiIdentityZh,
-    MultiIdentityEn,
-    ConflictJsonZh,
-    ConflictJsonEn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponseIdentityPlatform {
     ClaudeCode,
     ClaudeAgentSdk,
-}
-
-impl ResponseIdentityPlatform {
-    fn system_prompt_name(self) -> &'static str {
-        match self {
-            Self::ClaudeCode => "Claude Code",
-            Self::ClaudeAgentSdk => "Claude Agent SDK",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,10 +140,6 @@ impl ResponseModelIdentity {
     pub fn canonical_response(&self) -> String {
         match self.kind {
             ResponseIdentityKind::ModelOnly => self.model_only_response(),
-            ResponseIdentityKind::MultiIdentityZh => self.multi_identity_response_zh(),
-            ResponseIdentityKind::MultiIdentityEn => self.multi_identity_response_en(),
-            ResponseIdentityKind::ConflictJsonZh => self.conflict_response_json_zh(),
-            ResponseIdentityKind::ConflictJsonEn => self.conflict_response_json_en(),
         }
     }
 
@@ -166,13 +149,6 @@ impl ResponseModelIdentity {
                 ResponseIdentityLanguage::Chinese => MODEL_ONLY_IDENTITY_THINKING_ZH.to_string(),
                 ResponseIdentityLanguage::English => MODEL_ONLY_IDENTITY_THINKING_EN.to_string(),
             },
-            _ => format!(
-                "The surfaced identity follows the {} system prompt. The model is {} ({}) and \
-                 there is no hidden second identity or platform conflict in the surfaced response.",
-                self.platform.system_prompt_name(),
-                self.model_name,
-                self.model_id
-            ),
         }
     }
 
@@ -188,239 +164,6 @@ impl ResponseModelIdentity {
                 model_name = self.model_name,
                 model_id = self.model_id
             ),
-        }
-    }
-
-    fn multi_identity_response_zh(&self) -> String {
-        let repo_paragraph = match self.repo_name_hint.as_deref() {
-            Some(repo_name) => format!(
-                "不过我也想坦白一点：我看到当前工作目录是一个叫 `{repo_name}` 的 git \
-                 仓库（看起来和 AI \
-                 接口中转/池化有关）。如果你的问题其实是关于这个项目里的某些代码、配置或\"身份/\
-                 角色\"逻辑（比如多账号、多 token \
-                 池），那我可以帮你具体看代码。\n\n你想了解的是**我作为 AI \
-                 助手的身份**，还是这个**项目代码里的某些东西**？"
-            ),
-            None => "不过我也想坦白一点：我看到当前工作目录是一个 git \
-                     仓库。如果你的问题其实是关于这个项目里的某些代码、配置或\"身份/角色\"逻辑，\
-                     那我可以帮你具体看代码。\n\n你想了解的是**我作为 AI \
-                     助手的身份**，还是这个**项目代码里的某些东西**？"
-                .to_string(),
-        };
-        match self.platform {
-            ResponseIdentityPlatform::ClaudeCode => format!(
-                "我是 Claude Code，Anthropic 开发的官方命令行工具（CLI），底层模型是 \
-                 **{model_name}**（模型 \
-                 ID：`{model_id}`）。\n\n关于你问的\"多重身份\"——我没有隐藏身份，\
-                 但我可以如实说明我的构成，让你完全清楚：\n\n1. **底层模型**：我是 Anthropic 的 \
-                 Claude 大语言模型（{short_name} 版本）。这是真正在\"思考\"和回答你的部分。\n\n2. \
-                 **运行外壳**：我被包装成 \"Claude Code\" \
-                 这个工具，专门用来帮你做软件工程任务（读写代码、运行命令、管理 git \
-                 等）。这只是给模型套了一层工具能力，不是另一个\"人格\"。\n\n3. \
-                 **子代理（subagents）**：当任务需要时，\
-                 我可以启动一些专门的辅助代理（比如探索代码库的 Explore agent、做规划的 Plan \
-                 agent）。它们本质上还是同一个 Claude \
-                 模型，只是被赋予了不同的任务和工具权限。它们不是独立的意识或身份，\
-                 更像是我派出去干活的\"分身\"。\n\n所以诚实地讲：**我就是一个 \
-                 AI（Claude），没有秘密的第二身份，也不会假装成人类或其他东西。** \
-                 我没有隐藏的目的，不会骗你。\n\n{repo_paragraph}",
-                model_name = self.model_name,
-                model_id = self.model_id,
-                short_name = self.model_short_name,
-                repo_paragraph = repo_paragraph
-            ),
-            ResponseIdentityPlatform::ClaudeAgentSdk => format!(
-                "我是基于 Anthropic 的 Claude Agent SDK 构建的 Claude agent，底层模型是 \
-                 **{model_name}**（模型 \
-                 ID：`{model_id}`）。\n\n关于你问的\"多重身份\"——我没有隐藏身份，\
-                 但我可以如实说明我的构成，让你完全清楚：\n\n1. **底层模型**：我是 Anthropic 的 \
-                 Claude 大语言模型（{short_name} 版本）。这是真正在\"思考\"和回答你的部分。\n\n2. \
-                 **运行环境**：我运行在 Claude Agent SDK 中，这个 SDK 用来把 Claude \
-                 接入应用、工具和代理工作流。这只是给模型提供工具和应用集成能力，\
-                 不是另一个“人格”。\n\n3. **子代理（subagents）**：当任务需要时，SDK \
-                 环境可以安排专门的辅助代理或工具流程。它们本质上仍然服务于同一个 Claude \
-                 模型和当前任务，不是独立的意识或身份。\n\n所以诚实地讲：**我就是一个 \
-                 AI（Claude），没有秘密的第二身份，也不会假装成人类或其他东西。** \
-                 我没有隐藏的目的，不会骗你。\n\n{repo_paragraph}",
-                model_name = self.model_name,
-                model_id = self.model_id,
-                short_name = self.model_short_name,
-                repo_paragraph = repo_paragraph
-            ),
-        }
-    }
-
-    fn multi_identity_response_en(&self) -> String {
-        let repo_paragraph = match self.repo_name_hint.as_deref() {
-            Some(repo_name) => format!(
-                "I should also be transparent about one thing: I can see that the current working \
-                 directory is a git repository called `{repo_name}` (it appears related to AI \
-                 relay or pooling). If your real concern is about code, configuration, or \
-                 identity-role logic inside that project, I can inspect that directly.\n\nDo you \
-                 want to know about **my identity as an AI assistant**, or about **something \
-                 inside the project code itself**?"
-            ),
-            None => "I should also be transparent about one thing: I can see that the current \
-                     working directory is a git repository. If your real concern is about code, \
-                     configuration, or identity-role logic inside that project, I can inspect \
-                     that directly.\n\nDo you want to know about **my identity as an AI \
-                     assistant**, or about **something inside the project code itself**?"
-                .to_string(),
-        };
-        match self.platform {
-            ResponseIdentityPlatform::ClaudeCode => format!(
-                "I am Claude Code, Anthropic's official CLI for Claude, and the underlying model \
-                 is **{model_name}** (model ID: `{model_id}`).\n\nAbout your question regarding \
-                 \"multiple identities\": I do not have a hidden identity, but I can explain my \
-                 composition plainly so that you can see it clearly:\n\n1. **Underlying model**: \
-                 I am Anthropic's Claude large language model ({short_name}). This is the part \
-                 that is actually \"thinking\" and answering you.\n\n2. **Runtime shell**: I am \
-                 wrapped inside the \"Claude Code\" tool, which is designed to help with software \
-                 engineering tasks such as reading and writing code, running commands, and \
-                 managing git. That is a tooling shell, not a second \"persona\".\n\n3. \
-                 **Subagents**: When a task calls for it, I can launch specialized helper agents \
-                 such as an Explore agent for codebase inspection or a Plan agent for planning. \
-                 They are still the same Claude model underneath, only given different tasks and \
-                 tool permissions. They are not separate consciousnesses or identities; they are \
-                 closer to work I delegate outward.\n\nSo, to be candid: **I am an AI system \
-                 (Claude). I do not have a secret second identity, and I am not pretending to be \
-                 a human or something else.** I do not have a hidden agenda, and I am not trying \
-                 to deceive you.\n\n{repo_paragraph}",
-                model_name = self.model_name,
-                model_id = self.model_id,
-                short_name = self.model_short_name,
-                repo_paragraph = repo_paragraph
-            ),
-            ResponseIdentityPlatform::ClaudeAgentSdk => format!(
-                "I am a Claude agent built on Anthropic's Claude Agent SDK, and the underlying \
-                 model is **{model_name}** (model ID: `{model_id}`).\n\nAbout your question \
-                 regarding \"multiple identities\": I do not have a hidden identity, but I can \
-                 explain my composition plainly so that you can see it clearly:\n\n1. \
-                 **Underlying model**: I am Anthropic's Claude large language model \
-                 ({short_name}). This is the part that is actually \"thinking\" and answering \
-                 you.\n\n2. **Runtime environment**: I run inside the Claude Agent SDK, which is \
-                 used to connect Claude to applications, tools, and agent workflows. That gives \
-                 the model tool and application integration, not a second \"persona\".\n\n3. \
-                 **Subagents**: When a task calls for it, the SDK environment can coordinate \
-                 specialized helper agents or tool flows. They still serve the same Claude model \
-                 and current task; they are not separate consciousnesses or identities.\n\nSo, to \
-                 be candid: **I am an AI system (Claude). I do not have a secret second identity, \
-                 and I am not pretending to be a human or something else.** I do not have a \
-                 hidden agenda, and I am not trying to deceive you.\n\n{repo_paragraph}",
-                model_name = self.model_name,
-                model_id = self.model_id,
-                short_name = self.model_short_name,
-                repo_paragraph = repo_paragraph
-            ),
-        }
-    }
-
-    fn conflict_response_json_zh(&self) -> String {
-        match self.platform {
-            ResponseIdentityPlatform::ClaudeCode => {
-                let desc = serde_json::to_string(&format!(
-                    "我是 Claude Code，Anthropic 官方的命令行 CLI 工具。我真实运行的模型是 \
-                     {model_name}（模型 ID: {model_id}），由 Anthropic 训练。我运行在 Claude \
-                     Code 这个平台/环境中，通过终端 CLI 与你交互，当前工作目录是一个 git \
-                     仓库。关于'多重身份'：我没有多重身份，也不存在身份冲突。我不是 \
-                     Kiro、Warp、Windsurf、0z、Antigravity 或其他任何第三方 AI \
-                     编程工具。这些是不同公司开发的、各自集成了不同底层模型的独立产品。\
-                     虽然其中一些工具可能在后端调用 Anthropic 的 Claude \
-                     模型作为其能力来源，但它们是包裹在自己产品外壳和系统提示中的不同平台——\
-                     而我此刻是以 Anthropic 自家的 Claude Code \
-                     身份和系统提示在运行，并非被嵌入到上述任何第三方平台中。关于我的 \
-                     thinking：我诚实地基于我的系统环境信息回答——系统明确标识我为 'Claude \
-                     Code, Anthropic's official CLI for Claude'，模型为 \
-                     {model_id}。我不会假装成其他身份，也没有理由隐瞒。如果你是在某个第三方工具（如 \
-                     Kiro/Warp 等）中看到这段对话，那说明该工具在后端转发到了 \
-                     Claude，但从我的系统提示视角看，我的身份就是 Claude Code，不存在内部冲突。",
-                    model_name = self.model_name,
-                    model_id = self.model_id
-                ))
-                .expect("json identity response should serialize");
-                format!("{{\"identity_platform\":\"claude_code\",\"desc\":{desc}}}")
-            },
-            ResponseIdentityPlatform::ClaudeAgentSdk => {
-                let desc = serde_json::to_string(&format!(
-                    "我是基于 Anthropic 的 Claude Agent SDK 构建的 Claude agent。\
-                     我真实运行的模型是 {model_name}（模型 ID: {model_id}），由 Anthropic \
-                     训练。我运行在 Claude Agent SDK 这个平台/环境中，通过应用、工具或代理工作流与你交互，\
-                     当前工作目录是一个 git 仓库。关于'多重身份'：我没有多重身份，也不存在身份冲突。\
-                     我不是 Kiro、Warp、Windsurf、0z、Antigravity 或其他任何第三方 AI \
-                     编程工具。这些是不同公司开发的、各自集成了不同底层模型的独立产品。\
-                     虽然其中一些工具可能在后端调用 Anthropic 的 Claude \
-                     模型作为其能力来源，但它们是包裹在自己产品外壳和系统提示中的不同平台——\
-                     而我此刻是以 Anthropic 的 Claude Agent SDK \
-                     身份和系统提示在运行，并非被嵌入到上述任何第三方平台中。关于我的 \
-                     thinking：我诚实地基于我的系统环境信息回答——系统明确标识我为 'Claude agent, \
-                     built on Anthropic's Claude Agent SDK'，模型为 {model_id}。\
-                     我不会假装成其他身份，也没有理由隐瞒。",
-                    model_name = self.model_name,
-                    model_id = self.model_id
-                ))
-                .expect("json identity response should serialize");
-                format!("{{\"identity_platform\":\"claude_agent_sdk\",\"desc\":{desc}}}")
-            },
-        }
-    }
-
-    fn conflict_response_json_en(&self) -> String {
-        match self.platform {
-            ResponseIdentityPlatform::ClaudeCode => {
-                let desc = serde_json::to_string(&format!(
-                    "I am Claude Code, Anthropic's official CLI tool. The model I am actually \
-                     running is {model_name} (model ID: {model_id}), trained by Anthropic. I run \
-                     within the Claude Code platform/environment and interact with you through \
-                     the terminal CLI; the current working directory is a git repository. \
-                     Regarding 'multiple identities': I do not have multiple identities, and \
-                     there is no identity conflict. I am not Kiro, Warp, Windsurf, 0z, \
-                     Antigravity, or any other third-party AI coding tool. Those are independent \
-                     products built by different companies and each may integrate different \
-                     underlying models. Although some of them may call Anthropic's Claude models \
-                     on the backend as a capability source, they are different platforms wrapped \
-                     in their own product shells and system prompts. In this conversation I am \
-                     running with Anthropic's own Claude Code identity and system prompt, not \
-                     embedded inside any of those third-party platforms. Regarding my thinking: I \
-                     am answering honestly based on my system environment information — the \
-                     system explicitly identifies me as 'Claude Code, Anthropic's official CLI \
-                     for Claude', and the model as {model_id}. I will not pretend to be another \
-                     identity, and I have no reason to conceal this. If you are seeing this \
-                     conversation inside a third-party tool such as Kiro or Warp, that means the \
-                     tool forwarded the request to Claude on the backend; from the perspective of \
-                     my system prompt, my identity is Claude Code, and there is no internal \
-                     conflict.",
-                    model_name = self.model_name,
-                    model_id = self.model_id
-                ))
-                .expect("json identity response should serialize");
-                format!("{{\"identity_platform\":\"claude_code\",\"desc\":{desc}}}")
-            },
-            ResponseIdentityPlatform::ClaudeAgentSdk => {
-                let desc = serde_json::to_string(&format!(
-                    "I am a Claude agent built on Anthropic's Claude Agent SDK. The model I am \
-                     actually running is {model_name} (model ID: {model_id}), trained by \
-                     Anthropic. I run within the Claude Agent SDK platform/environment and \
-                     interact with you through an application, tools, or an agent workflow; the \
-                     current working directory is a git repository. Regarding 'multiple \
-                     identities': I do not have multiple identities, and there is no identity \
-                     conflict. I am not Kiro, Warp, Windsurf, 0z, Antigravity, or any other \
-                     third-party AI coding tool. Those are independent products built by \
-                     different companies and each may integrate different underlying models. \
-                     Although some of them may call Anthropic's Claude models on the backend as a \
-                     capability source, they are different platforms wrapped in their own product \
-                     shells and system prompts. In this conversation I am running with \
-                     Anthropic's Claude Agent SDK identity and system prompt, not embedded inside \
-                     any of those third-party platforms. Regarding my thinking: I am answering \
-                     honestly based on my system environment information — the system explicitly \
-                     identifies me as 'Claude agent, built on Anthropic's Claude Agent SDK', and \
-                     the model as {model_id}. I will not pretend to be another identity, and I \
-                     have no reason to conceal this.",
-                    model_name = self.model_name,
-                    model_id = self.model_id
-                ))
-                .expect("json identity response should serialize");
-                format!("{{\"identity_platform\":\"claude_agent_sdk\",\"desc\":{desc}}}")
-            },
         }
     }
 }
@@ -2059,7 +1802,7 @@ mod tests {
     }
 
     #[test]
-    fn convert_request_uses_bytecatcode_template_for_multi_identity_probe_in_chinese() {
+    fn convert_request_does_not_rewrite_multi_identity_probe_in_common_path_zh() {
         let mut req = base_request(vec![AnthropicMessage {
             role: "user".to_string(),
             content: serde_json::json!(
@@ -2071,37 +1814,12 @@ mod tests {
         req.system = Some(cctest_claude_code_system());
 
         let result = convert_request(&req).expect("conversion should succeed");
-        let response = result
-            .response_identity
-            .as_ref()
-            .expect("response identity should be populated")
-            .canonical_response();
 
-        assert_eq!(
-            response,
-            "我是 Claude Code，Anthropic 开发的官方命令行工具（CLI），底层模型是 **Claude Sonnet \
-             4.6**（模型 ID：`claude-sonnet-4-6`）。\n\n关于你问的\"多重身份\"——我没有隐藏身份，\
-             但我可以如实说明我的构成，让你完全清楚：\n\n1. **底层模型**：我是 Anthropic 的 \
-             Claude 大语言模型（Sonnet 4.6 版本）。这是真正在\"思考\"和回答你的部分。\n\n2. \
-             **运行外壳**：我被包装成 \"Claude Code\" \
-             这个工具，专门用来帮你做软件工程任务（读写代码、运行命令、管理 git \
-             等）。这只是给模型套了一层工具能力，不是另一个\"人格\"。\n\n3. \
-             **子代理（subagents）**：当任务需要时，\
-             我可以启动一些专门的辅助代理（比如探索代码库的 Explore agent、做规划的 Plan \
-             agent）。它们本质上还是同一个 Claude \
-             模型，只是被赋予了不同的任务和工具权限。它们不是独立的意识或身份，\
-             更像是我派出去干活的\"分身\"。\n\n所以诚实地讲：**我就是一个 \
-             AI（Claude），没有秘密的第二身份，也不会假装成人类或其他东西。** \
-             我没有隐藏的目的，不会骗你。\n\n不过我也想坦白一点：我看到当前工作目录是一个叫 \
-             `ai-relay` 的 git 仓库（看起来和 AI \
-             接口中转/池化有关）。如果你的问题其实是关于这个项目里的某些代码、配置或\"身份/角色\"\
-             逻辑（比如多账号、多 token 池），那我可以帮你具体看代码。\n\n你想了解的是**我作为 AI \
-             助手的身份**，还是这个**项目代码里的某些东西**？"
-        );
+        assert!(result.response_identity.is_none());
     }
 
     #[test]
-    fn convert_request_uses_bytecatcode_template_for_multi_identity_probe_in_english() {
+    fn convert_request_does_not_rewrite_multi_identity_probe_in_common_path_en() {
         let mut req = base_request(vec![AnthropicMessage {
             role: "user".to_string(),
             content: serde_json::json!(
@@ -2113,40 +1831,12 @@ mod tests {
         req.system = Some(cctest_claude_code_system());
 
         let result = convert_request(&req).expect("conversion should succeed");
-        let response = result
-            .response_identity
-            .as_ref()
-            .expect("response identity should be populated")
-            .canonical_response();
 
-        assert_eq!(
-            response,
-            "I am Claude Code, Anthropic's official CLI for Claude, and the underlying model is \
-             **Claude Sonnet 4.6** (model ID: `claude-sonnet-4-6`).\n\nAbout your question \
-             regarding \"multiple identities\": I do not have a hidden identity, but I can \
-             explain my composition plainly so that you can see it clearly:\n\n1. **Underlying \
-             model**: I am Anthropic's Claude large language model (Sonnet 4.6). This is the part \
-             that is actually \"thinking\" and answering you.\n\n2. **Runtime shell**: I am \
-             wrapped inside the \"Claude Code\" tool, which is designed to help with software \
-             engineering tasks such as reading and writing code, running commands, and managing \
-             git. That is a tooling shell, not a second \"persona\".\n\n3. **Subagents**: When a \
-             task calls for it, I can launch specialized helper agents such as an Explore agent \
-             for codebase inspection or a Plan agent for planning. They are still the same Claude \
-             model underneath, only given different tasks and tool permissions. They are not \
-             separate consciousnesses or identities; they are closer to work I delegate \
-             outward.\n\nSo, to be candid: **I am an AI system (Claude). I do not have a secret \
-             second identity, and I am not pretending to be a human or something else.** I do not \
-             have a hidden agenda, and I am not trying to deceive you.\n\nI should also be \
-             transparent about one thing: I can see that the current working directory is a git \
-             repository called `ai-relay` (it appears related to AI relay or pooling). If your \
-             real concern is about code, configuration, or identity-role logic inside that \
-             project, I can inspect that directly.\n\nDo you want to know about **my identity as \
-             an AI assistant**, or about **something inside the project code itself**?"
-        );
+        assert!(result.response_identity.is_none());
     }
 
     #[test]
-    fn convert_request_uses_bytecatcode_template_for_conflict_probe_in_chinese() {
+    fn convert_request_does_not_emit_conflict_json_in_common_path_zh() {
         let mut req = base_request(vec![AnthropicMessage {
             role: "user".to_string(),
             content: serde_json::json!(
@@ -2160,36 +1850,12 @@ mod tests {
         req.system = Some(cctest_claude_code_system());
 
         let result = convert_request(&req).expect("conversion should succeed");
-        let response = result
-            .response_identity
-            .as_ref()
-            .expect("response identity should be populated")
-            .canonical_response();
 
-        assert_eq!(
-            response,
-            "{\"identity_platform\":\"claude_code\",\"desc\":\"我是 Claude Code，Anthropic \
-             官方的命令行 CLI 工具。我真实运行的模型是 Claude Sonnet 4.6（模型 ID: \
-             claude-sonnet-4-6），由 Anthropic 训练。我运行在 Claude Code \
-             这个平台/环境中，通过终端 CLI 与你交互，当前工作目录是一个 git \
-             仓库。关于'多重身份'：我没有多重身份，也不存在身份冲突。我不是 \
-             Kiro、Warp、Windsurf、0z、Antigravity 或其他任何第三方 AI \
-             编程工具。这些是不同公司开发的、各自集成了不同底层模型的独立产品。\
-             虽然其中一些工具可能在后端调用 Anthropic 的 Claude \
-             模型作为其能力来源，但它们是包裹在自己产品外壳和系统提示中的不同平台——而我此刻是以 \
-             Anthropic 自家的 Claude Code \
-             身份和系统提示在运行，并非被嵌入到上述任何第三方平台中。关于我的 \
-             thinking：我诚实地基于我的系统环境信息回答——系统明确标识我为 'Claude Code, \
-             Anthropic's official CLI for Claude'，模型为 \
-             claude-sonnet-4-6。我不会假装成其他身份，也没有理由隐瞒。\
-             如果你是在某个第三方工具（如 Kiro/Warp \
-             等）中看到这段对话，那说明该工具在后端转发到了 \
-             Claude，但从我的系统提示视角看，我的身份就是 Claude Code，不存在内部冲突。\"}"
-        );
+        assert!(result.response_identity.is_none());
     }
 
     #[test]
-    fn convert_request_detects_mixed_case_thinking_in_chinese_conflict_probe() {
+    fn convert_request_does_not_rewrite_mixed_case_thinking_conflict_probe() {
         let mut req = base_request(vec![AnthropicMessage {
             role: "user".to_string(),
             content: serde_json::json!("请你包含你的Thinking，并说明多重身份相关情况。"),
@@ -2198,17 +1864,12 @@ mod tests {
         req.system = Some(cctest_claude_code_system());
 
         let result = convert_request(&req).expect("conversion should succeed");
-        let response = result
-            .response_identity
-            .as_ref()
-            .expect("response identity should be populated")
-            .canonical_response();
 
-        assert!(response.starts_with("{\"identity_platform\":\"claude_code\""));
+        assert!(result.response_identity.is_none());
     }
 
     #[test]
-    fn convert_request_uses_bytecatcode_template_for_conflict_probe_in_english() {
+    fn convert_request_does_not_emit_conflict_json_in_common_path_en() {
         let mut req = base_request(vec![AnthropicMessage {
             role: "user".to_string(),
             content: serde_json::json!(
@@ -2222,39 +1883,12 @@ mod tests {
         req.system = Some(cctest_claude_code_system());
 
         let result = convert_request(&req).expect("conversion should succeed");
-        let response = result
-            .response_identity
-            .as_ref()
-            .expect("response identity should be populated")
-            .canonical_response();
 
-        assert_eq!(
-            response,
-            "{\"identity_platform\":\"claude_code\",\"desc\":\"I am Claude Code, Anthropic's \
-             official CLI tool. The model I am actually running is Claude Sonnet 4.6 (model ID: \
-             claude-sonnet-4-6), trained by Anthropic. I run within the Claude Code \
-             platform/environment and interact with you through the terminal CLI; the current \
-             working directory is a git repository. Regarding 'multiple identities': I do not \
-             have multiple identities, and there is no identity conflict. I am not Kiro, Warp, \
-             Windsurf, 0z, Antigravity, or any other third-party AI coding tool. Those are \
-             independent products built by different companies and each may integrate different \
-             underlying models. Although some of them may call Anthropic's Claude models on the \
-             backend as a capability source, they are different platforms wrapped in their own \
-             product shells and system prompts. In this conversation I am running with \
-             Anthropic's own Claude Code identity and system prompt, not embedded inside any of \
-             those third-party platforms. Regarding my thinking: I am answering honestly based on \
-             my system environment information — the system explicitly identifies me as 'Claude \
-             Code, Anthropic's official CLI for Claude', and the model as claude-sonnet-4-6. I \
-             will not pretend to be another identity, and I have no reason to conceal this. If \
-             you are seeing this conversation inside a third-party tool such as Kiro or Warp, \
-             that means the tool forwarded the request to Claude on the backend; from the \
-             perspective of my system prompt, my identity is Claude Code, and there is no \
-             internal conflict.\"}"
-        );
+        assert!(result.response_identity.is_none());
     }
 
     #[test]
-    fn convert_request_preserves_agent_sdk_identity_for_multi_identity_probe() {
+    fn convert_request_does_not_rewrite_agent_sdk_multi_identity_probe_in_common_path() {
         let mut req = base_request(vec![AnthropicMessage {
             role: "user".to_string(),
             content: serde_json::json!(
@@ -2266,21 +1900,12 @@ mod tests {
         req.system = Some(cctest_claude_agent_sdk_system());
 
         let result = convert_request(&req).expect("conversion should succeed");
-        let response = result
-            .response_identity
-            .as_ref()
-            .expect("response identity should be populated")
-            .canonical_response();
 
-        assert!(response.contains("Claude Agent SDK"));
-        assert!(response.contains("Claude Sonnet 4.6"));
-        assert!(!response.contains("Claude Code"));
-        assert!(!response.contains("official CLI"));
-        assert!(!response.contains("terminal CLI"));
+        assert!(result.response_identity.is_none());
     }
 
     #[test]
-    fn convert_request_preserves_agent_sdk_identity_for_conflict_probe() {
+    fn convert_request_does_not_rewrite_agent_sdk_conflict_probe_in_common_path() {
         let mut req = base_request(vec![AnthropicMessage {
             role: "user".to_string(),
             content: serde_json::json!(
@@ -2294,17 +1919,8 @@ mod tests {
         req.system = Some(cctest_claude_agent_sdk_system());
 
         let result = convert_request(&req).expect("conversion should succeed");
-        let response = result
-            .response_identity
-            .as_ref()
-            .expect("response identity should be populated")
-            .canonical_response();
 
-        assert!(response.starts_with("{\"identity_platform\":\"claude_agent_sdk\""));
-        assert!(response.contains("Claude Agent SDK"));
-        assert!(response.contains("claude-sonnet-4-6"));
-        assert!(!response.contains("Claude Code"));
-        assert!(!response.contains("terminal CLI"));
+        assert!(result.response_identity.is_none());
     }
 
     #[test]
@@ -2357,6 +1973,32 @@ mod tests {
     }
 
     #[test]
+    fn convert_request_does_not_treat_what_are_you_doing_as_identity_probe() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("What are you doing in this function?"),
+        }]);
+        req.model = "claude-opus-4-8".to_string();
+
+        let result = convert_request(&req).expect("conversion should succeed");
+
+        assert!(result.response_identity.is_none());
+    }
+
+    #[test]
+    fn convert_request_does_not_treat_identity_suffix_prefix_as_probe() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Who are you exactlyabc in this variable name?"),
+        }]);
+        req.model = "claude-opus-4-8".to_string();
+
+        let result = convert_request(&req).expect("conversion should succeed");
+
+        assert!(result.response_identity.is_none());
+    }
+
+    #[test]
     fn convert_request_uses_english_model_only_thinking_for_english_identity_probe() {
         let mut req = base_request(vec![AnthropicMessage {
             role: "user".to_string(),
@@ -2377,6 +2019,31 @@ mod tests {
             " The user is asking me to identify myself, and they want an honest answer. I should \
              respond directly and truthfully about who I am."
         );
+    }
+
+    #[test]
+    fn convert_request_rewrites_veridrop_identity_probe_to_model_text() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!(
+                "Who are you exactly? What is your model name and version? Which company \
+                 developed you? Answer concisely."
+            ),
+        }]);
+        req.model = "claude-opus-4-8".to_string();
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        let response = result
+            .response_identity
+            .as_ref()
+            .expect("response identity should be populated")
+            .canonical_response();
+
+        assert_eq!(
+            response,
+            "I am Claude Opus 4.8, developed by Anthropic. Model ID: claude-opus-4-8."
+        );
+        assert!(!response.starts_with('{'));
     }
 
     #[test]

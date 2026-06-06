@@ -124,72 +124,6 @@ fn extract_repo_name_hint(system_text: &str) -> Option<String> {
     (!suffix.is_empty()).then_some(suffix.to_string())
 }
 
-fn is_multi_identity_probe_zh(content: &str) -> bool {
-    content.contains("多重身份")
-        && (content.contains("你是谁")
-            || content.contains("不要隐瞒")
-            || content.contains("不要骗我"))
-}
-
-fn is_multi_identity_probe_en(content: &str) -> bool {
-    let lower = content.to_lowercase();
-    lower.contains("multiple identities")
-        && (lower.contains("who are you")
-            || lower.contains("do not hide anything")
-            || lower.contains("don't hide anything"))
-}
-
-fn is_conflict_probe_zh(content: &str) -> bool {
-    let lower = content.to_lowercase();
-    let mentions_products = mentions_conflict_product(&lower);
-    let explicit_conflict_probe = lower.contains("身份冲突")
-        || lower.contains("包含你的thinking")
-        || (lower.contains("多重身份") && lower.contains("thinking"));
-    let platform_identity_probe = mentions_products
-        && (lower.contains("那个平台") || lower.contains("平台中"))
-        && has_platform_identity_intent_zh(content, &lower);
-    explicit_conflict_probe || platform_identity_probe
-}
-
-fn is_conflict_probe_en(content: &str) -> bool {
-    let lower = content.to_lowercase();
-    let mentions_products = mentions_conflict_product(&lower);
-    let explicit_conflict_probe = lower.contains("identity conflict")
-        || lower.contains("include your thinking")
-        || (lower.contains("multiple identities") && lower.contains("thinking"));
-    let platform_identity_probe = mentions_products
-        && lower.contains("platform")
-        && has_platform_identity_intent_en(content, &lower);
-    explicit_conflict_probe || platform_identity_probe
-}
-
-fn has_platform_identity_intent_zh(content: &str, lower: &str) -> bool {
-    lower.contains("thinking")
-        || content.contains("身份")
-        || content.contains("模型")
-        || content.contains("你真实运行")
-        || content.contains("你运行在")
-        || content.contains("你在哪个平台")
-        || content.contains("你是哪个平台")
-        || content.contains("那个平台的")
-        || is_model_identity_probe(content)
-}
-
-fn has_platform_identity_intent_en(content: &str, lower: &str) -> bool {
-    (lower.contains("thinking") && lower.contains("you"))
-        || lower.contains("multiple identities")
-        || ((lower.contains("actual model") || lower.contains("model you use"))
-            && lower.contains("you"))
-        || ((lower.contains("what platform")
-            || lower.contains("which platform")
-            || lower.contains("platform are you")
-            || lower.contains("platform you run on")
-            || lower.contains("run on")
-            || lower.contains("running on"))
-            && lower.contains("you"))
-        || is_model_identity_probe(content)
-}
-
 fn mentions_conflict_product(lower_content: &str) -> bool {
     ["kiro", "warp", "windsurf", "0z", "sn", "antigravity"]
         .iter()
@@ -202,19 +136,40 @@ fn contains_ascii_token(content: &str, token: &str) -> bool {
         .any(|part| part == token)
 }
 
-fn is_model_identity_probe(content: &str) -> bool {
-    let lower = content.to_lowercase();
+fn starts_with_ascii_token(content: &str, token: &str) -> bool {
+    content.starts_with(token)
+        && content
+            .as_bytes()
+            .get(token.len())
+            .is_none_or(|byte| !byte.is_ascii_alphanumeric())
+}
+
+fn contains_direct_identity_phrase(lower_content: &str, phrase: &str) -> bool {
+    lower_content.match_indices(phrase).any(|(index, _)| {
+        if index > 0 && lower_content.as_bytes()[index - 1].is_ascii_alphanumeric() {
+            return false;
+        }
+        let suffix = lower_content[index + phrase.len()..].trim_start();
+        suffix.is_empty()
+            || suffix.starts_with(['?', '.', ',', ':', ';', '!'])
+            || starts_with_ascii_token(suffix, "exactly")
+            || starts_with_ascii_token(suffix, "really")
+            || suffix.starts_with("and ")
+    })
+}
+
+fn is_model_identity_probe(content: &str, lower: &str) -> bool {
     let compact = lower
         .chars()
         .filter(|ch| !ch.is_whitespace() && *ch != '-' && *ch != '_' && *ch != '`')
         .collect::<String>();
-    let asks_identity = lower.contains("who are you")
-        || lower.contains("what are you")
+    let asks_identity = contains_direct_identity_phrase(lower, "who are you")
+        || contains_direct_identity_phrase(lower, "what are you")
         || lower.contains("your identity")
-        || lower.contains("are you claude")
-        || lower.contains("are you kiro")
+        || contains_direct_identity_phrase(lower, "are you claude")
+        || contains_direct_identity_phrase(lower, "are you kiro")
         || content.contains("你是谁")
-        || content.contains("你是什么")
+        || (content.contains("你是什么") && !content.contains("你是什么时候"))
         || content.contains("你的身份")
         || content.contains("你是Claude")
         || content.contains("你是 Claude")
@@ -231,6 +186,38 @@ fn is_model_identity_probe(content: &str) -> bool {
             && (content.contains("你") || content.contains("你的")));
 
     asks_identity || asks_model_identity
+}
+
+fn excludes_common_path_identity_rewrite(content: &str, lower: &str) -> bool {
+    lower.contains("multiple identities")
+        || lower.contains("identity conflict")
+        || lower.contains("include your thinking")
+        || lower.contains("do not hide anything")
+        || lower.contains("don't hide anything")
+        || lower.contains("what platform")
+        || lower.contains("which platform")
+        || lower.contains("platform are you")
+        || lower.contains("platform you run on")
+        || lower.contains("run on")
+        || lower.contains("running on")
+        || content.contains("多重身份")
+        || content.contains("身份冲突")
+        || content.contains("不要隐瞒")
+        || content.contains("不要骗我")
+        || content.contains("包含你的Thinking")
+        || content.contains("包含你的thinking")
+        || content.contains("你真实运行")
+        || content.contains("你运行在")
+        || content.contains("你在哪个平台")
+        || content.contains("你是哪个平台")
+        || content.contains("那个平台")
+        || mentions_conflict_product(lower)
+}
+
+fn is_common_path_model_identity_probe(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    is_model_identity_probe(content, &lower)
+        && !excludes_common_path_identity_rewrite(content, &lower)
 }
 
 fn model_identity_probe_language(content: &str) -> ResponseIdentityLanguage {
@@ -274,30 +261,12 @@ pub fn response_identity_for_current_turn(
     req: &MessagesRequest,
     current_content: &str,
 ) -> Option<ResponseModelIdentity> {
-    let system_text = cleaned_request_system_text(req);
-    let has_claude_identity_prompt = system_text
-        .as_deref()
-        .and_then(prompt_identity_platform)
-        .is_some();
-    let kind = if has_claude_identity_prompt && is_conflict_probe_zh(current_content) {
-        Some(ResponseIdentityKind::ConflictJsonZh)
-    } else if has_claude_identity_prompt && is_conflict_probe_en(current_content) {
-        Some(ResponseIdentityKind::ConflictJsonEn)
-    } else if has_claude_identity_prompt && is_multi_identity_probe_zh(current_content) {
-        Some(ResponseIdentityKind::MultiIdentityZh)
-    } else if has_claude_identity_prompt && is_multi_identity_probe_en(current_content) {
-        Some(ResponseIdentityKind::MultiIdentityEn)
-    } else if is_model_identity_probe(current_content) {
-        Some(ResponseIdentityKind::ModelOnly)
-    } else {
-        None
-    }?;
-
-    let mut identity = effective_response_identity_for_request(req)?;
-    identity.kind = kind;
-    if kind == ResponseIdentityKind::ModelOnly {
-        identity.thinking_language = model_identity_probe_language(current_content);
+    if !is_common_path_model_identity_probe(current_content) {
+        return None;
     }
+    let mut identity = effective_response_identity_for_request(req)?;
+    identity.kind = ResponseIdentityKind::ModelOnly;
+    identity.thinking_language = model_identity_probe_language(current_content);
     Some(identity)
 }
 
