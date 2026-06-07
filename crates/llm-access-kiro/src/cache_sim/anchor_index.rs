@@ -237,7 +237,8 @@ impl ConversationAnchorIndex {
         let mut rows = Vec::with_capacity((count as usize).min(reader.remaining()));
         for _ in 0..count {
             let hex_key = hex::encode(reader.read_bytes(32)?);
-            let conv_len = reader.read_varint()? as usize;
+            let conv_len =
+                usize::try_from(reader.read_varint()?).map_err(|_| SnapshotError::Malformed)?;
             let conv_bytes = reader.read_bytes(conv_len)?;
             let conversation_id =
                 String::from_utf8(conv_bytes.to_vec()).map_err(|_| SnapshotError::Malformed)?;

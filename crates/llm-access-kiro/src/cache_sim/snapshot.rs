@@ -307,9 +307,11 @@ pub(super) fn union_anchor_rows(
 
     let mut best: HashMap<String, Candidate> = HashMap::new();
     for row in rows {
-        let touched_ms = row
-            .snapshot_unix_ms
-            .saturating_sub((row.age_secs as i64).saturating_mul(1000));
+        // `age_secs` is read from the wire as an unbounded varint; clamp the
+        // millisecond conversion so a corrupt value cannot wrap negative and
+        // make the entry look newer than its snapshot.
+        let age_ms = i64::try_from(row.age_secs.saturating_mul(1000)).unwrap_or(i64::MAX);
+        let touched_ms = row.snapshot_unix_ms.saturating_sub(age_ms);
         let candidate = Candidate {
             conversation_id: row.conversation_id,
             token_counts: row.token_counts,

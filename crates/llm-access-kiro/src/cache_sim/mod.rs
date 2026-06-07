@@ -324,6 +324,38 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_empty_own_prefix_does_not_shadow_warm_peer() {
+        // Own snapshot has anchors but an empty prefix tree (anchor-only warm).
+        // A warm peer prefix must still seed the tree rather than being shadowed
+        // by the present-but-empty own snapshot.
+        let state = warm_state();
+        let projection = PromptProjection::from_conversation_state(&state);
+        let assistant = AssistantMessage::new("assistant reply");
+        let config = prefix_tree_config();
+        let caps = SnapshotCaps::default();
+        let now = Instant::now();
+
+        // Own: record anchor without warming the prefix tree -> empty prefix.
+        let own = KiroCacheSimulator::default();
+        own.record_success(&projection, &assistant, "own-conv", false, config, now);
+        let own_blob = own.export_snapshot(config, caps, now).expect("own blob");
+
+        // Peer: warm prefix tree.
+        let peer = KiroCacheSimulator::default();
+        peer.record_success(&projection, &assistant, "peer-conv", true, config, now);
+        let peer_blob = peer.export_snapshot(config, caps, now).expect("peer blob");
+
+        let restored = KiroCacheSimulator::default();
+        let outcome = restored.import_snapshot(Some(&own_blob), &[peer_blob], config, caps, now);
+        assert!(!outcome.prefix_from_own, "empty own prefix must not be the source");
+        assert!(outcome.prefix_from_peer, "warm peer prefix must seed the tree");
+        assert!(outcome.prefix_resident_tokens > 0);
+
+        let matched = restored.match_prefix(&projection, config, now + Duration::from_secs(1));
+        assert_eq!(matched.matched_pages, projection.stable_prefix_pages.len());
+    }
+
+    #[test]
     fn snapshot_formula_mode_round_trips_anchor_only() {
         let state = warm_state();
         let projection = PromptProjection::from_conversation_state(&state);

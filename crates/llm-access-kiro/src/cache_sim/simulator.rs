@@ -263,7 +263,10 @@ impl KiroCacheSimulator {
             index.encode_section(&mut anchor_section, now, caps.max_anchor_entries);
             index.is_empty()
         };
-        if !prefix_tree_mode && anchors_empty {
+        // Nothing worth persisting. Skipping here avoids writing an empty own
+        // key that would otherwise shadow warm peer snapshots on the next
+        // restart (a cold node's first scheduled flush would do exactly that).
+        if resident_tokens == 0 && anchors_empty {
             return None;
         }
         SnapshotHeader {
@@ -313,14 +316,19 @@ impl KiroCacheSimulator {
             }
         }
 
-        // Prefix tree: own first, else newest decodable peer.
-        let from_own = own_frame.is_some();
-        let prefix_source = own_frame.as_ref().or_else(|| {
-            peer_frames
-                .iter()
-                .max_by_key(|frame| frame.header.snapshot_unix_ms)
-        });
-        if let Some(frame) = prefix_source {
+        // Prefix tree: prefer own, else newest peer — but an empty own snapshot
+        // (e.g. a cold node's first flush, or one whose tree expired on decode)
+        // must not shadow a warm peer. Walk candidates own-first then by
+        // recency, installing the first tree that actually holds tokens.
+        let mut candidates: Vec<(&DecodedFrame, bool)> = Vec::new();
+        if let Some(frame) = own_frame.as_ref() {
+            candidates.push((frame, true));
+        }
+        let mut sorted_peers: Vec<&DecodedFrame> = peer_frames.iter().collect();
+        sorted_peers.sort_by_key(|frame| std::cmp::Reverse(frame.header.snapshot_unix_ms));
+        candidates.extend(sorted_peers.into_iter().map(|frame| (frame, false)));
+
+        for (frame, is_own) in candidates {
             let mut reader = SnapshotReader::new(&frame.sections);
             match PrefixTree::decode_section(
                 &mut reader,
@@ -331,10 +339,15 @@ impl KiroCacheSimulator {
             ) {
                 Ok(mut tree) => {
                     tree.enforce_token_budget(max_tokens);
+                    if tree.resident_tokens() == 0 {
+                        // Empty tree: do not let it shadow a warmer source.
+                        continue;
+                    }
                     outcome.prefix_resident_tokens = tree.resident_tokens();
-                    outcome.prefix_from_own = from_own;
-                    outcome.prefix_from_peer = !from_own;
+                    outcome.prefix_from_own = is_own;
+                    outcome.prefix_from_peer = !is_own;
                     *self.prefix_tree.lock() = tree;
+                    break;
                 },
                 Err(err) => {
                     tracing::warn!(error = %err, "failed to decode kiro prefix snapshot section");

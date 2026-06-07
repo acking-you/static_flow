@@ -106,17 +106,15 @@ impl KiroCacheSnapshotStore {
                 break;
             }
         }
-        let mut blobs = Vec::with_capacity(keys.len());
-        for key in keys {
-            let value: Option<Vec<u8>> = conn
-                .get(&key)
-                .await
-                .with_context(|| format!("redis GET `{key}`"))?;
-            if let Some(blob) = value {
-                blobs.push(blob);
-            }
+        if keys.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(blobs)
+        // One MGET round-trip instead of N sequential GETs.
+        let values: Vec<Option<Vec<u8>>> = conn
+            .mget(&keys)
+            .await
+            .context("redis MGET peer snapshot keys")?;
+        Ok(values.into_iter().flatten().collect())
     }
 
     /// Store this node's snapshot blob with a TTL. Redis strings are binary
@@ -197,12 +195,22 @@ pub(crate) fn spawn(
 ) -> KiroCacheSnapshotHandle {
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let join = tokio::spawn(async move {
+        // Retain the last successfully fetched config so a transient store
+        // error does not silently disable snapshotting by reverting to the
+        // (disabled-by-default) `AdminRuntimeConfig::default()`.
+        let mut last_config = AdminRuntimeConfig::default();
         loop {
             let config = match admin_config_store.get_admin_runtime_config().await {
-                Ok(config) => config,
+                Ok(config) => {
+                    last_config = config.clone();
+                    config
+                },
                 Err(error) => {
-                    tracing::warn!(%error, "failed to read runtime config for kiro cache snapshot");
-                    AdminRuntimeConfig::default()
+                    tracing::warn!(
+                        %error,
+                        "failed to read runtime config for kiro cache snapshot; using last known config"
+                    );
+                    last_config.clone()
                 },
             };
             let interval = Duration::from_secs(config.kiro_cache_snapshot_interval_seconds.max(1));

@@ -235,7 +235,7 @@ impl PrefixTree {
             let idx = frame.next;
             frame.next += 1;
             let edge = &node.children[idx];
-            write_edge_data(out, edge, now);
+            write_edge_pages(out, &edge.pages, edge.last_touched_at, now);
             stack.push(Frame {
                 node: &edge.child,
                 next: 0,
@@ -284,24 +284,45 @@ impl PrefixTree {
             let node = stack[top_idx].node;
             let next = stack[top_idx].next;
             let order_len = stack[top_idx].order.len();
-            let mut pushed: Option<&PrefixNode> = None;
             if next < order_len {
                 let idx = stack[top_idx].order[next];
                 let edge = &node.children[idx];
+                stack[top_idx].next += 1;
                 if edge.token_count <= budget {
+                    // Whole edge fits; recurse into its subtree under budget.
                     budget -= edge.token_count;
-                    stack[top_idx].next += 1;
                     let mut edge_bytes = Vec::new();
-                    write_edge_data(&mut edge_bytes, edge, now);
+                    write_edge_pages(&mut edge_bytes, &edge.pages, edge.last_touched_at, now);
                     stack[top_idx].pending_edge = edge_bytes;
-                    pushed = Some(&edge.child);
-                } else {
-                    // Hottest remaining edge does not fit; stop this node.
-                    stack[top_idx].next = order_len;
+                    stack.push(new_frame(&edge.child));
+                    continue;
                 }
-            }
-            if let Some(child) = pushed {
-                stack.push(new_frame(child));
+                // Edge overflows the remaining budget: keep its leading pages
+                // that fit as a truncated leaf (dropping the child subtree), so
+                // a small cap still persists the hottest shared prefix instead
+                // of nothing. Then keep trying colder siblings.
+                let mut fit_pages = 0usize;
+                let mut fit_tokens = 0u64;
+                for page in edge.pages.iter() {
+                    let next_tokens = fit_tokens.saturating_add(u64::from(page.token_count));
+                    if next_tokens > budget {
+                        break;
+                    }
+                    fit_tokens = next_tokens;
+                    fit_pages += 1;
+                }
+                if fit_pages > 0 {
+                    budget -= fit_tokens;
+                    write_edge_pages(
+                        &mut stack[top_idx].body,
+                        &edge.pages[..fit_pages],
+                        edge.last_touched_at,
+                        now,
+                    );
+                    // A truncated edge is a leaf: zero children.
+                    write_varint(&mut stack[top_idx].body, 0);
+                    stack[top_idx].kept += 1;
+                }
                 continue;
             }
             let frame = stack.pop().expect("capped frame to finalize");
@@ -361,7 +382,8 @@ impl PrefixTree {
                 continue;
             }
             // Read one edge: pages, age, then its child node count.
-            let page_count = reader.read_varint()? as usize;
+            let page_count =
+                usize::try_from(reader.read_varint()?).map_err(|_| SnapshotError::Malformed)?;
             let need = page_count
                 .checked_mul(PREFIX_PAGE_WIRE_LEN)
                 .ok_or(SnapshotError::Malformed)?;
@@ -415,7 +437,8 @@ pub(super) fn skip_prefix_section(reader: &mut SnapshotReader<'_>) -> Result<(),
             }
             continue;
         }
-        let page_count = reader.read_varint()? as usize;
+        let page_count =
+            usize::try_from(reader.read_varint()?).map_err(|_| SnapshotError::Malformed)?;
         let need = page_count
             .checked_mul(PREFIX_PAGE_WIRE_LEN)
             .ok_or(SnapshotError::Malformed)?;
@@ -429,16 +452,19 @@ pub(super) fn skip_prefix_section(reader: &mut SnapshotReader<'_>) -> Result<(),
     }
 }
 
-fn write_edge_data(out: &mut Vec<u8>, edge: &PrefixEdge, now: Instant) {
-    write_varint(out, edge.pages.len() as u64);
-    for page in edge.pages.iter() {
+fn write_edge_pages(
+    out: &mut Vec<u8>,
+    pages: &[CanonicalTokenPage],
+    last_touched_at: Instant,
+    now: Instant,
+) {
+    write_varint(out, pages.len() as u64);
+    for page in pages.iter() {
         out.extend_from_slice(&page.key.to_le_bytes());
         // token_count is capped at PREFIX_CACHE_PAGE_SIZE (64), so it fits a u8.
         out.push(page.token_count as u8);
     }
-    let age_secs = now
-        .saturating_duration_since(edge.last_touched_at)
-        .as_secs();
+    let age_secs = now.saturating_duration_since(last_touched_at).as_secs();
     write_varint(out, age_secs);
 }
 
@@ -861,6 +887,27 @@ mod tests {
                 .matched_pages,
             0
         );
+    }
+
+    #[test]
+    fn prefix_section_capped_export_truncates_long_edge_at_page_boundary() {
+        // A single compressed edge of four 10-token pages (40 total). A 25-token
+        // cap must keep the leading two pages (20 <= 25) as a truncated leaf,
+        // not bail out and persist an empty tree.
+        let path = pages_from_keys(&[1, 2, 3, 4]);
+        let mut tree = PrefixTree::default();
+        let now = Instant::now();
+        let ttl = Duration::from_secs(300);
+        tree.insert(&path, now, ttl, u64::MAX);
+        assert_eq!(tree.snapshot_stats(u64::MAX).resident_tokens, 40);
+
+        let s = 1_700_000_000_000i64;
+        let mut restored = round_trip(&tree, now, s, now, s, ttl, Some(25));
+        assert_eq!(restored.snapshot_stats(u64::MAX).resident_tokens, 20);
+        // The restored tree matches only the leading two pages of the path.
+        let matched = restored.match_prefix(&path, now + Duration::from_secs(1), ttl);
+        assert_eq!(matched.matched_pages, 2);
+        assert_eq!(matched.matched_tokens, 20);
     }
 
     #[test]
