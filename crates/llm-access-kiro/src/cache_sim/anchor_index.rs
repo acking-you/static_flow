@@ -243,9 +243,16 @@ impl ConversationAnchorIndex {
             let conversation_id =
                 String::from_utf8(conv_bytes.to_vec()).map_err(|_| SnapshotError::Malformed)?;
             let token_counts = if reader.read_u8()? == 1 {
+                // Reject out-of-range token counts rather than silently wrapping
+                // them; a corrupt value would otherwise flow into the
+                // proactive-compaction gate's effective-token estimate.
+                let real_input_tokens =
+                    i32::try_from(reader.read_zigzag()?).map_err(|_| SnapshotError::Malformed)?;
+                let local_input_tokens =
+                    i32::try_from(reader.read_zigzag()?).map_err(|_| SnapshotError::Malformed)?;
                 Some(AnchorTokenCounts {
-                    real_input_tokens: reader.read_zigzag()? as i32,
-                    local_input_tokens: reader.read_zigzag()? as i32,
+                    real_input_tokens,
+                    local_input_tokens,
                 })
             } else {
                 None
@@ -352,6 +359,32 @@ mod tests {
         );
         assert_eq!(restored.get(&key_b, restore_now, TTL, MAX), Some("conv-b".to_string()));
         assert_eq!(restored.recover_token_counts(&key_b, restore_now, TTL), None);
+    }
+
+    #[test]
+    fn anchor_section_decode_rejects_out_of_range_token_count() {
+        use crate::cache_sim::snapshot::{
+            write_varint, write_zigzag, SnapshotError, SnapshotReader,
+        };
+
+        // Hand-build a one-entry anchor section whose real_input_tokens zigzag
+        // exceeds i32::MAX. It must be rejected as malformed rather than wrap
+        // into a bogus token count that would mislead the compaction gate.
+        let mut buf = Vec::new();
+        write_varint(&mut buf, 1); // anchor_count
+        buf.extend_from_slice(&[0xaa; 32]); // 32B raw key
+        write_varint(&mut buf, 4); // conv_id_len
+        buf.extend_from_slice(b"conv");
+        buf.push(1); // token_counts present
+        write_zigzag(&mut buf, i64::from(i32::MAX) + 1); // out of i32 range
+        write_zigzag(&mut buf, 0);
+        write_varint(&mut buf, 0); // age_secs
+
+        let mut reader = SnapshotReader::new(&buf);
+        assert!(matches!(
+            ConversationAnchorIndex::decode_section(&mut reader, 0),
+            Err(SnapshotError::Malformed)
+        ));
     }
 
     #[test]

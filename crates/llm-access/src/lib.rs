@@ -575,8 +575,23 @@ async fn setup_kiro_cache_snapshot(
     };
     match admin_config_store.get_admin_runtime_config().await {
         Ok(config) if config.kiro_cache_snapshot_enabled => {
-            let outcome = kiro_cache_snapshot::restore_simulator(&store, &simulator, &config).await;
-            tracing::info!(?outcome, "restored kiro cache snapshot from valkey");
+            // Bound the restore so a slow/black-holed Valkey cannot stall
+            // startup and health checks: the listener is already bound but not
+            // yet serving. On timeout we start empty and the periodic task
+            // re-warms on the next tick.
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                kiro_cache_snapshot::restore_simulator(&store, &simulator, &config),
+            )
+            .await
+            {
+                Ok(outcome) => {
+                    tracing::info!(?outcome, "restored kiro cache snapshot from valkey");
+                },
+                Err(_) => {
+                    tracing::warn!("kiro cache snapshot restore timed out; starting empty");
+                },
+            }
         },
         Ok(_) => {},
         Err(error) => {

@@ -96,6 +96,10 @@ const MAX_RUNTIME_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS: u64 = 1_000_000;
 const MAX_RUNTIME_KIRO_COMPACT_TRIGGER_TOKENS: u64 = 1_000_000;
 const MAX_RUNTIME_KIRO_CACHE_SNAPSHOT_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 const MAX_RUNTIME_KIRO_CACHE_SNAPSHOT_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
+// Caps are persisted as Postgres BIGINT (`i64`); bound them to `i64::MAX` so an
+// out-of-range value is rejected here instead of silently wrapping negative on
+// the `as i64` store conversion and tripping the column CHECK as a 500.
+const MAX_RUNTIME_KIRO_CACHE_SNAPSHOT_CAP: u64 = i64::MAX as u64;
 const MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY: u64 = 1_024;
 const MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS: u64 = 300_000;
 const DEFAULT_ADMIN_REVIEW_QUEUE_LIMIT: usize = 50;
@@ -4058,9 +4062,19 @@ fn apply_runtime_config_update(
     let kiro_cache_snapshot_max_tokens = request
         .kiro_cache_snapshot_max_tokens
         .unwrap_or(current.kiro_cache_snapshot_max_tokens);
+    validate_max(
+        "kiro_cache_snapshot_max_tokens",
+        kiro_cache_snapshot_max_tokens,
+        MAX_RUNTIME_KIRO_CACHE_SNAPSHOT_CAP,
+    )?;
     let kiro_cache_snapshot_max_anchor_entries = request
         .kiro_cache_snapshot_max_anchor_entries
         .unwrap_or(current.kiro_cache_snapshot_max_anchor_entries);
+    validate_max(
+        "kiro_cache_snapshot_max_anchor_entries",
+        kiro_cache_snapshot_max_anchor_entries,
+        MAX_RUNTIME_KIRO_CACHE_SNAPSHOT_CAP,
+    )?;
     let kiro_cctest_proxy_base_url = match request.kiro_cctest_proxy_base_url.as_deref() {
         Some(value) => normalize_cctest_proxy_base_url(value)?,
         None => current.kiro_cctest_proxy_base_url,
