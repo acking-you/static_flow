@@ -27,6 +27,14 @@ const MAGIC: [u8; 4] = *b"KCS1";
 const FORMAT_VERSION: u16 = 1;
 const HEADER_LEN: usize = 24;
 const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
+/// Maximum compressed snapshot blob accepted from Valkey. The blob is external
+/// persistent state (a corrupt or foreign key may sit in the shared namespace),
+/// so an oversized input is refused before spending effort decompressing it.
+const MAX_COMPRESSED_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum decompressed frame size. This is the real guard against a gzip bomb:
+/// decompression is bounded so a corrupt or malicious blob cannot inflate into
+/// an unbounded allocation and exhaust process memory.
+const MAX_DECOMPRESSED_SNAPSHOT_BYTES: usize = 128 * 1024 * 1024;
 
 /// Error raised while decoding or finalizing a snapshot blob.
 #[derive(Debug, thiserror::Error)]
@@ -135,7 +143,10 @@ pub(super) fn finalize_frame(mut raw: Vec<u8>) -> Result<Vec<u8>, SnapshotError>
 
 /// Decompress and validate a snapshot blob, returning the header and sections.
 pub(super) fn decode_frame(blob: &[u8]) -> Result<DecodedFrame, SnapshotError> {
-    let raw = gzip_decompress(blob)?;
+    if blob.len() > MAX_COMPRESSED_SNAPSHOT_BYTES {
+        return Err(SnapshotError::Malformed);
+    }
+    let raw = gzip_decompress(blob, MAX_DECOMPRESSED_SNAPSHOT_BYTES)?;
     if raw.len() < HEADER_LEN + 4 {
         return Err(SnapshotError::Malformed);
     }
@@ -170,12 +181,19 @@ fn gzip_compress(raw: &[u8]) -> Result<Vec<u8>, SnapshotError> {
         .map_err(|err| SnapshotError::Compression(err.to_string()))
 }
 
-fn gzip_decompress(blob: &[u8]) -> Result<Vec<u8>, SnapshotError> {
-    let mut decoder = GzDecoder::new(blob);
+fn gzip_decompress(blob: &[u8], max_decompressed: usize) -> Result<Vec<u8>, SnapshotError> {
+    // Bound the reader so a gzip bomb cannot inflate into an unbounded
+    // allocation: read at most `max_decompressed + 1` bytes, then reject if the
+    // extra byte materialized (i.e. the stream exceeded the cap).
+    let limit = max_decompressed.saturating_add(1) as u64;
+    let mut decoder = GzDecoder::new(blob).take(limit);
     let mut out = Vec::new();
     decoder
         .read_to_end(&mut out)
         .map_err(|err| SnapshotError::Compression(err.to_string()))?;
+    if out.len() > max_decompressed {
+        return Err(SnapshotError::Malformed);
+    }
     Ok(out)
 }
 /// Bounds-checked forward cursor over snapshot section bytes.
@@ -370,9 +388,9 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        decode_frame, finalize_frame, gzip_compress, peek_header, union_anchor_rows, write_varint,
-        write_zigzag, DecodedAnchor, SnapshotError, SnapshotHeader, SnapshotReader, FORMAT_VERSION,
-        MAGIC,
+        decode_frame, finalize_frame, gzip_compress, gzip_decompress, peek_header,
+        union_anchor_rows, write_varint, write_zigzag, DecodedAnchor, SnapshotError,
+        SnapshotHeader, SnapshotReader, FORMAT_VERSION, MAGIC,
     };
     use crate::cache_sim::{anchor_index::AnchorTokenCounts, projection::PREFIX_CACHE_PAGE_SIZE};
 
@@ -451,6 +469,20 @@ mod tests {
         bad.extend_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
         let bad_blob = gzip_compress(&bad).expect("compress");
         assert!(matches!(decode_frame(&bad_blob), Err(SnapshotError::ChecksumMismatch)));
+    }
+
+    #[test]
+    fn gzip_decompress_rejects_blob_over_decompressed_limit() {
+        // A highly compressible payload (zeros) shrinks to a tiny blob but would
+        // inflate well past a small cap: the bounded reader must refuse it as
+        // malformed instead of allocating the full expansion.
+        let payload = vec![0u8; 4096];
+        let blob = gzip_compress(&payload).expect("compress");
+        assert!(blob.len() < payload.len());
+        // Within the cap it round-trips.
+        assert_eq!(gzip_decompress(&blob, 4096).expect("decompress").len(), 4096);
+        // Below the decompressed size it is rejected, not expanded.
+        assert!(matches!(gzip_decompress(&blob, 1024), Err(SnapshotError::Malformed)));
     }
 
     fn anchor_row(
