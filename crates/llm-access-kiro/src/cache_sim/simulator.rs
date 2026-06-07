@@ -14,7 +14,7 @@ use super::{
     prefix_tree::{skip_prefix_section, PrefixCacheMatch, PrefixTree, PrefixTreeRuntimeStats},
     projection::{PromptProjection, RuntimePromptProjection, PREFIX_CACHE_PAGE_SIZE},
     snapshot::{
-        decode_frame, finalize_frame, union_anchor_rows, write_varint, DecodedFrame,
+        decode_frame, finalize_frame, union_anchor_rows, write_varint, DecodedAnchor, DecodedFrame,
         KiroSnapshotImportOutcome, SnapshotCaps, SnapshotHeader, SnapshotReader,
     },
 };
@@ -299,83 +299,52 @@ impl KiroCacheSimulator {
         caps: SnapshotCaps,
         now: Instant,
     ) -> KiroSnapshotImportOutcome {
-        let now_unix_ms = Utc::now().timestamp_millis();
-        let ttl = config.prefix_cache_entry_ttl;
-        let anchor_ttl = config.conversation_anchor_ttl;
         let max_tokens = caps.max_tokens.unwrap_or(config.prefix_cache_max_tokens);
         let max_anchor_entries = caps
             .max_anchor_entries
             .unwrap_or(config.conversation_anchor_max_entries);
+        let ctx = RestoreCtx {
+            now,
+            now_unix_ms: Utc::now().timestamp_millis(),
+            ttl: config.prefix_cache_entry_ttl,
+            anchor_ttl: config.conversation_anchor_ttl,
+            max_tokens,
+            // Each retained page costs >= 1 token, so the page budget tracks the
+            // token budget; a section that cannot fit it is rejected on decode.
+            max_pages: usize::try_from(max_tokens).unwrap_or(usize::MAX),
+            max_anchor_entries,
+        };
 
         let mut outcome = KiroSnapshotImportOutcome::default();
-        let own_frame = decode_blob(own, &mut outcome.decode_errors);
-        let mut peer_frames: Vec<DecodedFrame> = Vec::new();
+        let mut best: Option<PrefixCandidate> = None;
+        let mut rows: Vec<DecodedAnchor> = Vec::new();
+
+        // Stream frames one at a time so only a single decompressed frame is
+        // resident at once: decode, fold its prefix candidate, collect bounded
+        // anchor rows, then drop its section bytes before the next peer. Own is
+        // folded first so a non-empty own tree wins; among peers the newest
+        // snapshot wins, and an empty/expired tree never shadows a warm source.
+        if let Some(frame) = decode_blob(own, &mut outcome.decode_errors) {
+            fold_restore_frame(&frame, true, &ctx, &mut best, &mut rows);
+        }
         for peer in peers {
             if let Some(frame) = decode_blob(Some(peer.as_slice()), &mut outcome.decode_errors) {
-                peer_frames.push(frame);
+                fold_restore_frame(&frame, false, &ctx, &mut best, &mut rows);
             }
         }
 
-        // Prefix tree: prefer own, else newest peer — but an empty own snapshot
-        // (e.g. a cold node's first flush, or one whose tree expired on decode)
-        // must not shadow a warm peer. Walk candidates own-first then by
-        // recency, installing the first tree that actually holds tokens.
-        let mut candidates: Vec<(&DecodedFrame, bool)> = Vec::new();
-        if let Some(frame) = own_frame.as_ref() {
-            candidates.push((frame, true));
-        }
-        let mut sorted_peers: Vec<&DecodedFrame> = peer_frames.iter().collect();
-        sorted_peers.sort_by_key(|frame| std::cmp::Reverse(frame.header.snapshot_unix_ms));
-        candidates.extend(sorted_peers.into_iter().map(|frame| (frame, false)));
-
-        for (frame, is_own) in candidates {
-            let mut reader = SnapshotReader::new(&frame.sections);
-            match PrefixTree::decode_section(
-                &mut reader,
-                frame.header.snapshot_unix_ms,
-                now,
-                now_unix_ms,
-                ttl,
-            ) {
-                Ok(mut tree) => {
-                    tree.enforce_token_budget(max_tokens);
-                    if tree.resident_tokens() == 0 {
-                        // Empty tree: do not let it shadow a warmer source.
-                        continue;
-                    }
-                    outcome.prefix_resident_tokens = tree.resident_tokens();
-                    outcome.prefix_from_own = is_own;
-                    outcome.prefix_from_peer = !is_own;
-                    *self.prefix_tree.lock() = tree;
-                    break;
-                },
-                Err(err) => {
-                    tracing::warn!(error = %err, "failed to decode kiro prefix snapshot section");
-                },
-            }
+        if let Some(candidate) = best {
+            outcome.prefix_resident_tokens = candidate.tree.resident_tokens();
+            outcome.prefix_from_own = candidate.from_own;
+            outcome.prefix_from_peer = !candidate.from_own;
+            *self.prefix_tree.lock() = candidate.tree;
         }
 
-        // Anchors: union across own + all peers.
-        let mut rows = Vec::new();
-        let frames = own_frame.iter().chain(peer_frames.iter());
-        for frame in frames {
-            let mut reader = SnapshotReader::new(&frame.sections);
-            if skip_prefix_section(&mut reader).is_err() {
-                continue;
-            }
-            match ConversationAnchorIndex::decode_section(
-                &mut reader,
-                frame.header.snapshot_unix_ms,
-                max_anchor_entries,
-            ) {
-                Ok(decoded) => rows.extend(decoded),
-                Err(_) => continue,
-            }
-        }
-        let merged = union_anchor_rows(rows, now_unix_ms, anchor_ttl, max_anchor_entries);
+        let merged =
+            union_anchor_rows(rows, ctx.now_unix_ms, ctx.anchor_ttl, ctx.max_anchor_entries);
         {
             let mut index = self.anchor_index.lock();
-            index.rebuild_from_rows(merged, now, anchor_ttl, max_anchor_entries);
+            index.rebuild_from_rows(merged, ctx.now, ctx.anchor_ttl, ctx.max_anchor_entries);
             outcome.anchor_entries = index.len();
         }
         outcome
@@ -391,5 +360,92 @@ fn decode_blob(blob: Option<&[u8]>, errors: &mut usize) -> Option<DecodedFrame> 
             *errors += 1;
             None
         },
+    }
+}
+
+/// Scalar restore parameters threaded into per-frame folding, kept in one
+/// struct so `fold_restore_frame` stays within the argument budget.
+struct RestoreCtx {
+    now: Instant,
+    now_unix_ms: i64,
+    ttl: Duration,
+    anchor_ttl: Duration,
+    max_tokens: u64,
+    max_pages: usize,
+    max_anchor_entries: usize,
+}
+
+/// The best prefix tree found so far while streaming decoded frames.
+struct PrefixCandidate {
+    tree: PrefixTree,
+    from_own: bool,
+    snapshot_unix_ms: i64,
+}
+
+/// Whether a `(from_own, snapshot_unix_ms)` tree should replace the current
+/// best prefix candidate. Own always wins; among peers the newest snapshot
+/// wins. Keeps selection order-independent across the streamed frames.
+fn prefix_candidate_wins(
+    best: Option<&PrefixCandidate>,
+    from_own: bool,
+    snapshot_unix_ms: i64,
+) -> bool {
+    match best {
+        None => true,
+        Some(existing) if existing.from_own => false,
+        Some(_) if from_own => true,
+        Some(existing) => snapshot_unix_ms > existing.snapshot_unix_ms,
+    }
+}
+
+/// Decode one frame's prefix tree (folding it into `best` when non-empty and it
+/// wins) and append its bounded anchor rows. The caller drops the frame's
+/// section bytes after this returns, so peak memory stays at one decompressed
+/// frame plus the retained best tree rather than every peer frame at once.
+fn fold_restore_frame(
+    frame: &DecodedFrame,
+    from_own: bool,
+    ctx: &RestoreCtx,
+    best: &mut Option<PrefixCandidate>,
+    rows: &mut Vec<DecodedAnchor>,
+) {
+    let mut reader = SnapshotReader::new(&frame.sections);
+    match PrefixTree::decode_section(
+        &mut reader,
+        frame.header.snapshot_unix_ms,
+        ctx.now,
+        ctx.now_unix_ms,
+        ctx.ttl,
+        ctx.max_pages,
+    ) {
+        Ok(mut tree) => {
+            tree.enforce_token_budget(ctx.max_tokens);
+            if tree.resident_tokens() > 0
+                && prefix_candidate_wins(best.as_ref(), from_own, frame.header.snapshot_unix_ms)
+            {
+                *best = Some(PrefixCandidate {
+                    tree,
+                    from_own,
+                    snapshot_unix_ms: frame.header.snapshot_unix_ms,
+                });
+            }
+        },
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to decode kiro prefix snapshot section");
+        },
+    }
+
+    // Anchors from a fresh reader so a rejected/oversized prefix does not stop
+    // anchor recovery for this frame.
+    let mut anchor_reader = SnapshotReader::new(&frame.sections);
+    if skip_prefix_section(&mut anchor_reader).is_err() {
+        return;
+    }
+    if let Ok(decoded) = ConversationAnchorIndex::decode_section(
+        &mut anchor_reader,
+        frame.header.snapshot_unix_ms,
+        ctx.max_anchor_entries,
+    ) {
+        rows.extend(decoded);
     }
 }

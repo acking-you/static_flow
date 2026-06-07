@@ -80,10 +80,20 @@ impl KiroCacheSnapshotStore {
             .context("connect kiro cache snapshot redis")
     }
 
-    /// Load this node's own snapshot blob, if present.
+    /// Load this node's own snapshot blob, if present. The key is external
+    /// Valkey state, so size-check with `STRLEN` first and skip an empty or
+    /// oversized value before pulling the bulk string into memory — otherwise a
+    /// single stale/corrupt own key bypasses the startup memory bound.
     async fn load_own(&self) -> anyhow::Result<Option<Vec<u8>>> {
         let mut conn = self.connection().await?;
         let key = self.own_key();
+        let len: usize = conn
+            .strlen(&key)
+            .await
+            .with_context(|| format!("redis STRLEN `{key}`"))?;
+        if len == 0 || len > MAX_COMPRESSED_SNAPSHOT_BYTES {
+            return Ok(None);
+        }
         let value: Option<Vec<u8>> = conn
             .get(&key)
             .await

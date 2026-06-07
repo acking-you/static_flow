@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use super::{
-    projection::CanonicalTokenPage,
+    projection::{CanonicalTokenPage, PREFIX_CACHE_PAGE_SIZE},
     snapshot::{effective_age_secs, write_varint, SnapshotError, SnapshotReader},
 };
 
@@ -349,6 +349,7 @@ impl PrefixTree {
         now: Instant,
         now_unix_ms: i64,
         ttl: Duration,
+        max_pages: usize,
     ) -> Result<PrefixTree, SnapshotError> {
         struct Frame {
             node: PrefixNode,
@@ -357,6 +358,12 @@ impl PrefixTree {
         }
         let ttl_secs = ttl.as_secs();
         let root_count = reader.read_varint()?;
+        // Bound total materialized pages by the restore budget. Each page costs
+        // at least one token, so a section that would exceed `max_pages` cannot
+        // fit the live token budget anyway; rejecting it here keeps a corrupt or
+        // oversized Valkey blob from inflating structured allocations far beyond
+        // the budget before `enforce_token_budget` runs.
+        let mut total_pages: usize = 0;
         let mut stack: Vec<Frame> = vec![Frame {
             node: PrefixNode::default(),
             remaining: root_count,
@@ -390,10 +397,22 @@ impl PrefixTree {
             if page_count == 0 || need > reader.remaining() {
                 return Err(SnapshotError::Malformed);
             }
+            total_pages = total_pages
+                .checked_add(page_count)
+                .ok_or(SnapshotError::Malformed)?;
+            if total_pages > max_pages {
+                return Err(SnapshotError::Malformed);
+            }
             let mut pages = Vec::with_capacity(page_count);
             for _ in 0..page_count {
                 let key = reader.read_u128_le()?;
                 let token_count = u16::from(reader.read_u8()?);
+                // The writer only emits 1..=PREFIX_CACHE_PAGE_SIZE; reject any
+                // other value so a corrupt page cannot inflate resident/matched
+                // token counts beyond what the live projection could produce.
+                if token_count == 0 || usize::from(token_count) > PREFIX_CACHE_PAGE_SIZE {
+                    return Err(SnapshotError::Malformed);
+                }
                 pages.push(CanonicalTokenPage {
                     key,
                     token_count,
@@ -771,8 +790,15 @@ mod tests {
         let mut buf = Vec::new();
         tree.encode_section(&mut buf, encode_now, cap);
         let mut reader = SnapshotReader::new(&buf);
-        PrefixTree::decode_section(&mut reader, snapshot_unix_ms, decode_now, now_unix_ms, ttl)
-            .expect("decode prefix section")
+        PrefixTree::decode_section(
+            &mut reader,
+            snapshot_unix_ms,
+            decode_now,
+            now_unix_ms,
+            ttl,
+            usize::MAX,
+        )
+        .expect("decode prefix section")
     }
 
     #[test]
@@ -933,6 +959,57 @@ mod tests {
                 .matched_pages,
             0
         );
+    }
+
+    #[test]
+    fn prefix_section_decode_rejects_exceeding_page_budget() {
+        use crate::cache_sim::snapshot::SnapshotError;
+
+        // A four-page path encodes as one edge of four pages.
+        let path = pages_from_keys(&[1, 2, 3, 4]);
+        let mut tree = PrefixTree::default();
+        let now = Instant::now();
+        let ttl = Duration::from_secs(300);
+        tree.insert(&path, now, ttl, u64::MAX);
+        let mut buf = Vec::new();
+        tree.encode_section(&mut buf, now, None);
+        let s = 1_700_000_000_000i64;
+
+        // max_pages = 2 < 4 actual pages: rejected before materializing them.
+        let mut reader = SnapshotReader::new(&buf);
+        assert!(matches!(
+            PrefixTree::decode_section(&mut reader, s, now, s, ttl, 2),
+            Err(SnapshotError::Malformed)
+        ));
+        // A sufficient budget decodes the section fine.
+        let mut reader = SnapshotReader::new(&buf);
+        let restored = PrefixTree::decode_section(&mut reader, s, now, s, ttl, 4)
+            .expect("decode within budget");
+        assert_eq!(restored.snapshot_stats(u64::MAX).resident_tokens, 40);
+    }
+
+    #[test]
+    fn prefix_section_decode_rejects_out_of_range_token_count() {
+        use crate::cache_sim::snapshot::{write_varint, SnapshotError};
+
+        // Hand-build a root with one edge of one page whose token_count is 255,
+        // a value the writer (1..=64) could never emit.
+        let mut buf = Vec::new();
+        write_varint(&mut buf, 1); // root child_edge_count
+        write_varint(&mut buf, 1); // page_count
+        buf.extend_from_slice(&7u128.to_le_bytes()); // page key
+        buf.push(255); // token_count out of range
+        write_varint(&mut buf, 0); // age_secs
+        write_varint(&mut buf, 0); // child node count (leaf)
+
+        let s = 1_700_000_000_000i64;
+        let now = Instant::now();
+        let ttl = Duration::from_secs(300);
+        let mut reader = SnapshotReader::new(&buf);
+        assert!(matches!(
+            PrefixTree::decode_section(&mut reader, s, now, s, ttl, usize::MAX),
+            Err(SnapshotError::Malformed)
+        ));
     }
 
     #[test]
