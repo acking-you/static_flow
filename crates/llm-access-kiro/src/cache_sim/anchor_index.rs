@@ -16,6 +16,11 @@ use super::snapshot::{
     write_varint, write_zigzag, DecodedAnchor, RebuildRow, SnapshotError, SnapshotReader,
 };
 
+/// Minimum wire bytes for one encoded anchor row: 32B key + 1B conv_len varint
+/// (empty id) + 1B token-counts flag + 1B age varint. Used to bound decode
+/// preallocation against the bytes actually present, never the untrusted count.
+const MIN_ANCHOR_ROW_WIRE_BYTES: usize = 35;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub struct ConversationAnchorRuntimeStats {
     pub entries: usize,
@@ -229,13 +234,30 @@ impl ConversationAnchorIndex {
 
     /// Decode a flat anchor section into source rows. No TTL filtering or
     /// insertion happens here; the cross-node union owns recency and capacity.
+    /// `max_rows` caps how many rows are materialized so an untrusted `count`
+    /// cannot drive an unbounded allocation.
     pub(super) fn decode_section(
         reader: &mut SnapshotReader<'_>,
         snapshot_unix_ms: i64,
+        max_rows: usize,
     ) -> Result<Vec<DecodedAnchor>, SnapshotError> {
         let count = reader.read_varint()?;
-        let mut rows = Vec::with_capacity((count as usize).min(reader.remaining()));
+        // Never preallocate from the untrusted wire `count`. Bound it by both the
+        // caller's row ceiling and the rows the remaining bytes could physically
+        // hold (each row is at least MIN_ANCHOR_ROW_WIRE_BYTES).
+        let byte_bound = reader.remaining() / MIN_ANCHOR_ROW_WIRE_BYTES;
+        let prealloc = usize::try_from(count)
+            .unwrap_or(usize::MAX)
+            .min(max_rows)
+            .min(byte_bound);
+        let mut rows = Vec::with_capacity(prealloc);
         for _ in 0..count {
+            // Stop at the ceiling. The encoder writes most-recently-used rows
+            // first, so the retained rows are the hottest; the remainder is
+            // dropped before the cross-node union (which caps again anyway).
+            if rows.len() >= max_rows {
+                break;
+            }
             let hex_key = hex::encode(reader.read_bytes(32)?);
             let conv_len =
                 usize::try_from(reader.read_varint()?).map_err(|_| SnapshotError::Malformed)?;
@@ -343,7 +365,7 @@ mod tests {
         index.encode_section(&mut buf, now, None);
 
         let mut reader = SnapshotReader::new(&buf);
-        let rows = ConversationAnchorIndex::decode_section(&mut reader, snapshot_unix_ms)
+        let rows = ConversationAnchorIndex::decode_section(&mut reader, snapshot_unix_ms, MAX)
             .expect("decode anchor section");
         assert_eq!(rows.len(), 2);
         let merged = union_anchor_rows(rows, snapshot_unix_ms, TTL, MAX);
@@ -382,9 +404,31 @@ mod tests {
 
         let mut reader = SnapshotReader::new(&buf);
         assert!(matches!(
-            ConversationAnchorIndex::decode_section(&mut reader, 0),
+            ConversationAnchorIndex::decode_section(&mut reader, 0, MAX),
             Err(SnapshotError::Malformed)
         ));
+    }
+
+    #[test]
+    fn anchor_section_decode_caps_rows_at_max() {
+        use crate::cache_sim::snapshot::SnapshotReader;
+
+        // Encode five entries but decode with max_rows = 2: only the first two
+        // (most-recently-used) are materialized, bounding the allocation.
+        let mut index = ConversationAnchorIndex::default();
+        let now = Instant::now();
+        for i in 0..5u8 {
+            // 64 identical hex digits -> a valid 32-byte raw key.
+            let key = String::from_utf8(vec![b'a' + i; 64]).expect("ascii hex key");
+            index.insert(key, format!("conv-{i}"), None, now, TTL, 64);
+        }
+        let mut buf = Vec::new();
+        index.encode_section(&mut buf, now, None);
+
+        let mut reader = SnapshotReader::new(&buf);
+        let rows = ConversationAnchorIndex::decode_section(&mut reader, 0, 2)
+            .expect("decode anchor section");
+        assert_eq!(rows.len(), 2);
     }
 
     #[test]

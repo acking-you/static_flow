@@ -30,7 +30,8 @@ const CRC32: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 /// Maximum compressed snapshot blob accepted from Valkey. The blob is external
 /// persistent state (a corrupt or foreign key may sit in the shared namespace),
 /// so an oversized input is refused before spending effort decompressing it.
-const MAX_COMPRESSED_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+/// Exposed so the Valkey read layer can skip oversized keys before fetching.
+pub const MAX_COMPRESSED_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum decompressed frame size. This is the real guard against a gzip bomb:
 /// decompression is bounded so a corrupt or malicious blob cannot inflate into
 /// an unbounded allocation and exhaust process memory.
@@ -242,7 +243,15 @@ impl<'a> SnapshotReader<'a> {
             if shift >= 64 {
                 return Err(SnapshotError::Malformed);
             }
-            value |= u64::from(byte & 0x7f) << shift;
+            let chunk = u64::from(byte & 0x7f);
+            let shifted = chunk << shift;
+            // At shift == 63 only payloads 0/1 fit a u64; a larger payload would
+            // silently drop high bits. Reject it as malformed rather than decode
+            // a wrong value that later count/len/age checks would trust.
+            if (shifted >> shift) != chunk {
+                return Err(SnapshotError::Malformed);
+            }
+            value |= shifted;
             if byte & 0x80 == 0 {
                 return Ok(value);
             }
@@ -403,6 +412,23 @@ mod tests {
             assert_eq!(reader.read_varint().expect("decode varint"), value);
             assert_eq!(reader.remaining(), 0);
         }
+    }
+
+    #[test]
+    fn varint_rejects_overflowing_tenth_byte() {
+        // u64::MAX is the largest legal varint: nine 0xFF groups then a final
+        // 0x01 (payload 1 at shift 63). A final byte > 1 would drop high bits.
+        let mut max_buf = Vec::new();
+        write_varint(&mut max_buf, u64::MAX);
+        assert_eq!(max_buf.len(), 10);
+        assert_eq!(*max_buf.last().expect("last byte"), 0x01);
+
+        // Same 10-byte shape but payload 2 in the last group: must be rejected
+        // rather than silently truncated into a smaller value.
+        let mut bad = vec![0xffu8; 9];
+        bad.push(0x02);
+        let mut reader = SnapshotReader::new(&bad);
+        assert!(matches!(reader.read_varint(), Err(SnapshotError::Malformed)));
     }
 
     #[test]

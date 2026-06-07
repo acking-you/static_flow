@@ -24,7 +24,10 @@ pub use projection::{CanonicalTokenPage, PromptProjection, RuntimePromptProjecti
 pub use simulator::{
     KiroCacheRuntimeStats, KiroCacheSimulationConfig, KiroCacheSimulationMode, KiroCacheSimulator,
 };
-pub use snapshot::{peek_header, KiroSnapshotImportOutcome, SnapshotCaps, SnapshotError};
+pub use snapshot::{
+    peek_header, KiroSnapshotImportOutcome, SnapshotCaps, SnapshotError,
+    MAX_COMPRESSED_SNAPSHOT_BYTES,
+};
 
 #[cfg(test)]
 mod tests {

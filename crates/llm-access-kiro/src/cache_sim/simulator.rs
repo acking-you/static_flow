@@ -366,6 +366,7 @@ impl KiroCacheSimulator {
             match ConversationAnchorIndex::decode_section(
                 &mut reader,
                 frame.header.snapshot_unix_ms,
+                max_anchor_entries,
             ) {
                 Ok(decoded) => rows.extend(decoded),
                 Err(_) => continue,

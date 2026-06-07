@@ -17,7 +17,9 @@ use std::{
 
 use anyhow::Context;
 use llm_access_core::store::{AdminConfigStore, AdminRuntimeConfig};
-use llm_access_kiro::cache_sim::{KiroCacheSimulator, KiroSnapshotImportOutcome, SnapshotCaps};
+use llm_access_kiro::cache_sim::{
+    KiroCacheSimulator, KiroSnapshotImportOutcome, SnapshotCaps, MAX_COMPRESSED_SNAPSHOT_BYTES,
+};
 use llm_access_store::request_cache::RequestCacheConfig;
 use redis::AsyncCommands;
 use tokio::{sync::watch, task::JoinHandle, time};
@@ -27,6 +29,13 @@ use crate::admin::kiro_cache_simulation_config_from_admin_config;
 /// Node-id placeholder used on single-machine deployments without a cluster
 /// identity, so the per-node key namespace stays stable.
 const SINGLE_NODE_ID: &str = "_single";
+/// Maximum number of peer snapshot keys considered during restore. Bounds both
+/// the SCAN result set and the worst-case aggregate fetch when the shared
+/// namespace accumulates many keys or is polluted with junk.
+const MAX_PEER_SNAPSHOTS: usize = 32;
+/// Maximum aggregate bytes pulled across all peer snapshots in one restore.
+/// A second guard (on top of the per-key size cap) bounding transient memory.
+const MAX_TOTAL_PEER_SNAPSHOT_BYTES: usize = 256 * 1024 * 1024;
 
 /// Valkey-backed store for cross-node Kiro cache snapshots.
 #[derive(Clone)]
@@ -82,15 +91,21 @@ impl KiroCacheSnapshotStore {
         Ok(value)
     }
 
-    /// Enumerate all peer snapshot blobs via SCAN, excluding this node's own
-    /// key. Uses a cursor loop, never `KEYS`.
+    /// Enumerate peer snapshot blobs via SCAN, excluding this node's own key.
+    /// Uses a cursor loop (never `KEYS`) and bounds memory: at most
+    /// `MAX_PEER_SNAPSHOTS` keys are considered, each is size-checked with
+    /// `STRLEN` and skipped if it exceeds `MAX_COMPRESSED_SNAPSHOT_BYTES`, and
+    /// the aggregate fetched bytes are capped at
+    /// `MAX_TOTAL_PEER_SNAPSHOT_BYTES`. This keeps a corrupt/oversized key
+    /// or a polluted namespace from blowing up startup memory before the
+    /// decoder's own size guard runs.
     async fn load_peers(&self) -> anyhow::Result<Vec<Vec<u8>>> {
         let mut conn = self.connection().await?;
         let own_key = self.own_key();
         let pattern = self.scan_pattern();
         let mut cursor: u64 = 0;
         let mut keys: Vec<String> = Vec::new();
-        loop {
+        'scan: loop {
             let (next, batch): (u64, Vec<String>) = redis::cmd("SCAN")
                 .arg(cursor)
                 .arg("MATCH")
@@ -100,21 +115,46 @@ impl KiroCacheSnapshotStore {
                 .query_async(&mut conn)
                 .await
                 .with_context(|| format!("redis SCAN `{pattern}`"))?;
-            keys.extend(batch.into_iter().filter(|key| key != &own_key));
+            for key in batch {
+                if key == own_key {
+                    continue;
+                }
+                keys.push(key);
+                if keys.len() >= MAX_PEER_SNAPSHOTS {
+                    break 'scan;
+                }
+            }
             cursor = next;
             if cursor == 0 {
                 break;
             }
         }
-        if keys.is_empty() {
-            return Ok(Vec::new());
+
+        // Fetch per key with a STRLEN pre-check and a running byte budget, so an
+        // oversized or junk value is skipped before it is pulled into memory.
+        let mut blobs = Vec::with_capacity(keys.len());
+        let mut total_bytes: usize = 0;
+        for key in keys {
+            let len: usize = conn
+                .strlen(&key)
+                .await
+                .with_context(|| format!("redis STRLEN `{key}`"))?;
+            if len == 0 || len > MAX_COMPRESSED_SNAPSHOT_BYTES {
+                continue;
+            }
+            if total_bytes.saturating_add(len) > MAX_TOTAL_PEER_SNAPSHOT_BYTES {
+                break;
+            }
+            let value: Option<Vec<u8>> = conn
+                .get(&key)
+                .await
+                .with_context(|| format!("redis GET `{key}`"))?;
+            if let Some(blob) = value {
+                total_bytes = total_bytes.saturating_add(blob.len());
+                blobs.push(blob);
+            }
         }
-        // One MGET round-trip instead of N sequential GETs.
-        let values: Vec<Option<Vec<u8>>> = conn
-            .mget(&keys)
-            .await
-            .context("redis MGET peer snapshot keys")?;
-        Ok(values.into_iter().flatten().collect())
+        Ok(blobs)
     }
 
     /// Store this node's snapshot blob with a TTL. Redis strings are binary
