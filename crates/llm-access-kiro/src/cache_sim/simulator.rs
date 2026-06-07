@@ -14,7 +14,7 @@ use super::{
     prefix_tree::{skip_prefix_section, PrefixCacheMatch, PrefixTree, PrefixTreeRuntimeStats},
     projection::{PromptProjection, RuntimePromptProjection, PREFIX_CACHE_PAGE_SIZE},
     snapshot::{
-        decode_frame, finalize_frame, union_anchor_rows, write_varint, DecodedAnchor, DecodedFrame,
+        decode_frame, finalize_frame, write_varint, AnchorUnion, DecodedFrame,
         KiroSnapshotImportOutcome, SnapshotCaps, SnapshotHeader, SnapshotReader,
     },
 };
@@ -317,19 +317,21 @@ impl KiroCacheSimulator {
 
         let mut outcome = KiroSnapshotImportOutcome::default();
         let mut best: Option<PrefixCandidate> = None;
-        let mut rows: Vec<DecodedAnchor> = Vec::new();
+        let mut anchors = AnchorUnion::new(ctx.now_unix_ms, ctx.anchor_ttl, ctx.max_anchor_entries);
 
         // Stream frames one at a time so only a single decompressed frame is
-        // resident at once: decode, fold its prefix candidate, collect bounded
-        // anchor rows, then drop its section bytes before the next peer. Own is
-        // folded first so a non-empty own tree wins; among peers the newest
-        // snapshot wins, and an empty/expired tree never shadows a warm source.
+        // resident at once: decode, fold its prefix candidate, fold its bounded
+        // anchor rows into the running union (which dedups + trims to
+        // max_anchor_entries each fold), then drop its section bytes before the
+        // next peer. Own is folded first so a non-empty own tree wins; among
+        // peers the newest snapshot wins, and an empty/expired tree never
+        // shadows a warm source.
         if let Some(frame) = decode_blob(own, &mut outcome.decode_errors) {
-            fold_restore_frame(&frame, true, &ctx, &mut best, &mut rows);
+            fold_restore_frame(&frame, true, &ctx, &mut best, &mut anchors);
         }
         for peer in peers {
             if let Some(frame) = decode_blob(Some(peer.as_slice()), &mut outcome.decode_errors) {
-                fold_restore_frame(&frame, false, &ctx, &mut best, &mut rows);
+                fold_restore_frame(&frame, false, &ctx, &mut best, &mut anchors);
             }
         }
 
@@ -340,8 +342,7 @@ impl KiroCacheSimulator {
             *self.prefix_tree.lock() = candidate.tree;
         }
 
-        let merged =
-            union_anchor_rows(rows, ctx.now_unix_ms, ctx.anchor_ttl, ctx.max_anchor_entries);
+        let merged = anchors.finish();
         {
             let mut index = self.anchor_index.lock();
             index.rebuild_from_rows(merged, ctx.now, ctx.anchor_ttl, ctx.max_anchor_entries);
@@ -407,7 +408,7 @@ fn fold_restore_frame(
     from_own: bool,
     ctx: &RestoreCtx,
     best: &mut Option<PrefixCandidate>,
-    rows: &mut Vec<DecodedAnchor>,
+    anchors: &mut AnchorUnion,
 ) {
     let mut reader = SnapshotReader::new(&frame.sections);
     match PrefixTree::decode_section(
@@ -436,7 +437,8 @@ fn fold_restore_frame(
     }
 
     // Anchors from a fresh reader so a rejected/oversized prefix does not stop
-    // anchor recovery for this frame.
+    // anchor recovery for this frame. Folding into the running union dedups and
+    // trims to max_anchor_entries now, so memory does not scale with peer count.
     let mut anchor_reader = SnapshotReader::new(&frame.sections);
     if skip_prefix_section(&mut anchor_reader).is_err() {
         return;
@@ -446,6 +448,6 @@ fn fold_restore_frame(
         frame.header.snapshot_unix_ms,
         ctx.max_anchor_entries,
     ) {
-        rows.extend(decoded);
+        anchors.fold(decoded);
     }
 }

@@ -20,6 +20,11 @@ use super::snapshot::{
 /// (empty id) + 1B token-counts flag + 1B age varint. Used to bound decode
 /// preallocation against the bytes actually present, never the untrusted count.
 const MIN_ANCHOR_ROW_WIRE_BYTES: usize = 35;
+/// Hard upper bound on one anchor's `conversation_id` length. Upstream ids are
+/// short opaque strings (UUID-shaped), so this is far above any real value; it
+/// caps the per-row `String` so a corrupt wire varint cannot make a single
+/// retained anchor allocate up to the whole decompressed frame.
+const MAX_ANCHOR_CONVERSATION_ID_BYTES: usize = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub struct ConversationAnchorRuntimeStats {
@@ -261,6 +266,11 @@ impl ConversationAnchorIndex {
             let hex_key = hex::encode(reader.read_bytes(32)?);
             let conv_len =
                 usize::try_from(reader.read_varint()?).map_err(|_| SnapshotError::Malformed)?;
+            // Reject an over-long conversation id rather than allocate it; the
+            // writer only emits short upstream ids.
+            if conv_len > MAX_ANCHOR_CONVERSATION_ID_BYTES {
+                return Err(SnapshotError::Malformed);
+            }
             let conv_bytes = reader.read_bytes(conv_len)?;
             let conversation_id =
                 String::from_utf8(conv_bytes.to_vec()).map_err(|_| SnapshotError::Malformed)?;
@@ -429,6 +439,25 @@ mod tests {
         let rows = ConversationAnchorIndex::decode_section(&mut reader, 0, 2)
             .expect("decode anchor section");
         assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn anchor_section_decode_rejects_oversized_conversation_id() {
+        use crate::cache_sim::snapshot::{write_varint, SnapshotError, SnapshotReader};
+
+        // A conversation_id longer than the hard cap is rejected right after the
+        // length varint, before the String is allocated, so one corrupt anchor
+        // cannot pull in up to a whole decompressed frame.
+        let mut buf = Vec::new();
+        write_varint(&mut buf, 1); // anchor_count
+        buf.extend_from_slice(&[0xaa; 32]); // 32B raw key
+        write_varint(&mut buf, (super::MAX_ANCHOR_CONVERSATION_ID_BYTES + 1) as u64);
+
+        let mut reader = SnapshotReader::new(&buf);
+        assert!(matches!(
+            ConversationAnchorIndex::decode_section(&mut reader, 0, MAX),
+            Err(SnapshotError::Malformed)
+        ));
     }
 
     #[test]

@@ -13,6 +13,7 @@
 //! little-endian; varints are LEB128, with zigzag for signed values.
 
 use std::{
+    collections::HashMap,
     io::{Read, Write},
     time::Duration,
 };
@@ -312,78 +313,128 @@ pub(super) struct RebuildRow {
     pub(super) eff_age_secs: u64,
 }
 
-/// Merge anchor rows from this node and peers into a recency-ordered, TTL- and
-/// cap-bounded set. Newest `last_touched` wins per anchor; ties break on hex.
-/// The returned rows are ordered oldest-first so an LRU rebuild preserves
-/// recency, and every row's `eff_age_secs <= ttl`.
+/// Per-anchor candidate kept while merging snapshot rows: the newest-touched
+/// conversation id and counts for one anchor hash. `touched_ms` is the absolute
+/// wall-clock of last touch, so recency comparison is independent of which
+/// snapshot a row came from.
+struct AnchorCandidate {
+    conversation_id: String,
+    token_counts: Option<AnchorTokenCounts>,
+    touched_ms: i64,
+}
+
+/// Incremental, bounded cross-node anchor union. Rows from this node and peers
+/// are folded one frame at a time; after each fold the working set is
+/// deduplicated (newest `last_touched` wins per anchor, hex tiebreak) and
+/// trimmed to `max_entries`. Retained memory is therefore bounded by the final
+/// cap, not by `frame_count × max_entries`. `finish` orders the survivors
+/// oldest-first (so an LRU rebuild preserves recency) and drops any past `ttl`.
+pub(super) struct AnchorUnion {
+    best: HashMap<String, AnchorCandidate>,
+    now_unix_ms: i64,
+    ttl: Duration,
+    max_entries: usize,
+}
+
+impl AnchorUnion {
+    pub(super) fn new(now_unix_ms: i64, ttl: Duration, max_entries: usize) -> Self {
+        Self {
+            best: HashMap::new(),
+            now_unix_ms,
+            ttl,
+            max_entries,
+        }
+    }
+
+    /// Merge one frame's decoded rows, then dedup + trim so the working set
+    /// stays bounded by `max_entries` regardless of how many frames are folded.
+    pub(super) fn fold(&mut self, rows: Vec<DecodedAnchor>) {
+        for row in rows {
+            // `age_secs` is an unbounded wire varint; clamp the ms conversion so
+            // a corrupt value cannot wrap negative and look newer than its
+            // snapshot.
+            let age_ms = i64::try_from(row.age_secs.saturating_mul(1000)).unwrap_or(i64::MAX);
+            let touched_ms = row.snapshot_unix_ms.saturating_sub(age_ms);
+            let candidate = AnchorCandidate {
+                conversation_id: row.conversation_id,
+                token_counts: row.token_counts,
+                touched_ms,
+            };
+            match self.best.get(&row.hex) {
+                Some(existing)
+                    if existing.touched_ms > touched_ms
+                        || (existing.touched_ms == touched_ms
+                            && existing.conversation_id >= candidate.conversation_id) => {},
+                _ => {
+                    self.best.insert(row.hex, candidate);
+                },
+            }
+        }
+        self.trim();
+    }
+
+    /// Drop all but the newest `max_entries` by `(touched_ms, hex)`. Top-K is
+    /// composable, so trimming after every fold yields the same survivors as a
+    /// single final trim.
+    fn trim(&mut self) {
+        if self.max_entries == 0 || self.best.len() <= self.max_entries {
+            return;
+        }
+        let mut ordered = self.sorted_oldest_first();
+        let drop = ordered.len() - self.max_entries;
+        ordered.drain(0..drop);
+        self.best = ordered.into_iter().collect();
+    }
+
+    /// Drain into `(hex, candidate)` pairs ordered oldest-first (ascending
+    /// `touched_ms`, hex tiebreak for determinism).
+    fn sorted_oldest_first(&mut self) -> Vec<(String, AnchorCandidate)> {
+        let mut ordered: Vec<(String, AnchorCandidate)> =
+            std::mem::take(&mut self.best).into_iter().collect();
+        ordered.sort_by(|(left_hex, left), (right_hex, right)| {
+            left.touched_ms
+                .cmp(&right.touched_ms)
+                .then_with(|| left_hex.cmp(right_hex))
+        });
+        ordered
+    }
+
+    /// Finalize: oldest-first rebuild rows, every one with `eff_age_secs <=
+    /// ttl`.
+    pub(super) fn finish(mut self) -> Vec<RebuildRow> {
+        self.trim();
+        let now_unix_ms = self.now_unix_ms;
+        let ttl_secs = self.ttl.as_secs();
+        self.sorted_oldest_first()
+            .into_iter()
+            .filter_map(|(hex, candidate)| {
+                let eff_age_ms = now_unix_ms.saturating_sub(candidate.touched_ms).max(0);
+                let eff_age_secs = (eff_age_ms as u64) / 1000;
+                if eff_age_secs > ttl_secs {
+                    return None;
+                }
+                Some(RebuildRow {
+                    hex,
+                    conversation_id: candidate.conversation_id,
+                    token_counts: candidate.token_counts,
+                    eff_age_secs,
+                })
+            })
+            .collect()
+    }
+}
+
+/// Batch helper retained for tests: fold all rows in one pass then finalize.
+#[cfg(test)]
 pub(super) fn union_anchor_rows(
     rows: Vec<DecodedAnchor>,
     now_unix_ms: i64,
     ttl: Duration,
     max_entries: usize,
 ) -> Vec<RebuildRow> {
-    use std::collections::HashMap;
-
-    // touched_ms is the absolute wall-clock of last touch; recency comparison
-    // is independent of which snapshot a row came from.
-    struct Candidate {
-        conversation_id: String,
-        token_counts: Option<AnchorTokenCounts>,
-        touched_ms: i64,
-    }
-
-    let mut best: HashMap<String, Candidate> = HashMap::new();
-    for row in rows {
-        // `age_secs` is read from the wire as an unbounded varint; clamp the
-        // millisecond conversion so a corrupt value cannot wrap negative and
-        // make the entry look newer than its snapshot.
-        let age_ms = i64::try_from(row.age_secs.saturating_mul(1000)).unwrap_or(i64::MAX);
-        let touched_ms = row.snapshot_unix_ms.saturating_sub(age_ms);
-        let candidate = Candidate {
-            conversation_id: row.conversation_id,
-            token_counts: row.token_counts,
-            touched_ms,
-        };
-        match best.get(&row.hex) {
-            Some(existing)
-                if existing.touched_ms > touched_ms
-                    || (existing.touched_ms == touched_ms
-                        && existing.conversation_id >= candidate.conversation_id) => {},
-            _ => {
-                best.insert(row.hex, candidate);
-            },
-        }
-    }
-
-    let mut ordered: Vec<(String, Candidate)> = best.into_iter().collect();
-    // Oldest first (ascending touched_ms); hex tiebreak for determinism.
-    ordered.sort_by(|(left_hex, left), (right_hex, right)| {
-        left.touched_ms
-            .cmp(&right.touched_ms)
-            .then_with(|| left_hex.cmp(right_hex))
-    });
-    if max_entries > 0 && ordered.len() > max_entries {
-        let drop = ordered.len() - max_entries;
-        ordered.drain(0..drop);
-    }
-
-    let ttl_secs = ttl.as_secs();
-    ordered
-        .into_iter()
-        .filter_map(|(hex, candidate)| {
-            let eff_age_ms = now_unix_ms.saturating_sub(candidate.touched_ms).max(0);
-            let eff_age_secs = (eff_age_ms as u64) / 1000;
-            if eff_age_secs > ttl_secs {
-                return None;
-            }
-            Some(RebuildRow {
-                hex,
-                conversation_id: candidate.conversation_id,
-                token_counts: candidate.token_counts,
-                eff_age_secs,
-            })
-        })
-        .collect()
+    let mut union = AnchorUnion::new(now_unix_ms, ttl, max_entries);
+    union.fold(rows);
+    union.finish()
 }
 
 /// Compute the effective age in seconds of a snapshot entry against the restore
@@ -398,7 +449,7 @@ mod tests {
 
     use super::{
         decode_frame, finalize_frame, gzip_compress, gzip_decompress, peek_header,
-        union_anchor_rows, write_varint, write_zigzag, DecodedAnchor, SnapshotError,
+        union_anchor_rows, write_varint, write_zigzag, AnchorUnion, DecodedAnchor, SnapshotError,
         SnapshotHeader, SnapshotReader, FORMAT_VERSION, MAGIC,
     };
     use crate::cache_sim::{anchor_index::AnchorTokenCounts, projection::PREFIX_CACHE_PAGE_SIZE};
@@ -567,5 +618,62 @@ mod tests {
         assert!(ids.contains(&"c2"));
         assert!(ids.contains(&"c3"));
         assert!(!ids.contains(&"c4"));
+    }
+
+    #[test]
+    fn anchor_union_incremental_matches_batch() {
+        // Folding frame-by-frame (with a trim after each fold) must yield the
+        // same survivors as one batch fold, including dedup of a re-touched
+        // hex across frames and cap-trimming. This is the property that lets
+        // the streamed restore keep memory bounded by max_entries.
+        let now = 2_000_000_000_000i64;
+        let ttl = Duration::from_secs(86_400);
+        // Built fresh twice (DecodedAnchor is not Clone) so the incremental and
+        // batch paths each get their own owned rows.
+        let make_frames = || {
+            (
+                vec![
+                    anchor_row("a1", "c1-old", now - 50_000, 0, None),
+                    anchor_row("a2", "c2", now - 40_000, 0, None),
+                ],
+                vec![
+                    anchor_row("a3", "c3", now - 30_000, 0, None),
+                    anchor_row("a1", "c1-new", now - 5_000, 0, None), // a1 re-touched newer
+                ],
+                vec![
+                    anchor_row("a4", "c4", now - 20_000, 0, None),
+                    anchor_row("a5", "c5", now - 10_000, 0, None),
+                ],
+            )
+        };
+
+        let (f1, f2, f3) = make_frames();
+        let mut incremental = AnchorUnion::new(now, ttl, 3);
+        incremental.fold(f1);
+        incremental.fold(f2);
+        incremental.fold(f3);
+        let inc_rows = incremental.finish();
+
+        let (b1, b2, b3) = make_frames();
+        let mut all = Vec::new();
+        all.extend(b1);
+        all.extend(b2);
+        all.extend(b3);
+        let batch_rows = union_anchor_rows(all, now, ttl, 3);
+
+        let inc: Vec<(&str, &str)> = inc_rows
+            .iter()
+            .map(|r| (r.hex.as_str(), r.conversation_id.as_str()))
+            .collect();
+        let batch: Vec<(&str, &str)> = batch_rows
+            .iter()
+            .map(|r| (r.hex.as_str(), r.conversation_id.as_str()))
+            .collect();
+        assert_eq!(inc, batch);
+        // cap=3 keeps the three newest touches: a1(c1-new,-5k), a5(-10k), a4(-20k).
+        assert_eq!(inc.len(), 3);
+        assert!(inc.iter().any(|(h, c)| *h == "a1" && *c == "c1-new"));
+        assert!(inc.iter().all(|(h, _)| *h != "a2"));
+        assert!(inc.iter().all(|(h, _)| *h != "a3"));
     }
 }
