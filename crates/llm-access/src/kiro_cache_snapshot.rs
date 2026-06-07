@@ -51,10 +51,7 @@ impl KiroCacheSnapshotStore {
             node_id: node_id.unwrap_or_else(|| SINGLE_NODE_ID.to_string()),
         })
     }
-    // __APPEND_SNAP__
-}
 
-impl KiroCacheSnapshotStore {
     fn node_key(&self, node_id: &str) -> String {
         format!("{}:kiro:cachesnap:node:{node_id}", self.key_prefix)
     }
@@ -292,7 +289,6 @@ mod tests {
             )));
         PromptProjection::from_conversation_state(&state)
     }
-    // __APPEND_SNAP_TEST__
 
     #[tokio::test]
     #[ignore = "requires a local Valkey/Redis reachable via LLM_ACCESS_TEST_VALKEY_URL"]
