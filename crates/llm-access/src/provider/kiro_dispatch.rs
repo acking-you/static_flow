@@ -18,7 +18,8 @@ use llm_access_core::store::{AuthenticatedKey, ProviderKiroRoute, ProviderRouteS
 use llm_access_kiro::{
     anthropic::{
         converter::{
-            convert_normalized_request_with_resolved_session, normalize_request, SessionIdSource,
+            convert_normalized_request_with_resolved_session, normalize_request, ConversionResult,
+            ResponseModelIdentity, SessionIdSource,
         },
         protected_content::validate_protected_content,
         stream::anthropic_usage_json,
@@ -79,6 +80,15 @@ use super::{
 use crate::kiro_refresh;
 
 const INCONSISTENT_ROUTE_CONFIGURATION_MESSAGE: &str = "Route configuration is inconsistent.";
+
+fn route_private_prompt_safety(
+    route: &ProviderKiroRoute,
+    conversion: &ConversionResult,
+) -> (bool, Option<ResponseModelIdentity>) {
+    let enabled = route.cctest_text_handling_enabled;
+    let response_identity = if enabled { conversion.response_identity.clone() } else { None };
+    (enabled, response_identity)
+}
 
 pub async fn dispatch_kiro_proxy(
     key: AuthenticatedKey,
@@ -825,11 +835,8 @@ pub async fn dispatch_kiro_proxy(
                 affinity_session_id.as_deref(),
                 &route.account_name,
             );
-            let private_prompt_safety_enabled = route.cctest_text_handling_enabled;
-            let response_identity = route
-                .cctest_text_handling_enabled
-                .then(|| conversion.response_identity.clone())
-                .flatten();
+            let (private_prompt_safety_enabled, response_identity) =
+                route_private_prompt_safety(&route, &conversion);
             let response_ctx = KiroResponseContext {
                 key,
                 route,
@@ -862,11 +869,8 @@ pub async fn dispatch_kiro_proxy(
                     affinity: Arc::clone(&kiro_session_affinity),
                     session_id,
                 });
-        let private_prompt_safety_enabled = route.cctest_text_handling_enabled;
-        let response_identity = route
-            .cctest_text_handling_enabled
-            .then(|| conversion.response_identity.clone())
-            .flatten();
+        let (private_prompt_safety_enabled, response_identity) =
+            route_private_prompt_safety(&route, &conversion);
         let response_ctx = KiroResponseContext {
             key,
             route,

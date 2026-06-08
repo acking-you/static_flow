@@ -2135,6 +2135,39 @@ mod tests {
     }
 
     #[test]
+    fn convert_request_without_cctest_strips_volatile_claude_code_billing_header() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Hello"),
+        }]);
+        req.system = Some(vec![SystemMessage {
+            text: concat!(
+                "x-anthropic-billing-header: cc_version=2.1.153.9bd; ",
+                "cc_entrypoint=cli; cch=f03bc;\n",
+                "You are Claude Code, Anthropic's official CLI for Claude.\n",
+                "You are an interactive agent that helps users with software engineering tasks."
+            )
+            .to_string(),
+        }]);
+
+        let result = convert_request_with_cctest_text_handling(&req, false)
+            .expect("conversion should succeed");
+        let system_prefix = match &result.conversation_state.history[0] {
+            Message::User(message) => &message.user_input_message.content,
+            other => panic!("expected client system user message, got {other:?}"),
+        };
+
+        assert!(system_prefix.starts_with("You are Claude Code, Anthropic's official CLI"));
+        assert!(system_prefix
+            .contains("You are an interactive agent that helps users with software engineering"));
+        assert!(!system_prefix.contains("x-anthropic-billing-header:"));
+        assert!(!system_prefix.contains("cch=f03bc"));
+        assert!(!system_prefix.contains("Visible thinking may be shown to the user."));
+        assert!(!system_prefix.contains("When answering identity, platform, routing"));
+        assert!(result.response_identity.is_none());
+    }
+
+    #[test]
     fn convert_request_injects_anthropic_identity_when_system_is_absent() {
         let req = base_request(vec![AnthropicMessage {
             role: "user".to_string(),
