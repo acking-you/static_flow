@@ -67,7 +67,31 @@ pub fn cleaned_system_message_text(message: &SystemMessage) -> Option<String> {
 pub fn build_injected_system_content(
     req: &MessagesRequest,
     structured_output_tool_name: Option<&str>,
+    cctest_text_handling_enabled: bool,
 ) -> Option<String> {
+    if !cctest_text_handling_enabled {
+        let mut parts = Vec::new();
+        if let Some(system_content) = req
+            .system
+            .as_ref()
+            .map(|system| {
+                system
+                    .iter()
+                    .filter_map(cleaned_system_message_text)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .filter(|content| !content.is_empty())
+            .map(strip_volatile_claude_code_billing_header)
+        {
+            parts.push(system_content);
+        }
+        if let Some(tool_name) = structured_output_tool_name {
+            parts.push(structured_output_instruction(tool_name));
+        }
+        return (!parts.is_empty()).then(|| parts.join("\n"));
+    }
+
     let identity = effective_response_identity_for_request(req);
     let identity_override = anthropic_identity_override(identity.as_ref());
     let system_content = req

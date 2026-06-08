@@ -119,7 +119,19 @@ pub fn web_search_tool_result_text(
 /// strip orphaned tool_uses, and assemble the final wire payload.
 #[cfg(test)]
 pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, ConversionError> {
-    convert_request_with_validation(req, true)
+    convert_request_with_cctest_text_handling(req, true)
+}
+
+#[cfg(test)]
+pub fn convert_request_with_cctest_text_handling(
+    req: &MessagesRequest,
+    cctest_text_handling_enabled: bool,
+) -> Result<ConversionResult, ConversionError> {
+    convert_request_with_validation_and_cctest_text_handling(
+        req,
+        true,
+        cctest_text_handling_enabled,
+    )
 }
 
 #[cfg(test)]
@@ -127,14 +139,28 @@ pub fn convert_request_with_validation(
     req: &MessagesRequest,
     request_validation_enabled: bool,
 ) -> Result<ConversionResult, ConversionError> {
+    convert_request_with_validation_and_cctest_text_handling(req, request_validation_enabled, true)
+}
+
+#[cfg(test)]
+fn convert_request_with_validation_and_cctest_text_handling(
+    req: &MessagesRequest,
+    request_validation_enabled: bool,
+    cctest_text_handling_enabled: bool,
+) -> Result<ConversionResult, ConversionError> {
     let normalized = normalize_request(req)?;
-    convert_normalized_request_with_validation(normalized, request_validation_enabled)
+    convert_normalized_request_with_validation(
+        normalized,
+        request_validation_enabled,
+        cctest_text_handling_enabled,
+    )
 }
 
 #[cfg(test)]
 pub(crate) fn convert_normalized_request_with_validation(
     normalized: NormalizedRequest,
     request_validation_enabled: bool,
+    cctest_text_handling_enabled: bool,
 ) -> Result<ConversionResult, ConversionError> {
     let resolved_conversation =
         resolve_conversation_id_from_metadata(normalized.request.metadata.as_ref());
@@ -142,6 +168,7 @@ pub(crate) fn convert_normalized_request_with_validation(
         normalized,
         request_validation_enabled,
         resolved_conversation,
+        cctest_text_handling_enabled,
     )
 }
 
@@ -149,6 +176,7 @@ pub fn convert_normalized_request_with_resolved_session(
     normalized: NormalizedRequest,
     request_validation_enabled: bool,
     resolved_conversation: ResolvedConversationId,
+    cctest_text_handling_enabled: bool,
 ) -> Result<ConversionResult, ConversionError> {
     let req = &normalized.request;
     let model_id = map_model(&req.model)
@@ -167,7 +195,9 @@ pub fn convert_normalized_request_with_resolved_session(
         .any(request_message_contains_image);
 
     let mut user_input = merge_current_user_messages(&current_messages, &model_id)?;
-    let response_identity = response_identity_for_current_turn(req, &user_input.content);
+    let response_identity = cctest_text_handling_enabled
+        .then(|| response_identity_for_current_turn(req, &user_input.content))
+        .flatten();
     apply_thinking_prefix_to_current_turn(req, &mut user_input);
     let mut tool_name_map = HashMap::new();
     let mut tools = convert_tools(&req.tools, &mut tool_name_map);
@@ -178,6 +208,7 @@ pub fn convert_normalized_request_with_resolved_session(
         &model_id,
         &mut tool_name_map,
         structured_output_tool_name.as_deref(),
+        cctest_text_handling_enabled,
     )?;
     dedupe_history_and_current_documents(&mut history, &mut user_input)?;
     prune_orphaned_history_tool_results(&mut history);
@@ -307,9 +338,14 @@ fn build_history(
     model_id: &str,
     tool_name_map: &mut HashMap<String, String>,
     structured_output_tool_name: Option<&str>,
+    cctest_text_handling_enabled: bool,
 ) -> Result<Vec<Message>, ConversionError> {
     let mut history = Vec::new();
-    if let Some(system_content) = build_injected_system_content(req, structured_output_tool_name) {
+    if let Some(system_content) = build_injected_system_content(
+        req,
+        structured_output_tool_name,
+        cctest_text_handling_enabled,
+    ) {
         history.push(Message::User(HistoryUserMessage::new(system_content, model_id)));
         history.push(Message::Assistant(HistoryAssistantMessage::new(
             "I will follow these instructions.",

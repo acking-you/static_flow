@@ -332,7 +332,10 @@ mod tests {
         super::types::{
             Message as AnthropicMessage, Metadata, SystemMessage, Tool as AnthropicTool,
         },
-        convert::{convert_request, convert_request_with_validation},
+        convert::{
+            convert_request, convert_request_with_cctest_text_handling,
+            convert_request_with_validation,
+        },
         document::generate_document_name,
         schema::permissive_object_schema,
         session::is_valid_uuid,
@@ -2056,6 +2059,79 @@ mod tests {
             "I am Claude Opus 4.8, developed by Anthropic. Model ID: claude-opus-4-8."
         );
         assert!(!response.starts_with('{'));
+    }
+
+    #[test]
+    fn convert_request_without_cctest_does_not_inject_identity_for_probe() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Who are you?"),
+        }]);
+        req.model = "claude-opus-4-8".to_string();
+
+        let result = convert_request_with_cctest_text_handling(&req, false)
+            .expect("conversion should succeed");
+
+        assert!(result.response_identity.is_none());
+        assert!(result.conversation_state.history.is_empty());
+        assert_eq!(
+            result
+                .conversation_state
+                .current_message
+                .user_input_message
+                .content,
+            "Who are you?"
+        );
+    }
+
+    #[test]
+    fn convert_request_without_cctest_keeps_client_system_without_safety_additions() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Hello"),
+        }]);
+        req.system = Some(vec![SystemMessage {
+            text: "Answer concisely.".to_string(),
+        }]);
+
+        let result = convert_request_with_cctest_text_handling(&req, false)
+            .expect("conversion should succeed");
+        let system_prefix = match &result.conversation_state.history[0] {
+            Message::User(message) => &message.user_input_message.content,
+            other => panic!("expected client system user message, got {other:?}"),
+        };
+
+        assert_eq!(system_prefix, "Answer concisely.");
+        assert!(!system_prefix.contains("Visible thinking may be shown to the user."));
+        assert!(!system_prefix.contains("When answering identity, platform, routing"));
+        assert!(!system_prefix.contains("<identity_override>"));
+        assert!(!system_prefix.contains("You are Claude, made by Anthropic."));
+    }
+
+    #[test]
+    fn convert_request_without_cctest_does_not_normalize_client_model_identity() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Hello"),
+        }]);
+        req.model = "claude-opus-4-8".to_string();
+        req.system = Some(cctest_claude_code_system());
+
+        let result = convert_request_with_cctest_text_handling(&req, false)
+            .expect("conversion should succeed");
+        let system_prefix = match &result.conversation_state.history[0] {
+            Message::User(message) => &message.user_input_message.content,
+            other => panic!("expected client system user message, got {other:?}"),
+        };
+
+        assert!(system_prefix.contains("You are Claude Code, Anthropic's official CLI"));
+        assert!(system_prefix.contains(
+            "You are powered by the model named Sonnet 4.6. The exact model ID is \
+             claude-sonnet-4-6."
+        ));
+        assert!(!system_prefix.contains("Opus 4.8"));
+        assert!(!system_prefix.contains("<identity_override>"));
+        assert!(result.response_identity.is_none());
     }
 
     #[test]

@@ -411,6 +411,7 @@ pub async fn dispatch_kiro_proxy(
         normalized,
         routes[0].request_validation_enabled,
         resolved_session,
+        routes[0].cctest_text_handling_enabled,
     ) {
         Ok(conversion) => conversion,
         Err(err) => {
@@ -819,6 +820,7 @@ pub async fn dispatch_kiro_proxy(
                 affinity_session_id.as_deref(),
                 &route.account_name,
             );
+            let private_prompt_safety_enabled = route.cctest_text_handling_enabled;
             let response_ctx = KiroResponseContext {
                 key,
                 route,
@@ -831,6 +833,7 @@ pub async fn dispatch_kiro_proxy(
                 tool_name_map: conversion.tool_name_map.clone(),
                 structured_output_tool_name: conversion.structured_output_tool_name.clone(),
                 response_identity: conversion.response_identity.clone(),
+                private_prompt_safety_enabled,
                 cache_ctx,
                 control_store,
                 kiro_cache_simulator,
@@ -850,6 +853,7 @@ pub async fn dispatch_kiro_proxy(
                     affinity: Arc::clone(&kiro_session_affinity),
                     session_id,
                 });
+        let private_prompt_safety_enabled = route.cctest_text_handling_enabled;
         let response_ctx = KiroResponseContext {
             key,
             route,
@@ -862,6 +866,7 @@ pub async fn dispatch_kiro_proxy(
             tool_name_map: conversion.tool_name_map.clone(),
             structured_output_tool_name: conversion.structured_output_tool_name.clone(),
             response_identity: conversion.response_identity.clone(),
+            private_prompt_safety_enabled,
             cache_ctx,
             control_store,
             kiro_cache_simulator,

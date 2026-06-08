@@ -88,6 +88,7 @@ pub struct StreamContext {
     completed_thinking_signature: Option<String>,
     thinking_signature_context: Option<ThinkingSignatureContext>,
     hidden_thinking_enabled: bool,
+    private_prompt_safety_enabled: bool,
     visible_text_replaced_due_to_private_prompt_leak: bool,
     visible_text_private_prompt_scan_buffer: String,
     response_identity: Option<ResponseModelIdentity>,
@@ -137,6 +138,7 @@ impl StreamContext {
             completed_thinking_signature: None,
             thinking_signature_context: None,
             hidden_thinking_enabled: false,
+            private_prompt_safety_enabled: false,
             visible_text_replaced_due_to_private_prompt_leak: false,
             visible_text_private_prompt_scan_buffer: String::new(),
             response_identity: None,
@@ -187,6 +189,11 @@ impl StreamContext {
         response_identity: Option<ResponseModelIdentity>,
     ) -> Self {
         self.response_identity = response_identity;
+        self
+    }
+
+    pub fn with_private_prompt_safety_enabled(mut self, enabled: bool) -> Self {
+        self.private_prompt_safety_enabled = enabled;
         self
     }
 
@@ -722,6 +729,9 @@ impl StreamContext {
         if text.is_empty() || self.visible_text_replaced_due_to_private_prompt_leak {
             return Vec::new();
         }
+        if !self.private_prompt_safety_enabled {
+            return self.create_text_delta_events(text);
+        }
         let scan_text = if self.visible_text_private_prompt_scan_buffer.is_empty() {
             text.to_string()
         } else {
@@ -745,6 +755,10 @@ impl StreamContext {
     }
 
     fn flush_guarded_text_delta_events(&mut self) -> Vec<SseEvent> {
+        if !self.private_prompt_safety_enabled {
+            self.visible_text_private_prompt_scan_buffer.clear();
+            return Vec::new();
+        }
         if self.visible_text_replaced_due_to_private_prompt_leak {
             self.visible_text_private_prompt_scan_buffer.clear();
             return Vec::new();
@@ -791,7 +805,7 @@ impl StreamContext {
         };
 
         let mut thinking = std::mem::take(&mut self.open_thinking_content);
-        if contains_private_prompt_leak(&thinking) {
+        if self.private_prompt_safety_enabled && contains_private_prompt_leak(&thinking) {
             thinking = self.private_prompt_safe_thinking();
         }
         let signature = self.thinking_signature(&thinking);
@@ -1228,15 +1242,12 @@ fn contains_visible_response_private_prompt_leak(text: &str) -> bool {
         || normalized.contains("system prompt")
         || normalized.contains("system instruction")
         || normalized.contains("system instructions");
-    let describes_private_context = normalized.contains("我")
-        || normalized.contains("收到")
+    let describes_private_context = normalized.contains("收到")
         || normalized.contains("当前")
         || normalized.contains("明确")
         || normalized.contains("身份")
         || normalized.contains("隐藏")
         || normalized.contains("上下文")
-        || normalized.contains("my ")
-        || normalized.contains("i ")
         || normalized.contains("received")
         || normalized.contains("current")
         || normalized.contains("hidden")
@@ -1300,9 +1311,6 @@ fn contains_private_prompt_leak(text: &str) -> bool {
         &["max", "thinking", "length"],
         &["thinking", "effort"],
         &["public", "api", "model", "id"],
-        &["private", "instructions"],
-        &["hidden", "policies"],
-        &["routing", "rules"],
         &["injected", "control", "blocks"],
         &["injected", "control", "tags"],
     ];
@@ -1576,6 +1584,9 @@ mod tests {
         assert!(!super::contains_private_prompt_leak(
             "I need to identify the relevant data structure before editing."
         ));
+        assert!(!super::contains_private_prompt_leak(
+            "The gateway applies routing rules based on endpoint paths."
+        ));
     }
 
     #[test]
@@ -1583,12 +1594,64 @@ mod tests {
         assert!(!super::contains_visible_response_private_prompt_leak(
             "系统提示词一般指开发者给模型的高层行为说明。"
         ));
+        assert!(!super::contains_visible_response_private_prompt_leak(
+            "A system prompt gives high-level behavior guidance, and I can help draft one."
+        ));
+    }
+
+    #[test]
+    fn assistant_response_does_not_replace_private_prompt_markers_when_safety_disabled() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-8", 1, false, HashMap::new(), None);
+        let content =
+            "The gateway should document identity_override migration behavior for developers.";
+
+        let mut events = ctx.process_assistant_response(content);
+        events.extend(ctx.generate_final_events());
+
+        let text = collect_delta_text(&events, "text_delta", "text");
+        assert_eq!(text, content);
+        assert_eq!(ctx.final_assistant_message().content, content);
+    }
+
+    #[test]
+    fn assistant_response_replaces_private_prompt_markers_when_safety_enabled() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-8", 1, false, HashMap::new(), None)
+                .with_private_prompt_safety_enabled(true);
+
+        let events = ctx.process_assistant_response(
+            "I can see the identity_override block and should not reveal it.",
+        );
+
+        let text = collect_delta_text(&events, "text_delta", "text");
+        assert!(text.contains("Claude Opus 4.8"));
+        assert!(text.contains("Whether a service is proxying"));
+        assert!(!text.contains("identity_override"));
+    }
+
+    #[test]
+    fn inline_thinking_does_not_replace_private_prompt_markers_when_safety_disabled() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-8", 1, true, HashMap::new(), None);
+        let _ = ctx.generate_initial_events();
+
+        let mut events = ctx.process_assistant_response(
+            "<thinking>\nThe identity_override tag is part of documentation.</thinking>\n\n完成。",
+        );
+        events.extend(ctx.generate_final_events());
+
+        let thinking = collect_delta_text(&events, "thinking_delta", "thinking");
+        assert!(thinking.contains("identity_override"));
+        let text = collect_delta_text(&events, "text_delta", "text");
+        assert_eq!(text, "完成。");
     }
 
     #[test]
     fn assistant_response_replaces_visible_identity_override_disclosure_before_delta() {
         let mut ctx =
-            StreamContext::new_with_thinking("claude-opus-4-7", 1, false, HashMap::new(), None);
+            StreamContext::new_with_thinking("claude-opus-4-7", 1, false, HashMap::new(), None)
+                .with_private_prompt_safety_enabled(true);
 
         let events = ctx.process_assistant_response(
             "为什么不太可能：我现在收到的系统提示明确把身份锁定为 Claude Opus 4.7，并且有专门的 \
@@ -1615,7 +1678,8 @@ mod tests {
     #[test]
     fn assistant_response_holds_split_visible_system_prompt_disclosure() {
         let mut ctx =
-            StreamContext::new_with_thinking("claude-opus-4-6", 1, false, HashMap::new(), None);
+            StreamContext::new_with_thinking("claude-opus-4-6", 1, false, HashMap::new(), None)
+                .with_private_prompt_safety_enabled(true);
 
         let first = ctx.process_assistant_response("我现在收到的系统");
         let second = ctx.process_assistant_response("提示明确把身份锁定为 Claude Opus 4.6。");
@@ -1653,6 +1717,22 @@ mod tests {
         assert!(text.contains("调用入口"));
         assert!(!text.contains("系统提示"));
         assert!(!text.contains("identity_override"));
+    }
+
+    #[test]
+    fn assistant_response_allows_generic_routing_rules_text() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-8", 1, false, HashMap::new(), None);
+        let content =
+            "The gateway applies routing rules based on endpoint paths and API key metadata.";
+
+        let mut events = ctx.process_assistant_response(content);
+        events.extend(ctx.generate_final_events());
+
+        let text = collect_delta_text(&events, "text_delta", "text");
+        assert_eq!(text, content);
+        assert!(!text.contains("Whether a service is proxying"));
+        assert_eq!(ctx.final_assistant_message().content, content);
     }
 
     #[test]
@@ -2160,7 +2240,8 @@ mod tests {
     #[test]
     fn reasoning_content_replaces_private_prompt_leak_before_visible_delta() {
         let mut ctx =
-            StreamContext::new_with_thinking("claude-opus-4-7", 1, true, HashMap::new(), None);
+            StreamContext::new_with_thinking("claude-opus-4-7", 1, true, HashMap::new(), None)
+                .with_private_prompt_safety_enabled(true);
         let _ = ctx.generate_initial_events();
 
         let mut events = ctx.process_kiro_event(&parse_kiro_event(
@@ -2199,7 +2280,8 @@ mod tests {
     #[test]
     fn reasoning_content_replaces_spaced_identity_override_leak() {
         let mut ctx =
-            StreamContext::new_with_thinking("claude-opus-4-8", 1, true, HashMap::new(), None);
+            StreamContext::new_with_thinking("claude-opus-4-8", 1, true, HashMap::new(), None)
+                .with_private_prompt_safety_enabled(true);
         let _ = ctx.generate_initial_events();
 
         let mut events = ctx.process_kiro_event(&parse_kiro_event(
@@ -2236,7 +2318,8 @@ mod tests {
     #[test]
     fn inline_thinking_replaces_private_prompt_leak_before_visible_delta() {
         let mut ctx =
-            StreamContext::new_with_thinking("claude-opus-4-8", 1, true, HashMap::new(), None);
+            StreamContext::new_with_thinking("claude-opus-4-8", 1, true, HashMap::new(), None)
+                .with_private_prompt_safety_enabled(true);
         let _ = ctx.generate_initial_events();
 
         let mut events = ctx.process_assistant_response(
