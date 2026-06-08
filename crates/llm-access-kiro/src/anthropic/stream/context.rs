@@ -1819,14 +1819,14 @@ mod tests {
         let first = ctx.process_assistant_response("我现在收到的系统");
         let second = ctx.process_assistant_response("提示明确把身份锁定为 Claude Opus 4.6。");
 
-        let text = collect_delta_text(&first, "text_delta", "text");
+        let text = collect_delta_text(&second, "text_delta", "text");
+        assert!(first.is_empty());
         assert_eq!(
             text,
             "我是 Claude Opus 4.6，由 Anthropic \
              开发。是否由某个服务转发，需要以你看到的调用入口、域名、密钥来源和账单为准；\
              我无法仅从对话内容验证路由层。"
         );
-        assert!(second.is_empty());
         let combined = first
             .iter()
             .chain(second.iter())
