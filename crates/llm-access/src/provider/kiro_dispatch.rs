@@ -826,6 +826,10 @@ pub async fn dispatch_kiro_proxy(
                 &route.account_name,
             );
             let private_prompt_safety_enabled = route.cctest_text_handling_enabled;
+            let response_identity = route
+                .cctest_text_handling_enabled
+                .then(|| conversion.response_identity.clone())
+                .flatten();
             let response_ctx = KiroResponseContext {
                 key,
                 route,
@@ -837,7 +841,7 @@ pub async fn dispatch_kiro_proxy(
                 protected_thinking_signature_secret: protected_thinking_signature_secret.clone(),
                 tool_name_map: conversion.tool_name_map.clone(),
                 structured_output_tool_name: conversion.structured_output_tool_name.clone(),
-                response_identity: conversion.response_identity.clone(),
+                response_identity,
                 private_prompt_safety_enabled,
                 cache_ctx,
                 control_store,
@@ -859,6 +863,10 @@ pub async fn dispatch_kiro_proxy(
                     session_id,
                 });
         let private_prompt_safety_enabled = route.cctest_text_handling_enabled;
+        let response_identity = route
+            .cctest_text_handling_enabled
+            .then(|| conversion.response_identity.clone())
+            .flatten();
         let response_ctx = KiroResponseContext {
             key,
             route,
@@ -870,7 +878,7 @@ pub async fn dispatch_kiro_proxy(
             protected_thinking_signature_secret,
             tool_name_map: conversion.tool_name_map.clone(),
             structured_output_tool_name: conversion.structured_output_tool_name.clone(),
-            response_identity: conversion.response_identity.clone(),
+            response_identity,
             private_prompt_safety_enabled,
             cache_ctx,
             control_store,

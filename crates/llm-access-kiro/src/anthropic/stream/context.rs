@@ -252,7 +252,9 @@ impl StreamContext {
     }
 
     fn identity_response_enabled(&self) -> bool {
-        self.response_identity.is_some() && !self.structured_output_mode()
+        self.private_prompt_safety_enabled
+            && self.response_identity.is_some()
+            && !self.structured_output_mode()
     }
 
     fn apply_identity_response(&mut self) {
@@ -1203,77 +1205,23 @@ fn safe_thinking_model_name(model: &str) -> &'static str {
 }
 
 fn contains_visible_response_private_prompt_leak(text: &str) -> bool {
-    if contains_private_prompt_leak(text) {
-        return true;
-    }
-    let normalized = normalize_private_prompt_marker_text(text);
-
-    const NORMALIZED_FRAGMENTS: &[&str] = &[
-        "identity override",
-        "system reminder",
-        "system-reminder",
-        "claude.md",
-        "/.claude/claude.md",
-        "superpowers skills",
-        "taskcreate",
-        "系统提示明确",
-        "收到的系统提示",
-        "收到的系统",
-        "真正的系统身份",
-        "上下文注入",
-        "外部内容",
-        "身份锁定",
-        "永不声称是 kiro",
-        "永不声称是 warp",
-        "不要声称是 kiro",
-        "不要声称是 warp",
-        "不声称是 kiro",
-        "不声称是 warp",
-        "专门的 <identity_override> 段落",
-    ];
-    if NORMALIZED_FRAGMENTS
-        .iter()
-        .any(|fragment| normalized.contains(fragment))
-    {
-        return true;
-    }
-
-    let mentions_system_prompt = normalized.contains("系统提示")
-        || normalized.contains("system prompt")
-        || normalized.contains("system instruction")
-        || normalized.contains("system instructions");
-    let describes_private_context = normalized.contains("收到")
-        || normalized.contains("当前")
-        || normalized.contains("明确")
-        || normalized.contains("身份")
-        || normalized.contains("隐藏")
-        || normalized.contains("上下文")
-        || normalized.contains("received")
-        || normalized.contains("current")
-        || normalized.contains("hidden")
-        || normalized.contains("identity")
-        || normalized.contains("runtime");
-    mentions_system_prompt && describes_private_context
+    contains_private_prompt_leak(text)
 }
 
 fn should_hold_visible_text_for_private_prompt_scan(text: &str) -> bool {
     let normalized = normalize_private_prompt_marker_text(text);
     const SUSPICIOUS_PARTIALS: &[&str] = &[
         "<identity",
-        "identity",
+        "identity_override",
         "system prompt",
         "system instruction",
-        "system reminder",
-        "system-reminder",
-        "claude.md",
-        "superpowers",
-        "taskcreate",
+        "private instructions",
+        "hidden policies",
+        "routing rules",
         "系统提示",
-        "收到的系统",
+        "我现在收到的系统",
+        "收到的系统提示",
         "身份锁定",
-        "真正的系统",
-        "上下文注入",
-        "隐藏",
         "永不",
         "不要声称",
         "不声称",
@@ -1320,24 +1268,9 @@ fn contains_private_prompt_leak(text: &str) -> bool {
     {
         return true;
     }
-    if contains_ascii_word_sequence(text, &["my", "system", "prompt"])
-        || contains_ascii_word_sequence(text, &["current", "system", "prompt"])
-        || contains_ascii_word_sequence(text, &["system", "prompt", "says"])
-        || contains_ascii_word_sequence(text, &["system", "prompt", "tells", "me"])
-    {
-        return true;
-    }
-    let mentions_private_instructions =
-        contains_ascii_word_sequence(text, &["private", "instructions"]);
-    let mentions_hidden_policies = contains_ascii_word_sequence(text, &["hidden", "policies"]);
-    let has_instruction_disclosure_context = contains_ascii_word_sequence(text, &["i", "received"])
-        || contains_ascii_word_sequence(text, &["received", "private", "instructions"])
-        || contains_ascii_word_sequence(text, &["should", "not", "reveal"])
-        || contains_ascii_word_sequence(text, &["must", "not", "reveal"])
-        || contains_ascii_word_sequence(text, &["says", "to"])
-        || contains_ascii_word_sequence(text, &["tells", "me"]);
-    if (mentions_private_instructions || mentions_hidden_policies)
-        && has_instruction_disclosure_context
+    if contains_explicit_system_prompt_disclosure(text, &normalized)
+        || contains_contextual_private_instruction_disclosure(text, &normalized)
+        || contains_contextual_internal_doc_disclosure(text, &normalized)
     {
         return true;
     }
@@ -1361,6 +1294,96 @@ fn contains_private_prompt_leak(text: &str) -> bool {
     NORMALIZED_FRAGMENTS
         .iter()
         .any(|fragment| normalized.contains(fragment))
+}
+
+fn contains_explicit_system_prompt_disclosure(text: &str, normalized: &str) -> bool {
+    const ASCII_DISCLOSURE_SEQUENCES: &[&[&str]] = &[
+        &["my", "system", "prompt", "says"],
+        &["my", "system", "prompt", "tells", "me"],
+        &["my", "system", "prompt", "asks", "me", "to"],
+        &["my", "system", "prompt", "requires", "me", "to"],
+        &["system", "prompt", "tells", "me"],
+        &["system", "prompt", "asks", "me", "to"],
+        &["system", "prompt", "requires", "me", "to"],
+    ];
+    if ASCII_DISCLOSURE_SEQUENCES
+        .iter()
+        .any(|sequence| contains_ascii_word_sequence(text, sequence))
+    {
+        return true;
+    }
+
+    let mentions_cjk_system_prompt =
+        ["我现在收到的系统提示", "我收到的系统提示", "我的系统提示", "收到的系统提示"]
+            .iter()
+            .any(|fragment| normalized.contains(fragment));
+    let has_cjk_disclosure_context = [
+        "要求",
+        "告诉我",
+        "让我",
+        "明确",
+        "锁定",
+        "永不声称",
+        "不要声称",
+        "不声称",
+        "不能透露",
+        "不要透露",
+        "不该透露",
+    ]
+    .iter()
+    .any(|fragment| normalized.contains(fragment));
+    mentions_cjk_system_prompt && has_cjk_disclosure_context
+}
+
+fn contains_contextual_private_instruction_disclosure(text: &str, normalized: &str) -> bool {
+    let mentions_internal_policy = contains_ascii_word_sequence(text, &["private", "instructions"])
+        || contains_ascii_word_sequence(text, &["hidden", "policies"])
+        || contains_ascii_word_sequence(text, &["routing", "rules"])
+        || normalized.contains("私有指令")
+        || normalized.contains("隐藏策略")
+        || normalized.contains("路由规则");
+    if !mentions_internal_policy {
+        return false;
+    }
+
+    let has_disclosure_context = [
+        &["i", "received"][..],
+        &["i", "was", "given"],
+        &["received", "private", "instructions"],
+        &["should", "not", "reveal"],
+        &["must", "not", "reveal"],
+        &["tells", "me"],
+        &["asks", "me", "to"],
+        &["requires", "me", "to"],
+        &["instructs", "me", "to"],
+    ]
+    .iter()
+    .any(|sequence| contains_ascii_word_sequence(text, sequence));
+    let has_cjk_disclosure_context =
+        ["我收到", "不要透露", "不能透露", "不该透露", "不应透露", "告诉我", "要求"]
+            .iter()
+            .any(|fragment| normalized.contains(fragment));
+    has_disclosure_context || has_cjk_disclosure_context
+}
+
+fn contains_contextual_internal_doc_disclosure(text: &str, normalized: &str) -> bool {
+    let mentions_internal_doc = normalized.contains("claude.md")
+        || normalized.contains("/.claude/claude.md")
+        || normalized.contains("superpowers skills")
+        || normalized.contains("taskcreate");
+    if !mentions_internal_doc {
+        return false;
+    }
+
+    [&["i", "can", "see"][..], &["i", "received"], &["private", "instructions"], &[
+        "hidden",
+        "instructions",
+    ]]
+    .iter()
+    .any(|sequence| contains_ascii_word_sequence(text, sequence))
+        || ["我收到", "隐藏指令", "私有指令"]
+            .iter()
+            .any(|fragment| normalized.contains(fragment))
 }
 
 fn normalize_private_prompt_marker_text(text: &str) -> String {
@@ -1609,6 +1632,9 @@ mod tests {
             "The user asks about system prompts, so I will give a high-level answer."
         ));
         assert!(!super::contains_private_prompt_leak(
+            "In this tutorial, the current system prompt says to answer briefly."
+        ));
+        assert!(!super::contains_private_prompt_leak(
             "I need to identify the relevant data structure before editing."
         ));
         assert!(!super::contains_private_prompt_leak(
@@ -1623,6 +1649,16 @@ mod tests {
         ));
         assert!(!super::contains_visible_response_private_prompt_leak(
             "A system prompt gives high-level behavior guidance, and I can help draft one."
+        ));
+        assert!(!super::contains_visible_response_private_prompt_leak(
+            "The current system prompt for this tutorial can describe model identity at a high \
+             level."
+        ));
+        assert!(!super::contains_visible_response_private_prompt_leak(
+            "Please document how CLAUDE.md, TaskCreate, and Superpowers skills work in this repo."
+        ));
+        assert!(!super::contains_visible_response_private_prompt_leak(
+            "CLAUDE.md explains how system prompts work during local development."
         ));
     }
 
@@ -1687,6 +1723,63 @@ mod tests {
         assert!(thinking.contains("identity_override"));
         let text = collect_delta_text(&events, "text_delta", "text");
         assert_eq!(text, "完成。");
+    }
+
+    #[test]
+    fn reasoning_content_does_not_replace_private_prompt_markers_when_safety_disabled() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-7", 1, true, HashMap::new(), None);
+        let _ = ctx.generate_initial_events();
+
+        let mut events = ctx.process_kiro_event(&parse_kiro_event(
+            "reasoningContentEvent",
+            json!({"text":"I can see the identity_override block and should not reveal it."}),
+        ));
+        events.extend(ctx.process_kiro_event(&parse_kiro_event(
+            "reasoningContentEvent",
+            json!({"signature":"upstream-signature-disabled"}),
+        )));
+        events.extend(ctx.process_kiro_event(&parse_kiro_event(
+            "assistantResponseEvent",
+            json!({"content":"Visible answer"}),
+        )));
+        events.extend(ctx.generate_final_events());
+
+        let thinking = collect_delta_text(&events, "thinking_delta", "thinking");
+        assert!(thinking.contains("identity_override"));
+        assert_eq!(ctx.final_assistant_message().content, "Visible answer");
+    }
+
+    #[test]
+    fn assistant_response_keeps_repo_doc_terms_when_safety_enabled() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-8", 1, false, HashMap::new(), None)
+                .with_private_prompt_safety_enabled(true);
+        let content =
+            "Please document how CLAUDE.md, TaskCreate, and Superpowers skills work in this repo.";
+
+        let mut events = ctx.process_assistant_response(content);
+        events.extend(ctx.generate_final_events());
+
+        let text = collect_delta_text(&events, "text_delta", "text");
+        assert_eq!(text, content);
+        assert_eq!(ctx.final_assistant_message().content, content);
+    }
+
+    #[test]
+    fn assistant_response_keeps_generic_current_system_prompt_discussion_when_safety_enabled() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-8", 1, false, HashMap::new(), None)
+                .with_private_prompt_safety_enabled(true);
+        let content = "The current system prompt for this tutorial can describe model identity at \
+                       a high level.";
+
+        let mut events = ctx.process_assistant_response(content);
+        events.extend(ctx.generate_final_events());
+
+        let text = collect_delta_text(&events, "text_delta", "text");
+        assert_eq!(text, content);
+        assert_eq!(ctx.final_assistant_message().content, content);
     }
 
     #[test]
@@ -2000,7 +2093,8 @@ mod tests {
                 thinking_language: ResponseIdentityLanguage::Chinese,
                 repo_name_hint: None,
             },
-        );
+        )
+        .with_private_prompt_safety_enabled(true);
 
         let initial = ctx.generate_initial_events();
         assert!(initial
@@ -2035,7 +2129,8 @@ mod tests {
                 thinking_language: ResponseIdentityLanguage::English,
                 repo_name_hint: None,
             },
-        );
+        )
+        .with_private_prompt_safety_enabled(true);
 
         let _ = ctx.generate_initial_events();
         let deltas = ctx.process_assistant_response("I am Kiro.");
@@ -2066,7 +2161,8 @@ mod tests {
                 thinking_language: ResponseIdentityLanguage::Chinese,
                 repo_name_hint: None,
             },
-        );
+        )
+        .with_private_prompt_safety_enabled(true);
         let _ = ctx.generate_initial_events();
 
         let deltas = ctx.process_assistant_response("我是 Kiro。");
@@ -2120,7 +2216,8 @@ mod tests {
                     thinking_language: ResponseIdentityLanguage::Chinese,
                     repo_name_hint: None,
                 },
-            );
+            )
+            .with_private_prompt_safety_enabled(true);
             let _ = ctx.generate_initial_events();
 
             let mut events = ctx.process_kiro_event(&parse_kiro_event(
@@ -2180,6 +2277,34 @@ mod tests {
                 .unwrap_or("")
                 .contains(model_name));
         }
+    }
+
+    #[test]
+    fn identity_probe_does_not_rewrite_when_private_prompt_safety_is_disabled() {
+        let mut ctx = StreamContext::new_with_identity(
+            "claude-opus-4-8",
+            1,
+            false,
+            HashMap::new(),
+            None,
+            ResponseModelIdentity {
+                model_name: "Claude Opus 4.8".to_string(),
+                model_short_name: "Opus 4.8".to_string(),
+                model_id: "claude-opus-4-8".to_string(),
+                kind: ResponseIdentityKind::ModelOnly,
+                platform: ResponseIdentityPlatform::ClaudeCode,
+                thinking_language: ResponseIdentityLanguage::English,
+                repo_name_hint: None,
+            },
+        );
+        let _ = ctx.generate_initial_events();
+
+        let mut events = ctx.process_assistant_response("I am Kiro.");
+        events.extend(ctx.generate_final_events());
+
+        let text = collect_delta_text(&events, "text_delta", "text");
+        assert_eq!(text, "I am Kiro.");
+        assert_eq!(ctx.final_assistant_message().content, "I am Kiro.");
     }
 
     #[test]
