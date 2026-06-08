@@ -887,9 +887,7 @@ pub async fn dispatch_kiro_proxy(
 }
 
 fn inconsistent_cctest_text_handling_response(routes: &[ProviderKiroRoute]) -> Option<Response> {
-    let Some(first) = routes.first() else {
-        return None;
-    };
+    let first = routes.first()?;
     if routes
         .iter()
         .skip(1)
