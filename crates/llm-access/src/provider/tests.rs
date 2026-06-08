@@ -7359,6 +7359,49 @@ async fn kiro_dispatch_fails_over_after_empty_stream_retries_exhausted() {
 }
 
 #[tokio::test]
+async fn kiro_dispatch_rejects_mixed_cctest_route_candidates() {
+    let mut first = kiro_route_for_account("kiro-a", "kiro-a-token");
+    first.cctest_text_handling_enabled = false;
+    let mut second = kiro_route_for_account("kiro-b", "kiro-b-token");
+    second.cctest_text_handling_enabled = true;
+
+    let state = super::ProviderState::new(
+        Arc::new(TestStore),
+        Arc::new(StaticMultiKiroRouteStore {
+            codex_route: codex_route_for_account("codex-a", "upstream-token"),
+            kiro_routes: vec![first, second],
+        }),
+    );
+
+    let response = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/api/kiro-gateway/v1/messages")
+            .header("x-api-key", "valid-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                        "model": "claude-opus-4-8",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": false
+                    }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+
+    assert_provider_neutral_json_error(
+        response,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "api_error",
+        "Route configuration is inconsistent.",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn kiro_dispatch_hides_provider_details_when_empty_stream_retries_exhausted() {
     let _guard = crate::KIRO_UPSTREAM_ENV_LOCK
         .lock()

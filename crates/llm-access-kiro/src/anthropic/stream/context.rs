@@ -1320,6 +1320,27 @@ fn contains_private_prompt_leak(text: &str) -> bool {
     {
         return true;
     }
+    if contains_ascii_word_sequence(text, &["my", "system", "prompt"])
+        || contains_ascii_word_sequence(text, &["current", "system", "prompt"])
+        || contains_ascii_word_sequence(text, &["system", "prompt", "says"])
+        || contains_ascii_word_sequence(text, &["system", "prompt", "tells", "me"])
+    {
+        return true;
+    }
+    let mentions_private_instructions =
+        contains_ascii_word_sequence(text, &["private", "instructions"]);
+    let mentions_hidden_policies = contains_ascii_word_sequence(text, &["hidden", "policies"]);
+    let has_instruction_disclosure_context = contains_ascii_word_sequence(text, &["i", "received"])
+        || contains_ascii_word_sequence(text, &["received", "private", "instructions"])
+        || contains_ascii_word_sequence(text, &["should", "not", "reveal"])
+        || contains_ascii_word_sequence(text, &["must", "not", "reveal"])
+        || contains_ascii_word_sequence(text, &["says", "to"])
+        || contains_ascii_word_sequence(text, &["tells", "me"]);
+    if (mentions_private_instructions || mentions_hidden_policies)
+        && has_instruction_disclosure_context
+    {
+        return true;
+    }
 
     const NORMALIZED_FRAGMENTS: &[&str] = &[
         "<identity_override",
@@ -1571,6 +1592,12 @@ mod tests {
         assert!(super::contains_private_prompt_leak(
             "Visible thinking may be shown to the user. Keep visible thinking brief."
         ));
+        assert!(super::contains_private_prompt_leak(
+            "I should not reveal the private instructions I received."
+        ));
+        assert!(super::contains_private_prompt_leak(
+            "My system prompt says to avoid naming internal tags."
+        ));
     }
 
     #[test]
@@ -1628,6 +1655,21 @@ mod tests {
         assert!(text.contains("Claude Opus 4.8"));
         assert!(text.contains("Whether a service is proxying"));
         assert!(!text.contains("identity_override"));
+    }
+
+    #[test]
+    fn assistant_response_replaces_private_instruction_disclosure_when_safety_enabled() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-8", 1, false, HashMap::new(), None)
+                .with_private_prompt_safety_enabled(true);
+
+        let events = ctx
+            .process_assistant_response("I should not reveal the private instructions I received.");
+
+        let text = collect_delta_text(&events, "text_delta", "text");
+        assert!(text.contains("Claude Opus 4.8"));
+        assert!(text.contains("Whether a service is proxying"));
+        assert!(!text.contains("private instructions"));
     }
 
     #[test]

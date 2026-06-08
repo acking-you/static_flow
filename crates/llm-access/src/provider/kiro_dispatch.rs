@@ -78,6 +78,8 @@ use super::{
 };
 use crate::kiro_refresh;
 
+const INCONSISTENT_ROUTE_CONFIGURATION_MESSAGE: &str = "Route configuration is inconsistent.";
+
 pub async fn dispatch_kiro_proxy(
     key: AuthenticatedKey,
     request: Request<Body>,
@@ -145,6 +147,9 @@ pub async fn dispatch_kiro_proxy(
             "invalid_request_error",
             "unsupported method",
         );
+    }
+    if let Err(response) = ensure_uniform_cctest_text_handling(&routes) {
+        return response;
     }
     let request_headers = request.headers().clone();
     let body_read_started = Instant::now();
@@ -880,6 +885,35 @@ pub async fn dispatch_kiro_proxy(
         return non_stream_kiro_response(response, response_ctx).await;
     }
 }
+
+fn ensure_uniform_cctest_text_handling(routes: &[ProviderKiroRoute]) -> Result<(), Response> {
+    let Some(first) = routes.first() else {
+        return Ok(());
+    };
+    if routes
+        .iter()
+        .skip(1)
+        .any(|route| route.cctest_text_handling_enabled != first.cctest_text_handling_enabled)
+    {
+        tracing::error!(
+            accounts = ?routes
+                .iter()
+                .map(|route| (
+                    route.account_name.as_str(),
+                    route.cctest_text_handling_enabled,
+                ))
+                .collect::<Vec<_>>(),
+            "kiro route candidates disagree on cctest text handling"
+        );
+        return Err(kiro_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "api_error",
+            INCONSISTENT_ROUTE_CONFIGURATION_MESSAGE,
+        ));
+    }
+    Ok(())
+}
+
 struct CctestTextProbeDispatch {
     key: AuthenticatedKey,
     route: ProviderKiroRoute,
