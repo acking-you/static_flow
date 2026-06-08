@@ -148,7 +148,7 @@ pub async fn dispatch_kiro_proxy(
             "unsupported method",
         );
     }
-    if let Err(response) = ensure_uniform_cctest_text_handling(&routes) {
+    if let Some(response) = inconsistent_cctest_text_handling_response(&routes) {
         return response;
     }
     let request_headers = request.headers().clone();
@@ -886,9 +886,9 @@ pub async fn dispatch_kiro_proxy(
     }
 }
 
-fn ensure_uniform_cctest_text_handling(routes: &[ProviderKiroRoute]) -> Result<(), Response> {
+fn inconsistent_cctest_text_handling_response(routes: &[ProviderKiroRoute]) -> Option<Response> {
     let Some(first) = routes.first() else {
-        return Ok(());
+        return None;
     };
     if routes
         .iter()
@@ -905,13 +905,13 @@ fn ensure_uniform_cctest_text_handling(routes: &[ProviderKiroRoute]) -> Result<(
                 .collect::<Vec<_>>(),
             "kiro route candidates disagree on cctest text handling"
         );
-        return Err(kiro_json_error(
+        return Some(kiro_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "api_error",
             INCONSISTENT_ROUTE_CONFIGURATION_MESSAGE,
         ));
     }
-    Ok(())
+    None
 }
 
 struct CctestTextProbeDispatch {

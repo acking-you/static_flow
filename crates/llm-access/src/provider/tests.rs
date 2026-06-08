@@ -7396,7 +7396,7 @@ async fn kiro_dispatch_rejects_mixed_cctest_route_candidates() {
         response,
         StatusCode::INTERNAL_SERVER_ERROR,
         "api_error",
-        "Route configuration is inconsistent.",
+        "Internal server error.",
     )
     .await;
 }
