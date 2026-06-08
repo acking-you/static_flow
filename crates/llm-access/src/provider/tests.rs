@@ -6921,9 +6921,9 @@ async fn kiro_dispatch_keeps_thinking_model_tags_on_current_turn_only() {
         .expect("system prefix");
     assert!(!system_prefix.contains("<thinking_effort>xhigh</thinking_effort>"));
     assert!(!system_prefix.contains("claude-opus-4-7-thinking"));
-    assert!(system_prefix.contains(
-        "You are powered by the model named Opus 4.7. The exact model ID is claude-opus-4-7."
-    ));
+    assert!(system_prefix.contains("You are Claude Code, Anthropic's official CLI for Claude."));
+    assert!(!system_prefix.contains("You are powered by the model named Opus 4.7"));
+    assert!(!system_prefix.contains("identity override"));
     let events = store.usage_events.lock().expect("usage events");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].status_code, 200);
