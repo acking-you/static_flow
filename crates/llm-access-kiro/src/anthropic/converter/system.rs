@@ -82,7 +82,6 @@ pub fn build_injected_system_content(
                     .join("\n")
             })
             .filter(|content| !content.is_empty())
-            .map(strip_volatile_claude_code_billing_header)
         {
             parts.push(system_content);
         }
@@ -105,7 +104,6 @@ pub fn build_injected_system_content(
                 .join("\n")
         })
         .filter(|content| !content.is_empty())
-        .map(strip_volatile_claude_code_billing_header)
         .map(|content| normalize_claude_code_model_identity(content, identity.as_ref()))
         .map(|content| {
             [
