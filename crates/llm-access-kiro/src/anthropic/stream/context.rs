@@ -1213,11 +1213,14 @@ fn should_hold_visible_text_for_private_prompt_scan(text: &str) -> bool {
     const SUSPICIOUS_PARTIALS: &[&str] = &[
         "<identity",
         "identity_override",
-        "system prompt",
-        "system instruction",
-        "private instructions",
-        "hidden policies",
-        "routing rules",
+        "my system prompt",
+        "system prompt tells",
+        "system prompt asks",
+        "system prompt requires",
+        "should not reveal",
+        "must not reveal",
+        "i received",
+        "i was given",
         "系统提示",
         "我现在收到的系统",
         "收到的系统提示",
@@ -1375,12 +1378,9 @@ fn contains_contextual_internal_doc_disclosure(text: &str, normalized: &str) -> 
         return false;
     }
 
-    [&["i", "can", "see"][..], &["i", "received"], &["private", "instructions"], &[
-        "hidden",
-        "instructions",
-    ]]
-    .iter()
-    .any(|sequence| contains_ascii_word_sequence(text, sequence))
+    [&["i", "received"][..], &["private", "instructions"], &["hidden", "instructions"]]
+        .iter()
+        .any(|sequence| contains_ascii_word_sequence(text, sequence))
         || ["我收到", "隐藏指令", "私有指令"]
             .iter()
             .any(|fragment| normalized.contains(fragment))
@@ -1660,6 +1660,9 @@ mod tests {
         assert!(!super::contains_visible_response_private_prompt_leak(
             "CLAUDE.md explains how system prompts work during local development."
         ));
+        assert!(!super::contains_visible_response_private_prompt_leak(
+            "I can see CLAUDE.md in this repo."
+        ));
     }
 
     #[test]
@@ -1767,6 +1770,20 @@ mod tests {
     }
 
     #[test]
+    fn assistant_response_keeps_repo_doc_observation_when_safety_enabled() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-8", 1, false, HashMap::new(), None)
+                .with_private_prompt_safety_enabled(true);
+        let content = "I can see CLAUDE.md in this repo.";
+
+        let events = ctx.process_assistant_response(content);
+
+        let text = collect_delta_text(&events, "text_delta", "text");
+        assert_eq!(text, content);
+        assert_eq!(ctx.final_assistant_message().content, content);
+    }
+
+    #[test]
     fn assistant_response_keeps_generic_current_system_prompt_discussion_when_safety_enabled() {
         let mut ctx =
             StreamContext::new_with_thinking("claude-opus-4-8", 1, false, HashMap::new(), None)
@@ -1776,6 +1793,21 @@ mod tests {
 
         let mut events = ctx.process_assistant_response(content);
         events.extend(ctx.generate_final_events());
+
+        let text = collect_delta_text(&events, "text_delta", "text");
+        assert_eq!(text, content);
+        assert_eq!(ctx.final_assistant_message().content, content);
+    }
+
+    #[test]
+    fn assistant_response_streams_generic_system_prompt_explanation_when_safety_enabled() {
+        let mut ctx =
+            StreamContext::new_with_thinking("claude-opus-4-8", 1, false, HashMap::new(), None)
+                .with_private_prompt_safety_enabled(true);
+        let content =
+            "A system prompt gives high-level behavior guidance, and I can help draft one.";
+
+        let events = ctx.process_assistant_response(content);
 
         let text = collect_delta_text(&events, "text_delta", "text");
         assert_eq!(text, content);
