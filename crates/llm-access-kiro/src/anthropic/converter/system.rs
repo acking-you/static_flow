@@ -64,14 +64,8 @@ pub fn cleaned_system_message_text(message: &SystemMessage) -> Option<String> {
     (!content.trim().is_empty()).then_some(content)
 }
 
-pub fn build_injected_system_content(
-    req: &MessagesRequest,
-    structured_output_tool_name: Option<&str>,
-) -> Option<String> {
-    let identity = effective_response_identity_for_request(req);
-    let identity_override = anthropic_identity_override(identity.as_ref());
-    let system_content = req
-        .system
+fn cleaned_client_system_content(req: &MessagesRequest) -> Option<String> {
+    req.system
         .as_ref()
         .map(|system| {
             system
@@ -81,7 +75,27 @@ pub fn build_injected_system_content(
                 .join("\n")
         })
         .filter(|content| !content.is_empty())
-        .map(strip_volatile_claude_code_billing_header)
+}
+
+pub fn build_injected_system_content(
+    req: &MessagesRequest,
+    structured_output_tool_name: Option<&str>,
+    cctest_text_handling_enabled: bool,
+) -> Option<String> {
+    if !cctest_text_handling_enabled {
+        let mut parts = Vec::new();
+        if let Some(system_content) = cleaned_client_system_content(req) {
+            parts.push(system_content);
+        }
+        if let Some(tool_name) = structured_output_tool_name {
+            parts.push(structured_output_instruction(tool_name));
+        }
+        return (!parts.is_empty()).then(|| parts.join("\n"));
+    }
+
+    let identity = effective_response_identity_for_request(req);
+    let identity_override = anthropic_identity_override(identity.as_ref());
+    let system_content = cleaned_client_system_content(req)
         .map(|content| normalize_claude_code_model_identity(content, identity.as_ref()))
         .map(|content| {
             [

@@ -230,6 +230,7 @@ pub fn stream_kiro_upstream_response(
             tool_name_map,
             structured_output_tool_name,
             response_identity,
+            private_prompt_safety_enabled,
             cache_ctx,
             control_store,
             kiro_cache_simulator,
@@ -261,6 +262,7 @@ pub fn stream_kiro_upstream_response(
             )
             .with_context_usage_min_request_tokens(context_usage_min_request_tokens)
             .with_thinking_signature_context(thinking_signature_context)
+            .with_private_prompt_safety_enabled(private_prompt_safety_enabled)
             .with_response_identity(response_identity),
             state: StreamRecordState::Pending,
             record_committed: false,
@@ -455,6 +457,7 @@ pub async fn non_stream_kiro_response(
             .clone()
             .map(|secret| ThinkingSignatureContext::new(ctx.key.key_id.clone(), secret)),
     )
+    .with_private_prompt_safety_enabled(ctx.private_prompt_safety_enabled)
     .with_response_identity(ctx.response_identity.clone());
     for event in &events {
         let _ = stream_ctx.process_kiro_event(event);

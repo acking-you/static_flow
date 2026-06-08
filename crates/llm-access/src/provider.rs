@@ -358,6 +358,7 @@ struct KiroResponseContext {
     tool_name_map: std::collections::HashMap<String, String>,
     structured_output_tool_name: Option<String>,
     response_identity: Option<ResponseModelIdentity>,
+    private_prompt_safety_enabled: bool,
     cache_ctx: KiroCacheContext,
     control_store: Arc<dyn ControlStore>,
     kiro_cache_simulator: Arc<KiroCacheSimulator>,

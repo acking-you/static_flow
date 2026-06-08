@@ -6921,9 +6921,9 @@ async fn kiro_dispatch_keeps_thinking_model_tags_on_current_turn_only() {
         .expect("system prefix");
     assert!(!system_prefix.contains("<thinking_effort>xhigh</thinking_effort>"));
     assert!(!system_prefix.contains("claude-opus-4-7-thinking"));
-    assert!(system_prefix.contains(
-        "You are powered by the model named Opus 4.7. The exact model ID is claude-opus-4-7."
-    ));
+    assert!(system_prefix.contains("You are Claude Code, Anthropic's official CLI for Claude."));
+    assert!(!system_prefix.contains("You are powered by the model named Opus 4.7"));
+    assert!(!system_prefix.contains("identity override"));
     let events = store.usage_events.lock().expect("usage events");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].status_code, 200);
@@ -7356,6 +7356,49 @@ async fn kiro_dispatch_fails_over_after_empty_stream_retries_exhausted() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].status_code, 200);
     assert_eq!(events[0].endpoint, "/v1/messages");
+}
+
+#[tokio::test]
+async fn kiro_dispatch_rejects_mixed_cctest_route_candidates() {
+    let mut first = kiro_route_for_account("kiro-a", "kiro-a-token");
+    first.cctest_text_handling_enabled = false;
+    let mut second = kiro_route_for_account("kiro-b", "kiro-b-token");
+    second.cctest_text_handling_enabled = true;
+
+    let state = super::ProviderState::new(
+        Arc::new(TestStore),
+        Arc::new(StaticMultiKiroRouteStore {
+            codex_route: codex_route_for_account("codex-a", "upstream-token"),
+            kiro_routes: vec![first, second],
+        }),
+    );
+
+    let response = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/api/kiro-gateway/v1/messages")
+            .header("x-api-key", "valid-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                        "model": "claude-opus-4-8",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": false
+                    }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+
+    assert_provider_neutral_json_error(
+        response,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "api_error",
+        "Internal server error.",
+    )
+    .await;
 }
 
 #[tokio::test]

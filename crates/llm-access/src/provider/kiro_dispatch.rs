@@ -18,7 +18,8 @@ use llm_access_core::store::{AuthenticatedKey, ProviderKiroRoute, ProviderRouteS
 use llm_access_kiro::{
     anthropic::{
         converter::{
-            convert_normalized_request_with_resolved_session, normalize_request, SessionIdSource,
+            convert_normalized_request_with_resolved_session, normalize_request, ConversionResult,
+            ResponseModelIdentity, SessionIdSource,
         },
         protected_content::validate_protected_content,
         stream::anthropic_usage_json,
@@ -77,6 +78,17 @@ use super::{
     KIRO_EMPTY_STREAM_MAX_RETRIES, MAX_PROVIDER_PROXY_BODY_BYTES,
 };
 use crate::kiro_refresh;
+
+const INCONSISTENT_ROUTE_CONFIGURATION_MESSAGE: &str = "Route configuration is inconsistent.";
+
+fn route_private_prompt_safety(
+    route: &ProviderKiroRoute,
+    conversion: &ConversionResult,
+) -> (bool, Option<ResponseModelIdentity>) {
+    let enabled = route.cctest_text_handling_enabled;
+    let response_identity = if enabled { conversion.response_identity.clone() } else { None };
+    (enabled, response_identity)
+}
 
 pub async fn dispatch_kiro_proxy(
     key: AuthenticatedKey,
@@ -145,6 +157,9 @@ pub async fn dispatch_kiro_proxy(
             "invalid_request_error",
             "unsupported method",
         );
+    }
+    if let Some(response) = inconsistent_cctest_text_handling_response(&routes) {
+        return response;
     }
     let request_headers = request.headers().clone();
     let body_read_started = Instant::now();
@@ -411,6 +426,7 @@ pub async fn dispatch_kiro_proxy(
         normalized,
         routes[0].request_validation_enabled,
         resolved_session,
+        routes[0].cctest_text_handling_enabled,
     ) {
         Ok(conversion) => conversion,
         Err(err) => {
@@ -819,6 +835,8 @@ pub async fn dispatch_kiro_proxy(
                 affinity_session_id.as_deref(),
                 &route.account_name,
             );
+            let (private_prompt_safety_enabled, response_identity) =
+                route_private_prompt_safety(&route, &conversion);
             let response_ctx = KiroResponseContext {
                 key,
                 route,
@@ -830,7 +848,8 @@ pub async fn dispatch_kiro_proxy(
                 protected_thinking_signature_secret: protected_thinking_signature_secret.clone(),
                 tool_name_map: conversion.tool_name_map.clone(),
                 structured_output_tool_name: conversion.structured_output_tool_name.clone(),
-                response_identity: conversion.response_identity.clone(),
+                response_identity,
+                private_prompt_safety_enabled,
                 cache_ctx,
                 control_store,
                 kiro_cache_simulator,
@@ -850,6 +869,8 @@ pub async fn dispatch_kiro_proxy(
                     affinity: Arc::clone(&kiro_session_affinity),
                     session_id,
                 });
+        let (private_prompt_safety_enabled, response_identity) =
+            route_private_prompt_safety(&route, &conversion);
         let response_ctx = KiroResponseContext {
             key,
             route,
@@ -861,7 +882,8 @@ pub async fn dispatch_kiro_proxy(
             protected_thinking_signature_secret,
             tool_name_map: conversion.tool_name_map.clone(),
             structured_output_tool_name: conversion.structured_output_tool_name.clone(),
-            response_identity: conversion.response_identity.clone(),
+            response_identity,
+            private_prompt_safety_enabled,
             cache_ctx,
             control_store,
             kiro_cache_simulator,
@@ -875,6 +897,33 @@ pub async fn dispatch_kiro_proxy(
         return non_stream_kiro_response(response, response_ctx).await;
     }
 }
+
+fn inconsistent_cctest_text_handling_response(routes: &[ProviderKiroRoute]) -> Option<Response> {
+    let first = routes.first()?;
+    if routes
+        .iter()
+        .skip(1)
+        .any(|route| route.cctest_text_handling_enabled != first.cctest_text_handling_enabled)
+    {
+        tracing::error!(
+            accounts = ?routes
+                .iter()
+                .map(|route| (
+                    route.account_name.as_str(),
+                    route.cctest_text_handling_enabled,
+                ))
+                .collect::<Vec<_>>(),
+            "kiro route candidates disagree on cctest text handling"
+        );
+        return Some(kiro_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "api_error",
+            INCONSISTENT_ROUTE_CONFIGURATION_MESSAGE,
+        ));
+    }
+    None
+}
+
 struct CctestTextProbeDispatch {
     key: AuthenticatedKey,
     route: ProviderKiroRoute,
