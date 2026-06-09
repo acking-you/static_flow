@@ -338,6 +338,10 @@ pub fn selection_ordered_kiro_routes<'a>(
     now_ms: i64,
     session_counts: Option<&HashMap<String, usize>>,
 ) -> Vec<&'a ProviderKiroRoute> {
+    if routes.len() <= 1 {
+        return routes.iter().collect();
+    }
+
     #[derive(Clone, Copy)]
     struct Candidate<'a> {
         route: &'a ProviderKiroRoute,

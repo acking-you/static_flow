@@ -793,20 +793,20 @@ mod tests {
                  'active', 'kiro', 'anthropic', TRUE, 1000, 100, 100);
                      INSERT INTO llm_key_route_config (
                         key_id, route_strategy, fixed_account_name, auto_account_names_json,
-                        account_group_id, model_name_map_json, request_max_concurrency,
-                        request_min_start_interval_ms, codex_fast_enabled,
+                        account_group_id, preferred_pool_strategy, model_name_map_json,
+                        request_max_concurrency, request_min_start_interval_ms, codex_fast_enabled,
                         kiro_request_validation_enabled, kiro_cache_estimation_enabled,
                         kiro_zero_cache_debug_enabled, kiro_full_request_logging_enabled,
                         kiro_cache_policy_override_json,
                         kiro_billable_model_multipliers_override_json
                      ) VALUES
-                        ('kiro-key-new', 'auto', NULL, NULL, NULL, NULL, NULL, NULL, TRUE, TRUE, \
-                 TRUE, FALSE, FALSE, NULL, NULL),
-                        ('kiro-key-mid', 'fixed', 'kiro-a', NULL, 'group-beta', NULL, NULL, NULL, \
-                 TRUE, TRUE, TRUE, FALSE, FALSE, NULL, NULL),
+                        ('kiro-key-new', 'auto', NULL, NULL, NULL, 'credit_first', NULL, NULL, \
+                 NULL, TRUE, TRUE, TRUE, FALSE, FALSE, NULL, NULL),
+                        ('kiro-key-mid', 'fixed', 'kiro-a', NULL, 'group-beta', 'balanced', NULL, \
+                 NULL, NULL, TRUE, TRUE, TRUE, FALSE, FALSE, NULL, NULL),
                         ('kiro-key-old', 'auto', NULL, '[\"kiro-a\", \"kiro-d\", \
-                 \"kiro-a\"]'::jsonb, NULL, NULL, NULL, NULL, TRUE, TRUE, TRUE, FALSE, FALSE, \
-                 NULL, NULL);
+                 \"kiro-a\"]'::jsonb, NULL, 'balanced', NULL, NULL, NULL, TRUE, TRUE, TRUE, \
+                 FALSE, FALSE, NULL, NULL);
                      INSERT INTO llm_key_usage_rollups (
                         key_id, input_uncached_tokens, input_cached_tokens, output_tokens,
                         billable_tokens, credit_total, credit_missing_events, last_used_at_ms,
@@ -1538,6 +1538,7 @@ mod tests {
         let newest_summary = first_page.keys[0]
             .kiro_candidate_credit_summary
             .expect("newest key candidate summary");
+        assert_eq!(first_page.keys[0].preferred_pool_strategy, "credit_first");
         assert_eq!(newest_summary.candidate_count, 4);
         assert_eq!(newest_summary.loaded_balance_count, 3);
         assert_eq!(newest_summary.missing_balance_count, 1);

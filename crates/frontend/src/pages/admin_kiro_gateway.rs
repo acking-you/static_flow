@@ -1430,8 +1430,9 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                                 onchange={{
                                     let pool_strategy = pool_strategy.clone();
                                     Callback::from(move |event: Event| {
-                                        let input: HtmlSelectElement = event.target_unchecked_into();
-                                        pool_strategy.set(input.value());
+                                        if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                                            pool_strategy.set(target.value());
+                                        }
                                     })
                                 }}
                             >
@@ -4792,8 +4793,9 @@ pub fn admin_kiro_gateway_page() -> Html {
                                 onchange={{
                                     let manual_pool_strategy = manual_pool_strategy.clone();
                                     Callback::from(move |event: Event| {
-                                        let input: HtmlSelectElement = event.target_unchecked_into();
-                                        manual_pool_strategy.set(input.value());
+                                        if let Some(target) = event.target_dyn_into::<HtmlSelectElement>() {
+                                            manual_pool_strategy.set(target.value());
+                                        }
                                     })
                                 }}
                             >

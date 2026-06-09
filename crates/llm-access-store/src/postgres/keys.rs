@@ -314,7 +314,7 @@ impl PostgresControlRepository {
                         k.protocol_family, k.public_visible, k.quota_billable_limit,
                         k.created_at_ms, k.updated_at_ms,
                         r.route_strategy, r.fixed_account_name, r.auto_account_names_json,
-                        r.account_group_id, r.preferred_pool_strategy, r.model_name_map_json,
+                        r.account_group_id, r.model_name_map_json,
                         r.request_max_concurrency, r.request_min_start_interval_ms,
                         r.codex_fast_enabled, r.kiro_request_validation_enabled,
                         r.kiro_cache_estimation_enabled,
@@ -333,6 +333,7 @@ impl PostgresControlRepository {
                         COALESCE(u.credit_missing_events, 0) AS credit_missing_events,
                         u.last_used_at_ms,
                         COALESCE(u.updated_at_ms, k.updated_at_ms) AS rollup_updated_at_ms,
+                        r.preferred_pool_strategy AS preferred_pool_strategy,
                         g.account_names_json AS group_account_names_json,
                         COALESCE(NULLIF(r.route_strategy, ''), 'auto') AS route_strategy_norm
                     FROM llm_keys k
