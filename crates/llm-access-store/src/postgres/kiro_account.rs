@@ -458,7 +458,16 @@ impl PostgresControlRepository {
                         ),
                         ''
                     ),
-                    last_error
+                    last_error,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'poolStrategy',
+                                auth_json ->> 'pool_strategy'
+                            )
+                        ),
+                        ''
+                    ) AS pool_strategy
                  FROM llm_kiro_accounts
                  WHERE lower(account_name) LIKE $1 || '%'
                  ORDER BY created_at_ms DESC, account_name DESC
@@ -621,7 +630,16 @@ impl PostgresControlRepository {
                         ),
                         ''
                     ),
-                    last_error
+                    last_error,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'poolStrategy',
+                                auth_json ->> 'pool_strategy'
+                            )
+                        ),
+                        ''
+                    ) AS pool_strategy
                  FROM llm_kiro_accounts
                  ORDER BY created_at_ms DESC, account_name DESC
                  LIMIT $1 OFFSET $2"

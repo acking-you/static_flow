@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 #[cfg(not(feature = "mock"))]
 use gloo_net::http::{Request, RequestBuilder};
 use js_sys::Date;
+use llm_access_core::store as llm_store;
 #[cfg(not(feature = "mock"))]
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -6057,7 +6058,7 @@ const fn default_true() -> bool {
 }
 
 fn default_kiro_pool_strategy() -> String {
-    "balanced".to_string()
+    llm_store::default_kiro_pool_strategy()
 }
 
 fn default_kiro_cache_policy_json() -> String {

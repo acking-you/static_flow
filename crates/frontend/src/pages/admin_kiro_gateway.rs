@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use gloo_timers::callback::Timeout;
+use llm_access_core::store as llm_store;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement};
@@ -684,6 +685,7 @@ fn kiro_key_route_summary(
     preferred_pool_strategy: &str,
     account_groups: &[AdminAccountGroupOptionView],
 ) -> String {
+    let preferred_pool_label = kiro_pool_strategy_label(preferred_pool_strategy);
     if route_strategy == "fixed" {
         if account_group_id.is_empty() {
             "固定组：未选择".to_string()
@@ -692,22 +694,34 @@ fn kiro_key_route_summary(
         }
     } else if account_group_id.is_empty() {
         format!(
-            "全账号池自动择优，优先 `{}` 池；若该池当前都不可用，会回退到其他池。",
-            kiro_pool_strategy_label(preferred_pool_strategy)
+            "全账号池自动择优，优先使用标记为 `{preferred_pool_label}` \
+             的账号池；若该池当前都不可用，会回退到其他池。"
         )
     } else {
         format!(
-            "仅在账号组 `{}` 中自动择优，优先 `{}` 池；若优先池当前都不可用，会回退到组内其他池。",
+            "仅在账号组 `{}` 中自动择优，优先使用组内标记为 `{}` \
+             的账号池；若优先池当前都不可用，会回退到组内其他池。",
             kiro_group_name_for_id(account_groups, account_group_id),
-            kiro_pool_strategy_label(preferred_pool_strategy)
+            preferred_pool_label
         )
     }
 }
 
 fn kiro_pool_strategy_label(strategy: &str) -> &'static str {
-    match strategy.trim() {
-        "credit_first" => "剩余额度优先",
-        _ => "亲和 + 动态",
+    match llm_store::normalize_kiro_pool_strategy(strategy) {
+        Some(llm_store::KIRO_POOL_STRATEGY_BALANCED) => "亲和 + 动态",
+        Some(llm_store::KIRO_POOL_STRATEGY_CREDIT_FIRST) => "剩余额度优先",
+        _ => "未知策略",
+    }
+}
+
+fn kiro_pool_strategy_options() -> Html {
+    html! {
+        <>
+            { for llm_store::KIRO_POOL_STRATEGIES.iter().map(|value| html! {
+                <option value={*value}>{ kiro_pool_strategy_label(value) }</option>
+            }) }
+        </>
     }
 }
 
@@ -1436,8 +1450,7 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                                     })
                                 }}
                             >
-                                <option value="balanced">{ "亲和 + 动态" }</option>
-                                <option value="credit_first">{ "剩余额度优先" }</option>
+                                { kiro_pool_strategy_options() }
                             </select>
                         </label>
                         <label class={classes!("text-sm")}>
@@ -1546,6 +1559,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         use_state(|| props.key_item.kiro_full_request_logging_enabled);
     let kiro_remote_media_resolution_enabled =
         use_state(|| props.key_item.kiro_remote_media_resolution_enabled);
+    let kiro_latency_routing_enabled = use_state(|| props.key_item.kiro_latency_routing_enabled);
     let kiro_protected_content_validation_enabled =
         use_state(|| props.key_item.kiro_protected_content_validation_enabled);
     let kiro_cctest_text_handling_enabled =
@@ -1581,6 +1595,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let kiro_zero_cache_debug_enabled = kiro_zero_cache_debug_enabled.clone();
         let kiro_full_request_logging_enabled = kiro_full_request_logging_enabled.clone();
         let kiro_remote_media_resolution_enabled = kiro_remote_media_resolution_enabled.clone();
+        let kiro_latency_routing_enabled = kiro_latency_routing_enabled.clone();
         let kiro_protected_content_validation_enabled =
             kiro_protected_content_validation_enabled.clone();
         let kiro_cctest_text_handling_enabled = kiro_cctest_text_handling_enabled.clone();
@@ -1616,6 +1631,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             kiro_zero_cache_debug_enabled.set(key_item.kiro_zero_cache_debug_enabled);
             kiro_full_request_logging_enabled.set(key_item.kiro_full_request_logging_enabled);
             kiro_remote_media_resolution_enabled.set(key_item.kiro_remote_media_resolution_enabled);
+            kiro_latency_routing_enabled.set(key_item.kiro_latency_routing_enabled);
             kiro_protected_content_validation_enabled
                 .set(key_item.kiro_protected_content_validation_enabled);
             kiro_cctest_text_handling_enabled.set(key_item.kiro_cctest_text_handling_enabled);
@@ -1656,6 +1672,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let kiro_zero_cache_debug_enabled = kiro_zero_cache_debug_enabled.clone();
         let kiro_full_request_logging_enabled = kiro_full_request_logging_enabled.clone();
         let kiro_remote_media_resolution_enabled = kiro_remote_media_resolution_enabled.clone();
+        let kiro_latency_routing_enabled = kiro_latency_routing_enabled.clone();
         let kiro_protected_content_validation_enabled =
             kiro_protected_content_validation_enabled.clone();
         let kiro_cctest_text_handling_enabled = kiro_cctest_text_handling_enabled.clone();
@@ -1688,6 +1705,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let kiro_zero_cache_debug_enabled_value = *kiro_zero_cache_debug_enabled;
             let kiro_full_request_logging_enabled_value = *kiro_full_request_logging_enabled;
             let kiro_remote_media_resolution_enabled_value = *kiro_remote_media_resolution_enabled;
+            let kiro_latency_routing_enabled_value = *kiro_latency_routing_enabled;
             let kiro_protected_content_validation_enabled_value =
                 *kiro_protected_content_validation_enabled;
             let kiro_cctest_text_handling_enabled_value = *kiro_cctest_text_handling_enabled;
@@ -1771,7 +1789,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     kiro_remote_media_resolution_enabled: Some(
                         kiro_remote_media_resolution_enabled_value,
                     ),
-                    kiro_latency_routing_enabled: None,
+                    kiro_latency_routing_enabled: Some(kiro_latency_routing_enabled_value),
                     kiro_protected_content_validation_enabled: Some(
                         kiro_protected_content_validation_enabled_value,
                     ),
@@ -1819,6 +1837,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let kiro_zero_cache_debug_enabled = kiro_zero_cache_debug_enabled.clone();
         let kiro_full_request_logging_enabled = kiro_full_request_logging_enabled.clone();
         let kiro_remote_media_resolution_enabled = kiro_remote_media_resolution_enabled.clone();
+        let kiro_latency_routing_enabled = kiro_latency_routing_enabled.clone();
         let saving = saving.clone();
         let feedback = feedback.clone();
         let on_flash = props.on_flash.clone();
@@ -1836,6 +1855,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let kiro_zero_cache_debug_enabled_value = *kiro_zero_cache_debug_enabled;
             let kiro_full_request_logging_enabled_value = *kiro_full_request_logging_enabled;
             let kiro_remote_media_resolution_enabled_value = *kiro_remote_media_resolution_enabled;
+            let kiro_latency_routing_enabled_value = *kiro_latency_routing_enabled;
             let saving = saving.clone();
             let feedback = feedback.clone();
             let on_flash = on_flash.clone();
@@ -1875,7 +1895,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     kiro_remote_media_resolution_enabled: Some(
                         kiro_remote_media_resolution_enabled_value,
                     ),
-                    kiro_latency_routing_enabled: None,
+                    kiro_latency_routing_enabled: Some(kiro_latency_routing_enabled_value),
                     kiro_protected_content_validation_enabled: None,
                     kiro_cctest_text_handling_enabled: None,
                     kiro_cache_policy_override_json: None,
@@ -2235,6 +2255,26 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                 <label class={classes!("md:col-span-2", "flex", "cursor-pointer", "items-start", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "text-sm")}>
                     <input
                         type="checkbox"
+                        checked={*kiro_latency_routing_enabled}
+                        onchange={{
+                            let kiro_latency_routing_enabled =
+                                kiro_latency_routing_enabled.clone();
+                            Callback::from(move |event: Event| {
+                                let input: HtmlInputElement = event.target_unchecked_into();
+                                kiro_latency_routing_enabled.set(input.checked());
+                            })
+                        }}
+                    />
+                    <span>
+                        <strong>{ "首字延迟自适应选号" }</strong>
+                        <span class={classes!("block", "mt-1", "text-xs", "text-[var(--muted)]")}>
+                            { "开启后，账号池内的亲和+动态策略会使用近期首字延迟快照作为排序信号；关闭后该 key 回到无延迟快照的轮转顺序。" }
+                        </span>
+                    </span>
+                </label>
+                <label class={classes!("md:col-span-2", "flex", "cursor-pointer", "items-start", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "text-sm")}>
+                    <input
+                        type="checkbox"
                         checked={*kiro_protected_content_validation_enabled}
                         onchange={{
                             let kiro_protected_content_validation_enabled =
@@ -2541,8 +2581,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                                         })
                                     }}
                                 >
-                                    <option value="balanced">{ "亲和 + 动态" }</option>
-                                    <option value="credit_first">{ "剩余额度优先" }</option>
+                                    { kiro_pool_strategy_options() }
                                 </select>
                             </label>
                             if *route_strategy == "fixed" {
@@ -3077,7 +3116,7 @@ pub fn admin_kiro_gateway_page() -> Html {
     let manual_scheduler_max = use_state(|| "1".to_string());
     let manual_scheduler_min = use_state(|| "0".to_string());
     let manual_minimum_remaining_credits_before_block = use_state(|| "0".to_string());
-    let manual_pool_strategy = use_state(|| "balanced".to_string());
+    let manual_pool_strategy = use_state(llm_store::default_kiro_pool_strategy);
     let manual_disabled = use_state(|| false);
 
     let new_key_name = use_state(|| "kiro-private".to_string());
@@ -4799,8 +4838,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                                     })
                                 }}
                             >
-                                <option value="balanced">{ "亲和 + 动态" }</option>
-                                <option value="credit_first">{ "剩余额度优先" }</option>
+                                { kiro_pool_strategy_options() }
                             </select>
                         </label>
                     </div>
@@ -5493,8 +5531,14 @@ mod tests {
 
     #[test]
     fn kiro_key_route_summary_uses_full_pool_text_when_group_is_empty() {
-        let summary = kiro_key_route_summary("auto", "", "balanced", &[]);
+        let summary = kiro_key_route_summary(
+            "auto",
+            "",
+            llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED,
+            &[],
+        );
         assert!(summary.contains("全账号池自动择优"));
+        assert!(summary.contains("标记为"));
         assert!(summary.contains("亲和 + 动态"));
     }
 

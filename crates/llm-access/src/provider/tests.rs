@@ -1538,6 +1538,23 @@ fn kiro_route_for_pool_selection(
     route
 }
 
+fn kiro_route_for_pool_selection_without_balance(
+    account_name: &str,
+    routing_identity: &str,
+    pool_strategy: &str,
+    preferred_pool_strategy: &str,
+) -> ProviderKiroRoute {
+    let mut route = kiro_route_for_pool_selection(
+        account_name,
+        routing_identity,
+        0.0,
+        pool_strategy,
+        preferred_pool_strategy,
+    );
+    route.cached_remaining_credits = None;
+    route
+}
+
 #[tokio::test]
 async fn forced_proxy_route_store_overrides_candidates_and_hydrated_routes() {
     let mut codex_route = codex_route_for_account("codex-a", "upstream-token");
@@ -1795,6 +1812,80 @@ fn kiro_selection_prefers_configured_pool_before_other_pools() {
     assert_eq!(ordered[0].account_name, "beta");
 }
 
+#[test]
+fn kiro_selection_keeps_proxy_cooldown_global_across_pool_preference() {
+    let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
+    scheduler.mark_proxy_cooldown(
+        "url:http://proxy-preferred",
+        Duration::from_secs(60),
+        "transient upstream error",
+    );
+    let mut fallback = kiro_route_for_pool_selection(
+        "alpha",
+        "user-alpha",
+        10.0,
+        llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED,
+        llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST,
+    );
+    fallback.proxy = Some(ProviderProxyConfig {
+        proxy_url: "http://proxy-fallback".to_string(),
+        proxy_username: None,
+        proxy_password: None,
+    });
+    let mut preferred = kiro_route_for_pool_selection(
+        "beta",
+        "user-beta",
+        90.0,
+        llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST,
+        llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST,
+    );
+    preferred.proxy = Some(ProviderProxyConfig {
+        proxy_url: "http://proxy-preferred".to_string(),
+        proxy_username: None,
+        proxy_password: None,
+    });
+    let routes = vec![fallback, preferred];
+
+    let ranker = crate::kiro_latency::KiroLatencyRanker::default();
+    let ordered =
+        super::selection_ordered_kiro_routes(&routes, scheduler.as_ref(), &ranker, 0, None);
+    assert_eq!(ordered[0].account_name, "alpha");
+}
+
+#[test]
+fn kiro_selection_keeps_new_session_spread_global_across_pool_preference() {
+    let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
+    let routes = vec![
+        kiro_route_for_pool_selection(
+            "alpha",
+            "user-alpha",
+            10.0,
+            llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED,
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST,
+        ),
+        kiro_route_for_pool_selection(
+            "beta",
+            "user-beta",
+            90.0,
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST,
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST,
+        ),
+    ];
+    let mut session_counts = HashMap::new();
+    session_counts.insert("alpha".to_string(), 0usize);
+    session_counts.insert("beta".to_string(), 5usize);
+
+    let ranker = crate::kiro_latency::KiroLatencyRanker::default();
+    let ordered = super::selection_ordered_kiro_routes(
+        &routes,
+        scheduler.as_ref(),
+        &ranker,
+        0,
+        Some(&session_counts),
+    );
+    assert_eq!(ordered[0].account_name, "alpha");
+}
+
 #[tokio::test]
 async fn kiro_selection_falls_back_when_preferred_pool_is_throttled() {
     let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
@@ -1914,6 +2005,31 @@ fn kiro_selection_orders_credit_first_pool_by_remaining_before_latency() {
         None,
     );
     assert_eq!(ordered[0].account_name, "beta");
+}
+
+#[test]
+fn kiro_selection_does_not_starve_unknown_balance_in_credit_first_pool() {
+    let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
+    let routes = vec![
+        kiro_route_for_pool_selection_without_balance(
+            "alpha",
+            "user-alpha",
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST,
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST,
+        ),
+        kiro_route_for_pool_selection(
+            "beta",
+            "user-beta",
+            5.0,
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST,
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST,
+        ),
+    ];
+    let ranker = crate::kiro_latency::KiroLatencyRanker::default();
+
+    let ordered =
+        super::selection_ordered_kiro_routes(&routes, scheduler.as_ref(), &ranker, 0, None);
+    assert_eq!(ordered[0].account_name, "alpha");
 }
 
 #[test]

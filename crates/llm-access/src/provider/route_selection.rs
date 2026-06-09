@@ -1,6 +1,7 @@
 //! Route selection with account permits + the `DefaultProviderDispatcher`.
 
 use std::{
+    cmp::Ordering,
     collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
@@ -350,7 +351,19 @@ pub fn selection_ordered_kiro_routes<'a>(
         session_count: Option<usize>,
         last_started_at: Option<Instant>,
         latency_band: Option<i64>,
-        remaining: f64,
+        remaining_sort: f64,
+    }
+
+    #[derive(Clone, Copy)]
+    enum CandidateSortKey {
+        RemainingDesc,
+        LatencyBand,
+        LastStarted,
+    }
+
+    fn route_pool_strategy(route: &ProviderKiroRoute) -> &'static str {
+        llm_access_core::store::normalize_kiro_pool_strategy(&route.pool_strategy)
+            .unwrap_or(llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED)
     }
 
     fn compare_proxy_cooldown(left: bool, right: bool) -> Option<std::cmp::Ordering> {
@@ -406,59 +419,81 @@ pub fn selection_ordered_kiro_routes<'a>(
         (ordering != std::cmp::Ordering::Equal).then_some(ordering)
     }
 
-    fn sort_kiro_candidates_for_pool(candidates: &mut [Candidate<'_>], pool_strategy: &str) {
-        candidates.sort_by(|left, right| {
-            if let Some(ordering) =
-                compare_proxy_cooldown(left.proxy_in_cooldown, right.proxy_in_cooldown)
-            {
-                return ordering;
+    fn pool_rank(pool_strategy: &str, preferred_pool_strategy: &str) -> usize {
+        if pool_strategy == preferred_pool_strategy {
+            return 0;
+        }
+        llm_access_core::store::KIRO_POOL_STRATEGIES
+            .iter()
+            .position(|strategy| *strategy == pool_strategy)
+            .map(|index| index + 1)
+            .unwrap_or(llm_access_core::store::KIRO_POOL_STRATEGIES.len() + 1)
+    }
+
+    fn compare_pool_rank(
+        left: &Candidate<'_>,
+        right: &Candidate<'_>,
+        preferred_pool_strategy: &str,
+    ) -> Option<Ordering> {
+        let ordering = pool_rank(left.pool_strategy, preferred_pool_strategy)
+            .cmp(&pool_rank(right.pool_strategy, preferred_pool_strategy));
+        (ordering != Ordering::Equal).then_some(ordering)
+    }
+
+    fn pool_sort_keys(pool_strategy: &str) -> &'static [CandidateSortKey] {
+        const BALANCED_KEYS: [CandidateSortKey; 3] = [
+            CandidateSortKey::LatencyBand,
+            CandidateSortKey::LastStarted,
+            CandidateSortKey::RemainingDesc,
+        ];
+        const CREDIT_FIRST_KEYS: [CandidateSortKey; 3] = [
+            CandidateSortKey::RemainingDesc,
+            CandidateSortKey::LatencyBand,
+            CandidateSortKey::LastStarted,
+        ];
+        match pool_strategy {
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST => &CREDIT_FIRST_KEYS,
+            _ => &BALANCED_KEYS,
+        }
+    }
+
+    fn compare_by_key(
+        left: &Candidate<'_>,
+        right: &Candidate<'_>,
+        key: CandidateSortKey,
+    ) -> Option<Ordering> {
+        match key {
+            CandidateSortKey::RemainingDesc => {
+                compare_remaining_desc(left.remaining_sort, right.remaining_sort)
+            },
+            CandidateSortKey::LatencyBand => {
+                compare_latency_band(left.latency_band, right.latency_band)
+            },
+            CandidateSortKey::LastStarted => {
+                compare_last_started(left.last_started_at, right.last_started_at)
+            },
+        }
+    }
+
+    fn compare_pool_tiebreakers(left: &Candidate<'_>, right: &Candidate<'_>) -> Option<Ordering> {
+        for key in pool_sort_keys(left.pool_strategy) {
+            if let Some(ordering) = compare_by_key(left, right, *key) {
+                return Some(ordering);
             }
-            match pool_strategy {
-                llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST => {
-                    if let Some(ordering) = compare_remaining_desc(left.remaining, right.remaining)
-                    {
-                        return ordering;
-                    }
-                    if let Some(ordering) =
-                        compare_session_count(left.session_count, right.session_count)
-                    {
-                        return ordering;
-                    }
-                    if let Some(ordering) =
-                        compare_latency_band(left.latency_band, right.latency_band)
-                    {
-                        return ordering;
-                    }
-                    if let Some(ordering) =
-                        compare_last_started(left.last_started_at, right.last_started_at)
-                    {
-                        return ordering;
-                    }
-                },
-                _ => {
-                    if let Some(ordering) =
-                        compare_session_count(left.session_count, right.session_count)
-                    {
-                        return ordering;
-                    }
-                    if let Some(ordering) =
-                        compare_latency_band(left.latency_band, right.latency_band)
-                    {
-                        return ordering;
-                    }
-                    if let Some(ordering) =
-                        compare_last_started(left.last_started_at, right.last_started_at)
-                    {
-                        return ordering;
-                    }
-                    if let Some(ordering) = compare_remaining_desc(left.remaining, right.remaining)
-                    {
-                        return ordering;
-                    }
-                },
-            }
-            left.route.account_name.cmp(&right.route.account_name)
-        });
+        }
+        None
+    }
+
+    fn compare_candidate_order(
+        left: &Candidate<'_>,
+        right: &Candidate<'_>,
+        preferred_pool_strategy: &str,
+    ) -> Ordering {
+        compare_proxy_cooldown(left.proxy_in_cooldown, right.proxy_in_cooldown)
+            .or_else(|| compare_session_count(left.session_count, right.session_count))
+            .or_else(|| compare_pool_rank(left, right, preferred_pool_strategy))
+            .or_else(|| compare_pool_tiebreakers(left, right))
+            .unwrap_or_else(|| left.route.account_name.cmp(&right.route.account_name))
     }
 
     let last_started_snapshot = scheduler.last_started_snapshot();
@@ -480,16 +515,44 @@ pub fn selection_ordered_kiro_routes<'a>(
                 by_identity
             })
     });
-    let sorted = routes
+    let known_remaining_max_by_pool =
+        routes
+            .iter()
+            .fold(HashMap::new(), |mut max_by_pool, route| {
+                if let Some(remaining) = route
+                    .cached_remaining_credits
+                    .filter(|value| value.is_finite())
+                {
+                    let pool_strategy = route_pool_strategy(route);
+                    max_by_pool
+                        .entry(pool_strategy)
+                        .and_modify(|current: &mut f64| *current = current.max(remaining))
+                        .or_insert(remaining);
+                }
+                max_by_pool
+            });
+    let preferred_pool_strategy = routes
+        .first()
+        .and_then(|route| {
+            llm_access_core::store::normalize_kiro_pool_strategy(&route.preferred_pool_strategy)
+        })
+        .unwrap_or(llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED);
+    let mut sorted = routes
         .iter()
         .map(|route| {
             let proxy_key = proxy_cooldown_key_for_route(route);
+            let pool_strategy = route_pool_strategy(route);
+            let remaining_sort = route
+                .cached_remaining_credits
+                .filter(|value| value.is_finite())
+                .unwrap_or_else(|| {
+                    *known_remaining_max_by_pool
+                        .get(pool_strategy)
+                        .unwrap_or(&0.0)
+                });
             Candidate {
                 route,
-                pool_strategy: llm_access_core::store::normalize_kiro_pool_strategy(
-                    &route.pool_strategy,
-                )
-                .unwrap_or(llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED),
+                pool_strategy,
                 proxy_in_cooldown: proxy_key
                     .as_deref()
                     .is_some_and(|key| proxy_cooldowns.contains_key(key)),
@@ -501,34 +564,13 @@ pub fn selection_ordered_kiro_routes<'a>(
                 }),
                 last_started_at: last_started_snapshot.get(&route.routing_identity).copied(),
                 latency_band: latency_ranker.route_score_band(route, now_ms),
-                remaining: route.cached_remaining_credits.unwrap_or(-1.0),
+                remaining_sort,
             }
         })
         .collect::<Vec<_>>();
-    let preferred_pool_strategy = routes
-        .first()
-        .and_then(|route| {
-            llm_access_core::store::normalize_kiro_pool_strategy(&route.preferred_pool_strategy)
-        })
-        .unwrap_or(llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED);
-    let mut preferred_candidates = Vec::new();
-    let mut fallback_candidates = Vec::new();
-    for candidate in sorted {
-        if candidate.pool_strategy == preferred_pool_strategy {
-            preferred_candidates.push(candidate);
-        } else {
-            fallback_candidates.push(candidate);
-        }
-    }
-    sort_kiro_candidates_for_pool(&mut preferred_candidates, preferred_pool_strategy);
-    if let Some(fallback_pool_strategy) =
-        fallback_candidates.first().map(|value| value.pool_strategy)
-    {
-        sort_kiro_candidates_for_pool(&mut fallback_candidates, fallback_pool_strategy);
-    }
-    preferred_candidates
+    sorted.sort_by(|left, right| compare_candidate_order(left, right, preferred_pool_strategy));
+    sorted
         .into_iter()
-        .chain(fallback_candidates)
         .map(|candidate| candidate.route)
         .collect()
 }

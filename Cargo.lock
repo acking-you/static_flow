@@ -8978,6 +8978,7 @@ dependencies = [
  "gloo-net 0.6.0",
  "gloo-timers 0.3.0",
  "js-sys",
+ "llm-access-core",
  "pulldown-cmark 0.13.0",
  "serde",
  "serde_json",

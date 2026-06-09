@@ -247,6 +247,24 @@ def filter_required_region_proxies(
     return [proxy for proxy in proxies if is_us_proxy(proxy)]
 
 
+def proxy_region_for_kiro_region(region: str) -> str | None:
+    value = region.strip().lower()
+    if value.startswith("us-"):
+        return "us"
+    return None
+
+
+def required_proxy_region_for_auth(auth: ImportedAuth) -> str:
+    region = field(auth.body, "api_region", "region", "auth_region") or DEFAULT_KIRO_REGION
+    proxy_region = proxy_region_for_kiro_region(str(region))
+    if proxy_region is None:
+        raise ValueError(
+            f"{auth.name}: Kiro region `{region}` has no supported proxy-region mapping; "
+            "the standard importer currently supports only US proxy configs"
+        )
+    return proxy_region
+
+
 def fetch_kiro_accounts(base_url: str, token: str | None) -> list[dict[str, Any]]:
     payload = request_json(
         "GET", base_url, "/admin/kiro-gateway/accounts?limit=10000&offset=0", token
@@ -523,17 +541,29 @@ def main(argv: list[str]) -> int:
     if not paths:
         raise SystemExit(f"no SQLite files found; default checked: {DEFAULT_SQLITE}")
     names = build_account_names(paths, args.account_name, args.name_prefix)
+    imports = [parse_sqlite(path, name) for path, name in zip(paths, names)]
 
     proxies: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
     latencies: dict[str, float] = {}
     existing_user_ids: dict[str, str] = {}
     if not args.no_proxy:
+        try:
+            required_proxy_regions = {
+                required_proxy_region_for_auth(auth) for auth in imports
+            }
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        if len(required_proxy_regions) != 1:
+            raise SystemExit(
+                "all Kiro imports in one batch must require the same proxy region"
+            )
+        required_proxy_region = next(iter(required_proxy_regions))
         proxies = filter_required_region_proxies(
-            fetch_active_proxies(args.admin_base_url, args.admin_token), REQUIRED_PROXY_REGION
+            fetch_active_proxies(args.admin_base_url, args.admin_token), required_proxy_region
         )
         if not proxies:
-            raise SystemExit("no active US proxy configs found")
+            raise SystemExit(f"no active {required_proxy_region.upper()} proxy configs found")
         accounts = fetch_kiro_accounts(args.admin_base_url, args.admin_token)
         existing_user_ids = existing_user_id_map(accounts)
         for account in accounts:
@@ -547,8 +577,7 @@ def main(argv: list[str]) -> int:
         )
 
     results = []
-    for path, name in zip(paths, names):
-        auth = parse_sqlite(path, name)
+    for auth in imports:
         candidate_proxies = rank_proxies(proxies, counts, latencies, args.balance_penalty_ms)
         min_interval_ms = rng.randint(args.min_interval_min_ms, args.min_interval_max_ms)
         result = import_account(

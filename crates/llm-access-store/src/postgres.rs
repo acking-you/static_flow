@@ -668,10 +668,10 @@ mod tests {
         provider::{ProtocolFamily, ProviderType, RouteStrategy},
         store::{
             AdminCodexAccountPageQuery, AdminCodexAccountSortMode, AdminCodexAccountStore,
-            AdminConfigStore, AdminKeyStore, AdminProxyConfigPatch, AdminProxyStore,
-            AdminReviewQueueStore, ControlStore, NewAdminProxyConfig,
-            NewPublicAccountContributionRequest, PublicSubmissionStore, PublicUsageStore,
-            UsageEventSink,
+            AdminConfigStore, AdminKeyStore, AdminKiroAccountStore, AdminPageRequest,
+            AdminProxyConfigPatch, AdminProxyStore, AdminReviewQueueStore, ControlStore,
+            NewAdminProxyConfig, NewPublicAccountContributionRequest, PublicSubmissionStore,
+            PublicUsageStore, UsageEventSink,
         },
     };
     use sha2::{Digest, Sha256};
@@ -855,6 +855,35 @@ mod tests {
             ))
             .await
             .context("seed postgres kiro key page fixture")?;
+        client.close().await;
+        Ok(())
+    }
+
+    async fn seed_test_kiro_account_page_fixture(database_url: &str) -> anyhow::Result<()> {
+        let client = SqlxClient::connect(database_url)
+            .await
+            .context("connect postgres test database")?;
+        client
+            .batch_execute(
+                "INSERT INTO llm_kiro_accounts (
+                    account_name, auth_method, account_id, profile_arn, user_id,
+                    status, auth_json, max_concurrency, min_start_interval_ms,
+                    proxy_config_id, last_refresh_at_ms, last_error, created_at_ms,
+                    updated_at_ms
+                 ) VALUES
+                    (
+                        'kiro-credit', 'social', NULL, NULL, 'user-credit', 'active',
+                        '{\"poolStrategy\":\"credit_first\",\"region\":\"us-east-1\"}'::jsonb,
+                        1, 0, NULL, NULL, NULL, 20, 20
+                    ),
+                    (
+                        'kiro-balanced', 'social', NULL, NULL, 'user-balanced', 'active',
+                        '{\"poolStrategy\":\"balanced\",\"region\":\"us-east-1\"}'::jsonb,
+                        1, 0, NULL, NULL, NULL, 10, 10
+                    );",
+            )
+            .await
+            .context("insert postgres kiro account page fixture")?;
         client.close().await;
         Ok(())
     }
@@ -1572,6 +1601,54 @@ mod tests {
         assert_eq!(oldest_summary.missing_balance_count, 0);
         assert_eq!(oldest_summary.total_limit, 400.0);
         assert_eq!(oldest_summary.total_remaining, 130.0);
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_preserves_kiro_account_pool_strategy_on_pages() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        seed_test_kiro_account_page_fixture(&database_url)
+            .await
+            .expect("seed postgres kiro account page fixture");
+        let repo = super::PostgresControlRepository::connect(&database_url, None)
+            .await
+            .expect("connect postgres repository");
+
+        let page = repo
+            .list_admin_kiro_accounts_page(AdminPageRequest {
+                limit: 10,
+                offset: 0,
+            })
+            .await
+            .expect("list kiro account page");
+        let credit_account = page
+            .accounts
+            .iter()
+            .find(|account| account.name == "kiro-credit")
+            .expect("credit account");
+        assert_eq!(
+            credit_account.pool_strategy,
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST
+        );
+
+        let filtered = repo
+            .list_admin_kiro_accounts_filtered_page(Some("kiro-credit"), AdminPageRequest {
+                limit: 10,
+                offset: 0,
+            })
+            .await
+            .expect("list filtered kiro account page");
+        assert_eq!(filtered.accounts.len(), 1);
+        assert_eq!(
+            filtered.accounts[0].pool_strategy,
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST
+        );
     }
 
     #[tokio::test]
