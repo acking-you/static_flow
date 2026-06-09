@@ -16,6 +16,7 @@ use super::{
         default_kiro_billable_model_multipliers_json, default_kiro_cache_policy_json,
         AdminRuntimeConfig,
     },
+    default_kiro_pool_strategy,
     groups::{AdminAccountGroup, AdminAccountGroupPatch, NewAdminAccountGroup},
     keys::{
         AdminKey, AdminKeyPatch, AdminKeysPage, AdminKeysSummary, AdminPageRequest, NewAdminKey,
@@ -332,6 +333,7 @@ impl AdminKeyStore for EmptyAdminKeyStore {
             account_group_id: None,
             fixed_account_name: None,
             auto_account_names: None,
+            preferred_pool_strategy: default_kiro_pool_strategy(),
             model_name_map: None,
             request_max_concurrency: key.request_max_concurrency,
             request_min_start_interval_ms: key.request_min_start_interval_ms,
@@ -750,6 +752,7 @@ impl AdminKiroAccountStore for EmptyAdminKiroAccountStore {
             kiro_channel_max_concurrency: account.max_concurrency.unwrap_or(1),
             kiro_channel_min_start_interval_ms: account.min_start_interval_ms.unwrap_or(0),
             minimum_remaining_credits_before_block: 0.0,
+            pool_strategy: default_kiro_pool_strategy(),
             proxy_mode: "inherit".to_string(),
             proxy_config_id: account.proxy_config_id,
             effective_proxy_source: "none".to_string(),

@@ -103,6 +103,7 @@ impl PostgresControlRepository {
                     COALESCE(u.credit_missing_events, 0),
                     u.last_used_at_ms,
                     COALESCE(u.updated_at_ms, 0),
+                    r.preferred_pool_strategy AS preferred_pool_strategy,
                     r.kiro_latency_routing_enabled AS kiro_latency_routing_enabled,
                     r.kiro_protected_content_validation_enabled
                         AS kiro_protected_content_validation_enabled,
@@ -145,6 +146,7 @@ impl PostgresControlRepository {
                     COALESCE(u.credit_missing_events, 0),
                     u.last_used_at_ms,
                     COALESCE(u.updated_at_ms, k.updated_at_ms),
+                    r.preferred_pool_strategy AS preferred_pool_strategy,
                     r.kiro_latency_routing_enabled AS kiro_latency_routing_enabled,
                     r.kiro_protected_content_validation_enabled
                         AS kiro_protected_content_validation_enabled,
@@ -259,6 +261,7 @@ impl PostgresControlRepository {
                     COALESCE(u.credit_missing_events, 0),
                     u.last_used_at_ms,
                     COALESCE(u.updated_at_ms, k.updated_at_ms),
+                    r.preferred_pool_strategy AS preferred_pool_strategy,
                     r.kiro_latency_routing_enabled AS kiro_latency_routing_enabled,
                     r.kiro_protected_content_validation_enabled
                         AS kiro_protected_content_validation_enabled,
@@ -311,7 +314,7 @@ impl PostgresControlRepository {
                         k.protocol_family, k.public_visible, k.quota_billable_limit,
                         k.created_at_ms, k.updated_at_ms,
                         r.route_strategy, r.fixed_account_name, r.auto_account_names_json,
-                        r.account_group_id, r.model_name_map_json,
+                        r.account_group_id, r.preferred_pool_strategy, r.model_name_map_json,
                         r.request_max_concurrency, r.request_min_start_interval_ms,
                         r.codex_fast_enabled, r.kiro_request_validation_enabled,
                         r.kiro_cache_estimation_enabled,
@@ -485,6 +488,7 @@ impl PostgresControlRepository {
                     COALESCE(summary.missing_balance_count, 0),
                     COALESCE(summary.total_limit, 0.0),
                     COALESCE(summary.total_remaining, 0.0),
+                    page_keys.preferred_pool_strategy AS preferred_pool_strategy,
                     page_keys.kiro_latency_routing_enabled AS kiro_latency_routing_enabled,
                     page_keys.kiro_protected_content_validation_enabled
                         AS kiro_protected_content_validation_enabled,
@@ -542,6 +546,7 @@ impl PostgresControlRepository {
                     COALESCE(u.credit_missing_events, 0),
                     u.last_used_at_ms,
                     COALESCE(u.updated_at_ms, k.updated_at_ms),
+                    r.preferred_pool_strategy AS preferred_pool_strategy,
                     r.kiro_latency_routing_enabled AS kiro_latency_routing_enabled,
                     r.kiro_protected_content_validation_enabled
                         AS kiro_protected_content_validation_enabled,
@@ -605,7 +610,8 @@ impl PostgresControlRepository {
             .execute(
                 "INSERT INTO llm_key_route_config (
                     key_id, route_strategy, fixed_account_name, auto_account_names_json,
-                    account_group_id, model_name_map_json, request_max_concurrency,
+                    account_group_id, preferred_pool_strategy, model_name_map_json,
+                    request_max_concurrency,
                     request_min_start_interval_ms, codex_fast_enabled,
                     kiro_request_validation_enabled, kiro_cache_estimation_enabled,
                     kiro_zero_cache_debug_enabled, kiro_full_request_logging_enabled,
@@ -615,14 +621,15 @@ impl PostgresControlRepository {
                     kiro_cache_policy_override_json,
                     kiro_billable_model_multipliers_override_json
                  ) VALUES (
-                    $1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8, $9, $10, $11, $12,
-                    $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb
+                    $1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10, $11, $12,
+                    $13, $14, $15, $16, $17, $18, $19::jsonb, $20::jsonb
                  )
                  ON CONFLICT(key_id) DO UPDATE SET
                     route_strategy = EXCLUDED.route_strategy,
                     fixed_account_name = EXCLUDED.fixed_account_name,
                     auto_account_names_json = EXCLUDED.auto_account_names_json,
                     account_group_id = EXCLUDED.account_group_id,
+                    preferred_pool_strategy = EXCLUDED.preferred_pool_strategy,
                     model_name_map_json = EXCLUDED.model_name_map_json,
                     request_max_concurrency = EXCLUDED.request_max_concurrency,
                     request_min_start_interval_ms = EXCLUDED.request_min_start_interval_ms,
@@ -650,6 +657,7 @@ impl PostgresControlRepository {
                     &route.fixed_account_name,
                     &route.auto_account_names_json,
                     &route.account_group_id,
+                    &route.preferred_pool_strategy,
                     &route.model_name_map_json,
                     &route.request_max_concurrency,
                     &route.request_min_start_interval_ms,
@@ -822,6 +830,7 @@ impl AdminKeyStore for PostgresControlRepository {
                 COALESCE(u.credit_missing_events, 0),
                 u.last_used_at_ms,
                 COALESCE(u.updated_at_ms, k.updated_at_ms),
+                r.preferred_pool_strategy AS preferred_pool_strategy,
                 r.kiro_latency_routing_enabled AS kiro_latency_routing_enabled,
                 r.kiro_protected_content_validation_enabled
                     AS kiro_protected_content_validation_enabled,
@@ -896,6 +905,7 @@ impl AdminKeyStore for PostgresControlRepository {
             fixed_account_name: None,
             auto_account_names_json: None,
             account_group_id: None,
+            preferred_pool_strategy: core_store::default_kiro_pool_strategy(),
             model_name_map_json: None,
             request_max_concurrency: key.request_max_concurrency.map(|value| value as i64),
             request_min_start_interval_ms: key
@@ -954,6 +964,9 @@ impl AdminKeyStore for PostgresControlRepository {
         }
         if let Some(value) = patch.route_strategy.as_ref() {
             bundle.route.route_strategy = value.clone();
+        }
+        if let Some(value) = patch.preferred_pool_strategy.as_ref() {
+            bundle.route.preferred_pool_strategy = value.clone();
         }
         if let Some(value) = patch.account_group_id.as_ref() {
             bundle.route.account_group_id = value.clone();

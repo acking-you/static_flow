@@ -104,6 +104,7 @@ pub fn build_cached_kiro_account_view(
         request_min_start_interval_ms: row.min_start_interval_ms.and_then(non_negative_i64_to_u64),
         disabled: row.disabled,
         minimum_remaining_credits_before_block: row.minimum_remaining_credits_before_block,
+        pool_strategy: row.pool_strategy.clone(),
         api_region: row
             .api_region
             .clone()

@@ -88,6 +88,10 @@ impl PgRow {
     fn get_optional_bool(&self, name: &str) -> Option<bool> {
         self.0.try_get::<Option<bool>, _>(name).ok().flatten()
     }
+
+    fn get_optional_string(&self, name: &str) -> Option<String> {
+        self.0.try_get::<Option<String>, _>(name).ok().flatten()
+    }
 }
 
 const POSTGRES_MAX_BIND_PARAMS: usize = 65_535;
@@ -118,6 +122,7 @@ struct KiroRouteCandidateRow {
     minimum_remaining_credits_before_block: f64,
     auth_profile_arn: Option<String>,
     api_region: Option<String>,
+    pool_strategy: String,
     proxy_mode: Option<String>,
     auth_proxy_config_id: Option<String>,
 }
@@ -463,6 +468,7 @@ struct KiroAdminAccountListRow {
     min_start_interval_ms: Option<i64>,
     auth_min_start_interval_ms: Option<i64>,
     minimum_remaining_credits_before_block: Option<f64>,
+    pool_strategy: String,
     proxy_mode: Option<String>,
     proxy_config_id: Option<String>,
     auth_proxy_config_id: Option<String>,

@@ -341,11 +341,120 @@ pub fn selection_ordered_kiro_routes<'a>(
     #[derive(Clone, Copy)]
     struct Candidate<'a> {
         route: &'a ProviderKiroRoute,
+        pool_strategy: &'static str,
         proxy_in_cooldown: bool,
         session_count: Option<usize>,
         last_started_at: Option<Instant>,
         latency_band: Option<i64>,
         remaining: f64,
+    }
+
+    fn compare_proxy_cooldown(left: bool, right: bool) -> Option<std::cmp::Ordering> {
+        match (left, right) {
+            (false, true) => Some(std::cmp::Ordering::Less),
+            (true, false) => Some(std::cmp::Ordering::Greater),
+            _ => None,
+        }
+    }
+
+    fn compare_session_count(
+        left: Option<usize>,
+        right: Option<usize>,
+    ) -> Option<std::cmp::Ordering> {
+        match (left, right) {
+            (Some(left_count), Some(right_count)) => {
+                let ordering = left_count.cmp(&right_count);
+                (ordering != std::cmp::Ordering::Equal).then_some(ordering)
+            },
+            _ => None,
+        }
+    }
+
+    fn compare_latency_band(left: Option<i64>, right: Option<i64>) -> Option<std::cmp::Ordering> {
+        match (left, right) {
+            (Some(left_band), Some(right_band)) => {
+                let ordering = left_band.cmp(&right_band);
+                (ordering != std::cmp::Ordering::Equal).then_some(ordering)
+            },
+            (Some(_), None) => Some(std::cmp::Ordering::Less),
+            (None, Some(_)) => Some(std::cmp::Ordering::Greater),
+            (None, None) => None,
+        }
+    }
+
+    fn compare_last_started(
+        left: Option<Instant>,
+        right: Option<Instant>,
+    ) -> Option<std::cmp::Ordering> {
+        match (left, right) {
+            (None, Some(_)) => Some(std::cmp::Ordering::Less),
+            (Some(_), None) => Some(std::cmp::Ordering::Greater),
+            (Some(left_started), Some(right_started)) => {
+                let ordering = left_started.cmp(&right_started);
+                (ordering != std::cmp::Ordering::Equal).then_some(ordering)
+            },
+            (None, None) => None,
+        }
+    }
+
+    fn compare_remaining_desc(left: f64, right: f64) -> Option<std::cmp::Ordering> {
+        let ordering = right.total_cmp(&left);
+        (ordering != std::cmp::Ordering::Equal).then_some(ordering)
+    }
+
+    fn sort_kiro_candidates_for_pool(candidates: &mut [Candidate<'_>], pool_strategy: &str) {
+        candidates.sort_by(|left, right| {
+            if let Some(ordering) =
+                compare_proxy_cooldown(left.proxy_in_cooldown, right.proxy_in_cooldown)
+            {
+                return ordering;
+            }
+            match pool_strategy {
+                llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST => {
+                    if let Some(ordering) = compare_remaining_desc(left.remaining, right.remaining)
+                    {
+                        return ordering;
+                    }
+                    if let Some(ordering) =
+                        compare_session_count(left.session_count, right.session_count)
+                    {
+                        return ordering;
+                    }
+                    if let Some(ordering) =
+                        compare_latency_band(left.latency_band, right.latency_band)
+                    {
+                        return ordering;
+                    }
+                    if let Some(ordering) =
+                        compare_last_started(left.last_started_at, right.last_started_at)
+                    {
+                        return ordering;
+                    }
+                },
+                _ => {
+                    if let Some(ordering) =
+                        compare_session_count(left.session_count, right.session_count)
+                    {
+                        return ordering;
+                    }
+                    if let Some(ordering) =
+                        compare_latency_band(left.latency_band, right.latency_band)
+                    {
+                        return ordering;
+                    }
+                    if let Some(ordering) =
+                        compare_last_started(left.last_started_at, right.last_started_at)
+                    {
+                        return ordering;
+                    }
+                    if let Some(ordering) = compare_remaining_desc(left.remaining, right.remaining)
+                    {
+                        return ordering;
+                    }
+                },
+            }
+            left.route.account_name.cmp(&right.route.account_name)
+        });
     }
 
     let last_started_snapshot = scheduler.last_started_snapshot();
@@ -367,12 +476,16 @@ pub fn selection_ordered_kiro_routes<'a>(
                 by_identity
             })
     });
-    let mut sorted = routes
+    let sorted = routes
         .iter()
         .map(|route| {
             let proxy_key = proxy_cooldown_key_for_route(route);
             Candidate {
                 route,
+                pool_strategy: llm_access_core::store::normalize_kiro_pool_strategy(
+                    &route.pool_strategy,
+                )
+                .unwrap_or(llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED),
                 proxy_in_cooldown: proxy_key
                     .as_deref()
                     .is_some_and(|key| proxy_cooldowns.contains_key(key)),
@@ -388,51 +501,30 @@ pub fn selection_ordered_kiro_routes<'a>(
             }
         })
         .collect::<Vec<_>>();
-    sorted.sort_by(|left, right| {
-        match (left.proxy_in_cooldown, right.proxy_in_cooldown) {
-            (false, true) => return std::cmp::Ordering::Less,
-            (true, false) => return std::cmp::Ordering::Greater,
-            _ => {},
+    let preferred_pool_strategy = routes
+        .first()
+        .and_then(|route| {
+            llm_access_core::store::normalize_kiro_pool_strategy(&route.preferred_pool_strategy)
+        })
+        .unwrap_or(llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED);
+    let mut preferred_candidates = Vec::new();
+    let mut fallback_candidates = Vec::new();
+    for candidate in sorted {
+        if candidate.pool_strategy == preferred_pool_strategy {
+            preferred_candidates.push(candidate);
+        } else {
+            fallback_candidates.push(candidate);
         }
-        // New-session balancing: when session counts are supplied, fewest bound
-        // sessions wins before latency so new conversations spread across
-        // accounts instead of stacking on the nominally fastest one. In normal
-        // mode every candidate carries `None`, so this key is inert.
-        if let (Some(left_count), Some(right_count)) = (left.session_count, right.session_count) {
-            let ordering = left_count.cmp(&right_count);
-            if ordering != std::cmp::Ordering::Equal {
-                return ordering;
-            }
-        }
-        match (left.latency_band, right.latency_band) {
-            (Some(left_band), Some(right_band)) => {
-                let ordering = left_band.cmp(&right_band);
-                if ordering != std::cmp::Ordering::Equal {
-                    return ordering;
-                }
-            },
-            (Some(_), None) => return std::cmp::Ordering::Less,
-            (None, Some(_)) => return std::cmp::Ordering::Greater,
-            (None, None) => {},
-        }
-        match (left.last_started_at, right.last_started_at) {
-            (None, Some(_)) => return std::cmp::Ordering::Less,
-            (Some(_), None) => return std::cmp::Ordering::Greater,
-            (Some(left_started), Some(right_started)) => {
-                let ordering = left_started.cmp(&right_started);
-                if ordering != std::cmp::Ordering::Equal {
-                    return ordering;
-                }
-            },
-            (None, None) => {},
-        }
-        right
-            .remaining
-            .total_cmp(&left.remaining)
-            .then_with(|| left.route.account_name.cmp(&right.route.account_name))
-    });
-    sorted
+    }
+    sort_kiro_candidates_for_pool(&mut preferred_candidates, preferred_pool_strategy);
+    if let Some(fallback_pool_strategy) =
+        fallback_candidates.first().map(|value| value.pool_strategy)
+    {
+        sort_kiro_candidates_for_pool(&mut fallback_candidates, fallback_pool_strategy);
+    }
+    preferred_candidates
         .into_iter()
+        .chain(fallback_candidates)
         .map(|candidate| candidate.route)
         .collect()
 }

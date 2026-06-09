@@ -492,6 +492,7 @@ impl PostgresControlRepository {
             account_group_id_at_event: bundle.route.account_group_id.clone(),
             selected_account_names,
             use_all_active_accounts: false,
+            preferred_pool_strategy: bundle.route.preferred_pool_strategy.clone(),
             request_max_concurrency: bundle
                 .route
                 .request_max_concurrency

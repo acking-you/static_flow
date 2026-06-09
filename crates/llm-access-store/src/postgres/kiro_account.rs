@@ -209,7 +209,16 @@ impl PostgresControlRepository {
                         ),
                         ''
                     ),
-                    last_error
+                    last_error,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                auth_json ->> 'poolStrategy',
+                                auth_json ->> 'pool_strategy'
+                            )
+                        ),
+                        ''
+                    ) AS pool_strategy
                  FROM llm_kiro_accounts
                  ORDER BY created_at_ms DESC, account_name DESC",
                 &[],
@@ -806,6 +815,7 @@ impl PostgresControlRepository {
                 .filter(|value| value.is_finite())
                 .unwrap_or(0.0)
                 .max(0.0),
+            pool_strategy: row.pool_strategy.clone(),
             proxy_mode,
             proxy_config_id,
             effective_proxy_source,
@@ -859,6 +869,9 @@ impl PostgresControlRepository {
             .or_else(|| {
                 optional_json_string_any(&auth, &["subscriptionTitle", "subscription_title"])
             });
+        let pool_strategy = core_store::canonical_kiro_pool_strategy(
+            optional_json_string_any(&auth, &["poolStrategy", "pool_strategy"]).as_deref(),
+        );
         Ok(AdminKiroAccount {
             name: record.account_name.clone(),
             auth_method: record.auth_method.clone(),
@@ -913,6 +926,7 @@ impl PostgresControlRepository {
             .filter(|value| value.is_finite())
             .unwrap_or(0.0)
             .max(0.0),
+            pool_strategy,
             proxy_mode,
             proxy_config_id,
             effective_proxy_source,
@@ -1149,6 +1163,9 @@ impl AdminKiroAccountStore for PostgresControlRepository {
                 Some(value.max(0.0)),
             )?;
         }
+        if let Some(pool_strategy) = patch.pool_strategy.as_ref() {
+            set_json_optional_string(object, "poolStrategy", Some(pool_strategy.clone()));
+        }
         if let Some(proxy_mode) = patch.proxy_mode.as_ref() {
             set_json_optional_string(object, "proxyMode", Some(proxy_mode.clone()));
         }
@@ -1229,6 +1246,9 @@ impl AdminKiroAccountStore for PostgresControlRepository {
         .filter(|value| value.is_finite())
         .unwrap_or(0.0)
         .max(0.0);
+        let pool_strategy = core_store::canonical_kiro_pool_strategy(
+            optional_json_string_any(&auth_json, &["poolStrategy", "pool_strategy"]).as_deref(),
+        );
         let cached_status = self
             .get_kiro_cached_status_parts_row(&record.account_name)
             .await?;
@@ -1269,6 +1289,7 @@ impl AdminKiroAccountStore for PostgresControlRepository {
             account_group_id_at_event: None,
             route_strategy_at_event: RouteStrategy::Auto,
             auth_json: record.auth_json,
+            pool_strategy,
             profile_arn,
             api_region,
             request_validation_enabled: true,
@@ -1302,6 +1323,7 @@ impl AdminKiroAccountStore for PostgresControlRepository {
             billable_model_multipliers_json: runtime_config.kiro_billable_model_multipliers_json,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            preferred_pool_strategy: core_store::default_kiro_pool_strategy(),
             account_request_max_concurrency: record
                 .max_concurrency
                 .and_then(non_negative_i64_to_u64),

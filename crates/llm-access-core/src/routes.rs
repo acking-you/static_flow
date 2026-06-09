@@ -277,6 +277,10 @@ pub const ADMIN_ROUTES: &[RouteSpec] = &[
         path: "/admin/kiro-gateway/accounts/import-local",
     },
     RouteSpec {
+        method: "POST",
+        path: "/admin/kiro-gateway/accounts/import-auth",
+    },
+    RouteSpec {
         method: "PATCH|DELETE",
         path: "/admin/kiro-gateway/accounts/:name",
     },
@@ -370,6 +374,7 @@ mod tests {
         assert!(paths.contains(&"/admin/llm-gateway/accounts/:name/probe-models"));
         assert!(paths.contains(&"/admin/llm-access/usage-journal/status"));
         assert!(paths.contains(&"/admin/kiro-gateway/keys/:key_id"));
+        assert!(paths.contains(&"/admin/kiro-gateway/accounts/import-auth"));
         assert!(paths.contains(&"/admin/kiro-gateway/accounts/:name/balance"));
         assert!(paths.contains(&"/admin/kiro-gateway/accounts/:name/probe-model"));
     }

@@ -27,6 +27,7 @@ IDC_DEVICE_KEYS = (
 PROFILE_STATE_KEY = "api.codewhisperer.profile"
 DEFAULT_SQLITE = Path.home() / ".local/share/kiro-cli/data.sqlite3"
 DEFAULT_MINIMUM_REMAINING_CREDITS = 10.0
+DEFAULT_KIRO_REGION = "us-east-1"
 REQUIRED_PROXY_REGION = "us"
 US_PROXY_NAME_RE = re.compile(r"(^|[-_])us([_-]|\d|$)|homeus|aws_us|dmit-us|do-us", re.I)
 
@@ -59,6 +60,16 @@ def field(data: dict[str, Any], *names: str) -> Any:
         if value not in (None, ""):
             return value
     return None
+
+
+def resolved_region(*sources: dict[str, Any]) -> str:
+    for source in sources:
+        if not source:
+            continue
+        value = field(source, "region")
+        if value is not None:
+            return str(value)
+    return DEFAULT_KIRO_REGION
 
 
 def query_auth_kv(conn: sqlite3.Connection, keys: tuple[str, ...]) -> str | None:
@@ -99,6 +110,7 @@ def parse_sqlite(path: Path, name: str) -> ImportedAuth:
             refresh_token = field(token, "refresh_token", "refreshToken")
             if not refresh_token:
                 raise ValueError(f"{path}: social token is missing refresh_token")
+            region = resolved_region(token)
             body = {
                 "name": name,
                 "access_token": field(token, "access_token", "accessToken"),
@@ -107,9 +119,9 @@ def parse_sqlite(path: Path, name: str) -> ImportedAuth:
                 "expires_at": field(token, "expires_at", "expiresAt"),
                 "auth_method": "social",
                 "provider": field(token, "provider"),
-                "region": "us-east-1",
-                "auth_region": "us-east-1",
-                "api_region": "us-east-1",
+                "region": region,
+                "auth_region": region,
+                "api_region": region,
                 "minimum_remaining_credits_before_block": DEFAULT_MINIMUM_REMAINING_CREDITS,
                 "disabled": False,
             }
@@ -137,6 +149,7 @@ def parse_sqlite(path: Path, name: str) -> ImportedAuth:
         ]
         if missing:
             raise ValueError(f"{path}: IDC auth missing {', '.join(missing)}")
+        region = resolved_region(token, device)
         body = {
             "name": name,
             "access_token": field(token, "access_token", "accessToken"),
@@ -147,9 +160,9 @@ def parse_sqlite(path: Path, name: str) -> ImportedAuth:
             "client_id": client_id,
             "client_secret": client_secret,
             "provider": field(token, "provider") or "aws",
-            "region": "us-east-1",
-            "auth_region": "us-east-1",
-            "api_region": "us-east-1",
+            "region": region,
+            "auth_region": region,
+            "api_region": region,
             "minimum_remaining_credits_before_block": DEFAULT_MINIMUM_REMAINING_CREDITS,
             "disabled": False,
         }
@@ -401,7 +414,6 @@ def import_account(
     body["kiro_channel_max_concurrency"] = args.max_concurrency
     body["kiro_channel_min_start_interval_ms"] = min_interval_ms
     body["minimum_remaining_credits_before_block"] = args.minimum_remaining_credits
-    body["source"] = "kiro-cli"
     body["source_db_path"] = str(auth.sqlite_path)
     body["last_imported_at"] = int(time.time() * 1000)
     first_proxy = proxies[0] if proxies else None
@@ -420,7 +432,11 @@ def import_account(
         return result
 
     created = request_json(
-        "POST", args.admin_base_url, "/admin/kiro-gateway/accounts", args.admin_token, body
+        "POST",
+        args.admin_base_url,
+        "/admin/kiro-gateway/accounts/import-auth",
+        args.admin_token,
+        body,
     )
     result["created_name"] = created.get("name") if isinstance(created, dict) else auth.name
     result["validated"] = False

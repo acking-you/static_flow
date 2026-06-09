@@ -113,6 +113,9 @@ fn decode_key_bundle(row: &PgRow) -> anyhow::Result<KeyBundle> {
             fixed_account_name: row.get(12),
             auto_account_names_json: row.get(13),
             account_group_id: row.get(14),
+            preferred_pool_strategy: row
+                .get_optional_string("preferred_pool_strategy")
+                .unwrap_or_else(core_store::default_kiro_pool_strategy),
             model_name_map_json: row.get(15),
             request_max_concurrency: row.get(16),
             request_min_start_interval_ms: row.get(17),
@@ -177,6 +180,7 @@ pub fn admin_key_from_bundle(bundle: &KeyBundle) -> AdminKey {
         account_group_id: bundle.route.account_group_id.clone(),
         fixed_account_name: bundle.route.fixed_account_name.clone(),
         auto_account_names: decode_optional_json(bundle.route.auto_account_names_json.as_deref()),
+        preferred_pool_strategy: bundle.route.preferred_pool_strategy.clone(),
         model_name_map: decode_optional_json(bundle.route.model_name_map_json.as_deref()),
         request_max_concurrency: bundle
             .route
@@ -377,6 +381,9 @@ pub fn decode_kiro_admin_account_list_row(row: PgRow) -> KiroAdminAccountListRow
         min_start_interval_ms: row.get(22),
         auth_min_start_interval_ms: row.get(23),
         minimum_remaining_credits_before_block: row.get(24),
+        pool_strategy: row
+            .get_optional_string("pool_strategy")
+            .unwrap_or_else(core_store::default_kiro_pool_strategy),
         proxy_mode: row.get(25),
         proxy_config_id: row.get(26),
         auth_proxy_config_id: row.get(27),

@@ -52,6 +52,9 @@ pub struct AdminKey {
     pub fixed_account_name: Option<String>,
     /// Auto account names.
     pub auto_account_names: Option<Vec<String>>,
+    /// Preferred Kiro scheduler pool when route strategy is automatic.
+    #[serde(default = "super::default_kiro_pool_strategy")]
+    pub preferred_pool_strategy: String,
     /// Model name mapping.
     pub model_name_map: Option<BTreeMap<String, String>>,
     /// Per-key request concurrency cap.
@@ -330,6 +333,8 @@ pub struct AdminKeyPatch {
     pub fixed_account_name: Option<Option<String>>,
     /// New auto account list.
     pub auto_account_names: Option<Option<Vec<String>>>,
+    /// New preferred Kiro scheduler pool.
+    pub preferred_pool_strategy: Option<String>,
     /// New model name map.
     pub model_name_map: Option<Option<BTreeMap<String, String>>>,
     /// New per-key request concurrency cap.

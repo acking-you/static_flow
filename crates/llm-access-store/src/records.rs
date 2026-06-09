@@ -54,6 +54,8 @@ pub struct KeyRouteConfig {
     pub auto_account_names_json: Option<String>,
     /// Account group id selected by the key.
     pub account_group_id: Option<String>,
+    /// Preferred Kiro scheduler pool when route strategy is automatic.
+    pub preferred_pool_strategy: String,
     /// JSON object mapping public model names to upstream model names.
     pub model_name_map_json: Option<String>,
     /// Optional per-key concurrency cap.

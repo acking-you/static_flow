@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS llm_key_route_config (
     fixed_account_name TEXT,
     auto_account_names_json JSONB,
     account_group_id TEXT,
+    preferred_pool_strategy TEXT NOT NULL DEFAULT 'balanced' CHECK (
+        preferred_pool_strategy IN ('balanced', 'credit_first')
+    ),
     model_name_map_json JSONB,
     request_max_concurrency BIGINT,
     request_min_start_interval_ms BIGINT,
