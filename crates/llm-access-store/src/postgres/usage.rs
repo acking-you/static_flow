@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use llm_access_core::{
     store::{
         self as core_store, KeyUsageRollupDelta, UsageEventSink, UsageRollupApplyReport,
-        UsageRollupBatch, UsageRollupBatchSink,
+        UsageRollupBatch, UsageRollupBatchSink, UsageRollupDigestMismatch,
     },
     usage::UsageEvent,
 };
@@ -390,10 +390,10 @@ impl PostgresControlRepository {
                              stable wire digest"
                         );
                     } else {
-                        anyhow::bail!(
-                            "usage rollup batch id `{}` was replayed with a different digest",
-                            batch.batch_id
-                        );
+                        return Err(UsageRollupDigestMismatch {
+                            batch_id: batch.batch_id.clone(),
+                        }
+                        .into());
                     }
                 }
                 report.already_applied_batch_count =

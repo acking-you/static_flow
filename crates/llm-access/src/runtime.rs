@@ -24,7 +24,7 @@ use llm_access_core::store::{
 use llm_access_core::store::{
     AdminKey, AdminKeyPatch, AdminKeysPage, AdminPageRequest, AdminRuntimeConfig, AuthenticatedKey,
     KeyUsageRollupDelta, NewAdminKey, PublicAccessKey, PublicUsageLookupKey, UsageEventSink,
-    UsageRollupBatch, UsageRollupBatchSink,
+    UsageRollupBatch, UsageRollupBatchSink, UsageRollupDigestMismatch,
 };
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 use llm_access_core::usage::UsageEvent;
@@ -1563,6 +1563,49 @@ async fn flush_rollup_backlog(
             );
         },
         Err(err) => {
+            if is_deterministic_rollup_apply_error(&err) {
+                match state.rollup_backlog.quarantine_claim(claim) {
+                    Ok(bad_path) => {
+                        if let Err(clear_err) = targets.pending_rollups.subtract_batches(&batches) {
+                            tracing::error!(
+                                path = %claim_path,
+                                bad_path = %bad_path.display(),
+                                source_event_count = summary.source_event_count,
+                                distinct_key_count = summary.distinct_key_count,
+                                key_id_samples = ?summary.key_id_samples,
+                                batch_id_samples = ?summary.batch_id_samples,
+                                flush_context = error_message,
+                                "quarantined poison control rollup backlog but failed to clear \
+                                 pending usage rollups: {clear_err:#}"
+                            );
+                        }
+                        tracing::error!(
+                            path = %claim_path,
+                            bad_path = %bad_path.display(),
+                            source_event_count = summary.source_event_count,
+                            distinct_key_count = summary.distinct_key_count,
+                            key_id_samples = ?summary.key_id_samples,
+                            batch_id_samples = ?summary.batch_id_samples,
+                            flush_context = error_message,
+                            "quarantined poison control rollup backlog after deterministic apply \
+                             failure: {err:#}"
+                        );
+                    },
+                    Err(quarantine_err) => {
+                        tracing::error!(
+                            path = %claim_path,
+                            source_event_count = summary.source_event_count,
+                            distinct_key_count = summary.distinct_key_count,
+                            key_id_samples = ?summary.key_id_samples,
+                            batch_id_samples = ?summary.batch_id_samples,
+                            flush_context = error_message,
+                            "failed to quarantine poison control rollup backlog after deterministic \
+                             apply failure: {quarantine_err:#}; original apply error: {err:#}"
+                        );
+                    },
+                }
+                return;
+            }
             let failure = state
                 .rollup_retry
                 .record_failure(Instant::now(), state.flush_interval);
@@ -1596,6 +1639,11 @@ async fn flush_rollup_backlog(
             }
         },
     }
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+fn is_deterministic_rollup_apply_error(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<UsageRollupDigestMismatch>().is_some()
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -2003,6 +2051,7 @@ mod tests {
         store::{
             AdminRuntimeConfig, AuthenticatedKey, ControlStore, KeyUsageRollupDelta,
             UsageEventSink, UsageRollupApplyReport, UsageRollupBatch, UsageRollupBatchSink,
+            UsageRollupDigestMismatch,
         },
         usage::UsageEvent,
     };
@@ -2162,6 +2211,31 @@ mod tests {
         ) -> anyhow::Result<UsageRollupApplyReport> {
             *self.attempts.lock().await += 1;
             anyhow::bail!("rollup sink unavailable")
+        }
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    #[derive(Default)]
+    struct DigestMismatchUsageRollupSink {
+        attempts: Mutex<usize>,
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    #[async_trait::async_trait]
+    impl UsageRollupBatchSink for DigestMismatchUsageRollupSink {
+        async fn apply_usage_rollup_batches(
+            &self,
+            batches: &[UsageRollupBatch],
+        ) -> anyhow::Result<UsageRollupApplyReport> {
+            *self.attempts.lock().await += 1;
+            let batch_id = batches
+                .first()
+                .map(|batch| batch.batch_id.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+            Err(UsageRollupDigestMismatch {
+                batch_id,
+            }
+            .into())
         }
     }
 
@@ -2567,6 +2641,65 @@ mod tests {
         .expect("parked rollup was not retried after retry window elapsed");
 
         handle.shutdown().await;
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    #[tokio::test]
+    async fn parked_rollup_backlog_quarantines_digest_mismatch() {
+        let rollup_sink = DigestMismatchUsageRollupSink::default();
+        let analytics_sink = RecordingUsageEventSink::default();
+        let pending_rollups = super::PendingUsageRollups::default();
+        let (_backlog_root, mut rollup_backlog) = test_rollup_backlog();
+        let events = vec![sample_usage_event("evt-poison-rollup")];
+        let rollup_batch = UsageRollupBatch::from_usage_events(
+            "poison-rollup".to_string(),
+            Some("node-test".to_string()),
+            1_700_000_000_000,
+            &events,
+        )
+        .expect("aggregate rollup batch");
+        pending_rollups
+            .add_batch(&rollup_batch)
+            .expect("add pending rollup");
+        rollup_backlog
+            .append_batches(std::slice::from_ref(&rollup_batch))
+            .expect("append parked rollup");
+        let mut buffer = Vec::new();
+        let mut analytics_retry_buffer = Vec::new();
+        let mut buffered_bytes = 0usize;
+        let mut analytics_retry_bytes = 0usize;
+        let mut flush_count = 0u64;
+        let mut rollup_retry = super::UsageRollupRetryState::default();
+
+        super::flush_usage_event_buffer(
+            super::UsageEventFlushTargets {
+                rollup_sink: &rollup_sink,
+                analytics_sink: &analytics_sink,
+                pending_rollups: &pending_rollups,
+                source_node_id: Some("node-test"),
+            },
+            super::UsageEventFlushState {
+                buffer: &mut buffer,
+                analytics_retry_buffer: &mut analytics_retry_buffer,
+                buffered_bytes: &mut buffered_bytes,
+                analytics_retry_bytes: &mut analytics_retry_bytes,
+                max_buffer_bytes: 8 * 1024 * 1024,
+                flush_count: &mut flush_count,
+                rollup_retry: &mut rollup_retry,
+                flush_interval: Duration::from_secs(1),
+                rollup_backlog: &mut rollup_backlog,
+            },
+            "usage event batch flush failed",
+        )
+        .await;
+
+        assert_eq!(*rollup_sink.attempts.lock().await, 1);
+        assert_eq!(rollup_backlog.sealed_file_count().expect("sealed count"), 0);
+        assert!(rollup_backlog
+            .read_all_pending_batches()
+            .expect("pending batches")
+            .is_empty());
+        assert!(pending_rollups.delta_for_key("key-runtime").is_none());
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]

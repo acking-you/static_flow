@@ -84,6 +84,7 @@ pub use usage::{
     UsageEventPage, UsageEventQuery, UsageEventSource, UsageEventStatusKind, UsageEventTotals,
     UsageFilterOptions, UsageMetricsDimensionView, UsageMetricsQuery, UsageMetricsSnapshot,
     UsageMetricsStatusCodeView, UsageMetricsSummary, UsageRollupApplyReport, UsageRollupBatch,
+    UsageRollupDigestMismatch,
 };
 
 /// Default public auth-cache TTL used when no runtime config row exists yet.

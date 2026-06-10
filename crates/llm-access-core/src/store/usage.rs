@@ -191,6 +191,14 @@ pub struct UsageRollupApplyReport {
     pub missing_key_delta_count: usize,
 }
 
+/// A rollup batch id was replayed with different content.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("usage rollup batch id `{batch_id}` was replayed with a different digest")]
+pub struct UsageRollupDigestMismatch {
+    /// Conflicting rollup batch id.
+    pub batch_id: String,
+}
+
 /// Physical usage-event source queried by admin and public compatibility views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
