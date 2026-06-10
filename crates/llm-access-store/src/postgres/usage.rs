@@ -248,7 +248,7 @@ impl PostgresControlRepository {
                         + EXCLUDED.billable_tokens,
                     credit_total = (
                         (llm_key_usage_rollups.credit_total)::numeric
-                        + (EXCLUDED.credit_total::double precision)::numeric
+                        + (EXCLUDED.credit_total)::numeric
                     )::text,
                     credit_missing_events =
                         llm_key_usage_rollups.credit_missing_events
