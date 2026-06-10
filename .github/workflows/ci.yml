@@ -121,6 +121,36 @@ jobs:
             echo "LD_LIBRARY_PATH=$lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           } >> "$GITHUB_ENV"
 
+      - name: Check Neon CI credentials
+        if: needs.changes.outputs.mode == 'all' || contains(needs.changes.outputs.test_crates, 'llm-access-store')
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$NEON_API_KEY"
+          test -n "$NEON_PROJECT_ID"
+
+      - name: Compute Neon branch expiration
+        if: needs.changes.outputs.mode == 'all' || contains(needs.changes.outputs.test_crates, 'llm-access-store')
+        run: echo "NEON_BRANCH_EXPIRES_AT=$(date -u --date '+1 day' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
+
+      - name: Create Neon test branch
+        id: create-neon-branch
+        if: needs.changes.outputs.mode == 'all' || contains(needs.changes.outputs.test_crates, 'llm-access-store')
+        uses: neondatabase/create-branch-action@v6
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+          branch_name: ci-pr-${{ github.event.pull_request.number }}-${{ github.run_id }}-${{ github.run_attempt }}
+          database: llm_access_control
+          role: llm_access_owner
+          expires_at: ${{ env.NEON_BRANCH_EXPIRES_AT }}
+
+      - name: Export Neon test database URL
+        if: steps.create-neon-branch.outputs.db_url != ''
+        run: echo "TEST_POSTGRES_URL=${{ steps.create-neon-branch.outputs.db_url }}" >> "$GITHUB_ENV"
+
       - name: Run tests for affected crates
         # subset -> test the changed crates + their dependents; all -> the
         # full workspace. See scripts/ci_affected.py.
@@ -128,3 +158,11 @@ jobs:
           MODE: ${{ needs.changes.outputs.mode }}
           CRATES: ${{ needs.changes.outputs.test_crates }}
         run: python3 scripts/ci_affected.py run-test
+
+      - name: Delete Neon test branch
+        if: always() && steps.create-neon-branch.outputs.branch_id != ''
+        uses: neondatabase/delete-branch-action@v3
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+          branch: ${{ steps.create-neon-branch.outputs.branch_id }}

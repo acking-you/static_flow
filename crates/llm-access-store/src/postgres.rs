@@ -1496,6 +1496,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn postgres_repository_skips_missing_key_usage_rollups() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        seed_test_key_bundle(&database_url)
+            .await
+            .expect("seed postgres test key bundle");
+        let repo = super::PostgresControlRepository::connect(&database_url, None)
+            .await
+            .expect("connect postgres repository");
+
+        let existing = llm_access_core::usage::UsageEvent {
+            event_id: "evt-existing".to_string(),
+            created_at_ms: 1_700_000_000_001,
+            provider_type: ProviderType::Codex,
+            protocol_family: ProtocolFamily::OpenAi,
+            key_id: "key-1".to_string(),
+            key_name: "external".to_string(),
+            account_name: Some("acct-1".to_string()),
+            account_group_id_at_event: None,
+            route_strategy_at_event: Some(RouteStrategy::Auto),
+            request_method: "POST".to_string(),
+            request_url: "https://ackingliu.top/v1/chat/completions".to_string(),
+            endpoint: "/v1/chat/completions".to_string(),
+            model: Some("gpt-4.1".to_string()),
+            mapped_model: Some("gpt-4.1".to_string()),
+            status_code: 200,
+            request_body_bytes: Some(256),
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
+            input_uncached_tokens: 10,
+            input_cached_tokens: 2,
+            output_tokens: 5,
+            billable_tokens: 15,
+            credit_usage: Some("1.25".to_string()),
+            usage_missing: false,
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: None,
+            client_request_body_json: None,
+            upstream_request_body_json: None,
+            full_request_json: None,
+            error_message: None,
+            error_body: None,
+            response_body: None,
+            timing: llm_access_core::usage::UsageTiming {
+                latency_ms: Some(120),
+                ..Default::default()
+            },
+            stream: llm_access_core::usage::UsageStreamDetails::default(),
+        };
+        let missing = llm_access_core::usage::UsageEvent {
+            event_id: "evt-missing".to_string(),
+            key_id: "deleted-key".to_string(),
+            key_name: "deleted".to_string(),
+            input_uncached_tokens: 99,
+            input_cached_tokens: 1,
+            output_tokens: 7,
+            billable_tokens: 107,
+            credit_usage: Some("9.99".to_string()),
+            ..existing.clone()
+        };
+
+        repo.append_usage_events(&[existing, missing])
+            .await
+            .expect("append usage events with a missing key");
+
+        let key = repo
+            .get_public_usage_key_by_secret("secret")
+            .await
+            .expect("load usage lookup key")
+            .expect("public usage lookup row");
+        assert_eq!(key.usage_input_uncached_tokens, 10);
+        assert_eq!(key.usage_input_cached_tokens, 2);
+        assert_eq!(key.usage_output_tokens, 5);
+        assert_eq!(key.usage_billable_tokens, 15);
+        assert_eq!(key.usage_credit_total, 1.25);
+        assert_eq!(key.last_used_at_ms, Some(1_700_000_000_001));
+    }
+
+    #[tokio::test]
     async fn postgres_repository_lists_kiro_key_pages_with_candidate_credit_summaries() {
         let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
             eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");

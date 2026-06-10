@@ -187,19 +187,27 @@ impl PostgresControlRepository {
         let deltas = aggregate_usage_rollup_deltas(events)?;
         for chunk in deltas.chunks(USAGE_ROLLUP_BATCH_ROW_LIMIT.max(1)) {
             let mut builder = QueryBuilder::<Postgres>::new(
-                "UPDATE llm_key_usage_rollups AS u
-                 SET input_uncached_tokens = u.input_uncached_tokens + v.input_uncached_tokens,
-                     input_cached_tokens = u.input_cached_tokens + v.input_cached_tokens,
-                     output_tokens = u.output_tokens + v.output_tokens,
-                     billable_tokens = u.billable_tokens + v.billable_tokens,
-                     credit_total = ((u.credit_total)::numeric + (v.credit_total::double \
-                 precision)::numeric)::text,
-                     credit_missing_events = u.credit_missing_events + v.credit_missing_events,
-                     last_used_at_ms = CASE
-                         WHEN u.last_used_at_ms IS NULL THEN v.last_used_at_ms
-                         ELSE GREATEST(u.last_used_at_ms, v.last_used_at_ms)
-                     END,
-                     updated_at_ms = GREATEST(u.updated_at_ms, v.last_used_at_ms)
+                "INSERT INTO llm_key_usage_rollups (
+                    key_id,
+                    input_uncached_tokens,
+                    input_cached_tokens,
+                    output_tokens,
+                    billable_tokens,
+                    credit_total,
+                    credit_missing_events,
+                    last_used_at_ms,
+                    updated_at_ms
+                 )
+                 SELECT
+                    v.key_id,
+                    v.input_uncached_tokens,
+                    v.input_cached_tokens,
+                    v.output_tokens,
+                    v.billable_tokens,
+                    v.credit_total::text,
+                    v.credit_missing_events,
+                    v.last_used_at_ms,
+                    v.last_used_at_ms
                  FROM (",
             );
             builder.push_values(chunk.iter(), |mut row, (key_id, delta)| {
@@ -223,19 +231,56 @@ impl PostgresControlRepository {
                     credit_missing_events,
                     last_used_at_ms
                  )
-                 WHERE u.key_id = v.key_id",
+                 JOIN llm_keys AS k ON k.key_id = v.key_id
+                 WHERE TRUE
+                 ON CONFLICT (key_id) DO UPDATE SET
+                    input_uncached_tokens =
+                        llm_key_usage_rollups.input_uncached_tokens
+                        + EXCLUDED.input_uncached_tokens,
+                    input_cached_tokens =
+                        llm_key_usage_rollups.input_cached_tokens
+                        + EXCLUDED.input_cached_tokens,
+                    output_tokens =
+                        llm_key_usage_rollups.output_tokens
+                        + EXCLUDED.output_tokens,
+                    billable_tokens =
+                        llm_key_usage_rollups.billable_tokens
+                        + EXCLUDED.billable_tokens,
+                    credit_total = (
+                        (llm_key_usage_rollups.credit_total)::numeric
+                        + (EXCLUDED.credit_total::double precision)::numeric
+                    )::text,
+                    credit_missing_events =
+                        llm_key_usage_rollups.credit_missing_events
+                        + EXCLUDED.credit_missing_events,
+                    last_used_at_ms = CASE
+                        WHEN llm_key_usage_rollups.last_used_at_ms IS NULL THEN
+                            EXCLUDED.last_used_at_ms
+                        ELSE GREATEST(
+                            llm_key_usage_rollups.last_used_at_ms,
+                            EXCLUDED.last_used_at_ms
+                        )
+                    END,
+                    updated_at_ms = GREATEST(
+                        llm_key_usage_rollups.updated_at_ms,
+                        EXCLUDED.updated_at_ms
+                    )",
             );
             let changed = builder
                 .build()
                 .persistent(false)
                 .execute(&self.client.pool)
                 .await
-                .context("batch update postgres usage rollups")?
+                .context("batch upsert postgres usage rollups")?
                 .rows_affected();
-            if changed != chunk.len() as u64 {
-                anyhow::bail!(
-                    "usage rollup rows missing for {} key(s) in postgres batch update",
-                    chunk.len().saturating_sub(changed as usize)
+            let skipped = chunk
+                .len()
+                .saturating_sub(usize::try_from(changed).unwrap_or(usize::MAX));
+            if skipped > 0 {
+                tracing::warn!(
+                    missing_key_count = skipped,
+                    batch_key_count = chunk.len(),
+                    "skipped postgres usage rollup deltas for missing keys"
                 );
             }
         }
