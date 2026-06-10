@@ -993,11 +993,29 @@ async fn prune_usage_rollup_batch_markers_if_due(
     rollup_sink: &dyn UsageRollupBatchSink,
     last_prune_at: &mut Option<Instant>,
     now: Instant,
+    rollup_backlog: &UsageRollupBacklog,
 ) {
     if last_prune_at.is_some_and(|last| {
         now.saturating_duration_since(last) < USAGE_ROLLUP_BATCH_MARKER_PRUNE_INTERVAL
     }) {
         return;
+    }
+    match rollup_backlog.sealed_file_count() {
+        Ok(count) if count > 0 => {
+            tracing::debug!(
+                sealed_file_count = count,
+                "skipping usage rollup applied-batch marker prune until disk backlog is drained"
+            );
+            return;
+        },
+        Ok(_) => {},
+        Err(err) => {
+            tracing::warn!(
+                "failed to count usage rollup disk backlog before marker prune; skipping prune: \
+                 {err:#}"
+            );
+            return;
+        },
     }
     *last_prune_at = Some(now);
     let retention_ms =
@@ -1191,6 +1209,7 @@ fn spawn_usage_event_flusher(parts: UsageEventFlusherParts) -> Arc<UsageEventFlu
                         rollup_sink.as_ref(),
                         &mut last_rollup_marker_prune_at,
                         now,
+                        &rollup_backlog,
                     )
                     .await;
                     if rollup_retry.reenable_if_ready(now) {
@@ -2175,6 +2194,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingUsageRollupSink {
         batches: Mutex<Vec<Vec<String>>>,
+        pruned_before_ms: Mutex<Vec<i64>>,
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -2193,6 +2213,14 @@ mod tests {
                 delta_count: batches.iter().map(|batch| batch.deltas.len()).sum(),
                 ..UsageRollupApplyReport::default()
             })
+        }
+
+        async fn prune_usage_rollup_batch_markers(
+            &self,
+            applied_before_ms: i64,
+        ) -> anyhow::Result<u64> {
+            self.pruned_before_ms.lock().await.push(applied_before_ms);
+            Ok(0)
         }
     }
 
@@ -2641,6 +2669,55 @@ mod tests {
         .expect("parked rollup was not retried after retry window elapsed");
 
         handle.shutdown().await;
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    #[tokio::test]
+    async fn rollup_marker_prune_waits_until_backlog_is_drained() {
+        let rollup_sink = RecordingUsageRollupSink::default();
+        let (_backlog_root, mut rollup_backlog) = test_rollup_backlog();
+        let events = vec![sample_usage_event("evt-prune-wait")];
+        let rollup_batch = UsageRollupBatch::from_usage_events(
+            "prune-wait-rollup".to_string(),
+            Some("node-test".to_string()),
+            1_700_000_000_000,
+            &events,
+        )
+        .expect("aggregate rollup batch");
+        rollup_backlog
+            .append_batches(std::slice::from_ref(&rollup_batch))
+            .expect("append parked rollup");
+        let now = Instant::now();
+        let mut last_prune_at = None;
+
+        super::prune_usage_rollup_batch_markers_if_due(
+            &rollup_sink,
+            &mut last_prune_at,
+            now,
+            &rollup_backlog,
+        )
+        .await;
+
+        assert!(rollup_sink.pruned_before_ms.lock().await.is_empty());
+        assert!(last_prune_at.is_none());
+        let claim = rollup_backlog
+            .claim_next()
+            .expect("claim backlog")
+            .expect("claim");
+        rollup_backlog
+            .complete_claim(claim)
+            .expect("complete backlog claim");
+
+        super::prune_usage_rollup_batch_markers_if_due(
+            &rollup_sink,
+            &mut last_prune_at,
+            now,
+            &rollup_backlog,
+        )
+        .await;
+
+        assert_eq!(rollup_sink.pruned_before_ms.lock().await.len(), 1);
+        assert_eq!(last_prune_at, Some(now));
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
