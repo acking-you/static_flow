@@ -1,7 +1,7 @@
 //! Runtime startup validation for the standalone LLM access service.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, RwLock},
     time::Duration,
@@ -46,7 +46,7 @@ use crate::{
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 const USAGE_EVENT_CHANNEL_CAPACITY: usize = 1_024;
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-const USAGE_EVENT_ROLLUP_MAX_RETRIES: usize = 3;
+const USAGE_EVENT_ROLLUP_MAX_ATTEMPTS: usize = 3;
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 const USAGE_EVENT_LOG_SAMPLE_LIMIT: usize = 8;
 
@@ -847,12 +847,14 @@ fn spawn_usage_event_flusher(
             usage_flush_config(&config)
         };
         let mut buffer = Vec::with_capacity(initial_config.batch_size);
+        let mut rollup_retry_buffer = Vec::new();
         let mut analytics_retry_buffer = Vec::new();
         let mut buffered_bytes = 0usize;
+        let mut rollup_retry_bytes = 0usize;
         let mut analytics_retry_bytes = 0usize;
         let mut flush_count: u64 = 0;
-        let mut retry_failed_batch_on_timer = false;
         let mut rollup_retry_attempts = 0usize;
+        let mut rollup_retry_exhausted = false;
 
         loop {
             let flush_config = {
@@ -861,66 +863,6 @@ fn spawn_usage_event_flusher(
                     .expect("llm access runtime config lock poisoned");
                 usage_flush_config(&config)
             };
-
-            if retry_failed_batch_on_timer
-                && (!buffer.is_empty() || !analytics_retry_buffer.is_empty())
-            {
-                tokio::select! {
-                    _ = shutdown_rx.changed() => {
-                        if *shutdown_rx.borrow() {
-                            while let Ok(events) = rx.try_recv() {
-                                append_usage_event_batch(
-                                    &mut buffer,
-                                    &mut buffered_bytes,
-                                    events,
-                                );
-                            }
-                            let _ = flush_usage_event_buffer(
-                                UsageEventFlushTargets {
-                                    rollup_sink: rollup_sink.as_ref(),
-                                    analytics_sink: analytics_sink.as_ref(),
-                                    pending_rollups: pending_rollups.as_ref(),
-                                },
-                                UsageEventFlushState {
-                                    buffer: &mut buffer,
-                                    analytics_retry_buffer: &mut analytics_retry_buffer,
-                                    buffered_bytes: &mut buffered_bytes,
-                                    analytics_retry_bytes: &mut analytics_retry_bytes,
-                                    max_buffer_bytes: flush_config.max_buffer_bytes,
-                                    flush_count: &mut flush_count,
-                                    rollup_retry_attempts: &mut rollup_retry_attempts,
-                                },
-                                "final usage event flush failed during shutdown",
-                            )
-                            .await;
-                            tracing::info!("llm access usage event flusher shutting down (shutdown signal)");
-                            return;
-                        }
-                    }
-                    _ = time::sleep(flush_config.flush_interval) => {
-                        journal_sink.maintain();
-                        retry_failed_batch_on_timer = flush_usage_event_buffer(
-                            UsageEventFlushTargets {
-                                rollup_sink: rollup_sink.as_ref(),
-                                analytics_sink: analytics_sink.as_ref(),
-                                pending_rollups: pending_rollups.as_ref(),
-                            },
-                            UsageEventFlushState {
-                                buffer: &mut buffer,
-                                analytics_retry_buffer: &mut analytics_retry_buffer,
-                                buffered_bytes: &mut buffered_bytes,
-                                analytics_retry_bytes: &mut analytics_retry_bytes,
-                                max_buffer_bytes: flush_config.max_buffer_bytes,
-                                flush_count: &mut flush_count,
-                                rollup_retry_attempts: &mut rollup_retry_attempts,
-                            },
-                            "usage event retry flush failed",
-                        )
-                        .await;
-                    }
-                }
-                continue;
-            }
 
             tokio::select! {
                 _ = shutdown_rx.changed() => {
@@ -932,7 +874,7 @@ fn spawn_usage_event_flusher(
                                 events,
                             );
                         }
-                        let _ = flush_usage_event_buffer(
+                        flush_usage_event_buffer(
                             UsageEventFlushTargets {
                                 rollup_sink: rollup_sink.as_ref(),
                                 analytics_sink: analytics_sink.as_ref(),
@@ -940,12 +882,15 @@ fn spawn_usage_event_flusher(
                             },
                             UsageEventFlushState {
                                 buffer: &mut buffer,
+                                rollup_retry_buffer: &mut rollup_retry_buffer,
                                 analytics_retry_buffer: &mut analytics_retry_buffer,
                                 buffered_bytes: &mut buffered_bytes,
+                                rollup_retry_bytes: &mut rollup_retry_bytes,
                                 analytics_retry_bytes: &mut analytics_retry_bytes,
                                 max_buffer_bytes: flush_config.max_buffer_bytes,
                                 flush_count: &mut flush_count,
                                 rollup_retry_attempts: &mut rollup_retry_attempts,
+                                rollup_retry_exhausted: &mut rollup_retry_exhausted,
                             },
                             "final usage event flush failed during shutdown",
                         )
@@ -979,7 +924,7 @@ fn spawn_usage_event_flusher(
                             if buffer.len() >= flush_config.batch_size
                                 || buffered_bytes >= flush_config.max_buffer_bytes
                             {
-                                retry_failed_batch_on_timer = flush_usage_event_buffer(
+                                flush_usage_event_buffer(
                                     UsageEventFlushTargets {
                                         rollup_sink: rollup_sink.as_ref(),
                                         analytics_sink: analytics_sink.as_ref(),
@@ -987,12 +932,15 @@ fn spawn_usage_event_flusher(
                                     },
                                     UsageEventFlushState {
                                         buffer: &mut buffer,
+                                        rollup_retry_buffer: &mut rollup_retry_buffer,
                                         analytics_retry_buffer: &mut analytics_retry_buffer,
                                         buffered_bytes: &mut buffered_bytes,
+                                        rollup_retry_bytes: &mut rollup_retry_bytes,
                                         analytics_retry_bytes: &mut analytics_retry_bytes,
                                         max_buffer_bytes: flush_config.max_buffer_bytes,
                                         flush_count: &mut flush_count,
                                         rollup_retry_attempts: &mut rollup_retry_attempts,
+                                        rollup_retry_exhausted: &mut rollup_retry_exhausted,
                                     },
                                     "usage event batch flush failed",
                                 )
@@ -1000,7 +948,7 @@ fn spawn_usage_event_flusher(
                             }
                         },
                         None => {
-                            let _ = flush_usage_event_buffer(
+                            flush_usage_event_buffer(
                                 UsageEventFlushTargets {
                                     rollup_sink: rollup_sink.as_ref(),
                                     analytics_sink: analytics_sink.as_ref(),
@@ -1008,12 +956,15 @@ fn spawn_usage_event_flusher(
                                 },
                                 UsageEventFlushState {
                                     buffer: &mut buffer,
+                                    rollup_retry_buffer: &mut rollup_retry_buffer,
                                     analytics_retry_buffer: &mut analytics_retry_buffer,
                                     buffered_bytes: &mut buffered_bytes,
+                                    rollup_retry_bytes: &mut rollup_retry_bytes,
                                     analytics_retry_bytes: &mut analytics_retry_bytes,
                                     max_buffer_bytes: flush_config.max_buffer_bytes,
                                     flush_count: &mut flush_count,
                                     rollup_retry_attempts: &mut rollup_retry_attempts,
+                                    rollup_retry_exhausted: &mut rollup_retry_exhausted,
                                 },
                                 "final usage event flush failed",
                             )
@@ -1025,8 +976,11 @@ fn spawn_usage_event_flusher(
                 }
                 _ = time::sleep(flush_config.flush_interval) => {
                     journal_sink.maintain();
-                    if !buffer.is_empty() || !analytics_retry_buffer.is_empty() {
-                        retry_failed_batch_on_timer = flush_usage_event_buffer(
+                    if !buffer.is_empty()
+                        || !rollup_retry_buffer.is_empty()
+                        || !analytics_retry_buffer.is_empty()
+                    {
+                        flush_usage_event_buffer(
                             UsageEventFlushTargets {
                                 rollup_sink: rollup_sink.as_ref(),
                                 analytics_sink: analytics_sink.as_ref(),
@@ -1034,12 +988,15 @@ fn spawn_usage_event_flusher(
                             },
                             UsageEventFlushState {
                                 buffer: &mut buffer,
+                                rollup_retry_buffer: &mut rollup_retry_buffer,
                                 analytics_retry_buffer: &mut analytics_retry_buffer,
                                 buffered_bytes: &mut buffered_bytes,
+                                rollup_retry_bytes: &mut rollup_retry_bytes,
                                 analytics_retry_bytes: &mut analytics_retry_bytes,
                                 max_buffer_bytes: flush_config.max_buffer_bytes,
                                 flush_count: &mut flush_count,
                                 rollup_retry_attempts: &mut rollup_retry_attempts,
+                                rollup_retry_exhausted: &mut rollup_retry_exhausted,
                             },
                             "usage event timed flush failed",
                         )
@@ -1096,12 +1053,15 @@ struct UsageEventFlushTargets<'a> {
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 struct UsageEventFlushState<'a> {
     buffer: &'a mut Vec<UsageEvent>,
+    rollup_retry_buffer: &'a mut Vec<UsageEvent>,
     analytics_retry_buffer: &'a mut Vec<UsageEvent>,
     buffered_bytes: &'a mut usize,
+    rollup_retry_bytes: &'a mut usize,
     analytics_retry_bytes: &'a mut usize,
     max_buffer_bytes: usize,
     flush_count: &'a mut u64,
     rollup_retry_attempts: &'a mut usize,
+    rollup_retry_exhausted: &'a mut bool,
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -1109,14 +1069,25 @@ async fn flush_usage_event_buffer(
     targets: UsageEventFlushTargets<'_>,
     mut state: UsageEventFlushState<'_>,
     error_message: &'static str,
-) -> bool {
+) {
+    flush_rollup_retry_buffer(&targets, &mut state, error_message).await;
     if !state.buffer.is_empty() {
         let batch = std::mem::take(state.buffer);
         *state.buffered_bytes = 0;
         let count = batch.len();
+        append_analytics_retry_events(&mut state, batch.clone());
         match targets.rollup_sink.append_usage_events(&batch).await {
             Ok(()) => {
                 *state.rollup_retry_attempts = 0;
+                if *state.rollup_retry_exhausted && !state.rollup_retry_buffer.is_empty() {
+                    *state.rollup_retry_exhausted = false;
+                    tracing::error!(
+                        retry_backlog_count = state.rollup_retry_buffer.len(),
+                        retry_backlog_bytes = *state.rollup_retry_bytes,
+                        "live usage rollup recovered; re-enabling parked control rollup backlog \
+                         retries"
+                    );
+                }
                 if let Err(err) = targets.pending_rollups.subtract_events(&batch) {
                     let summary = usage_event_batch_log_summary(&batch);
                     tracing::error!(
@@ -1129,63 +1100,30 @@ async fn flush_usage_event_buffer(
                          {err:#}"
                     );
                 }
-                append_analytics_retry_events(&mut state, batch);
             },
             Err(err) => {
-                *state.rollup_retry_attempts = state.rollup_retry_attempts.saturating_add(1);
-                let retry_attempt = *state.rollup_retry_attempts;
                 let buffered_bytes = batch.iter().map(estimate_usage_event_bytes).sum();
                 let summary = usage_event_batch_log_summary(&batch);
-                if retry_attempt < USAGE_EVENT_ROLLUP_MAX_RETRIES {
-                    tracing::error!(
-                        count,
-                        buffered_bytes,
-                        retry_attempt,
-                        max_retries = USAGE_EVENT_ROLLUP_MAX_RETRIES,
-                        distinct_key_count = summary.distinct_key_count,
-                        key_id_samples = ?summary.key_id_samples,
-                        key_name_samples = ?summary.key_name_samples,
-                        account_name_samples = ?summary.account_name_samples,
-                        provider_samples = ?summary.provider_samples,
-                        endpoint_samples = ?summary.endpoint_samples,
-                        status_code_samples = ?summary.status_code_samples,
-                        event_id_samples = ?summary.event_id_samples,
-                        "{}: {err:#}",
-                        error_message
-                    );
-                    *state.buffered_bytes = buffered_bytes;
-                    *state.buffer = batch;
-                    return true;
-                }
-                tracing::error!(
+                record_rollup_failure_attempt(&mut state);
+                let context = if *state.rollup_retry_exhausted {
+                    "live usage rollup write failed and the retry window is exhausted; parked \
+                     control rollup backlog remains in pending quota overlay until a live rollup \
+                     succeeds"
+                } else {
+                    "live usage rollup write failed; parked control rollup delta while forwarding \
+                     events to analytics/journal"
+                };
+                log_usage_rollup_failure(UsageRollupFailureLog {
+                    context,
+                    flush_context: error_message,
                     count,
                     buffered_bytes,
-                    retry_attempt,
-                    max_retries = USAGE_EVENT_ROLLUP_MAX_RETRIES,
-                    distinct_key_count = summary.distinct_key_count,
-                    key_id_samples = ?summary.key_id_samples,
-                    key_name_samples = ?summary.key_name_samples,
-                    account_name_samples = ?summary.account_name_samples,
-                    provider_samples = ?summary.provider_samples,
-                    endpoint_samples = ?summary.endpoint_samples,
-                    status_code_samples = ?summary.status_code_samples,
-                    event_id_samples = ?summary.event_id_samples,
-                    "usage rollup batch failed after bounded retries; abandoning control rollup \
-                     for this batch and forwarding events to analytics/journal: {err:#}"
-                );
-                if let Err(clear_err) = targets.pending_rollups.subtract_events(&batch) {
-                    tracing::error!(
-                        count,
-                        distinct_key_count = summary.distinct_key_count,
-                        key_id_samples = ?summary.key_id_samples,
-                        key_name_samples = ?summary.key_name_samples,
-                        event_id_samples = ?summary.event_id_samples,
-                        "abandoned usage rollups but failed to clear pending usage rollups: \
-                         {clear_err:#}"
-                    );
-                }
-                *state.rollup_retry_attempts = 0;
-                append_analytics_retry_events(&mut state, batch);
+                    summary: &summary,
+                    attempt: *state.rollup_retry_attempts,
+                    retry_exhausted: *state.rollup_retry_exhausted,
+                    err: &err,
+                });
+                append_rollup_retry_events(&mut state, batch);
             },
         }
     }
@@ -1209,12 +1147,110 @@ async fn flush_usage_event_buffer(
                 tracing::error!(count, "{}: {err:#}", error_message);
                 tracing::warn!(
                     count,
-                    "dropped llm access analytics events after rollup stage completed"
+                    "dropped llm access analytics events after control rollups were persisted or \
+                     parked"
                 );
             },
         }
     }
-    false
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+async fn flush_rollup_retry_buffer(
+    targets: &UsageEventFlushTargets<'_>,
+    state: &mut UsageEventFlushState<'_>,
+    error_message: &'static str,
+) {
+    if state.rollup_retry_buffer.is_empty() || *state.rollup_retry_exhausted {
+        return;
+    }
+    let batch = std::mem::take(state.rollup_retry_buffer);
+    *state.rollup_retry_bytes = 0;
+    let count = batch.len();
+    match targets.rollup_sink.append_usage_events(&batch).await {
+        Ok(()) => {
+            *state.rollup_retry_attempts = 0;
+            if let Err(err) = targets.pending_rollups.subtract_events(&batch) {
+                let summary = usage_event_batch_log_summary(&batch);
+                tracing::error!(
+                    count,
+                    distinct_key_count = summary.distinct_key_count,
+                    key_id_samples = ?summary.key_id_samples,
+                    key_name_samples = ?summary.key_name_samples,
+                    event_id_samples = ?summary.event_id_samples,
+                    "persisted parked usage rollups but failed to clear pending usage rollups: \
+                     {err:#}"
+                );
+            }
+            tracing::warn!(count, "parked control rollup backlog recovered and persisted");
+        },
+        Err(err) => {
+            let buffered_bytes = batch.iter().map(estimate_usage_event_bytes).sum();
+            let summary = usage_event_batch_log_summary(&batch);
+            record_rollup_failure_attempt(state);
+            let context = if *state.rollup_retry_exhausted {
+                "parked control rollup retry reached max attempts; backlog remains parked until a \
+                 live rollup succeeds"
+            } else {
+                "parked control rollup retry failed"
+            };
+            log_usage_rollup_failure(UsageRollupFailureLog {
+                context,
+                flush_context: error_message,
+                count,
+                buffered_bytes,
+                summary: &summary,
+                attempt: *state.rollup_retry_attempts,
+                retry_exhausted: *state.rollup_retry_exhausted,
+                err: &err,
+            });
+            *state.rollup_retry_bytes = buffered_bytes;
+            *state.rollup_retry_buffer = batch;
+        },
+    }
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+fn record_rollup_failure_attempt(state: &mut UsageEventFlushState<'_>) {
+    *state.rollup_retry_attempts = state.rollup_retry_attempts.saturating_add(1);
+    if *state.rollup_retry_attempts >= USAGE_EVENT_ROLLUP_MAX_ATTEMPTS {
+        *state.rollup_retry_exhausted = true;
+    }
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+struct UsageRollupFailureLog<'a> {
+    context: &'static str,
+    flush_context: &'static str,
+    count: usize,
+    buffered_bytes: usize,
+    summary: &'a UsageEventBatchLogSummary,
+    attempt: usize,
+    retry_exhausted: bool,
+    err: &'a anyhow::Error,
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+fn log_usage_rollup_failure(log: UsageRollupFailureLog<'_>) {
+    tracing::error!(
+        count = log.count,
+        buffered_bytes = log.buffered_bytes,
+        attempt = log.attempt,
+        max_attempts = USAGE_EVENT_ROLLUP_MAX_ATTEMPTS,
+        retry_exhausted = log.retry_exhausted,
+        distinct_key_count = log.summary.distinct_key_count,
+        key_id_samples = ?log.summary.key_id_samples,
+        key_name_samples = ?log.summary.key_name_samples,
+        account_name_samples = ?log.summary.account_name_samples,
+        provider_samples = ?log.summary.provider_samples,
+        endpoint_samples = ?log.summary.endpoint_samples,
+        status_code_samples = ?log.summary.status_code_samples,
+        event_id_samples = ?log.summary.event_id_samples,
+        flush_context = log.flush_context,
+        "usage control rollup failed: {}: {:#}",
+        log.context,
+        log.err
+    );
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -1233,39 +1269,72 @@ struct UsageEventBatchLogSummary {
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 fn usage_event_batch_log_summary(events: &[UsageEvent]) -> UsageEventBatchLogSummary {
     let mut summary = UsageEventBatchLogSummary::default();
-    let mut distinct_key_ids = Vec::<String>::new();
+    let mut distinct_key_ids = HashSet::<&str>::new();
     for event in events {
-        if !distinct_key_ids
-            .iter()
-            .any(|key_id| key_id == &event.key_id)
-        {
-            distinct_key_ids.push(event.key_id.clone());
-        }
-        push_unique_sample(&mut summary.key_id_samples, event.key_id.clone());
-        push_unique_sample(&mut summary.key_name_samples, event.key_name.clone());
+        distinct_key_ids.insert(event.key_id.as_str());
+        push_unique_sample(&mut summary.key_id_samples, &event.key_id);
+        push_unique_sample(&mut summary.key_name_samples, &event.key_name);
         if let Some(account_name) = &event.account_name {
-            push_unique_sample(&mut summary.account_name_samples, account_name.clone());
+            push_unique_sample(&mut summary.account_name_samples, account_name);
         }
         push_unique_sample(
             &mut summary.provider_samples,
-            format!("{:?}/{:?}", event.provider_type, event.protocol_family),
+            &format!("{:?}/{:?}", event.provider_type, event.protocol_family),
         );
-        push_unique_sample(&mut summary.endpoint_samples, event.endpoint.clone());
-        push_unique_sample(&mut summary.status_code_samples, event.status_code.to_string());
-        push_unique_sample(&mut summary.event_id_samples, event.event_id.clone());
+        push_unique_sample(&mut summary.endpoint_samples, &event.endpoint);
+        push_unique_sample(&mut summary.status_code_samples, &event.status_code.to_string());
+        push_unique_sample(&mut summary.event_id_samples, &event.event_id);
     }
     summary.distinct_key_count = distinct_key_ids.len();
     summary
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-fn push_unique_sample(samples: &mut Vec<String>, value: String) {
-    if samples.len() >= USAGE_EVENT_LOG_SAMPLE_LIMIT
-        || samples.iter().any(|sample| sample == &value)
+fn push_unique_sample(samples: &mut Vec<String>, value: &str) {
+    if samples.len() >= USAGE_EVENT_LOG_SAMPLE_LIMIT || samples.iter().any(|sample| sample == value)
     {
         return;
     }
-    samples.push(value);
+    samples.push(value.to_string());
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+fn append_rollup_retry_events(state: &mut UsageEventFlushState<'_>, events: Vec<UsageEvent>) {
+    let was_over_limit = *state.rollup_retry_bytes > state.max_buffer_bytes;
+    for event in events {
+        let retry_event = rollup_retry_event(event);
+        *state.rollup_retry_bytes = state
+            .rollup_retry_bytes
+            .saturating_add(estimate_usage_event_bytes(&retry_event));
+        state.rollup_retry_buffer.push(retry_event);
+    }
+    if !was_over_limit && *state.rollup_retry_bytes > state.max_buffer_bytes {
+        tracing::error!(
+            retry_backlog_count = state.rollup_retry_buffer.len(),
+            retry_backlog_bytes = *state.rollup_retry_bytes,
+            max_buffer_bytes = state.max_buffer_bytes,
+            "usage control rollup retry backlog exceeded configured flush buffer; retaining it to \
+             preserve pending quota overlay"
+        );
+    }
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+fn rollup_retry_event(mut event: UsageEvent) -> UsageEvent {
+    event.request_url = event.endpoint.clone();
+    event.request_body_bytes = None;
+    event.routing_diagnostics_json = None;
+    event.client_ip.clear();
+    event.ip_region.clear();
+    event.request_headers_json = "{}".to_string();
+    event.last_message_content = None;
+    event.client_request_body_json = None;
+    event.upstream_request_body_json = None;
+    event.full_request_json = None;
+    event.error_message = None;
+    event.error_body = None;
+    event.response_body = None;
+    event
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -1284,7 +1353,8 @@ fn append_analytics_retry_events(state: &mut UsageEventFlushState<'_>, events: V
         tracing::warn!(
             dropped,
             max_buffer_bytes = state.max_buffer_bytes,
-            "dropped llm access analytics retry events after rollups were persisted"
+            "dropped llm access analytics retry events after control rollups were persisted or \
+             parked"
         );
     }
 }
@@ -1667,6 +1737,47 @@ mod tests {
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    struct RecoveringUsageEventSink {
+        fail_remaining: Mutex<usize>,
+        attempts: Mutex<usize>,
+        batches: Mutex<Vec<Vec<String>>>,
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    impl RecoveringUsageEventSink {
+        fn new(failures: usize) -> Self {
+            Self {
+                fail_remaining: Mutex::new(failures),
+                attempts: Mutex::new(0),
+                batches: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    #[async_trait::async_trait]
+    impl UsageEventSink for RecoveringUsageEventSink {
+        async fn append_usage_event(&self, event: &UsageEvent) -> anyhow::Result<()> {
+            self.append_usage_events(std::slice::from_ref(event)).await
+        }
+
+        async fn append_usage_events(&self, events: &[UsageEvent]) -> anyhow::Result<()> {
+            *self.attempts.lock().await += 1;
+            let mut fail_remaining = self.fail_remaining.lock().await;
+            if *fail_remaining > 0 {
+                *fail_remaining -= 1;
+                anyhow::bail!("rollup sink temporarily unavailable");
+            }
+            drop(fail_remaining);
+            self.batches
+                .lock()
+                .await
+                .push(events.iter().map(|event| event.event_id.clone()).collect());
+            Ok(())
+        }
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     struct StaticControlStore {
         key: AuthenticatedKey,
     }
@@ -1781,15 +1892,18 @@ mod tests {
             .add_events(&buffer)
             .expect("add pending rollups");
         let mut analytics_retry_buffer = Vec::new();
+        let mut rollup_retry_buffer = Vec::new();
         let mut buffered_bytes = buffer
             .iter()
             .map(super::estimate_usage_event_bytes)
             .sum::<usize>();
+        let mut rollup_retry_bytes = 0usize;
         let mut analytics_retry_bytes = 0usize;
         let mut flush_count = 0u64;
         let mut rollup_retry_attempts = 0usize;
+        let mut rollup_retry_exhausted = false;
 
-        let retry = super::flush_usage_event_buffer(
+        super::flush_usage_event_buffer(
             super::UsageEventFlushTargets {
                 rollup_sink: &rollup_sink,
                 analytics_sink: &analytics_sink,
@@ -1797,21 +1911,25 @@ mod tests {
             },
             super::UsageEventFlushState {
                 buffer: &mut buffer,
+                rollup_retry_buffer: &mut rollup_retry_buffer,
                 analytics_retry_buffer: &mut analytics_retry_buffer,
                 buffered_bytes: &mut buffered_bytes,
+                rollup_retry_bytes: &mut rollup_retry_bytes,
                 analytics_retry_bytes: &mut analytics_retry_bytes,
                 max_buffer_bytes: 8 * 1024 * 1024,
                 flush_count: &mut flush_count,
                 rollup_retry_attempts: &mut rollup_retry_attempts,
+                rollup_retry_exhausted: &mut rollup_retry_exhausted,
             },
             "usage event batch flush failed",
         )
         .await;
 
-        assert!(!retry);
         assert!(buffer.is_empty());
+        assert!(rollup_retry_buffer.is_empty());
         assert!(analytics_retry_buffer.is_empty());
         assert_eq!(buffered_bytes, 0);
+        assert_eq!(rollup_retry_bytes, 0);
         assert_eq!(analytics_retry_bytes, 0);
         assert_eq!(flush_count, 0);
         assert_eq!(*analytics_sink.attempts.lock().await, 1);
@@ -1824,7 +1942,7 @@ mod tests {
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     #[tokio::test]
-    async fn usage_flusher_abandons_rollup_after_bounded_failures() {
+    async fn usage_flusher_parks_rollup_after_bounded_failures() {
         let rollup_sink = Arc::new(FailingUsageEventSink::default());
         let analytics_sink = Arc::new(RecordingUsageEventSink::default());
         let (_journal_root, journal_sink) = test_journal_sink();
@@ -1845,23 +1963,185 @@ mod tests {
             .await
             .expect("enqueue event");
 
-        tokio::time::timeout(Duration::from_secs(6), async {
+        tokio::time::timeout(Duration::from_secs(4), async {
             loop {
-                if !analytics_sink.batches.lock().await.is_empty() {
+                if *rollup_sink.attempts.lock().await >= super::USAGE_EVENT_ROLLUP_MAX_ATTEMPTS {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         })
         .await
-        .expect("usage event was not forwarded after rollup retries were exhausted");
+        .expect("usage rollup was not parked after bounded attempts");
 
-        assert_eq!(*rollup_sink.attempts.lock().await, super::USAGE_EVENT_ROLLUP_MAX_RETRIES);
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        assert_eq!(*rollup_sink.attempts.lock().await, super::USAGE_EVENT_ROLLUP_MAX_ATTEMPTS);
         assert_eq!(analytics_sink.batches.lock().await.as_slice(), &[vec![
             "evt-rollup-fail".to_string()
         ]]);
-        assert!(sink.pending_rollups.delta_for_key("key-runtime").is_none());
+        assert!(sink.pending_rollups.delta_for_key("key-runtime").is_some());
         handle.shutdown().await;
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    #[tokio::test]
+    async fn usage_flusher_keeps_accepting_events_when_rollup_retries_fail() {
+        let rollup_sink = Arc::new(FailingUsageEventSink::default());
+        let analytics_sink = Arc::new(RecordingUsageEventSink::default());
+        let (_journal_root, journal_sink) = test_journal_sink();
+        let runtime_config = Arc::new(RwLock::new(AdminRuntimeConfig {
+            usage_event_flush_batch_size: 1,
+            usage_event_flush_interval_seconds: 1,
+            usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
+            ..AdminRuntimeConfig::default()
+        }));
+        let (sink, handle) = super::UsageAccounting::new(
+            rollup_sink,
+            journal_sink,
+            analytics_sink.clone(),
+            runtime_config,
+        );
+
+        sink.append_usage_event(&sample_usage_event("evt-rollup-fail-1"))
+            .await
+            .expect("enqueue first event");
+        sink.append_usage_event(&sample_usage_event("evt-rollup-fail-2"))
+            .await
+            .expect("enqueue second event");
+
+        tokio::time::timeout(Duration::from_millis(1_500), async {
+            loop {
+                if analytics_sink.batches.lock().await.len() >= 2 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("rollup retry backlog blocked new usage events from analytics");
+
+        let batches = analytics_sink.batches.lock().await;
+        assert_eq!(batches.as_slice(), &[vec!["evt-rollup-fail-1".to_string()], vec![
+            "evt-rollup-fail-2".to_string()
+        ]]);
+        assert!(sink.pending_rollups.delta_for_key("key-runtime").is_some());
+        handle.shutdown().await;
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    #[tokio::test]
+    async fn parked_rollup_backlog_recovers_after_live_rollup_succeeds() {
+        let rollup_sink = RecoveringUsageEventSink::new(super::USAGE_EVENT_ROLLUP_MAX_ATTEMPTS);
+        let analytics_sink = RecordingUsageEventSink::default();
+        let pending_rollups = super::PendingUsageRollups::default();
+        let mut buffer = vec![sample_usage_event("evt-parked")];
+        pending_rollups
+            .add_events(&buffer)
+            .expect("add first pending rollup");
+        let mut rollup_retry_buffer = Vec::new();
+        let mut analytics_retry_buffer = Vec::new();
+        let mut buffered_bytes = buffer
+            .iter()
+            .map(super::estimate_usage_event_bytes)
+            .sum::<usize>();
+        let mut rollup_retry_bytes = 0usize;
+        let mut analytics_retry_bytes = 0usize;
+        let mut flush_count = 0u64;
+        let mut rollup_retry_attempts = 0usize;
+        let mut rollup_retry_exhausted = false;
+
+        for _ in 0..super::USAGE_EVENT_ROLLUP_MAX_ATTEMPTS {
+            super::flush_usage_event_buffer(
+                super::UsageEventFlushTargets {
+                    rollup_sink: &rollup_sink,
+                    analytics_sink: &analytics_sink,
+                    pending_rollups: &pending_rollups,
+                },
+                super::UsageEventFlushState {
+                    buffer: &mut buffer,
+                    rollup_retry_buffer: &mut rollup_retry_buffer,
+                    analytics_retry_buffer: &mut analytics_retry_buffer,
+                    buffered_bytes: &mut buffered_bytes,
+                    rollup_retry_bytes: &mut rollup_retry_bytes,
+                    analytics_retry_bytes: &mut analytics_retry_bytes,
+                    max_buffer_bytes: 8 * 1024 * 1024,
+                    flush_count: &mut flush_count,
+                    rollup_retry_attempts: &mut rollup_retry_attempts,
+                    rollup_retry_exhausted: &mut rollup_retry_exhausted,
+                },
+                "usage event batch flush failed",
+            )
+            .await;
+        }
+
+        assert!(rollup_retry_exhausted);
+        assert_eq!(rollup_retry_buffer.len(), 1);
+        assert!(pending_rollups.delta_for_key("key-runtime").is_some());
+        assert_eq!(analytics_sink.batches.lock().await.as_slice(), &[vec![
+            "evt-parked".to_string()
+        ]]);
+
+        buffer = vec![sample_usage_event("evt-live-recovery")];
+        buffered_bytes = buffer
+            .iter()
+            .map(super::estimate_usage_event_bytes)
+            .sum::<usize>();
+        pending_rollups
+            .add_events(&buffer)
+            .expect("add recovery pending rollup");
+        super::flush_usage_event_buffer(
+            super::UsageEventFlushTargets {
+                rollup_sink: &rollup_sink,
+                analytics_sink: &analytics_sink,
+                pending_rollups: &pending_rollups,
+            },
+            super::UsageEventFlushState {
+                buffer: &mut buffer,
+                rollup_retry_buffer: &mut rollup_retry_buffer,
+                analytics_retry_buffer: &mut analytics_retry_buffer,
+                buffered_bytes: &mut buffered_bytes,
+                rollup_retry_bytes: &mut rollup_retry_bytes,
+                analytics_retry_bytes: &mut analytics_retry_bytes,
+                max_buffer_bytes: 8 * 1024 * 1024,
+                flush_count: &mut flush_count,
+                rollup_retry_attempts: &mut rollup_retry_attempts,
+                rollup_retry_exhausted: &mut rollup_retry_exhausted,
+            },
+            "usage event batch flush failed",
+        )
+        .await;
+
+        assert!(!rollup_retry_exhausted);
+        assert!(pending_rollups.delta_for_key("key-runtime").is_some());
+
+        super::flush_usage_event_buffer(
+            super::UsageEventFlushTargets {
+                rollup_sink: &rollup_sink,
+                analytics_sink: &analytics_sink,
+                pending_rollups: &pending_rollups,
+            },
+            super::UsageEventFlushState {
+                buffer: &mut buffer,
+                rollup_retry_buffer: &mut rollup_retry_buffer,
+                analytics_retry_buffer: &mut analytics_retry_buffer,
+                buffered_bytes: &mut buffered_bytes,
+                rollup_retry_bytes: &mut rollup_retry_bytes,
+                analytics_retry_bytes: &mut analytics_retry_bytes,
+                max_buffer_bytes: 8 * 1024 * 1024,
+                flush_count: &mut flush_count,
+                rollup_retry_attempts: &mut rollup_retry_attempts,
+                rollup_retry_exhausted: &mut rollup_retry_exhausted,
+            },
+            "usage event retry flush failed",
+        )
+        .await;
+
+        assert!(rollup_retry_buffer.is_empty());
+        assert!(pending_rollups.delta_for_key("key-runtime").is_none());
+        assert_eq!(rollup_sink.batches.lock().await.as_slice(), &[
+            vec!["evt-live-recovery".to_string()],
+            vec!["evt-parked".to_string()]
+        ]);
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
