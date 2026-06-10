@@ -2,7 +2,7 @@
 
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType, RouteStrategy},
-    store::{KeyUsageRollupDelta, UsageRollupBatch},
+    store::{KeyUsageRollupDelta, KeyUsageRollupLastUsedCount, UsageRollupBatch},
     usage::{UsageEvent, UsageStreamDetails, UsageTiming},
 };
 use serde::{Deserialize, Serialize};
@@ -372,6 +372,19 @@ pub struct JournalRollupDeltaV1 {
     pub last_used_at_ms: Option<i64>,
 }
 
+/// One versioned last-used timestamp cardinality entry for rollup overlays.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JournalRollupLastUsedCountV1 {
+    /// Rollup timestamp-count schema version.
+    pub schema_version: u16,
+    /// Key receiving this timestamp contribution.
+    pub key_id: String,
+    /// Usage timestamp in Unix milliseconds.
+    pub last_used_at_ms: i64,
+    /// Number of raw events for this key at this timestamp.
+    pub count: u64,
+}
+
 /// One versioned rollup batch stored in the control-rollup journal.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JournalRollupBatchV1 {
@@ -387,6 +400,9 @@ pub struct JournalRollupBatchV1 {
     pub source_event_count: u64,
     /// Per-key rollup deltas.
     pub deltas: Vec<JournalRollupDeltaV1>,
+    /// Per-key timestamp cardinalities for exact in-memory overlay recovery.
+    #[serde(default)]
+    pub last_used_at_ms_counts: Vec<JournalRollupLastUsedCountV1>,
 }
 
 /// One compressed rollup block payload before compression.
@@ -394,6 +410,21 @@ pub struct JournalRollupBatchV1 {
 pub struct JournalRollupBatchBlockV1 {
     /// Rollup batches in append order.
     pub batches: Vec<JournalRollupBatchV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct LegacyJournalRollupBatchV1 {
+    schema_version: u16,
+    batch_id: String,
+    source_node_id: Option<String>,
+    created_at_ms: i64,
+    source_event_count: u64,
+    deltas: Vec<JournalRollupDeltaV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct LegacyJournalRollupBatchBlockV1 {
+    batches: Vec<LegacyJournalRollupBatchV1>,
 }
 
 impl JournalRollupDeltaV1 {
@@ -427,6 +458,27 @@ impl JournalRollupDeltaV1 {
     }
 }
 
+impl JournalRollupLastUsedCountV1 {
+    /// Convert a core timestamp-count entry into the stable journal wire shape.
+    pub fn from_rollup_last_used_count(count: &KeyUsageRollupLastUsedCount) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION_V1,
+            key_id: count.key_id.clone(),
+            last_used_at_ms: count.last_used_at_ms,
+            count: count.count,
+        }
+    }
+
+    /// Convert the journal wire shape back into a core timestamp-count entry.
+    pub fn into_rollup_last_used_count(self) -> KeyUsageRollupLastUsedCount {
+        KeyUsageRollupLastUsedCount {
+            key_id: self.key_id,
+            last_used_at_ms: self.last_used_at_ms,
+            count: self.count,
+        }
+    }
+}
+
 impl JournalRollupBatchV1 {
     /// Convert a core rollup batch into the stable journal wire shape.
     pub fn from_rollup_batch(batch: &UsageRollupBatch) -> Self {
@@ -440,6 +492,11 @@ impl JournalRollupBatchV1 {
                 .deltas
                 .iter()
                 .map(JournalRollupDeltaV1::from_rollup_delta)
+                .collect(),
+            last_used_at_ms_counts: batch
+                .last_used_at_ms_counts
+                .iter()
+                .map(JournalRollupLastUsedCountV1::from_rollup_last_used_count)
                 .collect(),
         }
     }
@@ -456,7 +513,51 @@ impl JournalRollupBatchV1 {
                 .into_iter()
                 .map(JournalRollupDeltaV1::into_rollup_delta)
                 .collect(),
+            last_used_at_ms_counts: self
+                .last_used_at_ms_counts
+                .into_iter()
+                .map(JournalRollupLastUsedCountV1::into_rollup_last_used_count)
+                .collect(),
         }
+    }
+}
+
+impl LegacyJournalRollupBatchV1 {
+    fn into_current(self) -> JournalRollupBatchV1 {
+        JournalRollupBatchV1 {
+            schema_version: self.schema_version,
+            batch_id: self.batch_id,
+            source_node_id: self.source_node_id,
+            created_at_ms: self.created_at_ms,
+            source_event_count: self.source_event_count,
+            deltas: self.deltas,
+            last_used_at_ms_counts: Vec::new(),
+        }
+    }
+}
+
+/// Encode one rollup batch using the stable versioned V1 wire shape.
+pub fn encode_rollup_batch_v1(batch: &UsageRollupBatch) -> Result<Vec<u8>, postcard::Error> {
+    postcard::to_allocvec(&JournalRollupBatchV1::from_rollup_batch(batch))
+}
+
+/// Decode one rollup block payload, accepting both current and legacy V1
+/// layouts.
+pub fn decode_journal_rollup_batch_block(
+    bytes: &[u8],
+) -> Result<JournalRollupBatchBlockV1, postcard::Error> {
+    match postcard::from_bytes::<JournalRollupBatchBlockV1>(bytes) {
+        Ok(block) => Ok(block),
+        Err(_) => {
+            let legacy = postcard::from_bytes::<LegacyJournalRollupBatchBlockV1>(bytes)?;
+            Ok(JournalRollupBatchBlockV1 {
+                batches: legacy
+                    .batches
+                    .into_iter()
+                    .map(LegacyJournalRollupBatchV1::into_current)
+                    .collect(),
+            })
+        },
     }
 }
 
@@ -482,12 +583,15 @@ pub fn decode_journal_usage_batch(bytes: &[u8]) -> Result<JournalUsageBatchV1, p
 mod tests {
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType},
+        store::{KeyUsageRollupDelta, KeyUsageRollupLastUsedCount, UsageRollupBatch},
         usage::{UsageEvent, UsageStreamDetails, UsageTiming},
     };
+    use serde::{Deserialize, Serialize};
 
     use super::{
-        decode_journal_usage_batch, JournalUsageBatchV1, JournalUsageEventV1,
-        LegacyJournalUsageBatchV1, LegacyJournalUsageEventV1,
+        decode_journal_rollup_batch_block, decode_journal_usage_batch, encode_rollup_batch_v1,
+        JournalRollupBatchV1, JournalUsageBatchV1, JournalUsageEventV1, LegacyJournalUsageBatchV1,
+        LegacyJournalUsageEventV1,
     };
 
     #[test]
@@ -559,6 +663,88 @@ mod tests {
         assert_eq!(decoded.events[0].error_message, None);
         assert_eq!(decoded.events[0].error_body, None);
         assert_eq!(decoded.events[0].stream, event.stream);
+    }
+
+    #[test]
+    fn rollup_batch_round_trips_last_used_counts_through_v1_wire() {
+        let batch = UsageRollupBatch {
+            batch_id: "rollup-wire-1".to_string(),
+            source_node_id: Some("node-test".to_string()),
+            created_at_ms: 1_700_000_000_000,
+            source_event_count: 2,
+            deltas: vec![KeyUsageRollupDelta {
+                key_id: "key-wire".to_string(),
+                input_uncached_tokens: 10,
+                input_cached_tokens: 1,
+                output_tokens: 2,
+                billable_tokens: 12,
+                credit_total: 0.25,
+                credit_missing_events: 0,
+                last_used_at_ms: Some(1_700_000_000_200),
+            }],
+            last_used_at_ms_counts: vec![
+                KeyUsageRollupLastUsedCount {
+                    key_id: "key-wire".to_string(),
+                    last_used_at_ms: 1_700_000_000_100,
+                    count: 1,
+                },
+                KeyUsageRollupLastUsedCount {
+                    key_id: "key-wire".to_string(),
+                    last_used_at_ms: 1_700_000_000_200,
+                    count: 1,
+                },
+            ],
+        };
+
+        let bytes = encode_rollup_batch_v1(&batch).expect("encode rollup batch");
+        let decoded: JournalRollupBatchV1 =
+            postcard::from_bytes(&bytes).expect("decode rollup batch");
+
+        assert_eq!(decoded.into_rollup_batch(), batch);
+    }
+
+    #[test]
+    fn rollup_batch_decodes_legacy_v1_payload_without_last_used_counts() {
+        #[derive(Debug, Serialize, Deserialize)]
+        struct LegacyJournalRollupBatchV1 {
+            schema_version: u16,
+            batch_id: String,
+            source_node_id: Option<String>,
+            created_at_ms: i64,
+            source_event_count: u64,
+            deltas: Vec<super::JournalRollupDeltaV1>,
+        }
+        #[derive(Debug, Serialize, Deserialize)]
+        struct LegacyJournalRollupBatchBlockV1 {
+            batches: Vec<LegacyJournalRollupBatchV1>,
+        }
+
+        let legacy = LegacyJournalRollupBatchBlockV1 {
+            batches: vec![LegacyJournalRollupBatchV1 {
+                schema_version: 1,
+                batch_id: "rollup-wire-legacy".to_string(),
+                source_node_id: Some("node-test".to_string()),
+                created_at_ms: 1_700_000_000_000,
+                source_event_count: 1,
+                deltas: vec![super::JournalRollupDeltaV1 {
+                    schema_version: 1,
+                    key_id: "key-wire".to_string(),
+                    input_uncached_tokens: 10,
+                    input_cached_tokens: 1,
+                    output_tokens: 2,
+                    billable_tokens: 12,
+                    credit_total: 0.25,
+                    credit_missing_events: 0,
+                    last_used_at_ms: Some(1_700_000_000_200),
+                }],
+            }],
+        };
+        let bytes = postcard::to_allocvec(&legacy).expect("encode legacy rollup block");
+        let decoded =
+            decode_journal_rollup_batch_block(&bytes).expect("decode legacy rollup block");
+
+        assert_eq!(decoded.batches[0].batch_id, "rollup-wire-legacy");
+        assert!(decoded.batches[0].last_used_at_ms_counts.is_empty());
     }
 
     fn test_usage_event(event_id: &str) -> UsageEvent {

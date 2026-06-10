@@ -812,4 +812,12 @@ pub trait UsageRollupBatchSink: Send + Sync {
         &self,
         batches: &[UsageRollupBatch],
     ) -> anyhow::Result<UsageRollupApplyReport>;
+
+    /// Prune idempotency markers older than the guaranteed replay horizon.
+    async fn prune_usage_rollup_batch_markers(
+        &self,
+        _applied_before_ms: i64,
+    ) -> anyhow::Result<u64> {
+        Ok(0)
+    }
 }

@@ -10,6 +10,8 @@ use llm_access_core::{
     },
     usage::UsageEvent,
 };
+use llm_usage_journal::wire::encode_rollup_batch_v1;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx_core::{query::query, query_builder::QueryBuilder, row::Row};
 use sqlx_postgres::Postgres;
@@ -367,10 +369,32 @@ impl PostgresControlRepository {
                     .try_get("digest")
                     .context("decode usage rollup applied batch digest")?;
                 if existing_digest != digest {
-                    anyhow::bail!(
-                        "usage rollup batch id `{}` was replayed with a different digest",
-                        batch.batch_id
-                    );
+                    let legacy_json_digest = legacy_json_usage_rollup_batch_digest(batch)?;
+                    if existing_digest == legacy_json_digest {
+                        let upgraded = query(
+                            "UPDATE llm_key_usage_rollup_applied_batches
+                             SET digest = $2
+                             WHERE batch_id = $1 AND digest = $3",
+                        )
+                        .bind(&batch.batch_id)
+                        .bind(&digest)
+                        .bind(&existing_digest)
+                        .execute(&mut *tx)
+                        .await
+                        .context("upgrade postgres usage rollup legacy batch marker digest")?
+                        .rows_affected();
+                        tracing::warn!(
+                            batch_id = %batch.batch_id,
+                            upgraded_marker_count = upgraded,
+                            "accepted legacy json usage rollup batch marker digest and upgraded to \
+                             stable wire digest"
+                        );
+                    } else {
+                        anyhow::bail!(
+                            "usage rollup batch id `{}` was replayed with a different digest",
+                            batch.batch_id
+                        );
+                    }
                 }
                 report.already_applied_batch_count =
                     report.already_applied_batch_count.saturating_add(1);
@@ -522,10 +546,36 @@ impl PostgresControlRepository {
 }
 
 fn usage_rollup_batch_digest(batch: &UsageRollupBatch) -> anyhow::Result<String> {
-    let bytes = serde_json::to_vec(batch).context("encode usage rollup batch for digest")?;
+    let bytes = encode_rollup_batch_v1(batch).context("encode usage rollup batch v1 digest")?;
+    Ok(sha256_hex(&bytes))
+}
+
+#[derive(Serialize)]
+struct LegacyJsonUsageRollupBatch<'a> {
+    batch_id: &'a str,
+    source_node_id: &'a Option<String>,
+    created_at_ms: i64,
+    source_event_count: u64,
+    deltas: &'a [KeyUsageRollupDelta],
+}
+
+fn legacy_json_usage_rollup_batch_digest(batch: &UsageRollupBatch) -> anyhow::Result<String> {
+    let legacy = LegacyJsonUsageRollupBatch {
+        batch_id: &batch.batch_id,
+        source_node_id: &batch.source_node_id,
+        created_at_ms: batch.created_at_ms,
+        source_event_count: batch.source_event_count,
+        deltas: &batch.deltas,
+    };
+    let bytes =
+        serde_json::to_vec(&legacy).context("encode legacy json usage rollup batch digest")?;
+    Ok(sha256_hex(&bytes))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    Ok(format!("{:x}", hasher.finalize()))
+    format!("{:x}", hasher.finalize())
 }
 
 #[async_trait]
@@ -546,5 +596,22 @@ impl UsageRollupBatchSink for PostgresControlRepository {
         batches: &[UsageRollupBatch],
     ) -> anyhow::Result<UsageRollupApplyReport> {
         self.apply_usage_rollup_batches_impl(batches).await
+    }
+
+    async fn prune_usage_rollup_batch_markers(
+        &self,
+        applied_before_ms: i64,
+    ) -> anyhow::Result<u64> {
+        self.ensure_connection_alive()?;
+        let deleted = query(
+            "DELETE FROM llm_key_usage_rollup_applied_batches
+             WHERE applied_at_ms < $1",
+        )
+        .bind(applied_before_ms)
+        .execute(&self.client.pool)
+        .await
+        .context("prune postgres usage rollup applied batch markers")?
+        .rows_affected();
+        Ok(deleted)
     }
 }

@@ -25,6 +25,7 @@ flate2 = "1.1"
 llm-access-core = { path = "../llm-access-core" }
 llm-access-kiro = { path = "../llm-access-kiro" }
 llm-access-migrations = { path = "../llm-access-migrations" }
+llm-usage-journal = { path = "../llm-usage-journal" }
 native-tls = "0.2"
 postgres = "0.19"
 postgres-native-tls = "0.5"

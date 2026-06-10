@@ -5802,6 +5802,7 @@ dependencies = [
  "llm-access-core",
  "llm-access-kiro",
  "llm-access-migrations",
+ "llm-usage-journal",
  "native-tls",
  "postgres",
  "postgres-native-tls",

@@ -53,6 +53,10 @@ const USAGE_EVENT_ROLLUP_MAX_ATTEMPTS: usize = 3;
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 const USAGE_EVENT_ROLLUP_RETRY_BACKOFF_MULTIPLIER: u32 = 3;
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+const USAGE_ROLLUP_BATCH_MARKER_RETENTION: Duration = Duration::from_secs(90 * 24 * 60 * 60);
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+const USAGE_ROLLUP_BATCH_MARKER_PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 const USAGE_EVENT_LOG_SAMPLE_LIMIT: usize = 8;
 
 /// Runtime dependencies shared by provider routes.
@@ -641,8 +645,8 @@ impl PendingUsageRollups {
             .inner
             .write()
             .map_err(|_| anyhow!("pending usage rollups lock poisoned"))?;
+        increment_pending_last_used_batch(&mut inner.last_used_counts, batch);
         for delta in &batch.deltas {
-            increment_pending_last_used(&mut inner.last_used_counts, delta);
             inner
                 .rollups
                 .entry(delta.key_id.clone())
@@ -657,8 +661,9 @@ impl PendingUsageRollups {
             .inner
             .write()
             .map_err(|_| anyhow!("pending usage rollups lock poisoned"))?;
+        subtract_pending_last_used_batch(&mut inner.last_used_counts, batch);
         for delta in &batch.deltas {
-            let next_last_used = decrement_pending_last_used(&mut inner.last_used_counts, delta);
+            let next_last_used = pending_last_used_for_key(&inner.last_used_counts, delta);
             if let Some(entry) = inner.rollups.get_mut(&delta.key_id) {
                 entry.subtract_assign(delta);
                 entry.last_used_at_ms = next_last_used;
@@ -687,39 +692,84 @@ impl PendingUsageRollups {
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-fn increment_pending_last_used(
+fn increment_pending_last_used_batch(
     counts_by_key: &mut HashMap<String, BTreeMap<i64, usize>>,
-    delta: &KeyUsageRollupDelta,
+    batch: &UsageRollupBatch,
 ) {
-    let Some(last_used_at_ms) = delta.last_used_at_ms else {
-        return;
-    };
-    let counts = counts_by_key.entry(delta.key_id.clone()).or_default();
-    *counts.entry(last_used_at_ms).or_insert(0) += 1;
+    let mut represented_keys = HashSet::new();
+    for entry in &batch.last_used_at_ms_counts {
+        represented_keys.insert(entry.key_id.as_str());
+        let counts = counts_by_key.entry(entry.key_id.clone()).or_default();
+        let count = counts.entry(entry.last_used_at_ms).or_insert(0);
+        *count = count.saturating_add(usize::try_from(entry.count).unwrap_or(usize::MAX));
+    }
+    for delta in &batch.deltas {
+        if represented_keys.contains(delta.key_id.as_str()) {
+            continue;
+        }
+        let Some(last_used_at_ms) = delta.last_used_at_ms else {
+            continue;
+        };
+        let counts = counts_by_key.entry(delta.key_id.clone()).or_default();
+        *counts.entry(last_used_at_ms).or_insert(0) += 1;
+    }
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-fn decrement_pending_last_used(
+fn subtract_pending_last_used_batch(
     counts_by_key: &mut HashMap<String, BTreeMap<i64, usize>>,
-    delta: &KeyUsageRollupDelta,
-) -> Option<i64> {
-    let Some(last_used_at_ms) = delta.last_used_at_ms else {
-        return counts_by_key
-            .get(&delta.key_id)
-            .and_then(|counts| counts.keys().next_back().copied());
+    batch: &UsageRollupBatch,
+) {
+    let mut represented_keys = HashSet::new();
+    for entry in &batch.last_used_at_ms_counts {
+        represented_keys.insert(entry.key_id.as_str());
+        decrement_pending_last_used_count(
+            counts_by_key,
+            &entry.key_id,
+            entry.last_used_at_ms,
+            usize::try_from(entry.count).unwrap_or(usize::MAX),
+        );
+    }
+    for delta in &batch.deltas {
+        if represented_keys.contains(delta.key_id.as_str()) {
+            continue;
+        }
+        let Some(last_used_at_ms) = delta.last_used_at_ms else {
+            continue;
+        };
+        decrement_pending_last_used_count(counts_by_key, &delta.key_id, last_used_at_ms, 1);
+    }
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+fn decrement_pending_last_used_count(
+    counts_by_key: &mut HashMap<String, BTreeMap<i64, usize>>,
+    key_id: &str,
+    last_used_at_ms: i64,
+    count: usize,
+) {
+    let Some(counts) = counts_by_key.get_mut(key_id) else {
+        return;
     };
-    let counts = counts_by_key.get_mut(&delta.key_id)?;
-    if let Some(count) = counts.get_mut(&last_used_at_ms) {
-        *count = count.saturating_sub(1);
-        if *count == 0 {
+    if let Some(current) = counts.get_mut(&last_used_at_ms) {
+        *current = current.saturating_sub(count);
+        if *current == 0 {
             counts.remove(&last_used_at_ms);
         }
     }
-    let next_last_used = counts.keys().next_back().copied();
     if counts.is_empty() {
-        counts_by_key.remove(&delta.key_id);
+        counts_by_key.remove(key_id);
     }
-    next_last_used
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+fn pending_last_used_for_key(
+    counts_by_key: &HashMap<String, BTreeMap<i64, usize>>,
+    delta: &KeyUsageRollupDelta,
+) -> Option<i64> {
+    counts_by_key
+        .get(&delta.key_id)
+        .and_then(|counts| counts.keys().next_back().copied())
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -939,6 +989,44 @@ fn now_ms() -> i64 {
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+async fn prune_usage_rollup_batch_markers_if_due(
+    rollup_sink: &dyn UsageRollupBatchSink,
+    last_prune_at: &mut Option<Instant>,
+    now: Instant,
+) {
+    if last_prune_at.is_some_and(|last| {
+        now.saturating_duration_since(last) < USAGE_ROLLUP_BATCH_MARKER_PRUNE_INTERVAL
+    }) {
+        return;
+    }
+    *last_prune_at = Some(now);
+    let retention_ms =
+        i64::try_from(USAGE_ROLLUP_BATCH_MARKER_RETENTION.as_millis()).unwrap_or(i64::MAX);
+    let cutoff_ms = now_ms().saturating_sub(retention_ms);
+    match rollup_sink
+        .prune_usage_rollup_batch_markers(cutoff_ms)
+        .await
+    {
+        Ok(deleted) if deleted > 0 => tracing::info!(
+            deleted_marker_count = deleted,
+            cutoff_ms,
+            retention_ms,
+            "pruned old usage rollup applied-batch markers"
+        ),
+        Ok(_) => tracing::debug!(
+            cutoff_ms,
+            retention_ms,
+            "usage rollup applied-batch marker prune found no old rows"
+        ),
+        Err(err) => tracing::warn!(
+            cutoff_ms,
+            retention_ms,
+            "failed to prune usage rollup applied-batch markers: {err:#}"
+        ),
+    }
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 struct UsageEventFlusherParts {
     rollup_sink: Arc<dyn UsageRollupBatchSink>,
     journal_sink: Arc<JournalUsageEventSink>,
@@ -976,6 +1064,7 @@ fn spawn_usage_event_flusher(parts: UsageEventFlusherParts) -> Arc<UsageEventFlu
         let mut analytics_retry_bytes = 0usize;
         let mut flush_count: u64 = 0;
         let mut rollup_retry = UsageRollupRetryState::default();
+        let mut last_rollup_marker_prune_at = None;
 
         loop {
             let flush_config = {
@@ -1098,6 +1187,12 @@ fn spawn_usage_event_flusher(parts: UsageEventFlusherParts) -> Arc<UsageEventFlu
                 _ = time::sleep(flush_config.flush_interval) => {
                     journal_sink.maintain();
                     let now = Instant::now();
+                    prune_usage_rollup_batch_markers_if_due(
+                        rollup_sink.as_ref(),
+                        &mut last_rollup_marker_prune_at,
+                        now,
+                    )
+                    .await;
                     if rollup_retry.reenable_if_ready(now) {
                         tracing::warn!(
                             sealed_file_count = rollup_backlog.sealed_file_count().unwrap_or(0),
@@ -1222,11 +1317,11 @@ async fn flush_usage_event_buffer(
         let batch = std::mem::take(state.buffer);
         *state.buffered_bytes = 0;
         let count = batch.len();
-        append_analytics_retry_events(&mut state, batch.clone());
+        let buffered_bytes = batch.iter().map(estimate_usage_event_bytes).sum();
+        let summary = usage_event_batch_log_summary(&batch);
         let rollup_batch = match usage_rollup_batch_from_events(targets.source_node_id, &batch) {
             Ok(batch) => batch,
             Err(err) => {
-                let summary = usage_event_batch_log_summary(&batch);
                 tracing::error!(
                     count,
                     distinct_key_count = summary.distinct_key_count,
@@ -1235,15 +1330,16 @@ async fn flush_usage_event_buffer(
                     event_id_samples = ?summary.event_id_samples,
                     "failed to aggregate live usage rollup batch; keeping pending overlay: {err:#}"
                 );
+                append_analytics_retry_events(&mut state, batch);
                 return;
             },
         };
-        let summary = usage_event_batch_log_summary(&batch);
+        append_analytics_retry_events(&mut state, batch);
         if state.rollup_retry.retry_suspended(Instant::now()) {
             tracing::warn!(
                 batch_id = %rollup_batch.batch_id,
                 count,
-                buffered_bytes = batch.iter().map(estimate_usage_event_bytes).sum::<usize>(),
+                buffered_bytes,
                 distinct_key_count = summary.distinct_key_count,
                 key_id_samples = ?summary.key_id_samples,
                 key_name_samples = ?summary.key_name_samples,
@@ -1306,7 +1402,6 @@ async fn flush_usage_event_buffer(
                     }
                 },
                 Err(err) => {
-                    let buffered_bytes = batch.iter().map(estimate_usage_event_bytes).sum();
                     let failure = state
                         .rollup_retry
                         .record_failure(Instant::now(), state.flush_interval);
@@ -2028,7 +2123,6 @@ mod tests {
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
-    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     #[derive(Default)]
     struct RecordingUsageRollupSink {
         batches: Mutex<Vec<Vec<String>>>,
@@ -2247,6 +2341,7 @@ mod tests {
                 credit_missing_events: 0,
                 last_used_at_ms: Some(1_700_000_000_000),
             }],
+            last_used_at_ms_counts: Vec::new(),
         };
         let newer = UsageRollupBatch {
             batch_id: "newer".to_string(),
@@ -2263,6 +2358,7 @@ mod tests {
                 credit_missing_events: 0,
                 last_used_at_ms: Some(1_700_000_001_000),
             }],
+            last_used_at_ms_counts: Vec::new(),
         };
 
         pending_rollups.add_batch(&older).expect("add older");
@@ -2278,6 +2374,40 @@ mod tests {
                 .last_used_at_ms,
             Some(1_700_000_000_000)
         );
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    #[test]
+    fn pending_rollups_subtracts_all_last_used_timestamps_in_aggregated_batch() {
+        let pending_rollups = super::PendingUsageRollups::default();
+        let mut older = sample_usage_event("evt-last-used-older");
+        older.created_at_ms = 1_700_000_000_000;
+        older.input_uncached_tokens = 10;
+        older.billable_tokens = 10;
+        let mut newer = sample_usage_event("evt-last-used-newer");
+        newer.created_at_ms = 1_700_000_001_000;
+        newer.input_uncached_tokens = 20;
+        newer.billable_tokens = 20;
+        let events = vec![older, newer];
+        let applied_batch = UsageRollupBatch::from_usage_events(
+            "combined".to_string(),
+            Some("node-test".to_string()),
+            1_700_000_002_000,
+            &events,
+        )
+        .expect("aggregate combined rollup batch");
+
+        pending_rollups
+            .add_events(std::slice::from_ref(&events[0]))
+            .expect("add older event");
+        pending_rollups
+            .add_events(std::slice::from_ref(&events[1]))
+            .expect("add newer event");
+        pending_rollups
+            .subtract_batch(&applied_batch)
+            .expect("subtract combined batch");
+
+        assert_eq!(pending_rollups.delta_for_key("key-runtime"), None);
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -2656,6 +2786,7 @@ mod tests {
                 credit_missing_events: 0,
                 last_used_at_ms: Some(1_700_000_000_000),
             }],
+            last_used_at_ms_counts: Vec::new(),
         };
         let initial_pending_rollups = super::PendingUsageRollups::default();
         initial_pending_rollups

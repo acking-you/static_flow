@@ -420,6 +420,7 @@ mod tests {
                 credit_missing_events: 0,
                 last_used_at_ms: Some(1_700_000_000_000),
             }],
+            last_used_at_ms_counts: Vec::new(),
         }
     }
 

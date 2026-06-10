@@ -639,6 +639,7 @@ mod tests {
             UsageEventSink, UsageRollupBatch, UsageRollupBatchSink,
         },
     };
+    use serde::Serialize;
     use sha2::{Digest, Sha256};
 
     use super::SqlxClient;
@@ -736,6 +737,27 @@ mod tests {
             .context("insert postgres test key config rows")?;
         client.close().await;
         Ok(())
+    }
+
+    #[derive(Serialize)]
+    struct TestLegacyJsonUsageRollupBatch<'a> {
+        batch_id: &'a str,
+        source_node_id: &'a Option<String>,
+        created_at_ms: i64,
+        source_event_count: u64,
+        deltas: &'a [KeyUsageRollupDelta],
+    }
+
+    fn legacy_json_rollup_digest(batch: &UsageRollupBatch) -> String {
+        let legacy = TestLegacyJsonUsageRollupBatch {
+            batch_id: &batch.batch_id,
+            source_node_id: &batch.source_node_id,
+            created_at_ms: batch.created_at_ms,
+            source_event_count: batch.source_event_count,
+            deltas: &batch.deltas,
+        };
+        let bytes = serde_json::to_vec(&legacy).expect("encode legacy digest");
+        format!("{:x}", Sha256::digest(bytes))
     }
 
     async fn seed_test_kiro_key_page_fixture(database_url: &str) -> anyhow::Result<()> {
@@ -973,6 +995,7 @@ mod tests {
                 credit_missing_events: 1,
                 last_used_at_ms: Some(1_700_000_000_020),
             }],
+            last_used_at_ms_counts: Vec::new(),
         };
 
         let first = repo
@@ -1010,6 +1033,151 @@ mod tests {
         assert_eq!(row.get::<_, String>("credit_total"), "0.25");
         assert_eq!(row.get::<_, i64>("credit_missing_events"), 1);
         assert_eq!(row.get::<_, Option<i64>>("last_used_at_ms"), Some(1_700_000_000_020));
+        client.close().await;
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_accepts_legacy_json_rollup_marker_digest() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        seed_test_key_bundle(&database_url)
+            .await
+            .expect("seed postgres test key bundle");
+        let repo = super::PostgresControlRepository::connect(&database_url, None)
+            .await
+            .expect("connect postgres repository");
+        let batch = UsageRollupBatch {
+            batch_id: "rollup-legacy-digest-1".to_string(),
+            source_node_id: Some("node-a".to_string()),
+            created_at_ms: 1_700_000_000_010,
+            source_event_count: 2,
+            deltas: vec![KeyUsageRollupDelta {
+                key_id: "key-1".to_string(),
+                input_uncached_tokens: 3,
+                input_cached_tokens: 5,
+                output_tokens: 7,
+                billable_tokens: 12,
+                credit_total: 0.25,
+                credit_missing_events: 1,
+                last_used_at_ms: Some(1_700_000_000_020),
+            }],
+            last_used_at_ms_counts: Vec::new(),
+        };
+        let legacy_digest = legacy_json_rollup_digest(&batch);
+        let client = SqlxClient::connect(&database_url)
+            .await
+            .expect("connect postgres test database");
+        let source_event_count = i64::try_from(batch.source_event_count).expect("count fits");
+        let delta_count = i64::try_from(batch.deltas.len()).expect("delta count fits");
+        client
+            .execute(
+                "INSERT INTO llm_key_usage_rollup_applied_batches (
+                    batch_id, digest, source_node_id, source_event_count,
+                    delta_count, applied_at_ms
+                 ) VALUES ($1, $2, $3, $4, $5, $6)",
+                &[
+                    &batch.batch_id,
+                    &legacy_digest,
+                    &batch.source_node_id,
+                    &source_event_count,
+                    &delta_count,
+                    &1_700_000_000_030_i64,
+                ],
+            )
+            .await
+            .expect("insert legacy digest marker");
+
+        let report = repo
+            .apply_usage_rollup_batches(std::slice::from_ref(&batch))
+            .await
+            .expect("replay legacy digest marker");
+
+        assert_eq!(report.applied_batch_count, 0);
+        assert_eq!(report.already_applied_batch_count, 1);
+        let row = client
+            .query_one(
+                "SELECT digest FROM llm_key_usage_rollup_applied_batches WHERE batch_id = $1",
+                &[&batch.batch_id],
+            )
+            .await
+            .expect("load upgraded marker");
+        let upgraded_digest: String = row.get("digest");
+        assert_ne!(upgraded_digest, legacy_digest);
+        let row = client
+            .query_one(
+                "SELECT count(*)::BIGINT AS count FROM llm_key_usage_rollups WHERE key_id = \
+                 'key-1'",
+                &[],
+            )
+            .await
+            .expect("count rollup rows");
+        assert_eq!(row.get::<_, i64>("count"), 0);
+        client.close().await;
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_prunes_old_rollup_batch_markers() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        let repo = super::PostgresControlRepository::connect(&database_url, None)
+            .await
+            .expect("connect postgres repository");
+        let client = SqlxClient::connect(&database_url)
+            .await
+            .expect("connect postgres test database");
+        let source_node_id: Option<String> = None;
+        let source_event_count = 1_i64;
+        let delta_count = 1_i64;
+        for (batch_id, applied_at_ms) in [
+            ("rollup-prune-old", 1_700_000_000_000_i64),
+            ("rollup-prune-new", 1_700_000_010_000_i64),
+        ] {
+            let digest = format!("{batch_id}-digest");
+            client
+                .execute(
+                    "INSERT INTO llm_key_usage_rollup_applied_batches (
+                        batch_id, digest, source_node_id, source_event_count,
+                        delta_count, applied_at_ms
+                     ) VALUES ($1, $2, $3, $4, $5, $6)",
+                    &[
+                        &batch_id,
+                        &digest,
+                        &source_node_id,
+                        &source_event_count,
+                        &delta_count,
+                        &applied_at_ms,
+                    ],
+                )
+                .await
+                .expect("insert marker");
+        }
+
+        let deleted = repo
+            .prune_usage_rollup_batch_markers(1_700_000_005_000)
+            .await
+            .expect("prune old markers");
+
+        assert_eq!(deleted, 1);
+        let row = client
+            .query_one(
+                "SELECT count(*)::BIGINT AS count FROM llm_key_usage_rollup_applied_batches",
+                &[],
+            )
+            .await
+            .expect("count remaining markers");
+        assert_eq!(row.get::<_, i64>("count"), 1);
         client.close().await;
     }
 

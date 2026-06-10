@@ -16,8 +16,9 @@ use crate::{
     config::JournalConfig,
     reader::{JournalFileSummary, JournalStreamReport},
     wire::{
-        BlockHeaderV1, FileFooterV1, FileHeaderV1, JournalRollupBatchBlockV1, JournalRollupBatchV1,
-        FORMAT_VERSION_V1, ROLLUP_FILE_MAGIC_V1, SCHEMA_VERSION_V1,
+        decode_journal_rollup_batch_block, BlockHeaderV1, FileFooterV1, FileHeaderV1,
+        JournalRollupBatchBlockV1, JournalRollupBatchV1, FORMAT_VERSION_V1, ROLLUP_FILE_MAGIC_V1,
+        SCHEMA_VERSION_V1,
     },
     writer::{block_crc32c, write_file_header, write_record, BLOCK_TAG, FOOTER_TAG},
 };
@@ -43,6 +44,7 @@ pub struct RollupJournalWriter {
     created_at_ms: i64,
     block_sequence: u64,
     pending_batches: Vec<JournalRollupBatchV1>,
+    pending_uncompressed_bytes: usize,
     batch_count: u64,
     min_created_at_ms: Option<i64>,
     max_created_at_ms: Option<i64>,
@@ -82,6 +84,7 @@ impl RollupJournalWriter {
             created_at_ms,
             block_sequence: 0,
             pending_batches: Vec::new(),
+            pending_uncompressed_bytes: 0,
             batch_count: 0,
             min_created_at_ms: None,
             max_created_at_ms: None,
@@ -97,10 +100,12 @@ impl RollupJournalWriter {
             if self.pending_batches.len() >= self.config.block_max_events.max(1) {
                 self.flush_pending_block()?;
             }
-            self.pending_batches
-                .push(JournalRollupBatchV1::from_rollup_batch(batch));
-            if self.pending_uncompressed_len()?
-                >= self.config.block_target_uncompressed_bytes.max(1)
+            let batch = JournalRollupBatchV1::from_rollup_batch(batch);
+            self.pending_uncompressed_bytes = self
+                .pending_uncompressed_bytes
+                .saturating_add(postcard::to_allocvec(&batch)?.len());
+            self.pending_batches.push(batch);
+            if self.pending_uncompressed_bytes >= self.config.block_target_uncompressed_bytes.max(1)
             {
                 self.flush_pending_block()?;
             }
@@ -178,13 +183,6 @@ impl RollupJournalWriter {
         Ok(sealed_path)
     }
 
-    fn pending_uncompressed_len(&self) -> Result<usize> {
-        let block = JournalRollupBatchBlockV1 {
-            batches: self.pending_batches.clone(),
-        };
-        Ok(postcard::to_allocvec(&block)?.len())
-    }
-
     fn flush_pending_block(&mut self) -> Result<()> {
         if self.pending_batches.is_empty() {
             return Ok(());
@@ -192,6 +190,7 @@ impl RollupJournalWriter {
         let block = JournalRollupBatchBlockV1 {
             batches: std::mem::take(&mut self.pending_batches),
         };
+        self.pending_uncompressed_bytes = 0;
         let uncompressed = postcard::to_allocvec(&block)?;
         let compressed =
             zstd::stream::encode_all(Cursor::new(&uncompressed), self.config.zstd_level)
@@ -379,7 +378,7 @@ impl RollupJournalBatchStream {
                 decoded.len()
             ));
         }
-        let block: JournalRollupBatchBlockV1 = postcard::from_bytes(&decoded)?;
+        let block = decode_journal_rollup_batch_block(&decoded)?;
         if block.batches.is_empty() {
             return Err(anyhow!("rollup journal block unexpectedly has no batches"));
         }

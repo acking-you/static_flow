@@ -32,6 +32,7 @@ pub struct JournalWriter {
     created_at_ms: i64,
     block_sequence: u64,
     pending_events: Vec<JournalUsageEventV1>,
+    pending_uncompressed_bytes: usize,
     event_count: u64,
     min_created_at_ms: Option<i64>,
     max_created_at_ms: Option<i64>,
@@ -89,6 +90,7 @@ impl JournalWriter {
             created_at_ms,
             block_sequence: 0,
             pending_events: Vec::new(),
+            pending_uncompressed_bytes: 0,
             event_count: 0,
             min_created_at_ms: None,
             max_created_at_ms: None,
@@ -104,10 +106,12 @@ impl JournalWriter {
             if self.pending_events.len() >= self.config.block_max_events.max(1) {
                 self.flush_pending_block()?;
             }
-            self.pending_events
-                .push(JournalUsageEventV1::from_usage_event(event));
-            if self.pending_uncompressed_len()?
-                >= self.config.block_target_uncompressed_bytes.max(1)
+            let event = JournalUsageEventV1::from_usage_event(event);
+            self.pending_uncompressed_bytes = self
+                .pending_uncompressed_bytes
+                .saturating_add(postcard::to_allocvec(&event)?.len());
+            self.pending_events.push(event);
+            if self.pending_uncompressed_bytes >= self.config.block_target_uncompressed_bytes.max(1)
             {
                 self.flush_pending_block()?;
             }
@@ -188,13 +192,6 @@ impl JournalWriter {
         Ok(sealed_path)
     }
 
-    fn pending_uncompressed_len(&self) -> Result<usize> {
-        let batch = JournalUsageBatchV1 {
-            events: self.pending_events.clone(),
-        };
-        Ok(postcard::to_allocvec(&batch)?.len())
-    }
-
     fn flush_pending_block(&mut self) -> Result<()> {
         if self.pending_events.is_empty() {
             return Ok(());
@@ -202,6 +199,7 @@ impl JournalWriter {
         let batch = JournalUsageBatchV1 {
             events: std::mem::take(&mut self.pending_events),
         };
+        self.pending_uncompressed_bytes = 0;
         let uncompressed = postcard::to_allocvec(&batch)?;
         let compressed =
             zstd::stream::encode_all(Cursor::new(&uncompressed), self.config.zstd_level)
@@ -466,6 +464,7 @@ mod tests {
                 credit_missing_events: 1,
                 last_used_at_ms: Some(1_700_000_000_020),
             }],
+            last_used_at_ms_counts: Vec::new(),
         }
     }
 

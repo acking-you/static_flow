@@ -2,6 +2,8 @@
 //! totals, chart points, the legacy Kiro-proxy migration record, and the
 //! usage-metrics + Kiro-latency-ranking query/view/snapshot types.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::proxy::AdminProxyConfig;
@@ -31,11 +33,13 @@ pub struct KeyUsageRollupDelta {
 impl KeyUsageRollupDelta {
     /// Build a single-key rollup delta from one raw usage event.
     pub fn from_usage_event(event: &UsageEvent) -> anyhow::Result<Self> {
-        let credit_total = event
-            .credit_usage
-            .as_deref()
-            .unwrap_or("0")
-            .parse::<f64>()?;
+        let (credit_total, credit_missing_events) = match event.credit_usage.as_deref() {
+            Some(raw) => match raw.parse::<f64>() {
+                Ok(value) if value.is_finite() => (value, event.credit_usage_missing as i64),
+                _ => (0.0, 1),
+            },
+            None => (0.0, event.credit_usage_missing as i64),
+        };
         Ok(Self {
             key_id: event.key_id.clone(),
             input_uncached_tokens: event.input_uncached_tokens.max(0),
@@ -43,7 +47,7 @@ impl KeyUsageRollupDelta {
             output_tokens: event.output_tokens.max(0),
             billable_tokens: event.billable_tokens.max(0),
             credit_total,
-            credit_missing_events: event.credit_usage_missing as i64,
+            credit_missing_events,
             last_used_at_ms: Some(event.created_at_ms),
         })
     }
@@ -99,6 +103,17 @@ impl KeyUsageRollupDelta {
     }
 }
 
+/// Exact last-used timestamp cardinality represented by one rollup batch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyUsageRollupLastUsedCount {
+    /// Key receiving this timestamp contribution.
+    pub key_id: String,
+    /// Usage timestamp in Unix milliseconds.
+    pub last_used_at_ms: i64,
+    /// Number of raw events for this key at this timestamp.
+    pub count: u64,
+}
+
 /// One durable, idempotently applied control-plane rollup batch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsageRollupBatch {
@@ -112,6 +127,10 @@ pub struct UsageRollupBatch {
     pub source_event_count: u64,
     /// Per-key rollup deltas.
     pub deltas: Vec<KeyUsageRollupDelta>,
+    /// Per-key timestamp cardinalities used to update in-memory quota overlays
+    /// exactly when an aggregated batch is replayed or applied later.
+    #[serde(default)]
+    pub last_used_at_ms_counts: Vec<KeyUsageRollupLastUsedCount>,
 }
 
 impl UsageRollupBatch {
@@ -122,9 +141,15 @@ impl UsageRollupBatch {
         created_at_ms: i64,
         events: &[UsageEvent],
     ) -> anyhow::Result<Self> {
-        let mut deltas = std::collections::BTreeMap::<String, KeyUsageRollupDelta>::new();
+        let mut deltas = BTreeMap::<String, KeyUsageRollupDelta>::new();
+        let mut last_used_counts = BTreeMap::<(String, i64), u64>::new();
         for event in events {
             let delta = KeyUsageRollupDelta::from_usage_event(event)?;
+            if let Some(last_used_at_ms) = delta.last_used_at_ms {
+                let key = (delta.key_id.clone(), last_used_at_ms);
+                let count = last_used_counts.entry(key).or_insert(0);
+                *count = count.saturating_add(1);
+            }
             deltas
                 .entry(delta.key_id.clone())
                 .and_modify(|current| current.add_assign(&delta))
@@ -136,6 +161,14 @@ impl UsageRollupBatch {
             created_at_ms,
             source_event_count: events.len() as u64,
             deltas: deltas.into_values().collect(),
+            last_used_at_ms_counts: last_used_counts
+                .into_iter()
+                .map(|((key_id, last_used_at_ms), count)| KeyUsageRollupLastUsedCount {
+                    key_id,
+                    last_used_at_ms,
+                    count,
+                })
+                .collect(),
         })
     }
 
@@ -514,4 +547,95 @@ pub struct KiroLatencyRankingSnapshot {
     pub accounts: Vec<KiroLatencyRankingRow>,
     /// Proxy latency rows. This is intentionally full, not top-N.
     pub proxies: Vec<KiroLatencyRankingRow>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UsageRollupBatch;
+    use crate::{
+        provider::{ProtocolFamily, ProviderType},
+        usage::{UsageEvent, UsageStreamDetails, UsageTiming},
+    };
+
+    #[test]
+    fn rollup_treats_malformed_credit_as_missing_without_dropping_batch() {
+        let events = vec![
+            test_usage_event("evt-bad-credit", 100, Some("not-a-number"), false),
+            test_usage_event("evt-good-credit", 200, Some("0.5"), false),
+        ];
+
+        let batch = UsageRollupBatch::from_usage_events(
+            "batch-credit".to_string(),
+            Some("node-test".to_string()),
+            300,
+            &events,
+        )
+        .expect("aggregate usage rollup");
+
+        assert_eq!(batch.deltas.len(), 1);
+        let delta = &batch.deltas[0];
+        assert_eq!(delta.credit_total, 0.5);
+        assert_eq!(delta.credit_missing_events, 1);
+        assert_eq!(delta.last_used_at_ms, Some(200));
+        assert_eq!(batch.last_used_at_ms_counts.len(), 2);
+        assert_eq!(batch.last_used_at_ms_counts[0].last_used_at_ms, 100);
+        assert_eq!(batch.last_used_at_ms_counts[1].last_used_at_ms, 200);
+    }
+
+    #[test]
+    fn rollup_treats_non_finite_credit_as_missing() {
+        let event = test_usage_event("evt-nan-credit", 100, Some("NaN"), false);
+
+        let delta = super::KeyUsageRollupDelta::from_usage_event(&event).expect("usage delta");
+
+        assert_eq!(delta.credit_total, 0.0);
+        assert_eq!(delta.credit_missing_events, 1);
+    }
+
+    fn test_usage_event(
+        event_id: &str,
+        created_at_ms: i64,
+        credit_usage: Option<&str>,
+        credit_usage_missing: bool,
+    ) -> UsageEvent {
+        UsageEvent {
+            event_id: event_id.to_string(),
+            created_at_ms,
+            provider_type: ProviderType::Kiro,
+            protocol_family: ProtocolFamily::Anthropic,
+            key_id: "key-usage".to_string(),
+            key_name: "runtime".to_string(),
+            account_name: Some("acct-1".to_string()),
+            account_group_id_at_event: None,
+            route_strategy_at_event: None,
+            request_method: "POST".to_string(),
+            request_url: "/v1/messages".to_string(),
+            endpoint: "/v1/messages".to_string(),
+            model: Some("claude".to_string()),
+            mapped_model: Some("claude".to_string()),
+            status_code: 200,
+            request_body_bytes: Some(1),
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
+            input_uncached_tokens: 10,
+            input_cached_tokens: 1,
+            output_tokens: 2,
+            billable_tokens: 12,
+            credit_usage: credit_usage.map(str::to_string),
+            usage_missing: false,
+            credit_usage_missing,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: None,
+            client_request_body_json: None,
+            upstream_request_body_json: None,
+            full_request_json: None,
+            error_message: None,
+            error_body: None,
+            response_body: None,
+            timing: UsageTiming::default(),
+            stream: UsageStreamDetails::default(),
+        }
+    }
 }
