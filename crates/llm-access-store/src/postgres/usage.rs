@@ -501,6 +501,16 @@ impl PostgresControlRepository {
             .await
             .context("commit postgres usage rollup batch transaction")?;
 
+        tracing::debug!(
+            requested_batch_count = batches.len(),
+            applied_batch_count = report.applied_batch_count,
+            already_applied_batch_count = report.already_applied_batch_count,
+            delta_count = report.delta_count,
+            missing_key_delta_count = report.missing_key_delta_count,
+            affected_rollup_rows = affected_rows,
+            "applied postgres usage rollup batches"
+        );
+
         let key_ids = deltas
             .iter()
             .map(|delta| delta.key_id.clone())

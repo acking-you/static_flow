@@ -3,6 +3,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{anyhow, Context};
@@ -26,6 +27,16 @@ pub(crate) struct UsageRollupBacklog {
 pub(crate) struct ClaimedRollupBacklogFile {
     path: PathBuf,
     sealed_path: PathBuf,
+}
+
+/// Result of scanning durable control-rollup backlog files.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct UsageRollupBacklogLoadReport {
+    pub(crate) sealed_file_count: usize,
+    pub(crate) loaded_file_count: usize,
+    pub(crate) loaded_batch_count: usize,
+    pub(crate) quarantined_file_count: usize,
+    pub(crate) bad_file_samples: Vec<String>,
 }
 
 impl ClaimedRollupBacklogFile {
@@ -58,10 +69,16 @@ impl UsageRollupBacklog {
         }
         restore_consuming_files(&config.root_dir)?;
         let writer = RollupJournalWriter::open(config.clone())?;
-        Ok(Self {
+        let backlog = Self {
             config,
             writer: Some(writer),
-        })
+        };
+        tracing::info!(
+            root = %backlog.config.root_dir.display(),
+            sealed_file_count = backlog.sealed_file_count().unwrap_or(0),
+            "opened control rollup disk backlog"
+        );
+        Ok(backlog)
     }
 
     /// Open a test backlog under a temporary root.
@@ -95,12 +112,51 @@ impl UsageRollupBacklog {
         Ok(())
     }
 
+    /// Stream pending batches from sealed files one file at a time. Unreadable
+    /// files are quarantined so one corrupt backlog cannot block startup.
+    pub(crate) fn for_each_pending_batch(
+        &self,
+        mut on_batch: impl FnMut(&UsageRollupBatch) -> anyhow::Result<()>,
+    ) -> anyhow::Result<UsageRollupBacklogLoadReport> {
+        let mut report = UsageRollupBacklogLoadReport::default();
+        let paths = self.pending_sealed_paths()?;
+        report.sealed_file_count = paths.len();
+        for path in paths {
+            let path_display = path.display().to_string();
+            let batches = match RollupJournalReader::open(&path)
+                .and_then(|reader| reader.read_all_batches())
+            {
+                Ok(batches) => batches,
+                Err(err) => {
+                    let bad_path = self.quarantine_sealed_path(&path)?;
+                    report.quarantined_file_count = report.quarantined_file_count.saturating_add(1);
+                    push_sample(&mut report.bad_file_samples, bad_path.display().to_string());
+                    tracing::error!(
+                        path = %path_display,
+                        bad_path = %bad_path.display(),
+                        "quarantined unreadable control rollup backlog file during startup scan: \
+                         {err:#}"
+                    );
+                    continue;
+                },
+            };
+            for batch in &batches {
+                on_batch(batch)?;
+            }
+            report.loaded_file_count = report.loaded_file_count.saturating_add(1);
+            report.loaded_batch_count = report.loaded_batch_count.saturating_add(batches.len());
+        }
+        Ok(report)
+    }
+
     /// Return all pending batches from sealed backlog files.
+    #[cfg(test)]
     pub(crate) fn read_all_pending_batches(&self) -> anyhow::Result<Vec<UsageRollupBatch>> {
         let mut batches = Vec::new();
-        for path in self.pending_sealed_paths()? {
-            batches.extend(RollupJournalReader::open(&path)?.read_all_batches()?);
-        }
+        let _ = self.for_each_pending_batch(|batch| {
+            batches.push(batch.clone());
+            Ok(())
+        })?;
         Ok(batches)
     }
 
@@ -120,6 +176,11 @@ impl UsageRollupBacklog {
                 consuming_path.display()
             )
         })?;
+        tracing::warn!(
+            path = %consuming_path.display(),
+            sealed_path = %sealed_path.display(),
+            "claimed control rollup backlog file for replay"
+        );
         Ok(Some(ClaimedRollupBacklogFile {
             path: consuming_path,
             sealed_path,
@@ -156,12 +217,42 @@ impl UsageRollupBacklog {
                 claim.path.display(),
                 claim.sealed_path.display()
             )
-        })
+        })?;
+        tracing::warn!(
+            path = %claim.path.display(),
+            sealed_path = %claim.sealed_path.display(),
+            "restored control rollup backlog claim after retryable failure"
+        );
+        Ok(())
+    }
+
+    /// Move an unreadable claimed file out of the replay queue.
+    pub(crate) fn quarantine_claim(
+        &self,
+        claim: ClaimedRollupBacklogFile,
+    ) -> anyhow::Result<PathBuf> {
+        self.quarantine_path(&claim.path)
     }
 
     /// Count currently sealed backlog files.
     pub(crate) fn sealed_file_count(&self) -> anyhow::Result<usize> {
         Ok(self.pending_sealed_paths()?.len())
+    }
+
+    fn quarantine_sealed_path(&self, path: &Path) -> anyhow::Result<PathBuf> {
+        self.quarantine_path(path)
+    }
+
+    fn quarantine_path(&self, path: &Path) -> anyhow::Result<PathBuf> {
+        let bad_path = unique_bad_path(&self.config.root_dir, path)?;
+        fs::rename(path, &bad_path).with_context(|| {
+            format!(
+                "failed to quarantine rollup backlog `{}` to `{}`",
+                path.display(),
+                bad_path.display()
+            )
+        })?;
+        Ok(bad_path)
     }
 
     fn seal_current_writer(&mut self) -> anyhow::Result<()> {
@@ -170,8 +261,10 @@ impl UsageRollupBacklog {
             .take()
             .ok_or_else(|| anyhow!("rollup backlog writer is not open"))?;
         let sealed = old_writer.seal_current_file()?;
+        let sealed_file_count = self.sealed_file_count().unwrap_or(0);
         tracing::error!(
             path = %sealed.display(),
+            sealed_file_count,
             "persisted failed control rollup batch to disk backlog"
         );
         self.writer = Some(RollupJournalWriter::open(self.config.clone())?);
@@ -206,7 +299,7 @@ impl UsageRollupBacklog {
 }
 
 fn create_dirs(root: &Path) -> anyhow::Result<()> {
-    for name in ["active", "sealed", "consuming"] {
+    for name in ["active", "sealed", "consuming", "bad"] {
         let path = root.join(name);
         fs::create_dir_all(&path)
             .with_context(|| format!("failed to create rollup backlog dir `{}`", path.display()))?;
@@ -235,10 +328,22 @@ fn restore_consuming_files(root: &Path) -> anyhow::Result<()> {
         }
         let sealed_path = sealed_dir.join(file_name);
         if sealed_path.exists() {
-            return Err(anyhow!(
-                "cannot restore rollup backlog consuming file `{}` because sealed target exists",
-                path.display()
-            ));
+            let bad_path = unique_bad_path(root, &path)?;
+            fs::rename(&path, &bad_path).with_context(|| {
+                format!(
+                    "failed to quarantine duplicate rollup backlog consuming file `{}` to `{}`",
+                    path.display(),
+                    bad_path.display()
+                )
+            })?;
+            tracing::error!(
+                path = %path.display(),
+                sealed_path = %sealed_path.display(),
+                bad_path = %bad_path.display(),
+                "quarantined abandoned control rollup backlog claim because sealed target already \
+                 exists"
+            );
+            continue;
         }
         fs::rename(&path, &sealed_path).with_context(|| {
             format!(
@@ -253,4 +358,110 @@ fn restore_consuming_files(root: &Path) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+fn unique_bad_path(root: &Path, source_path: &Path) -> anyhow::Result<PathBuf> {
+    let file_name = source_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            anyhow!("rollup backlog path `{}` has no file name", source_path.display())
+        })?;
+    let bad_dir = root.join("bad");
+    fs::create_dir_all(&bad_dir).with_context(|| {
+        format!("failed to create rollup backlog bad dir `{}`", bad_dir.display())
+    })?;
+    let candidate = bad_dir.join(file_name);
+    if !candidate.exists() {
+        return Ok(candidate);
+    }
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    for suffix in 1..=1024 {
+        let candidate = bad_dir.join(format!("{file_name}.bad-{now_ms}-{suffix}"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err(anyhow!(
+        "failed to find unique quarantine path for rollup backlog `{}`",
+        source_path.display()
+    ))
+}
+
+fn push_sample(samples: &mut Vec<String>, value: String) {
+    if samples.len() >= 8 || samples.iter().any(|existing| existing == &value) {
+        return;
+    }
+    samples.push(value);
+}
+
+#[cfg(test)]
+mod tests {
+    use llm_access_core::store::{KeyUsageRollupDelta, UsageRollupBatch};
+
+    use super::UsageRollupBacklog;
+
+    fn test_rollup_batch(batch_id: &str) -> UsageRollupBatch {
+        UsageRollupBatch {
+            batch_id: batch_id.to_string(),
+            source_node_id: Some("node-test".to_string()),
+            created_at_ms: 1_700_000_000_000,
+            source_event_count: 1,
+            deltas: vec![KeyUsageRollupDelta {
+                key_id: "key-runtime".to_string(),
+                input_uncached_tokens: 10,
+                input_cached_tokens: 0,
+                output_tokens: 2,
+                billable_tokens: 12,
+                credit_total: 0.0,
+                credit_missing_events: 0,
+                last_used_at_ms: Some(1_700_000_000_000),
+            }],
+        }
+    }
+
+    #[test]
+    fn read_all_pending_batches_quarantines_unreadable_sealed_files() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut backlog =
+            UsageRollupBacklog::open_for_tests(root.path().to_path_buf()).expect("open backlog");
+        backlog
+            .append_batches(&[test_rollup_batch("rollup-readable")])
+            .expect("append readable batch");
+        let corrupt_path = root.path().join("sealed/rollup-999999999999.journal");
+        std::fs::write(&corrupt_path, b"not a rollup journal").expect("write corrupt file");
+
+        let batches = backlog
+            .read_all_pending_batches()
+            .expect("corrupt sealed files should be quarantined");
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].batch_id, "rollup-readable");
+        assert!(!corrupt_path.exists());
+        assert!(root.path().join("bad/rollup-999999999999.journal").exists());
+    }
+
+    #[test]
+    fn quarantine_claim_moves_bad_claim_out_of_replay_queue() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let backlog =
+            UsageRollupBacklog::open_for_tests(root.path().to_path_buf()).expect("open backlog");
+        let corrupt_path = root.path().join("sealed/rollup-000000000001.journal");
+        std::fs::write(&corrupt_path, b"not a rollup journal").expect("write corrupt file");
+
+        let claim = backlog
+            .claim_next()
+            .expect("claim")
+            .expect("claim should exist");
+        assert!(backlog.read_claim(&claim).is_err());
+        let bad_path = backlog
+            .quarantine_claim(claim)
+            .expect("quarantine bad claim");
+
+        assert!(bad_path.exists());
+        assert_eq!(backlog.sealed_file_count().expect("sealed count"), 0);
+    }
 }
