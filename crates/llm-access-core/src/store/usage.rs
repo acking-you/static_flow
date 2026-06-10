@@ -7,6 +7,157 @@ use serde::{Deserialize, Serialize};
 use super::proxy::AdminProxyConfig;
 use crate::usage::UsageEvent;
 
+/// Aggregated control-plane usage delta for one key.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KeyUsageRollupDelta {
+    /// Key receiving this rollup delta.
+    pub key_id: String,
+    /// Uncached input tokens to add.
+    pub input_uncached_tokens: i64,
+    /// Cached input tokens to add.
+    pub input_cached_tokens: i64,
+    /// Output tokens to add.
+    pub output_tokens: i64,
+    /// Billable tokens to add.
+    pub billable_tokens: i64,
+    /// Credit usage to add.
+    pub credit_total: f64,
+    /// Count of events whose credit usage was missing.
+    pub credit_missing_events: i64,
+    /// Latest usage timestamp represented by this delta.
+    pub last_used_at_ms: Option<i64>,
+}
+
+impl KeyUsageRollupDelta {
+    /// Build a single-key rollup delta from one raw usage event.
+    pub fn from_usage_event(event: &UsageEvent) -> anyhow::Result<Self> {
+        let credit_total = event
+            .credit_usage
+            .as_deref()
+            .unwrap_or("0")
+            .parse::<f64>()?;
+        Ok(Self {
+            key_id: event.key_id.clone(),
+            input_uncached_tokens: event.input_uncached_tokens.max(0),
+            input_cached_tokens: event.input_cached_tokens.max(0),
+            output_tokens: event.output_tokens.max(0),
+            billable_tokens: event.billable_tokens.max(0),
+            credit_total,
+            credit_missing_events: event.credit_usage_missing as i64,
+            last_used_at_ms: Some(event.created_at_ms),
+        })
+    }
+
+    /// Add another delta for the same key.
+    pub fn add_assign(&mut self, other: &Self) {
+        self.input_uncached_tokens = self
+            .input_uncached_tokens
+            .saturating_add(other.input_uncached_tokens);
+        self.input_cached_tokens = self
+            .input_cached_tokens
+            .saturating_add(other.input_cached_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.billable_tokens = self.billable_tokens.saturating_add(other.billable_tokens);
+        self.credit_total += other.credit_total;
+        self.credit_missing_events = self
+            .credit_missing_events
+            .saturating_add(other.credit_missing_events);
+        self.last_used_at_ms = match (self.last_used_at_ms, other.last_used_at_ms) {
+            (Some(current), Some(next)) => Some(current.max(next)),
+            (None, next) => next,
+            (current, None) => current,
+        };
+    }
+
+    /// Subtract another delta after it has been durably applied.
+    pub fn subtract_assign(&mut self, other: &Self) {
+        self.input_uncached_tokens = self
+            .input_uncached_tokens
+            .saturating_sub(other.input_uncached_tokens);
+        self.input_cached_tokens = self
+            .input_cached_tokens
+            .saturating_sub(other.input_cached_tokens);
+        self.output_tokens = self.output_tokens.saturating_sub(other.output_tokens);
+        self.billable_tokens = self.billable_tokens.saturating_sub(other.billable_tokens);
+        self.credit_total = (self.credit_total - other.credit_total).max(0.0);
+        self.credit_missing_events = self
+            .credit_missing_events
+            .saturating_sub(other.credit_missing_events);
+        if self.last_used_at_ms == other.last_used_at_ms {
+            self.last_used_at_ms = None;
+        }
+    }
+
+    /// Whether all additive counters in this delta are zero.
+    pub fn is_zero(&self) -> bool {
+        self.input_uncached_tokens == 0
+            && self.input_cached_tokens == 0
+            && self.output_tokens == 0
+            && self.billable_tokens == 0
+            && self.credit_total == 0.0
+            && self.credit_missing_events == 0
+    }
+}
+
+/// One durable, idempotently applied control-plane rollup batch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsageRollupBatch {
+    /// Stable id used by control stores for replay deduplication.
+    pub batch_id: String,
+    /// Optional source node id for diagnostics.
+    pub source_node_id: Option<String>,
+    /// Batch creation timestamp in Unix milliseconds.
+    pub created_at_ms: i64,
+    /// Number of raw usage events represented by this aggregated batch.
+    pub source_event_count: u64,
+    /// Per-key rollup deltas.
+    pub deltas: Vec<KeyUsageRollupDelta>,
+}
+
+impl UsageRollupBatch {
+    /// Aggregate raw usage events into one idempotent rollup batch.
+    pub fn from_usage_events(
+        batch_id: String,
+        source_node_id: Option<String>,
+        created_at_ms: i64,
+        events: &[UsageEvent],
+    ) -> anyhow::Result<Self> {
+        let mut deltas = std::collections::BTreeMap::<String, KeyUsageRollupDelta>::new();
+        for event in events {
+            let delta = KeyUsageRollupDelta::from_usage_event(event)?;
+            deltas
+                .entry(delta.key_id.clone())
+                .and_modify(|current| current.add_assign(&delta))
+                .or_insert(delta);
+        }
+        Ok(Self {
+            batch_id,
+            source_node_id,
+            created_at_ms,
+            source_event_count: events.len() as u64,
+            deltas: deltas.into_values().collect(),
+        })
+    }
+
+    /// Return true if this batch has no deltas to apply.
+    pub fn is_empty(&self) -> bool {
+        self.deltas.is_empty()
+    }
+}
+
+/// Summary returned by idempotent rollup batch sinks.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UsageRollupApplyReport {
+    /// Batches newly applied in this call.
+    pub applied_batch_count: usize,
+    /// Batches already recorded and therefore skipped.
+    pub already_applied_batch_count: usize,
+    /// Delta rows newly considered for application.
+    pub delta_count: usize,
+    /// Delta rows skipped because their key no longer exists.
+    pub missing_key_delta_count: usize,
+}
+
 /// Physical usage-event source queried by admin and public compatibility views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]

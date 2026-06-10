@@ -23,6 +23,8 @@ mod process_memory;
 pub mod provider;
 mod public;
 mod request_context;
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+mod rollup_backlog;
 /// LLM-owned route classification.
 pub mod routes;
 /// Runtime startup validation.

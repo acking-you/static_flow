@@ -2,12 +2,16 @@
 
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType, RouteStrategy},
+    store::{KeyUsageRollupDelta, UsageRollupBatch},
     usage::{UsageEvent, UsageStreamDetails, UsageTiming},
 };
 use serde::{Deserialize, Serialize};
 
 /// Current journal file magic bytes.
 pub const FILE_MAGIC_V1: &[u8; 8] = b"LLMUJNL1";
+
+/// Current control-rollup journal file magic bytes.
+pub const ROLLUP_FILE_MAGIC_V1: &[u8; 8] = b"LLMRJNL1";
 
 /// Current journal file format version.
 pub const FORMAT_VERSION_V1: u16 = 1;
@@ -343,6 +347,117 @@ impl LegacyJournalUsageEventV1 {
 pub struct JournalUsageBatchV1 {
     /// Usage events in append order.
     pub events: Vec<JournalUsageEventV1>,
+}
+
+/// One versioned rollup delta record stored in the control-rollup journal.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JournalRollupDeltaV1 {
+    /// Rollup delta schema version.
+    pub schema_version: u16,
+    /// Key receiving this rollup delta.
+    pub key_id: String,
+    /// Uncached input tokens to add.
+    pub input_uncached_tokens: i64,
+    /// Cached input tokens to add.
+    pub input_cached_tokens: i64,
+    /// Output tokens to add.
+    pub output_tokens: i64,
+    /// Billable tokens to add.
+    pub billable_tokens: i64,
+    /// Credit usage to add.
+    pub credit_total: f64,
+    /// Count of events whose credit usage was missing.
+    pub credit_missing_events: i64,
+    /// Latest usage timestamp represented by this delta.
+    pub last_used_at_ms: Option<i64>,
+}
+
+/// One versioned rollup batch stored in the control-rollup journal.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JournalRollupBatchV1 {
+    /// Rollup batch schema version.
+    pub schema_version: u16,
+    /// Stable id used by control stores for replay deduplication.
+    pub batch_id: String,
+    /// Optional source node id for diagnostics.
+    pub source_node_id: Option<String>,
+    /// Batch creation timestamp in Unix milliseconds.
+    pub created_at_ms: i64,
+    /// Number of raw usage events represented by this aggregated batch.
+    pub source_event_count: u64,
+    /// Per-key rollup deltas.
+    pub deltas: Vec<JournalRollupDeltaV1>,
+}
+
+/// One compressed rollup block payload before compression.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JournalRollupBatchBlockV1 {
+    /// Rollup batches in append order.
+    pub batches: Vec<JournalRollupBatchV1>,
+}
+
+impl JournalRollupDeltaV1 {
+    /// Convert a core rollup delta into the stable journal wire shape.
+    pub fn from_rollup_delta(delta: &KeyUsageRollupDelta) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION_V1,
+            key_id: delta.key_id.clone(),
+            input_uncached_tokens: delta.input_uncached_tokens,
+            input_cached_tokens: delta.input_cached_tokens,
+            output_tokens: delta.output_tokens,
+            billable_tokens: delta.billable_tokens,
+            credit_total: delta.credit_total,
+            credit_missing_events: delta.credit_missing_events,
+            last_used_at_ms: delta.last_used_at_ms,
+        }
+    }
+
+    /// Convert the journal wire shape back into a core rollup delta.
+    pub fn into_rollup_delta(self) -> KeyUsageRollupDelta {
+        KeyUsageRollupDelta {
+            key_id: self.key_id,
+            input_uncached_tokens: self.input_uncached_tokens,
+            input_cached_tokens: self.input_cached_tokens,
+            output_tokens: self.output_tokens,
+            billable_tokens: self.billable_tokens,
+            credit_total: self.credit_total,
+            credit_missing_events: self.credit_missing_events,
+            last_used_at_ms: self.last_used_at_ms,
+        }
+    }
+}
+
+impl JournalRollupBatchV1 {
+    /// Convert a core rollup batch into the stable journal wire shape.
+    pub fn from_rollup_batch(batch: &UsageRollupBatch) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION_V1,
+            batch_id: batch.batch_id.clone(),
+            source_node_id: batch.source_node_id.clone(),
+            created_at_ms: batch.created_at_ms,
+            source_event_count: batch.source_event_count,
+            deltas: batch
+                .deltas
+                .iter()
+                .map(JournalRollupDeltaV1::from_rollup_delta)
+                .collect(),
+        }
+    }
+
+    /// Convert the journal wire shape back into a core rollup batch.
+    pub fn into_rollup_batch(self) -> UsageRollupBatch {
+        UsageRollupBatch {
+            batch_id: self.batch_id,
+            source_node_id: self.source_node_id,
+            created_at_ms: self.created_at_ms,
+            source_event_count: self.source_event_count,
+            deltas: self
+                .deltas
+                .into_iter()
+                .map(JournalRollupDeltaV1::into_rollup_delta)
+                .collect(),
+        }
+    }
 }
 
 /// Decode one journal batch payload, accepting both current and legacy event

@@ -44,11 +44,12 @@ use super::{
         AdminAccountGroupStore, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,
         AdminKiroAccountStore, AdminProxyStore, AdminReviewQueueStore, ProviderRouteStore,
         PublicAccessStore, PublicCommunityStore, PublicStatusStore, PublicSubmissionStore,
-        PublicUsageStore, UsageAnalyticsStore, UsageEventSink,
+        PublicUsageStore, UsageAnalyticsStore, UsageEventSink, UsageRollupBatchSink,
     },
     usage::{
         AdminLegacyKiroProxyMigration, UsageChartPoint, UsageEventPage, UsageEventQuery,
         UsageEventTotals, UsageFilterOptions, UsageMetricsQuery, UsageMetricsSnapshot,
+        UsageRollupApplyReport, UsageRollupBatch,
     },
     DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_STATUS_REFRESH_SECONDS, KEY_STATUS_ACTIVE,
 };
@@ -210,6 +211,19 @@ impl UsageEventSink for NoopUsageEventSink {
 
     async fn append_usage_events(&self, _events: &[UsageEvent]) -> anyhow::Result<()> {
         Ok(())
+    }
+}
+
+/// No-op rollup sink used by isolated unit tests.
+pub struct NoopUsageRollupBatchSink;
+
+#[async_trait]
+impl UsageRollupBatchSink for NoopUsageRollupBatchSink {
+    async fn apply_usage_rollup_batches(
+        &self,
+        _batches: &[UsageRollupBatch],
+    ) -> anyhow::Result<UsageRollupApplyReport> {
+        Ok(UsageRollupApplyReport::default())
     }
 }
 

@@ -278,7 +278,7 @@ pub(crate) fn write_record<T: serde::Serialize>(
 }
 
 pub(crate) fn write_file_header(file: &mut File, header: &FileHeaderV1) -> Result<()> {
-    file.write_all(FILE_MAGIC_V1)
+    file.write_all(&header.magic)
         .context("failed to write journal magic")?;
     let bytes = postcard::to_allocvec(header)?;
     file.write_all(&(bytes.len() as u32).to_le_bytes())
@@ -317,11 +317,14 @@ mod tests {
 
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType},
+        store::{KeyUsageRollupDelta, UsageRollupBatch},
         usage::{UsageEvent, UsageStreamDetails, UsageTiming},
     };
 
     use super::JournalWriter;
-    use crate::{reader::JournalReader, retention, JournalConfig};
+    use crate::{
+        reader::JournalReader, retention, JournalConfig, RollupJournalReader, RollupJournalWriter,
+    };
 
     #[test]
     fn writer_seals_file_with_valid_footer_and_reader_streams_batches_and_summary() {
@@ -349,6 +352,40 @@ mod tests {
         assert_eq!(report.footer.block_count, 1);
         assert_eq!(report.footer.event_count, 1);
         assert_eq!(report.total_compressed_bytes, summary.total_compressed_bytes);
+        assert_eq!(report.file_digest_hex.len(), 64);
+    }
+
+    #[test]
+    fn rollup_writer_seals_file_with_valid_footer_and_reader_streams_batches() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = JournalConfig::new(dir.path().to_path_buf());
+        let mut writer = RollupJournalWriter::open(config).expect("open rollup writer");
+        writer
+            .append_batches(&[test_rollup_batch("rollup-batch-1")])
+            .expect("append rollup batch");
+        let sealed = writer.seal_current_file().expect("seal rollup file");
+        assert!(sealed
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("sealed file name")
+            .starts_with("rollup-"));
+
+        let reader = RollupJournalReader::open(&sealed).expect("open rollup reader");
+        let summary = reader.scan_summary().expect("scan rollup summary");
+        assert_eq!(summary.footer.block_count, 1);
+        assert_eq!(summary.footer.event_count, 1);
+        assert!(summary.total_compressed_bytes > 0);
+
+        let mut stream = reader.stream_batches().expect("stream rollup batches");
+        let batch = stream
+            .next_batch()
+            .expect("read rollup batch")
+            .expect("rollup batch present");
+        assert_eq!(batch.batch_id, "rollup-batch-1");
+        assert_eq!(batch.deltas[0].key_id, "key-rollup");
+        assert!(stream.next_batch().expect("read rollup footer").is_none());
+        let report = stream.finish().expect("finish rollup stream");
+        assert_eq!(report.footer.event_count, 1);
         assert_eq!(report.file_digest_hex.len(), 64);
     }
 
@@ -411,6 +448,25 @@ mod tests {
         let path = root.join(relative);
         fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
         fs::write(path, bytes).expect("write file");
+    }
+
+    fn test_rollup_batch(batch_id: &str) -> UsageRollupBatch {
+        UsageRollupBatch {
+            batch_id: batch_id.to_string(),
+            source_node_id: Some("node-test".to_string()),
+            created_at_ms: 1_700_000_000_010,
+            source_event_count: 2,
+            deltas: vec![KeyUsageRollupDelta {
+                key_id: "key-rollup".to_string(),
+                input_uncached_tokens: 11,
+                input_cached_tokens: 22,
+                output_tokens: 33,
+                billable_tokens: 44,
+                credit_total: 0.44,
+                credit_missing_events: 1,
+                last_used_at_ms: Some(1_700_000_000_020),
+            }],
+        }
     }
 
     fn test_usage_event(event_id: &str) -> UsageEvent {

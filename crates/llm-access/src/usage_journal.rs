@@ -199,7 +199,7 @@ impl JournalUsageWriter for DiskJournalUsageWriter {
     }
 }
 
-fn journal_config_from_runtime(
+pub(crate) fn journal_config_from_runtime(
     root_dir: PathBuf,
     runtime_config: &AdminRuntimeConfig,
 ) -> JournalConfig {
