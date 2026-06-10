@@ -45,6 +45,10 @@ use crate::{
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 const USAGE_EVENT_CHANNEL_CAPACITY: usize = 1_024;
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+const USAGE_EVENT_ROLLUP_MAX_RETRIES: usize = 3;
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+const USAGE_EVENT_LOG_SAMPLE_LIMIT: usize = 8;
 
 /// Runtime dependencies shared by provider routes.
 #[derive(Clone)]
@@ -848,6 +852,7 @@ fn spawn_usage_event_flusher(
         let mut analytics_retry_bytes = 0usize;
         let mut flush_count: u64 = 0;
         let mut retry_failed_batch_on_timer = false;
+        let mut rollup_retry_attempts = 0usize;
 
         loop {
             let flush_config = {
@@ -883,6 +888,7 @@ fn spawn_usage_event_flusher(
                                     analytics_retry_bytes: &mut analytics_retry_bytes,
                                     max_buffer_bytes: flush_config.max_buffer_bytes,
                                     flush_count: &mut flush_count,
+                                    rollup_retry_attempts: &mut rollup_retry_attempts,
                                 },
                                 "final usage event flush failed during shutdown",
                             )
@@ -906,6 +912,7 @@ fn spawn_usage_event_flusher(
                                 analytics_retry_bytes: &mut analytics_retry_bytes,
                                 max_buffer_bytes: flush_config.max_buffer_bytes,
                                 flush_count: &mut flush_count,
+                                rollup_retry_attempts: &mut rollup_retry_attempts,
                             },
                             "usage event retry flush failed",
                         )
@@ -938,6 +945,7 @@ fn spawn_usage_event_flusher(
                                 analytics_retry_bytes: &mut analytics_retry_bytes,
                                 max_buffer_bytes: flush_config.max_buffer_bytes,
                                 flush_count: &mut flush_count,
+                                rollup_retry_attempts: &mut rollup_retry_attempts,
                             },
                             "final usage event flush failed during shutdown",
                         )
@@ -984,6 +992,7 @@ fn spawn_usage_event_flusher(
                                         analytics_retry_bytes: &mut analytics_retry_bytes,
                                         max_buffer_bytes: flush_config.max_buffer_bytes,
                                         flush_count: &mut flush_count,
+                                        rollup_retry_attempts: &mut rollup_retry_attempts,
                                     },
                                     "usage event batch flush failed",
                                 )
@@ -1004,6 +1013,7 @@ fn spawn_usage_event_flusher(
                                     analytics_retry_bytes: &mut analytics_retry_bytes,
                                     max_buffer_bytes: flush_config.max_buffer_bytes,
                                     flush_count: &mut flush_count,
+                                    rollup_retry_attempts: &mut rollup_retry_attempts,
                                 },
                                 "final usage event flush failed",
                             )
@@ -1029,6 +1039,7 @@ fn spawn_usage_event_flusher(
                                 analytics_retry_bytes: &mut analytics_retry_bytes,
                                 max_buffer_bytes: flush_config.max_buffer_bytes,
                                 flush_count: &mut flush_count,
+                                rollup_retry_attempts: &mut rollup_retry_attempts,
                             },
                             "usage event timed flush failed",
                         )
@@ -1090,6 +1101,7 @@ struct UsageEventFlushState<'a> {
     analytics_retry_bytes: &'a mut usize,
     max_buffer_bytes: usize,
     flush_count: &'a mut u64,
+    rollup_retry_attempts: &'a mut usize,
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -1104,9 +1116,15 @@ async fn flush_usage_event_buffer(
         let count = batch.len();
         match targets.rollup_sink.append_usage_events(&batch).await {
             Ok(()) => {
+                *state.rollup_retry_attempts = 0;
                 if let Err(err) = targets.pending_rollups.subtract_events(&batch) {
+                    let summary = usage_event_batch_log_summary(&batch);
                     tracing::error!(
                         count,
+                        distinct_key_count = summary.distinct_key_count,
+                        key_id_samples = ?summary.key_id_samples,
+                        key_name_samples = ?summary.key_name_samples,
+                        event_id_samples = ?summary.event_id_samples,
                         "persisted usage rollups but failed to clear pending usage rollups: \
                          {err:#}"
                     );
@@ -1114,10 +1132,60 @@ async fn flush_usage_event_buffer(
                 append_analytics_retry_events(&mut state, batch);
             },
             Err(err) => {
-                tracing::error!(count, "{}: {err:#}", error_message);
-                *state.buffered_bytes = batch.iter().map(estimate_usage_event_bytes).sum();
-                *state.buffer = batch;
-                return true;
+                *state.rollup_retry_attempts = state.rollup_retry_attempts.saturating_add(1);
+                let retry_attempt = *state.rollup_retry_attempts;
+                let buffered_bytes = batch.iter().map(estimate_usage_event_bytes).sum();
+                let summary = usage_event_batch_log_summary(&batch);
+                if retry_attempt < USAGE_EVENT_ROLLUP_MAX_RETRIES {
+                    tracing::error!(
+                        count,
+                        buffered_bytes,
+                        retry_attempt,
+                        max_retries = USAGE_EVENT_ROLLUP_MAX_RETRIES,
+                        distinct_key_count = summary.distinct_key_count,
+                        key_id_samples = ?summary.key_id_samples,
+                        key_name_samples = ?summary.key_name_samples,
+                        account_name_samples = ?summary.account_name_samples,
+                        provider_samples = ?summary.provider_samples,
+                        endpoint_samples = ?summary.endpoint_samples,
+                        status_code_samples = ?summary.status_code_samples,
+                        event_id_samples = ?summary.event_id_samples,
+                        "{}: {err:#}",
+                        error_message
+                    );
+                    *state.buffered_bytes = buffered_bytes;
+                    *state.buffer = batch;
+                    return true;
+                }
+                tracing::error!(
+                    count,
+                    buffered_bytes,
+                    retry_attempt,
+                    max_retries = USAGE_EVENT_ROLLUP_MAX_RETRIES,
+                    distinct_key_count = summary.distinct_key_count,
+                    key_id_samples = ?summary.key_id_samples,
+                    key_name_samples = ?summary.key_name_samples,
+                    account_name_samples = ?summary.account_name_samples,
+                    provider_samples = ?summary.provider_samples,
+                    endpoint_samples = ?summary.endpoint_samples,
+                    status_code_samples = ?summary.status_code_samples,
+                    event_id_samples = ?summary.event_id_samples,
+                    "usage rollup batch failed after bounded retries; abandoning control rollup \
+                     for this batch and forwarding events to analytics/journal: {err:#}"
+                );
+                if let Err(clear_err) = targets.pending_rollups.subtract_events(&batch) {
+                    tracing::error!(
+                        count,
+                        distinct_key_count = summary.distinct_key_count,
+                        key_id_samples = ?summary.key_id_samples,
+                        key_name_samples = ?summary.key_name_samples,
+                        event_id_samples = ?summary.event_id_samples,
+                        "abandoned usage rollups but failed to clear pending usage rollups: \
+                         {clear_err:#}"
+                    );
+                }
+                *state.rollup_retry_attempts = 0;
+                append_analytics_retry_events(&mut state, batch);
             },
         }
     }
@@ -1141,12 +1209,63 @@ async fn flush_usage_event_buffer(
                 tracing::error!(count, "{}: {err:#}", error_message);
                 tracing::warn!(
                     count,
-                    "dropped llm access analytics events after rollups were persisted"
+                    "dropped llm access analytics events after rollup stage completed"
                 );
             },
         }
     }
     false
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+#[derive(Debug, Default)]
+struct UsageEventBatchLogSummary {
+    distinct_key_count: usize,
+    key_id_samples: Vec<String>,
+    key_name_samples: Vec<String>,
+    account_name_samples: Vec<String>,
+    provider_samples: Vec<String>,
+    endpoint_samples: Vec<String>,
+    status_code_samples: Vec<String>,
+    event_id_samples: Vec<String>,
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+fn usage_event_batch_log_summary(events: &[UsageEvent]) -> UsageEventBatchLogSummary {
+    let mut summary = UsageEventBatchLogSummary::default();
+    let mut distinct_key_ids = Vec::<String>::new();
+    for event in events {
+        if !distinct_key_ids
+            .iter()
+            .any(|key_id| key_id == &event.key_id)
+        {
+            distinct_key_ids.push(event.key_id.clone());
+        }
+        push_unique_sample(&mut summary.key_id_samples, event.key_id.clone());
+        push_unique_sample(&mut summary.key_name_samples, event.key_name.clone());
+        if let Some(account_name) = &event.account_name {
+            push_unique_sample(&mut summary.account_name_samples, account_name.clone());
+        }
+        push_unique_sample(
+            &mut summary.provider_samples,
+            format!("{:?}/{:?}", event.provider_type, event.protocol_family),
+        );
+        push_unique_sample(&mut summary.endpoint_samples, event.endpoint.clone());
+        push_unique_sample(&mut summary.status_code_samples, event.status_code.to_string());
+        push_unique_sample(&mut summary.event_id_samples, event.event_id.clone());
+    }
+    summary.distinct_key_count = distinct_key_ids.len();
+    summary
+}
+
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+fn push_unique_sample(samples: &mut Vec<String>, value: String) {
+    if samples.len() >= USAGE_EVENT_LOG_SAMPLE_LIMIT
+        || samples.iter().any(|sample| sample == &value)
+    {
+        return;
+    }
+    samples.push(value);
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -1668,6 +1787,7 @@ mod tests {
             .sum::<usize>();
         let mut analytics_retry_bytes = 0usize;
         let mut flush_count = 0u64;
+        let mut rollup_retry_attempts = 0usize;
 
         let retry = super::flush_usage_event_buffer(
             super::UsageEventFlushTargets {
@@ -1682,6 +1802,7 @@ mod tests {
                 analytics_retry_bytes: &mut analytics_retry_bytes,
                 max_buffer_bytes: 8 * 1024 * 1024,
                 flush_count: &mut flush_count,
+                rollup_retry_attempts: &mut rollup_retry_attempts,
             },
             "usage event batch flush failed",
         )
@@ -1699,6 +1820,48 @@ mod tests {
             "evt-2".to_string()
         ]]);
         assert!(pending_rollups.delta_for_key("key-runtime").is_none());
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    #[tokio::test]
+    async fn usage_flusher_abandons_rollup_after_bounded_failures() {
+        let rollup_sink = Arc::new(FailingUsageEventSink::default());
+        let analytics_sink = Arc::new(RecordingUsageEventSink::default());
+        let (_journal_root, journal_sink) = test_journal_sink();
+        let runtime_config = Arc::new(RwLock::new(AdminRuntimeConfig {
+            usage_event_flush_batch_size: 1,
+            usage_event_flush_interval_seconds: 1,
+            usage_event_flush_max_buffer_bytes: 8 * 1024 * 1024,
+            ..AdminRuntimeConfig::default()
+        }));
+        let (sink, handle) = super::UsageAccounting::new(
+            rollup_sink.clone(),
+            journal_sink,
+            analytics_sink.clone(),
+            runtime_config,
+        );
+
+        sink.append_usage_event(&sample_usage_event("evt-rollup-fail"))
+            .await
+            .expect("enqueue event");
+
+        tokio::time::timeout(Duration::from_secs(6), async {
+            loop {
+                if !analytics_sink.batches.lock().await.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("usage event was not forwarded after rollup retries were exhausted");
+
+        assert_eq!(*rollup_sink.attempts.lock().await, super::USAGE_EVENT_ROLLUP_MAX_RETRIES);
+        assert_eq!(analytics_sink.batches.lock().await.as_slice(), &[vec![
+            "evt-rollup-fail".to_string()
+        ]]);
+        assert!(sink.pending_rollups.delta_for_key("key-runtime").is_none());
+        handle.shutdown().await;
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
