@@ -1111,13 +1111,22 @@ mod tests {
         assert_ne!(upgraded_digest, legacy_digest);
         let row = client
             .query_one(
-                "SELECT count(*)::BIGINT AS count FROM llm_key_usage_rollups WHERE key_id = \
-                 'key-1'",
+                "SELECT input_uncached_tokens, input_cached_tokens, output_tokens,
+                        billable_tokens, credit_total, credit_missing_events,
+                        last_used_at_ms
+                 FROM llm_key_usage_rollups
+                 WHERE key_id = 'key-1'",
                 &[],
             )
             .await
-            .expect("count rollup rows");
-        assert_eq!(row.get::<_, i64>("count"), 0);
+            .expect("load unchanged usage rollup row");
+        assert_eq!(row.get::<_, i64>("input_uncached_tokens"), 0);
+        assert_eq!(row.get::<_, i64>("input_cached_tokens"), 0);
+        assert_eq!(row.get::<_, i64>("output_tokens"), 0);
+        assert_eq!(row.get::<_, i64>("billable_tokens"), 0);
+        assert_eq!(row.get::<_, String>("credit_total"), "0");
+        assert_eq!(row.get::<_, i64>("credit_missing_events"), 0);
+        assert_eq!(row.get::<_, Option<i64>>("last_used_at_ms"), None);
         client.close().await;
     }
 
