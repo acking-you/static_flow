@@ -571,7 +571,7 @@ pub fn music_player_page(props: &Props) -> Html {
             </button>
 
             <div class="flex flex-col items-center mb-8">
-                <div class="w-64 h-64 sm:w-72 sm:h-72 rounded-2xl overflow-hidden liquid-glass shadow-[var(--shadow-8)] mb-6 bg-[var(--surface-alt)]">
+                <div class="w-64 h-64 sm:w-72 sm:h-72 rounded-2xl overflow-hidden shadow-[var(--shadow-8)] mb-6 bg-[var(--surface-alt)]">
                     if cover_url.is_empty() {
                         <div class="w-full h-full flex items-center justify-center text-[var(--muted)]">
                             <Icon name={IconName::Music} size={64} class={classes!("opacity-30")} />

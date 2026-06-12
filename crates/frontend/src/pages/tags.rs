@@ -162,7 +162,6 @@ pub fn tags_page() -> Html {
                                     "py-20",
                                     "px-4",
                                     "bg-[var(--surface)]",
-                                    "liquid-glass",
                                     "rounded-2xl",
                                     "border",
                                     "border-[var(--border)]"
@@ -213,7 +212,6 @@ pub fn tags_page() -> Html {
                                                         "border-[var(--border)]",
                                                         "rounded-full",
                                                         "bg-[var(--surface)]",
-                                                        "liquid-glass-subtle",
                                                         "text-[var(--text)]",
                                                         "font-medium",
                                                         "transition-all",

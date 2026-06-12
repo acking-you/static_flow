@@ -361,7 +361,6 @@ pub fn posts_page() -> Html {
                                 "py-20",
                                 "px-4",
                                 "bg-[var(--surface)]",
-                                "liquid-glass",
                                 "rounded-2xl",
                                 "border",
                                 "border-[var(--border)]"
@@ -446,7 +445,6 @@ pub fn posts_page() -> Html {
                                                             <article class={classes!(
                                                                 "article-card",
                                                                 "bg-[var(--surface)]",
-                                                                "liquid-glass",
                                                                 "rounded-xl",
                                                                 "border",
                                                                 "border-[var(--border)]",

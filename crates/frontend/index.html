@@ -265,15 +265,6 @@
 </head>
 
 <body>
-  <svg width="0" height="0" style="position:absolute;">
-    <defs>
-      <filter id="wave-filter">
-        <feTurbulence type="fractalNoise" baseFrequency="0.01" numOctaves="1" result="noise" />
-        <feDisplacementMap in="SourceGraphic" in2="noise" scale="5" xChannelSelector="R" yChannelSelector="G" />
-      </filter>
-    </defs>
-  </svg>
-  <div class="spotlight" id="global-spotlight" aria-hidden="true"></div>
   <!-- WASM app will render here -->
   <noscript>本应用需要启用 JavaScript。</noscript>
 

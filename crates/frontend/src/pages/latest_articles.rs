@@ -740,7 +740,6 @@ pub fn latest_articles_page() -> Html {
                                 "py-20",
                                 "px-4",
                                 "bg-[var(--surface)]",
-                                "liquid-glass",
                                 "rounded-2xl",
                                 "border",
                                 "border-[var(--border)]"
@@ -789,7 +788,7 @@ pub fn latest_articles_page() -> Html {
                     <p class="text-[var(--muted)] text-sm mb-6">{ar_t::SECTION_SUBTITLE}</p>
 
                     <form onsubmit={on_ar_submit}
-                        class="bg-[var(--surface)] liquid-glass border border-[var(--border)] rounded-xl p-5 mb-8 \
+                        class="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5 mb-8 \
                                grid grid-cols-1 sm:grid-cols-2 gap-4">
                         if has_parent {
                             <div class="sm:col-span-2 flex items-center justify-between gap-2 \

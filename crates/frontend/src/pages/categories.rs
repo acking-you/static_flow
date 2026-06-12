@@ -160,7 +160,6 @@ pub fn categories_page() -> Html {
                                 "py-20",
                                 "px-4",
                                 "bg-[var(--surface)]",
-                                "liquid-glass",
                                 "rounded-2xl",
                                 "border",
                                 "border-[var(--border)]"
@@ -209,7 +208,6 @@ pub fn categories_page() -> Html {
                                                 "hover:border-[var(--primary)]",
                                                 "hover:shadow-[0_4px_12px_rgba(var(--primary-rgb),0.4)]",
                                                 "hover:-translate-y-1",
-                                                "liquid-glass"
                                             )}
                                         >
                                             <div class={classes!("flex", "flex-col", "gap-3", "h-full")}>

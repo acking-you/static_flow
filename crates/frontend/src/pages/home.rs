@@ -290,8 +290,7 @@ pub fn home_page() -> Html {
         "hero-avatar",
         "transition-opacity",
         "duration-500",
-        if *avatar_loaded { "opacity-100" } else { "opacity-0" },
-        if *avatar_hovered { "hero-avatar--spinning" } else { "" }
+        if *avatar_loaded { "opacity-100" } else { "opacity-0" }
     );
 
     // --- social button class (reused in Section 7) ---

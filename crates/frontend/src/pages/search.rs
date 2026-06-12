@@ -1859,7 +1859,6 @@ pub fn search_page() -> Html {
                             "border",
                             "border-[var(--primary)]/30",
                             "bg-[var(--surface)]",
-                            "liquid-glass",
                             "px-4",
                             "py-4"
                         )}>
@@ -2140,7 +2139,6 @@ pub fn search_page() -> Html {
                                         "py-10",
                                         "px-4",
                                         "bg-[var(--surface)]",
-                                        "liquid-glass",
                                         "rounded-2xl",
                                         "border",
                                         "border-[var(--primary)]/30"
@@ -2256,7 +2254,6 @@ pub fn search_page() -> Html {
                                     "py-12",
                                     "px-4",
                                     "bg-[var(--surface)]",
-                                    "liquid-glass",
                                     "rounded-2xl",
                                     "border",
                                     "border-[var(--primary)]/30"
@@ -2384,7 +2381,6 @@ pub fn search_page() -> Html {
                                         "py-10",
                                         "px-4",
                                         "bg-[var(--surface)]",
-                                        "liquid-glass",
                                         "rounded-2xl",
                                         "border",
                                         "border-[var(--primary)]/30"
@@ -2469,7 +2465,6 @@ pub fn search_page() -> Html {
                                     "py-10",
                                     "px-4",
                                     "bg-[var(--surface)]",
-                                    "liquid-glass",
                                     "rounded-2xl",
                                     "border",
                                     "border-[var(--primary)]/30"
@@ -2514,7 +2509,7 @@ pub fn search_page() -> Html {
                                 let id = r.id.clone();
                                 html! {
                                     <Link<Route> to={Route::MusicPlayer { id }}>
-                                        <div class="group bg-[var(--surface)] liquid-glass border border-[var(--border)] rounded-xl \
+                                        <div class="group bg-[var(--surface)] border border-[var(--border)] rounded-xl \
                                                     overflow-hidden flex flex-col transition-all duration-300 ease-out \
                                                     hover:shadow-[var(--shadow-8)] hover:border-[var(--primary)] hover:-translate-y-2">
                                             <div class="aspect-square bg-[var(--surface-alt)] relative overflow-hidden">
@@ -2560,7 +2555,6 @@ pub fn search_page() -> Html {
                             "py-16",
                             "px-4",
                             "bg-[var(--surface)]",
-                            "liquid-glass",
                             "rounded-2xl",
                             "border",
                             "border-[var(--primary)]/30"
@@ -2654,7 +2648,6 @@ pub fn search_page() -> Html {
                             "py-16",
                             "px-4",
                             "bg-[var(--surface)]",
-                            "liquid-glass",
                             "rounded-2xl",
                             "border",
                             "border-[var(--primary)]/30"
@@ -2926,7 +2919,6 @@ fn render_search_result(result: &SearchResult) -> Html {
         <article class={classes!(
             "search-result-card",
             "bg-[var(--surface)]",
-            "liquid-glass",
             "border-2",
             "border-[var(--primary)]/20",
             "rounded-xl",

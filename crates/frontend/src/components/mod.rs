@@ -20,7 +20,6 @@ pub mod raw_html;
 pub mod scroll_to_top_button;
 pub mod search_box;
 pub mod skeleton;
-pub mod spotlight;
 pub mod stats_card;
 pub mod stream_chunk_batcher;
 pub mod synced_lyrics;

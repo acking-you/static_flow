@@ -356,7 +356,7 @@ fn render_image_card(image: &api::ImageInfo) -> Html {
             href={src.clone()}
             target="_blank"
             rel="noopener noreferrer"
-            class="group bg-[var(--surface)] liquid-glass border border-[var(--border)] rounded-xl overflow-hidden flex flex-col transition-all duration-300 ease-out hover:shadow-[var(--shadow-8)] hover:border-[var(--primary)] hover:-translate-y-1 no-underline"
+            class="group bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden flex flex-col transition-all duration-300 ease-out hover:shadow-[var(--shadow-8)] hover:border-[var(--primary)] hover:-translate-y-1 no-underline"
             title={filename.clone()}
         >
             <div class="aspect-square bg-[var(--surface-alt)] relative overflow-hidden">

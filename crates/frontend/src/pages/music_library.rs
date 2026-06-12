@@ -706,7 +706,7 @@ pub fn music_library_page() -> Html {
                 <p class="text-[var(--muted)] text-sm mb-6">{wish_t::SECTION_SUBTITLE}</p>
 
                 <form id="music-wish-form" onsubmit={on_wish_submit}
-                    class="bg-[var(--surface)] liquid-glass border border-[var(--border)] rounded-xl p-5 mb-8 \
+                    class="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5 mb-8 \
                            grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <FormField
                         label={wish_t::SONG_NAME_LABEL}
@@ -851,7 +851,7 @@ fn render_song_card(
     let album_cb = on_album_click(album.clone());
 
     html! {
-        <div class="group bg-[var(--surface)] liquid-glass border border-[var(--border)] rounded-xl \
+        <div class="group bg-[var(--surface)] border border-[var(--border)] rounded-xl \
                     overflow-hidden flex flex-col transition-all duration-300 ease-out \
                     hover:shadow-[var(--shadow-8)] hover:border-[var(--primary)] hover:-translate-y-2">
             <Link<Route> to={Route::MusicPlayer { id }}>
@@ -945,7 +945,7 @@ fn wish_card(props: &WishCardProps) -> Html {
     };
 
     html! {
-        <div class="bg-[var(--surface)] liquid-glass border border-[var(--border)] rounded-xl p-4 \
+        <div class="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4 \
                     flex flex-col gap-2">
             <div class="flex items-start justify-between gap-2">
                 <h3 class="text-sm font-semibold text-[var(--text)] truncate">{&w.song_name}</h3>

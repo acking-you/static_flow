@@ -57,7 +57,6 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
             "editorial-card",
             is_interactive.then_some("editorial-card--interactive"),
             "bg-[var(--surface)]",
-            "liquid-glass",
             "border",
             "border-[var(--border)]",
             "rounded-xl",
