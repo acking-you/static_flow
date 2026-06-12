@@ -17,6 +17,7 @@ pub mod modal;
 pub mod pagination;
 pub mod persistent_audio;
 pub mod raw_html;
+pub mod reading_progress;
 pub mod scroll_to_top_button;
 pub mod search_box;
 pub mod skeleton;

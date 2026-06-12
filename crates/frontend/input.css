@@ -2747,6 +2747,35 @@ button[aria-current="page"]:hover {
   opacity: 1;
 }
 
+/* vNext: touch devices have no hover — keep the copy button visible
+   and give it a finger-sized hit area. */
+@media (hover: none) {
+  .code-wrapper .copy-button,
+  .mermaid-wrapper .copy-button {
+    opacity: 1;
+    min-width: var(--hit-size);
+    min-height: 2.25rem;
+  }
+}
+
+/* vNext: language label injected by the code-block enhancer. */
+.code-lang-label {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.75rem;
+  font-family: 'Space Mono', ui-monospace, monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+  pointer-events: none;
+  user-select: none;
+}
+
+[data-theme="dark"] .code-lang-label {
+  color: rgba(229, 231, 235, 0.45);
+}
+
 .copy-button:hover {
   background: rgba(0, 0, 0, 0.8);
   transform: scale(1.05);
@@ -5745,5 +5774,32 @@ html {
     margin: 0;
     font-size: 0.78rem;
     color: var(--muted);
+  }
+}
+
+/* === vNext: reading progress (article detail) === */
+@layer components {
+  .reading-progress-track {
+    position: fixed;
+    top: var(--header-height-desktop);
+    left: 0;
+    right: 0;
+    height: 2px;
+    z-index: 85;
+    background: transparent;
+    pointer-events: none;
+  }
+
+  @media (max-width: 768px) {
+    .reading-progress-track {
+      top: var(--header-height-mobile);
+    }
+  }
+
+  .reading-progress-bar {
+    height: 100%;
+    width: 0%;
+    background: var(--primary);
+    transition: none;
   }
 }

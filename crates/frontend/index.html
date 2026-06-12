@@ -801,11 +801,24 @@
         pre.parentNode.insertBefore(wrapper, pre);
         wrapper.appendChild(pre);
 
+        // Language label (from highlight.js `language-xxx` class)
+        const codeEl = pre.querySelector('code');
+        const langClass = codeEl && [...codeEl.classList].find((c) => c.startsWith('language-'));
+        const lang = langClass ? langClass.slice('language-'.length) : '';
+        if (lang && lang !== 'undefined' && lang !== 'plaintext') {
+          const langLabel = document.createElement('span');
+          langLabel.className = 'code-lang-label';
+          langLabel.textContent = lang;
+          langLabel.setAttribute('aria-hidden', 'true');
+          wrapper.appendChild(langLabel);
+        }
+
         // Create copy button
         const copyBtn = document.createElement('button');
         copyBtn.className = 'copy-button';
         copyBtn.innerHTML = '<i class="far fa-copy"></i>';
         copyBtn.title = '复制代码';
+        copyBtn.setAttribute('aria-label', '复制代码');
 
         copyBtn.addEventListener('click', async () => {
           const code = pre.querySelector('code');
