@@ -4,7 +4,8 @@
   /* Fluent 2 colors */
   --bg: #f3f2f1;
   --text: #1d1f23;
-  --muted: #6c7382;
+  /* ≥4.5:1 on both --bg and --surface (WCAG AA); was #6c7382 (~3.8:1 on --bg) */
+  --muted: #5b6270;
   --surface: #ffffff;
   --surface-rgb: 255, 255, 255;
   --surface-alt: #f6f8fb;
@@ -63,6 +64,36 @@
   --transition-base: background-color 0.28s ease, color 0.28s ease, border-color 0.28s ease, box-shadow 0.28s ease, transform 0.2s ease;
   --ease-spring: cubic-bezier(0.11, 0.9, 0.2, 1);
   --ease-snap: cubic-bezier(0.5, 0, 0.1, 1);
+
+}
+
+/* === vNext design tokens ===
+   `@theme static` so they are always emitted: Tailwind v4 prunes
+   unreferenced @theme variables, and these tokens are consumed
+   incrementally by later refinement phases. */
+@theme static {
+  /* Motion: two durations only — fast for micro-interactions (hover,
+     focus, toggles), base for elevation/entrance. Pair with
+     --ease-snap (micro) and --ease-spring (elevation). */
+  --motion-fast: 140ms;
+  --motion-base: 280ms;
+
+  /* Focus: one visible treatment everywhere — inner gap + primary ring. */
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--primary);
+
+  /* Editorial type scale: fluid clamps so headings stay proportionate
+     from 320px viewports to desktop. Applied in the typography pass. */
+  --font-size-display: clamp(2rem, 1.2rem + 3vw, 3rem);
+  --font-size-h1: clamp(1.6rem, 1.22rem + 1.6vw, 2.06rem);
+  --font-size-h2: clamp(1.38rem, 1.12rem + 1.1vw, 1.76rem);
+  --font-size-h3: clamp(1.22rem, 1.08rem + 0.7vw, 1.5rem);
+  --font-size-h4: clamp(1.1rem, 1.02rem + 0.4vw, 1.3rem);
+  --font-size-h5: clamp(1.02rem, 0.98rem + 0.2vw, 1.14rem);
+  --font-size-h6: clamp(0.98rem, 0.95rem + 0.15vw, 1.03rem);
+
+  /* Skeleton surfaces (dark values live in the data-theme block). */
+  --skeleton-base: #e7e8ec;
+  --skeleton-highlight: #f3f4f7;
 }
 
 [data-theme=dark],
@@ -88,6 +119,10 @@
   --header-bg: var(--acrylic-bg-dark);
   --glass-opacity: 0.75;
   --glass-noise-svg: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='4' stitchTiles='stitch'/></filter><rect width='200' height='200' filter='url(%23n)' opacity='0.15'/></svg>");
+
+  /* === vNext: skeleton surfaces (dark) === */
+  --skeleton-base: #2c2e36;
+  --skeleton-highlight: #383b44;
 }
 
 @property --search-hero-angle {
@@ -3209,17 +3244,6 @@ a:hover {
   overflow: hidden
 }
 
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(4px)
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0)
-  }
-}
 
 .fade-in {
   animation: fadeIn .4s ease both
@@ -3254,13 +3278,32 @@ a:hover {
   }
 }
 
-@media (prefers-reduced-motion:reduced) {
+/* vNext: was `reduced` (invalid value) — the global reduced-motion
+   kill switch never matched until this fix. */
+@media (prefers-reduced-motion: reduce) {
   * {
     animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
     scroll-behavior: auto !important
   }
+}
+
+/* === vNext: unified focus treatment ===
+   Keyboard focus is always visible; pointer focus stays quiet. */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.btn-terminal:focus-visible,
+.btn-fluent-primary:focus-visible,
+.btn-fluent-secondary:focus-visible,
+.btn-fluent-ghost:focus-visible,
+.btn-fluent-icon:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 /* Pagination current page button fix */
@@ -4103,16 +4146,6 @@ button[aria-current="page"]:hover {
 
 /* 回到顶部按钮 - 已迁移到 Tailwind (scroll_to_top_button.rs) */
 
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px)
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0)
-  }
-}
 
 /* ==========================================
    Category Detail Page - Geometric Design
@@ -4263,16 +4296,6 @@ button[aria-current="page"]:hover {
 .articles-grid > *:nth-child(4) { animation-delay: 0.4s; }
 .articles-grid > *:nth-child(5) { animation-delay: 0.5s; }
 
-@keyframes fadeInCard {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
 
 /* Dark Theme Adjustments for Category Pages */
 [data-theme="dark"] .category-title {
@@ -5043,27 +5066,7 @@ button[aria-current="page"]:hover {
   }
 }
 
-@keyframes fadeInSection {
-  from {
-    opacity: 0;
-    transform: translateY(30px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
 
-@keyframes fadeInCard {
-  from {
-    opacity: 0;
-    transform: translateY(15px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
 
 @keyframes fadeIn {
   from {
@@ -5345,27 +5348,7 @@ html {
   animation: pulse 2s ease-in-out 0.6s infinite;
 }
 
-@keyframes expandWidth {
-  from {
-    width: 0;
-    opacity: 0;
-  }
-  to {
-    width: 3rem;
-    opacity: 1;
-  }
-}
 
-@keyframes pulse {
-  0%, 100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(1.3);
-    opacity: 0.7;
-  }
-}
 
 /* Category Timeline */
 .category-timeline {
@@ -5405,16 +5388,6 @@ html {
   transition: transform 0.3s ease;
 }
 
-@keyframes slideInLeft {
-  from {
-    opacity: 0;
-    transform: translateX(-40px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
 
 /* Category Card with left border accent */
 .category-card {
