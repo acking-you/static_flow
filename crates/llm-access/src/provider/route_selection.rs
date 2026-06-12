@@ -332,6 +332,10 @@ pub async fn hydrate_kiro_route_for_dispatch(
     route.proxy = loaded.proxy;
     Ok(route)
 }
+/// Order candidate routes for one authenticated Kiro key.
+///
+/// All routes in `routes` must come from the same key route config, so their
+/// preferred pool strategy is expected to be identical.
 pub fn selection_ordered_kiro_routes<'a>(
     routes: &'a [ProviderKiroRoute],
     scheduler: &KiroRequestScheduler,
@@ -363,6 +367,11 @@ pub fn selection_ordered_kiro_routes<'a>(
 
     fn route_pool_strategy(route: &ProviderKiroRoute) -> &'static str {
         llm_access_core::store::normalize_kiro_pool_strategy(&route.pool_strategy)
+            .unwrap_or(llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED)
+    }
+
+    fn route_preferred_pool_strategy(route: &ProviderKiroRoute) -> &'static str {
+        llm_access_core::store::normalize_kiro_pool_strategy(&route.preferred_pool_strategy)
             .unwrap_or(llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED)
     }
 
@@ -489,6 +498,8 @@ pub fn selection_ordered_kiro_routes<'a>(
         right: &Candidate<'_>,
         preferred_pool_strategy: &str,
     ) -> Ordering {
+        // New-session spread stays global: pool preference only applies after
+        // proxy cooldown and active session count have been considered.
         compare_proxy_cooldown(left.proxy_in_cooldown, right.proxy_in_cooldown)
             .or_else(|| compare_session_count(left.session_count, right.session_count))
             .or_else(|| compare_pool_rank(left, right, preferred_pool_strategy))
@@ -531,12 +542,13 @@ pub fn selection_ordered_kiro_routes<'a>(
                 }
                 max_by_pool
             });
-    let preferred_pool_strategy = routes
-        .first()
-        .and_then(|route| {
-            llm_access_core::store::normalize_kiro_pool_strategy(&route.preferred_pool_strategy)
-        })
-        .unwrap_or(llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED);
+    let preferred_pool_strategy = route_preferred_pool_strategy(&routes[0]);
+    debug_assert!(
+        routes
+            .iter()
+            .all(|route| route_preferred_pool_strategy(route) == preferred_pool_strategy),
+        "Kiro route selection expects one preferred_pool_strategy per key"
+    );
     let mut sorted = routes
         .iter()
         .map(|route| {
@@ -546,9 +558,13 @@ pub fn selection_ordered_kiro_routes<'a>(
                 .cached_remaining_credits
                 .filter(|value| value.is_finite())
                 .unwrap_or_else(|| {
-                    *known_remaining_max_by_pool
-                        .get(pool_strategy)
-                        .unwrap_or(&0.0)
+                    if pool_strategy == llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST {
+                        *known_remaining_max_by_pool
+                            .get(pool_strategy)
+                            .unwrap_or(&0.0)
+                    } else {
+                        -1.0
+                    }
                 });
             Candidate {
                 route,

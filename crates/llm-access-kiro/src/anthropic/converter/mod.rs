@@ -2071,16 +2071,9 @@ mod tests {
 
         let result = convert_request_with_cctest_text_handling(&req, false)
             .expect("conversion should succeed");
-        let system_prefix = match &result.conversation_state.history[0] {
-            Message::User(message) => &message.user_input_message.content,
-            other => panic!("expected stable system user message, got {other:?}"),
-        };
 
         assert!(result.response_identity.is_none());
-        assert!(system_prefix.contains("Visible thinking may be shown to the user."));
-        assert!(system_prefix.contains("When answering identity, platform, routing"));
-        assert!(system_prefix.contains("When the Write or Edit tool has content size limits"));
-        assert!(!system_prefix.contains("<identity_override>"));
+        assert!(result.conversation_state.history.is_empty());
         assert_eq!(
             result
                 .conversation_state
@@ -2092,7 +2085,7 @@ mod tests {
     }
 
     #[test]
-    fn convert_request_without_cctest_keeps_stable_cache_safety_prefix_without_identity_override() {
+    fn convert_request_without_cctest_does_not_inject_system_when_absent() {
         let mut req = base_request(vec![AnthropicMessage {
             role: "user".to_string(),
             content: serde_json::json!("Hello"),
@@ -2101,15 +2094,8 @@ mod tests {
 
         let result = convert_request_with_cctest_text_handling(&req, false)
             .expect("conversion should succeed");
-        let system_prefix = match &result.conversation_state.history[0] {
-            Message::User(message) => &message.user_input_message.content,
-            other => panic!("expected stable system user message, got {other:?}"),
-        };
 
-        assert!(system_prefix.contains("Visible thinking may be shown to the user."));
-        assert!(system_prefix.contains("When answering identity, platform, routing"));
-        assert!(system_prefix.contains("When the Write or Edit tool has content size limits"));
-        assert!(!system_prefix.contains("<identity_override>"));
+        assert!(result.conversation_state.history.is_empty());
         assert!(result.response_identity.is_none());
     }
 
@@ -2130,10 +2116,7 @@ mod tests {
             other => panic!("expected client system user message, got {other:?}"),
         };
 
-        assert!(system_prefix.starts_with("Answer concisely."));
-        assert!(system_prefix.contains("Visible thinking may be shown to the user."));
-        assert!(system_prefix.contains("When answering identity, platform, routing"));
-        assert!(system_prefix.contains("When the Write or Edit tool has content size limits"));
+        assert_eq!(system_prefix, "Answer concisely.");
         assert!(!system_prefix.contains("<identity_override>"));
         assert!(!system_prefix.contains("You are Claude, made by Anthropic."));
     }
@@ -2160,6 +2143,9 @@ mod tests {
              claude-sonnet-4-6."
         ));
         assert!(!system_prefix.contains("Opus 4.8"));
+        assert!(!system_prefix.contains("Visible thinking may be shown to the user."));
+        assert!(!system_prefix.contains("When answering identity, platform, routing"));
+        assert!(!system_prefix.contains("When the Write or Edit tool has content size limits"));
         assert!(!system_prefix.contains("<identity_override>"));
         assert!(result.response_identity.is_none());
     }
@@ -2192,9 +2178,9 @@ mod tests {
             .contains("You are an interactive agent that helps users with software engineering"));
         assert!(!system_prefix.contains("x-anthropic-billing-header:"));
         assert!(!system_prefix.contains("cch=f03bc"));
-        assert!(system_prefix.contains("Visible thinking may be shown to the user."));
-        assert!(system_prefix.contains("When answering identity, platform, routing"));
-        assert!(system_prefix.contains("When the Write or Edit tool has content size limits"));
+        assert!(!system_prefix.contains("Visible thinking may be shown to the user."));
+        assert!(!system_prefix.contains("When answering identity, platform, routing"));
+        assert!(!system_prefix.contains("When the Write or Edit tool has content size limits"));
         assert!(result.response_identity.is_none());
     }
 

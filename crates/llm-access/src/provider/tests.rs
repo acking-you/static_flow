@@ -2033,6 +2033,31 @@ fn kiro_selection_does_not_starve_unknown_balance_in_credit_first_pool() {
 }
 
 #[test]
+fn kiro_selection_keeps_unknown_balance_last_in_balanced_pool() {
+    let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
+    let routes = vec![
+        kiro_route_for_pool_selection_without_balance(
+            "alpha",
+            "user-alpha",
+            llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED,
+            llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED,
+        ),
+        kiro_route_for_pool_selection(
+            "beta",
+            "user-beta",
+            5.0,
+            llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED,
+            llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED,
+        ),
+    ];
+    let ranker = crate::kiro_latency::KiroLatencyRanker::default();
+
+    let ordered =
+        super::selection_ordered_kiro_routes(&routes, scheduler.as_ref(), &ranker, 0, None);
+    assert_eq!(ordered[0].account_name, "beta");
+}
+
+#[test]
 fn kiro_selection_keeps_legacy_order_when_latency_routing_disabled() {
     let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
     let mut alpha =

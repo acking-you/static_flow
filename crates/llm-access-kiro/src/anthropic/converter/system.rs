@@ -87,13 +87,10 @@ pub fn build_injected_system_content(
         if let Some(system_content) = cleaned_client_system_content(req) {
             parts.push(system_content);
         }
-        parts.push(SYSTEM_CHUNKED_POLICY.to_string());
-        parts.push(VISIBLE_THINKING_PRIVACY_POLICY.to_string());
-        parts.push(SYSTEM_PROMPT_PRIVACY_POLICY.to_string());
         if let Some(tool_name) = structured_output_tool_name {
             parts.push(structured_output_instruction(tool_name));
         }
-        return Some(parts.join("\n"));
+        return (!parts.is_empty()).then(|| parts.join("\n"));
     }
 
     let identity = effective_response_identity_for_request(req);

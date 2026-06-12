@@ -89,8 +89,10 @@ impl PgRow {
         self.0.try_get::<Option<bool>, _>(name).ok().flatten()
     }
 
-    fn get_optional_string(&self, name: &str) -> Option<String> {
-        self.0.try_get::<Option<String>, _>(name).ok().flatten()
+    fn try_get_optional_string(&self, name: &str) -> anyhow::Result<Option<String>> {
+        self.0
+            .try_get::<Option<String>, _>(name)
+            .with_context(|| format!("decode sqlx postgres row column `{name}`"))
     }
 }
 
@@ -1569,6 +1571,7 @@ mod tests {
             .expect("newest key candidate summary");
         assert_eq!(first_page.keys[0].preferred_pool_strategy, "credit_first");
         assert_eq!(newest_summary.candidate_count, 4);
+        assert_eq!(newest_summary.preferred_pool_candidate_count, 0);
         assert_eq!(newest_summary.loaded_balance_count, 3);
         assert_eq!(newest_summary.missing_balance_count, 1);
         assert_eq!(newest_summary.total_limit, 600.0);
@@ -1577,6 +1580,7 @@ mod tests {
             .kiro_candidate_credit_summary
             .expect("middle key candidate summary");
         assert_eq!(middle_summary.candidate_count, 2);
+        assert_eq!(middle_summary.preferred_pool_candidate_count, 2);
         assert_eq!(middle_summary.loaded_balance_count, 1);
         assert_eq!(middle_summary.missing_balance_count, 1);
         assert_eq!(middle_summary.total_limit, 200.0);
@@ -1597,6 +1601,7 @@ mod tests {
             .kiro_candidate_credit_summary
             .expect("oldest key candidate summary");
         assert_eq!(oldest_summary.candidate_count, 2);
+        assert_eq!(oldest_summary.preferred_pool_candidate_count, 2);
         assert_eq!(oldest_summary.loaded_balance_count, 2);
         assert_eq!(oldest_summary.missing_balance_count, 0);
         assert_eq!(oldest_summary.total_limit, 400.0);

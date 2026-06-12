@@ -103,6 +103,9 @@ pub struct AdminKey {
 pub struct AdminKiroKeyCandidateCreditSummary {
     /// Number of candidate accounts matched by the key route.
     pub candidate_count: usize,
+    /// Number of candidate accounts in the key's preferred scheduler pool.
+    #[serde(default)]
+    pub preferred_pool_candidate_count: usize,
     /// Number of candidate accounts with a loaded balance snapshot.
     pub loaded_balance_count: usize,
     /// Number of candidate accounts still missing a balance snapshot.

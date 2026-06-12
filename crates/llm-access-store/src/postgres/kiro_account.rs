@@ -225,10 +225,9 @@ impl PostgresControlRepository {
             )
             .await
             .context("list postgres kiro admin account rows")?;
-        Ok(rows
-            .into_iter()
+        rows.into_iter()
             .map(decode_kiro_admin_account_list_row)
-            .collect())
+            .collect()
     }
 
     async fn admin_kiro_accounts_summary(
@@ -655,12 +654,11 @@ impl PostgresControlRepository {
                 .await
                 .context("list postgres kiro admin account rows page")?
         };
-        Ok((
-            rows.into_iter()
-                .map(decode_kiro_admin_account_list_row)
-                .collect(),
-            total,
-        ))
+        let accounts = rows
+            .into_iter()
+            .map(decode_kiro_admin_account_list_row)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok((accounts, total))
     }
 
     pub(super) async fn get_kiro_account_row(

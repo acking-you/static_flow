@@ -5803,6 +5803,9 @@ fn build_kiro_candidate_credit_summary(
 ) -> core_store::AdminKiroKeyCandidateCreditSummary {
     let mut seen = HashSet::<String>::new();
     let mut summary = core_store::AdminKiroKeyCandidateCreditSummary::default();
+    let preferred_pool_strategy =
+        core_store::normalize_kiro_pool_strategy(&key.preferred_pool_strategy)
+            .unwrap_or(core_store::KIRO_POOL_STRATEGY_BALANCED);
     for account_name in select_kiro_candidate_account_names(key, groups_by_id, all_account_names) {
         if !seen.insert(account_name.clone()) {
             continue;
@@ -5811,6 +5814,12 @@ fn build_kiro_candidate_credit_summary(
             continue;
         };
         summary.candidate_count += 1;
+        let account_pool_strategy =
+            core_store::normalize_kiro_pool_strategy(&account.pool_strategy)
+                .unwrap_or(core_store::KIRO_POOL_STRATEGY_BALANCED);
+        if account_pool_strategy == preferred_pool_strategy {
+            summary.preferred_pool_candidate_count += 1;
+        }
         if let Some(balance) = account.balance.as_ref() {
             summary.loaded_balance_count += 1;
             summary.total_limit += balance.usage_limit.max(0.0);
@@ -7353,6 +7362,7 @@ mod tests {
             .expect("summary should be attached");
 
         assert_eq!(summary.candidate_count, 3);
+        assert_eq!(summary.preferred_pool_candidate_count, 3);
         assert_eq!(summary.loaded_balance_count, 3);
         assert_eq!(summary.missing_balance_count, 0);
         assert_eq!(summary.total_limit, 3_000.0);
@@ -7376,9 +7386,31 @@ mod tests {
             .expect("summary should be attached");
 
         assert_eq!(summary.candidate_count, 2);
+        assert_eq!(summary.preferred_pool_candidate_count, 2);
         assert_eq!(summary.loaded_balance_count, 2);
         assert_eq!(summary.total_limit, 2_000.0);
         assert_eq!(summary.total_remaining, 1_550.0);
+    }
+
+    #[test]
+    fn apply_kiro_candidate_credit_summaries_counts_preferred_pool_matches() {
+        let mut key = sample_kiro_key(None);
+        key.preferred_pool_strategy = core_store::KIRO_POOL_STRATEGY_CREDIT_FIRST.to_string();
+        let mut credit_first = sample_kiro_account("kiro-a", 800.0, 1_000.0);
+        credit_first.pool_strategy = core_store::KIRO_POOL_STRATEGY_CREDIT_FIRST.to_string();
+        let accounts = vec![
+            credit_first,
+            sample_kiro_account("kiro-b", 650.0, 1_000.0),
+            sample_kiro_account("kiro-c", 900.0, 1_000.0),
+        ];
+
+        let keys = apply_kiro_candidate_credit_summaries(vec![key], &accounts, &[]);
+        let summary = keys[0]
+            .kiro_candidate_credit_summary
+            .expect("summary should be attached");
+
+        assert_eq!(summary.candidate_count, 3);
+        assert_eq!(summary.preferred_pool_candidate_count, 1);
     }
 
     #[test]

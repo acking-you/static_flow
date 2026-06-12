@@ -12,6 +12,7 @@ BEGIN
         SELECT 1
         FROM pg_constraint
         WHERE conname = 'llm_key_route_config_preferred_pool_strategy_check'
+          AND conrelid = 'llm_key_route_config'::regclass
     ) THEN
         ALTER TABLE llm_key_route_config
             ADD CONSTRAINT llm_key_route_config_preferred_pool_strategy_check

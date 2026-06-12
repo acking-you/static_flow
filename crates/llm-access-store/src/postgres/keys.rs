@@ -333,7 +333,10 @@ impl PostgresControlRepository {
                         COALESCE(u.credit_missing_events, 0) AS credit_missing_events,
                         u.last_used_at_ms,
                         COALESCE(u.updated_at_ms, k.updated_at_ms) AS rollup_updated_at_ms,
-                        r.preferred_pool_strategy AS preferred_pool_strategy,
+                        CASE COALESCE(NULLIF(BTRIM(r.preferred_pool_strategy), ''), 'balanced')
+                            WHEN 'credit_first' THEN 'credit_first'
+                            ELSE 'balanced'
+                        END AS preferred_pool_strategy,
                         g.account_names_json AS group_account_names_json,
                         COALESCE(NULLIF(r.route_strategy, ''), 'auto') AS route_strategy_norm
                     FROM llm_keys k
@@ -409,19 +412,39 @@ impl PostgresControlRepository {
                     SELECT key_id, account_name FROM all_auto_candidates
                  ),
                  valid_key_candidates AS (
-                    SELECT DISTINCT candidates.key_id, accounts.account_name
-                    FROM key_candidate_names candidates
-                    JOIN llm_kiro_accounts accounts
-                      ON accounts.account_name = candidates.account_name
-                    WHERE candidates.account_name IS NOT NULL
-                 ),
-                 key_candidate_summary AS (
-                    SELECT
-                        candidates.key_id,
-                        COUNT(*)::BIGINT AS candidate_count,
-                        COUNT(*) FILTER (
-                            WHERE status.balance_json IS NOT NULL
-                              AND status.balance_json <> 'null'::jsonb
+	                    SELECT DISTINCT
+	                        candidates.key_id,
+	                        accounts.account_name,
+	                        CASE COALESCE(
+	                            NULLIF(
+	                                BTRIM(
+	                                    COALESCE(
+	                                        accounts.auth_json ->> 'poolStrategy',
+	                                        accounts.auth_json ->> 'pool_strategy'
+	                                    )
+	                                ),
+	                                ''
+	                            ),
+	                            'balanced'
+	                        )
+	                            WHEN 'credit_first' THEN 'credit_first'
+	                            ELSE 'balanced'
+	                        END AS pool_strategy
+	                    FROM key_candidate_names candidates
+	                    JOIN llm_kiro_accounts accounts
+	                      ON accounts.account_name = candidates.account_name
+	                    WHERE candidates.account_name IS NOT NULL
+	                 ),
+	                 key_candidate_summary AS (
+	                    SELECT
+	                        candidates.key_id,
+	                        COUNT(*)::BIGINT AS candidate_count,
+	                        COUNT(*) FILTER (
+	                            WHERE candidates.pool_strategy = page_keys.preferred_pool_strategy
+	                        )::BIGINT AS preferred_pool_candidate_count,
+	                        COUNT(*) FILTER (
+	                            WHERE status.balance_json IS NOT NULL
+	                              AND status.balance_json <> 'null'::jsonb
                         )::BIGINT AS loaded_balance_count,
                         COUNT(*) FILTER (
                             WHERE status.balance_json IS NULL
@@ -455,10 +478,11 @@ impl PostgresControlRepository {
                                 ELSE 0.0
                             END
                         ), 0.0) AS total_remaining
-                    FROM valid_key_candidates candidates
-                    LEFT JOIN llm_kiro_status_cache status
-                      ON status.account_name = candidates.account_name
-                    GROUP BY candidates.key_id
+	                    FROM valid_key_candidates candidates
+                        JOIN page_keys ON page_keys.key_id = candidates.key_id
+	                    LEFT JOIN llm_kiro_status_cache status
+	                      ON status.account_name = candidates.account_name
+	                    GROUP BY candidates.key_id, page_keys.preferred_pool_strategy
                  )
                  SELECT
                     page_keys.key_id, page_keys.name, page_keys.secret, page_keys.key_hash,
@@ -482,10 +506,11 @@ impl PostgresControlRepository {
                     page_keys.billable_tokens,
                     page_keys.credit_total,
                     page_keys.credit_missing_events,
-                    page_keys.last_used_at_ms,
-                    page_keys.rollup_updated_at_ms,
-                    COALESCE(summary.candidate_count, 0),
-                    COALESCE(summary.loaded_balance_count, 0),
+	                    page_keys.last_used_at_ms,
+	                    page_keys.rollup_updated_at_ms,
+	                    COALESCE(summary.candidate_count, 0),
+                        COALESCE(summary.preferred_pool_candidate_count, 0),
+	                    COALESCE(summary.loaded_balance_count, 0),
                     COALESCE(summary.missing_balance_count, 0),
                     COALESCE(summary.total_limit, 0.0),
                     COALESCE(summary.total_remaining, 0.0),

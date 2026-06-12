@@ -68,7 +68,9 @@ def resolved_region(*sources: dict[str, Any]) -> str:
             continue
         value = field(source, "region")
         if value is not None:
-            return str(value)
+            text = str(value).strip()
+            if text:
+                return text
     return DEFAULT_KIRO_REGION
 
 
@@ -255,8 +257,10 @@ def proxy_region_for_kiro_region(region: str) -> str | None:
 
 
 def required_proxy_region_for_auth(auth: ImportedAuth) -> str:
-    region = field(auth.body, "api_region", "region", "auth_region") or DEFAULT_KIRO_REGION
-    proxy_region = proxy_region_for_kiro_region(str(region))
+    region = str(field(auth.body, "api_region", "region", "auth_region") or "").strip()
+    if not region:
+        region = DEFAULT_KIRO_REGION
+    proxy_region = proxy_region_for_kiro_region(region)
     if proxy_region is None:
         raise ValueError(
             f"{auth.name}: Kiro region `{region}` has no supported proxy-region mapping; "

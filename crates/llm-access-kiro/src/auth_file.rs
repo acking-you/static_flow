@@ -244,10 +244,10 @@ impl KiroAuthRecord {
     }
 
     /// Scheduler pool used for this account when key routing is automatic.
-    pub fn effective_pool_strategy(&self) -> &str {
+    pub fn effective_pool_strategy(&self) -> &'static str {
         self.pool_strategy
             .as_deref()
-            .filter(|value| !value.trim().is_empty())
+            .and_then(llm_access_core::store::normalize_kiro_pool_strategy)
             .unwrap_or(llm_access_core::store::KIRO_POOL_STRATEGY_BALANCED)
     }
 
