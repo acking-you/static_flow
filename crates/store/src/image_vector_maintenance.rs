@@ -16,9 +16,8 @@ use futures::TryStreamExt;
 use lance::datatypes::BlobHandling;
 #[cfg(not(target_arch = "wasm32"))]
 use lancedb::Table;
-
 #[cfg(not(target_arch = "wasm32"))]
-use crate::embedding::{embed_image_bytes, IMAGE_VECTOR_DIM};
+use static_flow_embedding::{embed_image_bytes, IMAGE_VECTOR_DIM};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

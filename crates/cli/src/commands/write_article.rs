@@ -7,13 +7,11 @@ use std::{
 use anyhow::{Context, Result};
 use image::GenericImageView;
 use regex::Regex;
-use static_flow_shared::{
-    embedding::{
-        detect_language, embed_image_bytes, embed_text_with_language, TextEmbeddingLanguage,
-        TEXT_VECTOR_DIM_EN, TEXT_VECTOR_DIM_ZH,
-    },
-    normalize_taxonomy_key, LocalizedText,
+use static_flow_embedding::{
+    detect_language, embed_image_bytes, embed_text_with_language, TextEmbeddingLanguage,
+    TEXT_VECTOR_DIM_EN, TEXT_VECTOR_DIM_ZH,
 };
+use static_flow_shared::{normalize_taxonomy_key, LocalizedText};
 
 use crate::{
     db::{

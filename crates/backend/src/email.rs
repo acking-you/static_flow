@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use static_flow_shared::{
+use static_flow_store::{
     article_request_store::ArticleRequestRecord,
     llm_gateway_store::Gpt2ApiAccountContributionRequestRecord, music_wish_store::MusicWishRecord,
 };

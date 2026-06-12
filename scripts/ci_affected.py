@@ -360,7 +360,8 @@ def run_clippy():
         return 0
     if mode == "all":
         rc = sh([
-            "cargo", "clippy", "-p", "static-flow-shared", "-p", "static-flow-backend",
+            "cargo", "clippy", "-p", "static-flow-shared", "-p", "static-flow-store",
+            "-p", "static-flow-embedding", "-p", "static-flow-backend",
             "-p", "sf-cli", "--tests", "--", "-D", "warnings",
         ])
         return rc or sh([

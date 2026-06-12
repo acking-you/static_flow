@@ -15,11 +15,9 @@ use lancedb::{
     Connection, Table,
 };
 use serde::{Deserialize, Serialize};
+use static_flow_shared::task_status::TaskStatus;
 
-use crate::{
-    lance_schema_encoding::{compressed_utf8_field, low_cardinality_utf8_field},
-    task_status::TaskStatus,
-};
+use crate::lance_schema_encoding::{compressed_utf8_field, low_cardinality_utf8_field};
 
 pub const COMMENT_STATUS_PENDING: &str = "pending";
 pub const COMMENT_STATUS_APPROVED: &str = "approved";
@@ -840,7 +838,7 @@ fn validate_transition(current_status: &str, next_status: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("unknown comment status: {current_status}"))?;
     let next = TaskStatus::parse(next_status)
         .ok_or_else(|| anyhow::anyhow!("unknown comment status: {next_status}"))?;
-    crate::task_status::validate_task_transition(current, next, false)
+    static_flow_shared::task_status::validate_task_transition(current, next, false)
         .map_err(|e| anyhow::anyhow!("invalid comment task transition: {e}"))
 }
 

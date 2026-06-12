@@ -5,7 +5,7 @@ use lancedb::{
     index::scalar::FullTextSearchQuery,
     query::{ExecutableQuery, QueryBase},
 };
-use static_flow_shared::interactive_store::InteractivePageStore;
+use static_flow_store::interactive_store::InteractivePageStore;
 
 use crate::{
     db::{connect_db, ensure_fts_index, ensure_table, ensure_vector_index},

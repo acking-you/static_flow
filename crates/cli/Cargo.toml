@@ -22,6 +22,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 static-flow-shared = { path = "../shared" }
+static-flow-store = { path = "../store" }
+static-flow-embedding = { path = "../embedding" }
 tokio = { workspace = true }
 walkdir = { workspace = true }
 futures = "0.3"

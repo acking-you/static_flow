@@ -2,7 +2,7 @@ use std::{fs, path::Path};
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
-use static_flow_shared::lancedb_api::{
+use static_flow_store::lancedb_api::{
     ArticleListResponse, CategoriesResponse, ImageListResponse, ImageSearchResponse,
     ImageTextSearchResponse, SearchResponse, StaticFlowDataStore, TagsResponse,
 };

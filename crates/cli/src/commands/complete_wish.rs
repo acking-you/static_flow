@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use static_flow_shared::music_wish_store::{MusicWishStore, WISH_STATUS_DONE};
+use static_flow_store::music_wish_store::{MusicWishStore, WISH_STATUS_DONE};
 
 pub async fn run(
     db_path: &Path,

@@ -21,10 +21,10 @@ use lancedb::{
     table::{OptimizeAction, OptimizeOptions},
     Connection, Table,
 };
-use static_flow_shared::{
+use static_flow_embedding::{embed_image_bytes, embed_text_with_language, TextEmbeddingLanguage};
+use static_flow_store::{
     article_request_store::request_ai_chunks_schema,
     comments_store::comment_ai_chunks_schema,
-    embedding::{embed_image_bytes, embed_text_with_language, TextEmbeddingLanguage},
     image_vector_maintenance::{
         reembed_image_vectors as reembed_image_vectors_in_table, ImageReembedOptions,
         ImageReembedScope,
@@ -668,7 +668,7 @@ pub async fn migrate_images_vector_nullable(db_path: &Path, dry_run: bool) -> Re
         bail!(
             "`images.vector` has unsupported type `{}` (expected fixed_size_list<float32, {}>)",
             field.data_type(),
-            static_flow_shared::embedding::IMAGE_VECTOR_DIM
+            static_flow_embedding::IMAGE_VECTOR_DIM
         );
     }
 
@@ -875,7 +875,7 @@ pub async fn backfill_article_vectors(
     apply_article_vector_updates(
         &table,
         "vector_en",
-        static_flow_shared::embedding::TEXT_VECTOR_DIM_EN,
+        static_flow_embedding::TEXT_VECTOR_DIM_EN,
         &updates_vector_en,
         now_ms,
     )
@@ -883,7 +883,7 @@ pub async fn backfill_article_vectors(
     apply_article_vector_updates(
         &table,
         "vector_zh",
-        static_flow_shared::embedding::TEXT_VECTOR_DIM_ZH,
+        static_flow_embedding::TEXT_VECTOR_DIM_ZH,
         &updates_vector_zh,
         now_ms,
     )
@@ -2485,7 +2485,7 @@ fn downcast_timestamp_ms<'a>(
 pub async fn test_blob_compact(db_path: &Path, count: usize, blob_size: usize) -> Result<()> {
     use std::time::Instant;
 
-    use static_flow_shared::music_store::{MusicDataStore, SongRecord};
+    use static_flow_store::music_store::{MusicDataStore, SongRecord};
 
     if count == 0 {
         bail!("count must be at least 1");
@@ -2644,7 +2644,7 @@ pub async fn test_blob_compact(db_path: &Path, count: usize, blob_size: usize) -
 // ---------------------------------------------------------------------------
 
 pub async fn verify_audio(db_path: &Path, ids: Option<String>, limit: Option<usize>) -> Result<()> {
-    use static_flow_shared::music_store::MusicDataStore;
+    use static_flow_store::music_store::MusicDataStore;
 
     let db_uri = db_path.to_string_lossy().to_string();
     let store = MusicDataStore::connect(&db_uri).await?;
@@ -2712,7 +2712,7 @@ pub async fn verify_audio(db_path: &Path, ids: Option<String>, limit: Option<usi
 #[cfg(test)]
 mod tests {
     use arrow_schema::Field;
-    use static_flow_shared::llm_gateway_store::{
+    use static_flow_store::llm_gateway_store::{
         LlmGatewayKeyRecord, LlmGatewayRuntimeConfigRecord, LlmGatewayUsageEventRecord,
         LLM_GATEWAY_KEY_STATUS_ACTIVE, LLM_GATEWAY_PROTOCOL_OPENAI, LLM_GATEWAY_PROVIDER_CODEX,
     };

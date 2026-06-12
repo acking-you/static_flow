@@ -9,7 +9,7 @@ use std::{
 use anyhow::Result;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use static_flow_shared::{
+use static_flow_store::{
     article_request_store::ArticleRequestStore,
     comments_store::CommentDataStore,
     interactive_store::InteractivePageStore,

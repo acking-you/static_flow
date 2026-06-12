@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use static_flow_shared::music_store::MusicDataStore;
+use static_flow_store::music_store::MusicDataStore;
 
 pub async fn run(db_path: &Path) -> Result<()> {
     let db_uri = db_path.to_string_lossy();

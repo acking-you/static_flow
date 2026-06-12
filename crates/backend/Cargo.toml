@@ -40,6 +40,7 @@ parking_lot = "0.12"
 memory-stats = "1.2"
 rustc-demangle = "0.1"
 static-flow-shared = { path = "../shared" }
+static-flow-store = { path = "../store" }
 static-flow-runtime = { path = "../runtime" }
 static-flow-email = { path = "../email-notifier" }
 static-flow-media-types = { path = "../media-types", optional = true }

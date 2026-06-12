@@ -25,8 +25,7 @@ use lancedb::{
     Connection, Table,
 };
 use serde::{Deserialize, Serialize};
-
-use crate::embedding::text::{
+use static_flow_embedding::text::{
     detect_language, embed_text_with_language, TextEmbeddingLanguage, TEXT_VECTOR_DIM_EN,
     TEXT_VECTOR_DIM_ZH,
 };

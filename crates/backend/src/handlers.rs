@@ -20,7 +20,8 @@ use axum::{
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use static_flow_shared::{
+use static_flow_shared::Article;
+use static_flow_store::{
     article_request_store::{
         ArticleRequestAiRunChunkRecord, ArticleRequestAiRunRecord, ArticleRequestRecord,
         NewArticleRequestInput, REQUEST_STATUS_DONE, REQUEST_STATUS_FAILED, REQUEST_STATUS_PENDING,
@@ -47,7 +48,6 @@ use static_flow_shared::{
         WISH_STATUS_DONE, WISH_STATUS_FAILED, WISH_STATUS_PENDING, WISH_STATUS_REJECTED,
         WISH_STATUS_RUNNING,
     },
-    Article,
 };
 use tokio::time::sleep;
 
@@ -564,7 +564,7 @@ pub struct AdminCommentTasksQuery {
 
 #[derive(Debug, Serialize)]
 pub struct AdminCommentTaskListResponse {
-    pub tasks: Vec<static_flow_shared::comments_store::CommentTaskRecord>,
+    pub tasks: Vec<static_flow_store::comments_store::CommentTaskRecord>,
     pub total: usize,
     pub status_counts: HashMap<String, usize>,
 }
@@ -574,7 +574,7 @@ pub struct AdminCommentTaskGroup {
     pub article_id: String,
     pub total: usize,
     pub status_counts: HashMap<String, usize>,
-    pub tasks: Vec<static_flow_shared::comments_store::CommentTaskRecord>,
+    pub tasks: Vec<static_flow_store::comments_store::CommentTaskRecord>,
 }
 
 #[derive(Debug, Serialize)]
@@ -962,8 +962,8 @@ struct InteractiveLocaleView {
 }
 
 fn collect_interactive_locale_views(
-    page: &static_flow_shared::interactive_store::InteractivePageRecord,
-    locale_variants: &[static_flow_shared::interactive_store::InteractivePageLocaleRecord],
+    page: &static_flow_store::interactive_store::InteractivePageRecord,
+    locale_variants: &[static_flow_store::interactive_store::InteractivePageLocaleRecord],
 ) -> Vec<InteractiveLocaleView> {
     let mut by_locale: HashMap<String, InteractiveLocaleView> = HashMap::new();
     let source_locale = normalize_interactive_locale(page.source_lang.as_str());
@@ -1025,7 +1025,7 @@ fn pick_interactive_locale(
 }
 
 fn build_interactive_page_shell_html(
-    page: &static_flow_shared::interactive_store::InteractivePageRecord,
+    page: &static_flow_store::interactive_store::InteractivePageRecord,
     locales: &[InteractiveLocaleView],
     selected_locale: &InteractiveLocaleView,
 ) -> String {
@@ -1988,10 +1988,8 @@ pub async fn admin_list_comment_tasks_grouped(
         .await
         .map_err(|e| internal_error("Failed to summarize comment statuses", e))?;
 
-    let mut by_article: HashMap<
-        String,
-        Vec<static_flow_shared::comments_store::CommentTaskRecord>,
-    > = HashMap::new();
+    let mut by_article: HashMap<String, Vec<static_flow_store::comments_store::CommentTaskRecord>> =
+        HashMap::new();
     for task in tasks {
         by_article
             .entry(task.article_id.clone())
@@ -2042,7 +2040,7 @@ pub async fn admin_get_comment_task(
     headers: HeaderMap,
     Path(task_id): Path<String>,
 ) -> Result<
-    Json<static_flow_shared::comments_store::CommentTaskRecord>,
+    Json<static_flow_store::comments_store::CommentTaskRecord>,
     (StatusCode, Json<ErrorResponse>),
 > {
     ensure_admin_access(&state, &headers)?;
@@ -2070,7 +2068,7 @@ pub async fn admin_patch_comment_task(
     Path(task_id): Path<String>,
     Json(request): Json<AdminPatchCommentTaskRequest>,
 ) -> Result<
-    Json<static_flow_shared::comments_store::CommentTaskRecord>,
+    Json<static_flow_store::comments_store::CommentTaskRecord>,
     (StatusCode, Json<ErrorResponse>),
 > {
     ensure_admin_access(&state, &headers)?;
@@ -2134,7 +2132,7 @@ pub async fn admin_approve_comment_task(
     Path(task_id): Path<String>,
     Json(request): Json<AdminTaskActionRequest>,
 ) -> Result<
-    Json<static_flow_shared::comments_store::CommentTaskRecord>,
+    Json<static_flow_store::comments_store::CommentTaskRecord>,
     (StatusCode, Json<ErrorResponse>),
 > {
     ensure_admin_access(&state, &headers)?;
@@ -2197,7 +2195,7 @@ pub async fn admin_approve_and_run_comment_task(
     Path(task_id): Path<String>,
     Json(request): Json<AdminTaskActionRequest>,
 ) -> Result<
-    Json<static_flow_shared::comments_store::CommentTaskRecord>,
+    Json<static_flow_store::comments_store::CommentTaskRecord>,
     (StatusCode, Json<ErrorResponse>),
 > {
     ensure_admin_access(&state, &headers)?;
@@ -2276,7 +2274,7 @@ pub async fn admin_reject_comment_task(
     Path(task_id): Path<String>,
     Json(request): Json<AdminTaskActionRequest>,
 ) -> Result<
-    Json<static_flow_shared::comments_store::CommentTaskRecord>,
+    Json<static_flow_store::comments_store::CommentTaskRecord>,
     (StatusCode, Json<ErrorResponse>),
 > {
     ensure_admin_access(&state, &headers)?;
@@ -2339,7 +2337,7 @@ pub async fn admin_retry_comment_task(
     Path(task_id): Path<String>,
     Json(request): Json<AdminTaskActionRequest>,
 ) -> Result<
-    Json<static_flow_shared::comments_store::CommentTaskRecord>,
+    Json<static_flow_store::comments_store::CommentTaskRecord>,
     (StatusCode, Json<ErrorResponse>),
 > {
     ensure_admin_access(&state, &headers)?;
@@ -3440,7 +3438,7 @@ async fn resolve_reply_context(
 }
 
 fn public_comment_from_published(
-    row: static_flow_shared::comments_store::PublishedCommentRecord,
+    row: static_flow_store::comments_store::PublishedCommentRecord,
     override_time: Option<i64>,
 ) -> PublicCommentItem {
     PublicCommentItem {
@@ -3464,8 +3462,8 @@ fn public_comment_from_published(
 }
 
 fn public_comment_from_task(
-    task: static_flow_shared::comments_store::CommentTaskRecord,
-    published: Option<static_flow_shared::comments_store::PublishedCommentRecord>,
+    task: static_flow_store::comments_store::CommentTaskRecord,
+    published: Option<static_flow_store::comments_store::PublishedCommentRecord>,
 ) -> PublicCommentItem {
     if let Some(row) = published {
         return public_comment_from_published(row, Some(task.created_at));
@@ -3629,7 +3627,7 @@ fn conflict_error(message: &str) -> (StatusCode, Json<ErrorResponse>) {
 }
 
 fn build_interactive_asset_response(
-    asset: static_flow_shared::interactive_store::InteractiveAssetBlob,
+    asset: static_flow_store::interactive_store::InteractiveAssetBlob,
     is_entry_html: bool,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
     let cache_control =
@@ -4097,7 +4095,7 @@ pub async fn random_recommended_songs(
     State(state): State<AppState>,
     Query(query): Query<RandomRecommendationSongsQuery>,
 ) -> Result<
-    Json<Vec<static_flow_shared::music_store::SongListItem>>,
+    Json<Vec<static_flow_store::music_store::SongListItem>>,
     (StatusCode, Json<ErrorResponse>),
 > {
     let limit = query.limit.unwrap_or(10).clamp(1, 50);

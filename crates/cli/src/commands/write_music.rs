@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
-use static_flow_shared::{
-    embedding::text::{detect_language, embed_text_with_language, TextEmbeddingLanguage},
-    music_store::{MusicDataStore, SongRecord},
+use static_flow_embedding::text::{
+    detect_language, embed_text_with_language, TextEmbeddingLanguage,
 };
+use static_flow_store::music_store::{MusicDataStore, SongRecord};
 
 pub struct WriteMusicOptions {
     pub id: Option<String>,

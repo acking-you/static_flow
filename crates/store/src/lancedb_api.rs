@@ -24,20 +24,21 @@ use lancedb::{
     Connection, Table,
 };
 use serde::{Deserialize, Serialize};
+use static_flow_embedding::{
+    detect_language, embed_text_with_language, embed_text_with_model, TextEmbeddingLanguage,
+    TextEmbeddingModel,
+};
+use static_flow_shared::{
+    normalize_taxonomy_key, Article, ArticleKind, ArticleListItem, LocalizedText,
+};
 use tokio::sync::RwLock;
 
 use crate::{
-    embedding::{
-        detect_language, embed_text_with_language, embed_text_with_model, TextEmbeddingLanguage,
-        TextEmbeddingModel,
-    },
     lance_schema_encoding::low_cardinality_utf8_field,
-    normalize_taxonomy_key,
     optimize::{
         check_opened_table_and_compact, compact_table_with_fallback, prune_table_versions,
         scan_and_compact_tables, CompactAction, CompactConfig, CompactResult,
     },
-    Article, ArticleKind, ArticleListItem, LocalizedText,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

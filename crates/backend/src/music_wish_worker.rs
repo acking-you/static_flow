@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use static_flow_shared::music_wish_store::{
+use static_flow_store::music_wish_store::{
     MusicWishRecord, MusicWishStore, NewMusicWishAiRunChunkInput, NewMusicWishAiRunInput,
     WISH_AI_RUN_STATUS_FAILED, WISH_AI_RUN_STATUS_SUCCESS, WISH_STATUS_APPROVED, WISH_STATUS_DONE,
     WISH_STATUS_FAILED, WISH_STATUS_REJECTED, WISH_STATUS_RUNNING,

@@ -8,7 +8,7 @@ use std::{
 };
 
 use parking_lot::RwLock;
-use static_flow_shared::{
+use static_flow_store::{
     article_request_store, comments_store, interactive_store,
     lancedb_api::CONTENT_BACKGROUND_COMPACTION_TABLE_NAMES,
     llm_gateway_store::GPT2API_ACCOUNT_CONTRIBUTION_REQUESTS_TABLE,
