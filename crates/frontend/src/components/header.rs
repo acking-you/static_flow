@@ -6,6 +6,7 @@ use yew_router::prelude::*;
 use crate::{
     components::{
         icons::IconName,
+        search_suggest::SearchSuggest,
         theme_toggle::ThemeToggle,
         tooltip::{TooltipIconButton, TooltipPosition},
     },
@@ -96,34 +97,6 @@ pub fn header() -> Html {
     };
 
     // Enter键搜索
-    let on_search_keypress = {
-        let search_query = search_query.clone();
-        let route = route.clone();
-        let location = location.clone();
-        Callback::from(move |e: KeyboardEvent| {
-            if e.key() == "Enter" {
-                let query = (*search_query).trim();
-                if !query.is_empty() {
-                    let encoded_query = urlencoding::encode(query);
-                    let search_url =
-                        build_search_url(route.clone(), location.clone(), &encoded_query);
-                    if let Some(window) = web_sys::window() {
-                        if let Ok(history) = window.history() {
-                            let _ = history.push_state_with_url(
-                                &wasm_bindgen::JsValue::NULL,
-                                "",
-                                Some(&search_url),
-                            );
-                            if let Ok(event) = web_sys::Event::new("popstate") {
-                                let _ = window.dispatch_event(&event);
-                            }
-                        }
-                    }
-                }
-            }
-        })
-    };
-
     let mobile_menu_classes = classes!(
         "fixed",
         "inset-0",
@@ -328,15 +301,41 @@ pub fn header() -> Html {
                             </Link<Route>>
                         </nav>
 
-                        // Search
+                        // Search (with suggestion dropdown)
                         <div class={classes!("flex", "items-center", "gap-1")}>
-                            <input
-                                type="text"
-                                placeholder={common_text::SEARCH_PLACEHOLDER}
+                            <SearchSuggest
                                 value={(*search_query).clone()}
-                                oninput={on_search_input.clone()}
-                                onkeypress={on_search_keypress.clone()}
-                                class={classes!(
+                                on_change={{
+                                    let search_query = search_query.clone();
+                                    Callback::from(move |value: String| search_query.set(value))
+                                }}
+                                on_submit={{
+                                    let route = route.clone();
+                                    let location = location.clone();
+                                    Callback::from(move |query: String| {
+                                        let encoded_query = urlencoding::encode(&query);
+                                        let search_url = build_search_url(
+                                            route.clone(),
+                                            location.clone(),
+                                            &encoded_query,
+                                        );
+                                        if let Some(window) = web_sys::window() {
+                                            if let Ok(history) = window.history() {
+                                                let _ = history.push_state_with_url(
+                                                    &wasm_bindgen::JsValue::NULL,
+                                                    "",
+                                                    Some(&search_url),
+                                                );
+                                                if let Ok(event) =
+                                                    web_sys::Event::new("popstate")
+                                                {
+                                                    let _ = window.dispatch_event(&event);
+                                                }
+                                            }
+                                        }
+                                    })
+                                }}
+                                input_class={classes!(
                                     "search-minimal",
                                     "w-[180px]", "lg:w-[220px]",
                                     "border", "border-[var(--border)]", "rounded-lg",

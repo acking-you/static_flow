@@ -20,6 +20,7 @@ pub mod raw_html;
 pub mod reading_progress;
 pub mod scroll_to_top_button;
 pub mod search_box;
+pub mod search_suggest;
 pub mod skeleton;
 pub mod stats_card;
 pub mod stream_chunk_batcher;

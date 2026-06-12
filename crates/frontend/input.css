@@ -5803,3 +5803,58 @@ html {
     transition: none;
   }
 }
+
+/* === vNext: header search suggestions === */
+@layer components {
+  .search-suggest {
+    position: relative;
+  }
+
+  .search-suggest-list {
+    position: absolute;
+    top: calc(100% + 0.4rem);
+    left: 0;
+    right: 0;
+    min-width: 260px;
+    z-index: 110;
+    margin: 0;
+    padding: 0.3rem;
+    list-style: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-8);
+    overflow: hidden;
+  }
+
+  .search-suggest-item {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.6rem;
+    padding: 0.5rem 0.65rem;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background-color var(--motion-fast) var(--ease-snap);
+  }
+
+  .search-suggest-item:hover,
+  .search-suggest-item--active {
+    background: var(--surface-alt);
+  }
+
+  .search-suggest-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.875rem;
+    color: var(--text);
+  }
+
+  .search-suggest-meta {
+    flex-shrink: 0;
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+}
