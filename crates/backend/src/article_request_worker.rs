@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use static_flow_shared::article_request_store::{
+use static_flow_store::article_request_store::{
     ArticleRequestRecord, ArticleRequestStore, NewArticleRequestAiRunChunkInput,
     NewArticleRequestAiRunInput, REQUEST_AI_RUN_STATUS_FAILED, REQUEST_AI_RUN_STATUS_SUCCESS,
     REQUEST_STATUS_APPROVED, REQUEST_STATUS_DONE, REQUEST_STATUS_FAILED, REQUEST_STATUS_REJECTED,

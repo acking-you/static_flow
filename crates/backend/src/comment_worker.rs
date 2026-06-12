@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use static_flow_shared::comments_store::{
+use static_flow_store::comments_store::{
     CommentDataStore, CommentTaskRecord, NewCommentAiRunChunkInput, NewCommentAiRunInput,
     NewPublishedCommentInput, COMMENT_AI_RUN_STATUS_FAILED, COMMENT_AI_RUN_STATUS_SUCCESS,
     COMMENT_STATUS_APPROVED, COMMENT_STATUS_DONE, COMMENT_STATUS_FAILED, COMMENT_STATUS_REJECTED,

@@ -533,6 +533,8 @@ pub(crate) struct PatchLlmGatewayKeyRequest {
     #[serde(default)]
     auto_account_names: Option<Vec<String>>,
     #[serde(default)]
+    preferred_pool_strategy: Option<String>,
+    #[serde(default)]
     model_name_map: Option<BTreeMap<String, String>>,
     #[serde(default)]
     request_max_concurrency: Option<u64>,
@@ -692,7 +694,7 @@ pub(crate) struct ImportLocalKiroAccountRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct CreateManualKiroAccountRequest {
+struct KiroAuthRequestFields {
     name: String,
     #[serde(default)]
     access_token: Option<String>,
@@ -729,7 +731,25 @@ pub(crate) struct CreateManualKiroAccountRequest {
     #[serde(default)]
     minimum_remaining_credits_before_block: Option<f64>,
     #[serde(default)]
+    pool_strategy: Option<String>,
+    #[serde(default)]
     disabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateManualKiroAccountRequest {
+    #[serde(flatten)]
+    auth: KiroAuthRequestFields,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ImportParsedKiroAccountRequest {
+    #[serde(flatten)]
+    auth: KiroAuthRequestFields,
+    #[serde(default)]
+    source_db_path: Option<String>,
+    #[serde(default)]
+    last_imported_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -742,6 +762,8 @@ pub(crate) struct PatchKiroAccountRequest {
     kiro_channel_min_start_interval_ms: Option<u64>,
     #[serde(default)]
     minimum_remaining_credits_before_block: Option<f64>,
+    #[serde(default)]
+    pool_strategy: Option<String>,
     #[serde(default)]
     proxy_mode: Option<String>,
     #[serde(default)]
@@ -2567,6 +2589,21 @@ pub(crate) async fn import_admin_kiro_account(
         auth.kiro_channel_min_start_interval_ms = Some(value);
     }
     create_or_replace_kiro_account(state, auth.canonicalize()).await
+}
+
+pub(crate) async fn import_admin_kiro_auth_account(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<ImportParsedKiroAccountRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let auth = match kiro_auth_from_import_request(request) {
+        Ok(auth) => auth,
+        Err(response) => return response.into_response(),
+    };
+    create_or_replace_kiro_account(state, auth).await
 }
 
 pub(crate) async fn create_admin_kiro_manual_account(
@@ -5766,6 +5803,9 @@ fn build_kiro_candidate_credit_summary(
 ) -> core_store::AdminKiroKeyCandidateCreditSummary {
     let mut seen = HashSet::<String>::new();
     let mut summary = core_store::AdminKiroKeyCandidateCreditSummary::default();
+    let preferred_pool_strategy =
+        core_store::normalize_kiro_pool_strategy(&key.preferred_pool_strategy)
+            .unwrap_or(core_store::KIRO_POOL_STRATEGY_BALANCED);
     for account_name in select_kiro_candidate_account_names(key, groups_by_id, all_account_names) {
         if !seen.insert(account_name.clone()) {
             continue;
@@ -5774,6 +5814,12 @@ fn build_kiro_candidate_credit_summary(
             continue;
         };
         summary.candidate_count += 1;
+        let account_pool_strategy =
+            core_store::normalize_kiro_pool_strategy(&account.pool_strategy)
+                .unwrap_or(core_store::KIRO_POOL_STRATEGY_BALANCED);
+        if account_pool_strategy == preferred_pool_strategy {
+            summary.preferred_pool_candidate_count += 1;
+        }
         if let Some(balance) = account.balance.as_ref() {
             summary.loaded_balance_count += 1;
             summary.total_limit += balance.usage_limit.max(0.0);
@@ -5852,6 +5898,11 @@ fn normalize_key_patch(
         .as_deref()
         .map(normalize_optional_string);
     let auto_account_names = request.auto_account_names.map(normalize_auto_account_names);
+    let preferred_pool_strategy = request
+        .preferred_pool_strategy
+        .as_deref()
+        .map(normalize_kiro_pool_strategy_input)
+        .transpose()?;
     let request_max_concurrency = if request.request_max_concurrency_unlimited {
         Some(None)
     } else {
@@ -5892,6 +5943,7 @@ fn normalize_key_patch(
         account_group_id,
         fixed_account_name,
         auto_account_names,
+        preferred_pool_strategy,
         model_name_map: request.model_name_map.map(Some),
         request_max_concurrency,
         request_min_start_interval_ms,
@@ -5950,6 +6002,12 @@ fn normalize_route_strategy_input(raw: &str) -> Result<Option<String>, AdminHttp
         "auto" | "fixed" => Ok(Some(trimmed.to_string())),
         _ => Err(bad_request("route_strategy must be `auto` or `fixed`")),
     }
+}
+
+fn normalize_kiro_pool_strategy_input(raw: &str) -> Result<String, AdminHttpError> {
+    core_store::normalize_kiro_pool_strategy(raw)
+        .map(str::to_string)
+        .ok_or_else(|| bad_request("pool strategy must be `balanced` or `credit_first`"))
 }
 
 fn validate_provider_type(provider_type: &str) -> Result<(), AdminHttpError> {
@@ -6301,42 +6359,105 @@ fn normalize_codex_route_weight_tier(raw: &str) -> Result<String, AdminHttpError
     }
 }
 
+enum KiroAuthSourceConfig {
+    Manual,
+    Imported { source: &'static str, source_db_path: Option<String>, last_imported_at: Option<i64> },
+}
+
 fn kiro_auth_from_manual_request(
     request: CreateManualKiroAccountRequest,
 ) -> Result<KiroAuthRecord, AdminHttpError> {
-    let name = normalize_account_name(&request.name)?;
+    kiro_auth_from_request_fields(request.auth, KiroAuthSourceConfig::Manual)
+}
+
+fn kiro_auth_from_import_request(
+    request: ImportParsedKiroAccountRequest,
+) -> Result<KiroAuthRecord, AdminHttpError> {
+    let last_imported_at = match request.last_imported_at {
+        Some(value) if value < 0 => return Err(bad_request("last_imported_at must be >= 0")),
+        Some(value) => Some(value),
+        None => Some(now_ms()),
+    };
+    kiro_auth_from_request_fields(request.auth, KiroAuthSourceConfig::Imported {
+        source: "kiro-cli",
+        source_db_path: normalize_optional_string_option(request.source_db_path.as_deref()),
+        last_imported_at,
+    })
+}
+
+fn kiro_auth_from_request_fields(
+    request: KiroAuthRequestFields,
+    source_config: KiroAuthSourceConfig,
+) -> Result<KiroAuthRecord, AdminHttpError> {
+    let KiroAuthRequestFields {
+        name,
+        access_token,
+        refresh_token,
+        profile_arn,
+        expires_at,
+        auth_method,
+        client_id,
+        client_secret,
+        region,
+        auth_region,
+        api_region,
+        machine_id,
+        provider,
+        email,
+        subscription_title,
+        kiro_channel_max_concurrency,
+        kiro_channel_min_start_interval_ms,
+        minimum_remaining_credits_before_block,
+        pool_strategy,
+        disabled,
+    } = request;
+    let name = normalize_account_name(&name)?;
     validate_kiro_channel_limit_inputs(
-        request.kiro_channel_max_concurrency,
-        request.kiro_channel_min_start_interval_ms,
+        kiro_channel_max_concurrency,
+        kiro_channel_min_start_interval_ms,
     )?;
-    if let Some(value) = request.minimum_remaining_credits_before_block {
+    if let Some(value) = minimum_remaining_credits_before_block {
         if !value.is_finite() || value < 0.0 {
             return Err(bad_request("minimum_remaining_credits_before_block must be >= 0"));
         }
     }
+    let pool_strategy = pool_strategy
+        .as_deref()
+        .map(normalize_kiro_pool_strategy_input)
+        .transpose()?;
+    let (source, source_db_path, last_imported_at) = match source_config {
+        KiroAuthSourceConfig::Manual => (Some("manual".to_string()), None, Some(now_ms())),
+        KiroAuthSourceConfig::Imported {
+            source,
+            source_db_path,
+            last_imported_at,
+        } => (Some(source.to_string()), source_db_path, last_imported_at),
+    };
     Ok(KiroAuthRecord {
         name,
-        access_token: normalize_optional_string_option(request.access_token.as_deref()),
-        refresh_token: normalize_optional_string_option(request.refresh_token.as_deref()),
-        profile_arn: normalize_optional_string_option(request.profile_arn.as_deref()),
-        expires_at: normalize_optional_string_option(request.expires_at.as_deref()),
-        auth_method: normalize_optional_string_option(request.auth_method.as_deref()),
-        client_id: normalize_optional_string_option(request.client_id.as_deref()),
-        client_secret: normalize_optional_string_option(request.client_secret.as_deref()),
-        region: normalize_optional_string_option(request.region.as_deref()),
-        auth_region: normalize_optional_string_option(request.auth_region.as_deref()),
-        api_region: normalize_optional_string_option(request.api_region.as_deref()),
-        machine_id: normalize_optional_string_option(request.machine_id.as_deref()),
-        provider: normalize_optional_string_option(request.provider.as_deref()),
-        email: normalize_optional_string_option(request.email.as_deref()),
-        subscription_title: normalize_optional_string_option(request.subscription_title.as_deref()),
-        kiro_channel_max_concurrency: request.kiro_channel_max_concurrency,
-        kiro_channel_min_start_interval_ms: request.kiro_channel_min_start_interval_ms,
-        minimum_remaining_credits_before_block: request.minimum_remaining_credits_before_block,
-        disabled: request.disabled,
+        access_token: normalize_optional_string_option(access_token.as_deref()),
+        refresh_token: normalize_optional_string_option(refresh_token.as_deref()),
+        profile_arn: normalize_optional_string_option(profile_arn.as_deref()),
+        expires_at: normalize_optional_string_option(expires_at.as_deref()),
+        auth_method: normalize_optional_string_option(auth_method.as_deref()),
+        client_id: normalize_optional_string_option(client_id.as_deref()),
+        client_secret: normalize_optional_string_option(client_secret.as_deref()),
+        region: normalize_optional_string_option(region.as_deref()),
+        auth_region: normalize_optional_string_option(auth_region.as_deref()),
+        api_region: normalize_optional_string_option(api_region.as_deref()),
+        machine_id: normalize_optional_string_option(machine_id.as_deref()),
+        provider: normalize_optional_string_option(provider.as_deref()),
+        email: normalize_optional_string_option(email.as_deref()),
+        subscription_title: normalize_optional_string_option(subscription_title.as_deref()),
+        kiro_channel_max_concurrency,
+        kiro_channel_min_start_interval_ms,
+        minimum_remaining_credits_before_block,
+        pool_strategy,
+        disabled,
         disabled_reason: None,
-        source: Some("manual".to_string()),
-        last_imported_at: Some(now_ms()),
+        source,
+        source_db_path,
+        last_imported_at,
         ..KiroAuthRecord::default()
     }
     .canonicalize())
@@ -6375,16 +6496,29 @@ async fn create_or_replace_kiro_account(state: HttpState, auth: KiroAuthRecord) 
         Ok(account) => account,
         Err(response) => return response.into_response(),
     };
+    let account_name = account.name.clone();
     match state
         .admin_kiro_account_store
         .create_admin_kiro_account(account)
         .await
     {
         Ok(account) => {
+            tracing::info!(
+                account_name = %account.name,
+                auth_method = %account.auth_method,
+                source = account.source.as_deref().unwrap_or("unknown"),
+                region = account.region.as_deref().unwrap_or(""),
+                pool_strategy = %account.pool_strategy,
+                disabled = account.disabled,
+                "saved kiro account"
+            );
             sync_kiro_status_after_account_update(&state, &account).await;
             Json(account).into_response()
         },
-        Err(_) => internal_error("Failed to save Kiro account").into_response(),
+        Err(err) => {
+            tracing::warn!(account_name = %account_name, "failed to save kiro account: {err:#}");
+            internal_error("Failed to save Kiro account").into_response()
+        },
     }
 }
 
@@ -6466,6 +6600,11 @@ fn normalize_kiro_account_patch(
             return Err(bad_request("minimum_remaining_credits_before_block must be >= 0"));
         }
     }
+    let pool_strategy = request
+        .pool_strategy
+        .as_deref()
+        .map(normalize_kiro_pool_strategy_input)
+        .transpose()?;
     let proxy_mode = request
         .proxy_mode
         .as_deref()
@@ -6488,6 +6627,7 @@ fn normalize_kiro_account_patch(
         max_concurrency: request.kiro_channel_max_concurrency,
         min_start_interval_ms: request.kiro_channel_min_start_interval_ms,
         minimum_remaining_credits_before_block: request.minimum_remaining_credits_before_block,
+        pool_strategy,
         proxy_mode,
         proxy_config_id,
         updated_at_ms: now_ms(),
@@ -6888,6 +7028,7 @@ mod tests {
             account_group_id: None,
             fixed_account_name: None,
             auto_account_names: None,
+            preferred_pool_strategy: None,
             model_name_map: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
@@ -6930,6 +7071,7 @@ mod tests {
             account_group_id: None,
             fixed_account_name: None,
             auto_account_names: None,
+            preferred_pool_strategy: core_store::default_kiro_pool_strategy(),
             model_name_map: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
@@ -6976,6 +7118,7 @@ mod tests {
             kiro_channel_max_concurrency: 1,
             kiro_channel_min_start_interval_ms: 0,
             minimum_remaining_credits_before_block: 0.0,
+            pool_strategy: core_store::default_kiro_pool_strategy(),
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
             effective_proxy_source: "inherit".to_string(),
@@ -7232,6 +7375,7 @@ mod tests {
             .expect("summary should be attached");
 
         assert_eq!(summary.candidate_count, 3);
+        assert_eq!(summary.preferred_pool_candidate_count, 3);
         assert_eq!(summary.loaded_balance_count, 3);
         assert_eq!(summary.missing_balance_count, 0);
         assert_eq!(summary.total_limit, 3_000.0);
@@ -7255,9 +7399,31 @@ mod tests {
             .expect("summary should be attached");
 
         assert_eq!(summary.candidate_count, 2);
+        assert_eq!(summary.preferred_pool_candidate_count, 2);
         assert_eq!(summary.loaded_balance_count, 2);
         assert_eq!(summary.total_limit, 2_000.0);
         assert_eq!(summary.total_remaining, 1_550.0);
+    }
+
+    #[test]
+    fn apply_kiro_candidate_credit_summaries_counts_preferred_pool_matches() {
+        let mut key = sample_kiro_key(None);
+        key.preferred_pool_strategy = core_store::KIRO_POOL_STRATEGY_CREDIT_FIRST.to_string();
+        let mut credit_first = sample_kiro_account("kiro-a", 800.0, 1_000.0);
+        credit_first.pool_strategy = core_store::KIRO_POOL_STRATEGY_CREDIT_FIRST.to_string();
+        let accounts = vec![
+            credit_first,
+            sample_kiro_account("kiro-b", 650.0, 1_000.0),
+            sample_kiro_account("kiro-c", 900.0, 1_000.0),
+        ];
+
+        let keys = apply_kiro_candidate_credit_summaries(vec![key], &accounts, &[]);
+        let summary = keys[0]
+            .kiro_candidate_credit_summary
+            .expect("summary should be attached");
+
+        assert_eq!(summary.candidate_count, 3);
+        assert_eq!(summary.preferred_pool_candidate_count, 1);
     }
 
     #[test]
@@ -7920,5 +8086,85 @@ mod tests {
         let request = sample_account_contribution_request("user@example.com");
 
         assert!(should_issue_account_contribution_access_artifacts(&request));
+    }
+
+    #[test]
+    fn normalize_kiro_key_patch_accepts_preferred_pool_strategy() {
+        let patch = normalize_kiro_key_patch(PatchLlmGatewayKeyRequest {
+            preferred_pool_strategy: Some("credit_first".to_string()),
+            ..empty_key_patch_request()
+        })
+        .expect("kiro key patch should normalize");
+
+        assert_eq!(
+            patch.preferred_pool_strategy.as_deref(),
+            Some(core_store::KIRO_POOL_STRATEGY_CREDIT_FIRST)
+        );
+    }
+
+    #[test]
+    fn normalize_kiro_account_patch_accepts_pool_strategy() {
+        let patch = normalize_kiro_account_patch(PatchKiroAccountRequest {
+            pool_strategy: Some("balanced".to_string()),
+            status: None,
+            kiro_channel_max_concurrency: None,
+            kiro_channel_min_start_interval_ms: None,
+            minimum_remaining_credits_before_block: None,
+            proxy_mode: None,
+            proxy_config_id: None,
+        })
+        .expect("kiro account patch should normalize");
+
+        assert_eq!(patch.pool_strategy.as_deref(), Some(core_store::KIRO_POOL_STRATEGY_BALANCED));
+    }
+
+    #[test]
+    fn kiro_auth_from_import_request_preserves_import_metadata() {
+        let auth = kiro_auth_from_import_request(ImportParsedKiroAccountRequest {
+            auth: KiroAuthRequestFields {
+                name: " org-main ".to_string(),
+                access_token: Some(" access-token ".to_string()),
+                refresh_token: Some(" refresh-token ".to_string()),
+                profile_arn: Some(
+                    " arn:aws:iam::123456789012:role/OrganizationProfile ".to_string(),
+                ),
+                expires_at: Some(" 2032-03-04T05:06:07Z ".to_string()),
+                auth_method: Some(" IDC ".to_string()),
+                client_id: Some(" client-id ".to_string()),
+                client_secret: Some(" client-secret ".to_string()),
+                region: Some(" eu-west-1 ".to_string()),
+                auth_region: None,
+                api_region: None,
+                machine_id: None,
+                provider: Some(" aws ".to_string()),
+                email: None,
+                subscription_title: None,
+                kiro_channel_max_concurrency: Some(32),
+                kiro_channel_min_start_interval_ms: Some(123),
+                minimum_remaining_credits_before_block: Some(10.0),
+                pool_strategy: Some(core_store::KIRO_POOL_STRATEGY_CREDIT_FIRST.to_string()),
+                disabled: false,
+            },
+            source_db_path: Some(" /home/ubuntu/.local/share/kiro-cli/data.sqlite3 ".to_string()),
+            last_imported_at: Some(1_780_988_532_000),
+        })
+        .expect("import request should normalize");
+
+        assert_eq!(auth.name, "org-main");
+        assert_eq!(auth.auth_method(), "idc");
+        assert_eq!(auth.provider.as_deref(), Some("aws"));
+        assert_eq!(auth.region.as_deref(), Some("eu-west-1"));
+        assert_eq!(auth.source.as_deref(), Some("kiro-cli"));
+        assert_eq!(
+            auth.source_db_path.as_deref(),
+            Some("/home/ubuntu/.local/share/kiro-cli/data.sqlite3")
+        );
+        assert_eq!(auth.last_imported_at, Some(1_780_988_532_000));
+        assert_eq!(auth.kiro_channel_max_concurrency, Some(32));
+        assert_eq!(auth.kiro_channel_min_start_interval_ms, Some(123));
+        assert_eq!(
+            auth.pool_strategy.as_deref(),
+            Some(core_store::KIRO_POOL_STRATEGY_CREDIT_FIRST)
+        );
     }
 }

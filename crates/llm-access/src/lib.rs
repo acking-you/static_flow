@@ -385,6 +385,10 @@ pub fn router_with_simulator(
             "/admin/kiro-gateway/accounts",
             get(admin::list_admin_kiro_accounts).post(admin::create_admin_kiro_manual_account),
         )
+        .route(
+            "/admin/kiro-gateway/accounts/import-auth",
+            post(admin::import_admin_kiro_auth_account),
+        )
         .route("/admin/kiro-gateway/accounts/import-local", post(admin::import_admin_kiro_account))
         .route(
             "/admin/kiro-gateway/accounts/:name",

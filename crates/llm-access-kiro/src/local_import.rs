@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
+use llm_access_core::store::default_kiro_pool_strategy;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
 
@@ -45,6 +46,8 @@ struct StoredTokenRecord {
     profile_arn: Option<String>,
     #[serde(default)]
     provider: Option<String>,
+    #[serde(default)]
+    region: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +56,8 @@ struct DeviceRegistrationRecord {
     client_id: Option<String>,
     #[serde(default, alias = "clientSecret")]
     client_secret: Option<String>,
+    #[serde(default)]
+    region: Option<String>,
 }
 
 /// Read the local Kiro auth record from the kiro-cli SQLite database at
@@ -104,6 +109,7 @@ fn import_from_sqlite_blocking(
             token_record.refresh_token.as_deref(),
             "kiro cli db missing refresh_token",
         )?;
+        let region = resolved_region(token_record.region.as_deref(), None);
         return Ok(KiroAuthRecord {
             name: resolved_account_name(requested_name),
             access_token: token_record.access_token,
@@ -113,9 +119,9 @@ fn import_from_sqlite_blocking(
             auth_method: Some("social".to_string()),
             client_id: None,
             client_secret: None,
-            region: Some(DEFAULT_KIRO_REGION.to_string()),
-            auth_region: Some(DEFAULT_KIRO_REGION.to_string()),
-            api_region: Some(DEFAULT_KIRO_REGION.to_string()),
+            region: Some(region.clone()),
+            auth_region: Some(region.clone()),
+            api_region: Some(region),
             machine_id: None,
             provider: token_record.provider,
             email: None,
@@ -123,6 +129,7 @@ fn import_from_sqlite_blocking(
             kiro_channel_max_concurrency: Some(DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY),
             kiro_channel_min_start_interval_ms: Some(DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS),
             minimum_remaining_credits_before_block: Some(0.0),
+            pool_strategy: Some(default_kiro_pool_strategy()),
             proxy_mode: Default::default(),
             proxy_config_id: None,
             proxy_url: None,
@@ -159,6 +166,8 @@ fn import_from_sqlite_blocking(
         device_registration.client_secret.as_deref(),
         "kiro cli db missing client_secret",
     )?;
+    let region =
+        resolved_region(token_record.region.as_deref(), device_registration.region.as_deref());
 
     Ok(KiroAuthRecord {
         name: resolved_account_name(requested_name),
@@ -169,9 +178,9 @@ fn import_from_sqlite_blocking(
         auth_method: Some("idc".to_string()),
         client_id: Some(client_id.to_string()),
         client_secret: Some(client_secret.to_string()),
-        region: Some(DEFAULT_KIRO_REGION.to_string()),
-        auth_region: Some(DEFAULT_KIRO_REGION.to_string()),
-        api_region: Some(DEFAULT_KIRO_REGION.to_string()),
+        region: Some(region.clone()),
+        auth_region: Some(region.clone()),
+        api_region: Some(region),
         machine_id: None,
         provider: token_record.provider.or(Some("aws".to_string())),
         email: None,
@@ -179,6 +188,7 @@ fn import_from_sqlite_blocking(
         kiro_channel_max_concurrency: Some(DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY),
         kiro_channel_min_start_interval_ms: Some(DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS),
         minimum_remaining_credits_before_block: Some(0.0),
+        pool_strategy: Some(default_kiro_pool_strategy()),
         proxy_mode: Default::default(),
         proxy_config_id: None,
         proxy_url: None,
@@ -212,6 +222,15 @@ fn required_token_field<'a>(value: Option<&'a str>, missing_message: &str) -> Re
         .map(str::trim)
         .filter(|item| !item.is_empty())
         .ok_or_else(|| anyhow!("{missing_message}"))
+}
+
+fn resolved_region(primary: Option<&str>, fallback: Option<&str>) -> String {
+    primary
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| fallback.map(str::trim).filter(|value| !value.is_empty()))
+        .unwrap_or(DEFAULT_KIRO_REGION)
+        .to_string()
 }
 
 fn resolved_account_name(requested_name: Option<&str>) -> String {
@@ -327,6 +346,52 @@ mod tests {
             imported.profile_arn.as_deref(),
             Some("arn:aws:iam::123456789012:role/AwsProfile")
         );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn import_from_sqlite_blocking_preserves_region_for_organization_login() {
+        let path = create_test_db_path();
+        let conn = open_test_db(&path);
+        conn.execute(
+            "INSERT INTO auth_kv(key, value) VALUES (?1, ?2)",
+            params![
+                "kirocli:oidc:token",
+                r#"{
+                    "access_token":"org-access",
+                    "refresh_token":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "expires_at":"2032-03-04T05:06:07Z",
+                    "oauth_flow":"organization",
+                    "region":"eu-west-1",
+                    "start_url":"https://example.awsapps.com/start",
+                    "scopes":["openid","profile"]
+                }"#
+            ],
+        )
+        .expect("insert organization token");
+        conn.execute("INSERT INTO auth_kv(key, value) VALUES (?1, ?2)", params![
+            "kirocli:oidc:device-registration",
+            r#"{
+                    "client_id":"org-client-id",
+                    "client_secret":"org-client-secret",
+                    "client_secret_expires_at":4102444800,
+                    "oauth_flow":"organization",
+                    "region":"eu-west-1",
+                    "scopes":["openid","profile"]
+                }"#
+        ])
+        .expect("insert organization device registration");
+        drop(conn);
+
+        let imported =
+            import_from_sqlite_blocking(&path, Some("org-main")).expect("import organization auth");
+
+        assert_eq!(imported.name, "org-main");
+        assert_eq!(imported.auth_method(), "idc");
+        assert_eq!(imported.region.as_deref(), Some("eu-west-1"));
+        assert_eq!(imported.auth_region.as_deref(), Some("eu-west-1"));
+        assert_eq!(imported.api_region.as_deref(), Some("eu-west-1"));
 
         let _ = std::fs::remove_file(&path);
     }

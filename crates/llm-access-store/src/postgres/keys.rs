@@ -103,6 +103,7 @@ impl PostgresControlRepository {
                     COALESCE(u.credit_missing_events, 0),
                     u.last_used_at_ms,
                     COALESCE(u.updated_at_ms, 0),
+                    r.preferred_pool_strategy AS preferred_pool_strategy,
                     r.kiro_latency_routing_enabled AS kiro_latency_routing_enabled,
                     r.kiro_protected_content_validation_enabled
                         AS kiro_protected_content_validation_enabled,
@@ -145,6 +146,7 @@ impl PostgresControlRepository {
                     COALESCE(u.credit_missing_events, 0),
                     u.last_used_at_ms,
                     COALESCE(u.updated_at_ms, k.updated_at_ms),
+                    r.preferred_pool_strategy AS preferred_pool_strategy,
                     r.kiro_latency_routing_enabled AS kiro_latency_routing_enabled,
                     r.kiro_protected_content_validation_enabled
                         AS kiro_protected_content_validation_enabled,
@@ -259,6 +261,7 @@ impl PostgresControlRepository {
                     COALESCE(u.credit_missing_events, 0),
                     u.last_used_at_ms,
                     COALESCE(u.updated_at_ms, k.updated_at_ms),
+                    r.preferred_pool_strategy AS preferred_pool_strategy,
                     r.kiro_latency_routing_enabled AS kiro_latency_routing_enabled,
                     r.kiro_protected_content_validation_enabled
                         AS kiro_protected_content_validation_enabled,
@@ -330,6 +333,10 @@ impl PostgresControlRepository {
                         COALESCE(u.credit_missing_events, 0) AS credit_missing_events,
                         u.last_used_at_ms,
                         COALESCE(u.updated_at_ms, k.updated_at_ms) AS rollup_updated_at_ms,
+                        CASE COALESCE(NULLIF(BTRIM(r.preferred_pool_strategy), ''), 'balanced')
+                            WHEN 'credit_first' THEN 'credit_first'
+                            ELSE 'balanced'
+                        END AS preferred_pool_strategy,
                         g.account_names_json AS group_account_names_json,
                         COALESCE(NULLIF(r.route_strategy, ''), 'auto') AS route_strategy_norm
                     FROM llm_keys k
@@ -405,19 +412,39 @@ impl PostgresControlRepository {
                     SELECT key_id, account_name FROM all_auto_candidates
                  ),
                  valid_key_candidates AS (
-                    SELECT DISTINCT candidates.key_id, accounts.account_name
-                    FROM key_candidate_names candidates
-                    JOIN llm_kiro_accounts accounts
-                      ON accounts.account_name = candidates.account_name
-                    WHERE candidates.account_name IS NOT NULL
-                 ),
-                 key_candidate_summary AS (
-                    SELECT
-                        candidates.key_id,
-                        COUNT(*)::BIGINT AS candidate_count,
-                        COUNT(*) FILTER (
-                            WHERE status.balance_json IS NOT NULL
-                              AND status.balance_json <> 'null'::jsonb
+	                    SELECT DISTINCT
+	                        candidates.key_id,
+	                        accounts.account_name,
+	                        CASE COALESCE(
+	                            NULLIF(
+	                                BTRIM(
+	                                    COALESCE(
+	                                        accounts.auth_json ->> 'poolStrategy',
+	                                        accounts.auth_json ->> 'pool_strategy'
+	                                    )
+	                                ),
+	                                ''
+	                            ),
+	                            'balanced'
+	                        )
+	                            WHEN 'credit_first' THEN 'credit_first'
+	                            ELSE 'balanced'
+	                        END AS pool_strategy
+	                    FROM key_candidate_names candidates
+	                    JOIN llm_kiro_accounts accounts
+	                      ON accounts.account_name = candidates.account_name
+	                    WHERE candidates.account_name IS NOT NULL
+	                 ),
+	                 key_candidate_summary AS (
+	                    SELECT
+	                        candidates.key_id,
+	                        COUNT(*)::BIGINT AS candidate_count,
+	                        COUNT(*) FILTER (
+	                            WHERE candidates.pool_strategy = page_keys.preferred_pool_strategy
+	                        )::BIGINT AS preferred_pool_candidate_count,
+	                        COUNT(*) FILTER (
+	                            WHERE status.balance_json IS NOT NULL
+	                              AND status.balance_json <> 'null'::jsonb
                         )::BIGINT AS loaded_balance_count,
                         COUNT(*) FILTER (
                             WHERE status.balance_json IS NULL
@@ -451,10 +478,11 @@ impl PostgresControlRepository {
                                 ELSE 0.0
                             END
                         ), 0.0) AS total_remaining
-                    FROM valid_key_candidates candidates
-                    LEFT JOIN llm_kiro_status_cache status
-                      ON status.account_name = candidates.account_name
-                    GROUP BY candidates.key_id
+	                    FROM valid_key_candidates candidates
+                        JOIN page_keys ON page_keys.key_id = candidates.key_id
+	                    LEFT JOIN llm_kiro_status_cache status
+	                      ON status.account_name = candidates.account_name
+	                    GROUP BY candidates.key_id, page_keys.preferred_pool_strategy
                  )
                  SELECT
                     page_keys.key_id, page_keys.name, page_keys.secret, page_keys.key_hash,
@@ -478,13 +506,15 @@ impl PostgresControlRepository {
                     page_keys.billable_tokens,
                     page_keys.credit_total,
                     page_keys.credit_missing_events,
-                    page_keys.last_used_at_ms,
-                    page_keys.rollup_updated_at_ms,
-                    COALESCE(summary.candidate_count, 0),
-                    COALESCE(summary.loaded_balance_count, 0),
+	                    page_keys.last_used_at_ms,
+	                    page_keys.rollup_updated_at_ms,
+	                    COALESCE(summary.candidate_count, 0),
+                        COALESCE(summary.preferred_pool_candidate_count, 0),
+	                    COALESCE(summary.loaded_balance_count, 0),
                     COALESCE(summary.missing_balance_count, 0),
                     COALESCE(summary.total_limit, 0.0),
                     COALESCE(summary.total_remaining, 0.0),
+                    page_keys.preferred_pool_strategy AS preferred_pool_strategy,
                     page_keys.kiro_latency_routing_enabled AS kiro_latency_routing_enabled,
                     page_keys.kiro_protected_content_validation_enabled
                         AS kiro_protected_content_validation_enabled,
@@ -542,6 +572,7 @@ impl PostgresControlRepository {
                     COALESCE(u.credit_missing_events, 0),
                     u.last_used_at_ms,
                     COALESCE(u.updated_at_ms, k.updated_at_ms),
+                    r.preferred_pool_strategy AS preferred_pool_strategy,
                     r.kiro_latency_routing_enabled AS kiro_latency_routing_enabled,
                     r.kiro_protected_content_validation_enabled
                         AS kiro_protected_content_validation_enabled,
@@ -605,7 +636,8 @@ impl PostgresControlRepository {
             .execute(
                 "INSERT INTO llm_key_route_config (
                     key_id, route_strategy, fixed_account_name, auto_account_names_json,
-                    account_group_id, model_name_map_json, request_max_concurrency,
+                    account_group_id, preferred_pool_strategy, model_name_map_json,
+                    request_max_concurrency,
                     request_min_start_interval_ms, codex_fast_enabled,
                     kiro_request_validation_enabled, kiro_cache_estimation_enabled,
                     kiro_zero_cache_debug_enabled, kiro_full_request_logging_enabled,
@@ -615,14 +647,15 @@ impl PostgresControlRepository {
                     kiro_cache_policy_override_json,
                     kiro_billable_model_multipliers_override_json
                  ) VALUES (
-                    $1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8, $9, $10, $11, $12,
-                    $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb
+                    $1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10, $11, $12,
+                    $13, $14, $15, $16, $17, $18, $19::jsonb, $20::jsonb
                  )
                  ON CONFLICT(key_id) DO UPDATE SET
                     route_strategy = EXCLUDED.route_strategy,
                     fixed_account_name = EXCLUDED.fixed_account_name,
                     auto_account_names_json = EXCLUDED.auto_account_names_json,
                     account_group_id = EXCLUDED.account_group_id,
+                    preferred_pool_strategy = EXCLUDED.preferred_pool_strategy,
                     model_name_map_json = EXCLUDED.model_name_map_json,
                     request_max_concurrency = EXCLUDED.request_max_concurrency,
                     request_min_start_interval_ms = EXCLUDED.request_min_start_interval_ms,
@@ -650,6 +683,7 @@ impl PostgresControlRepository {
                     &route.fixed_account_name,
                     &route.auto_account_names_json,
                     &route.account_group_id,
+                    &route.preferred_pool_strategy,
                     &route.model_name_map_json,
                     &route.request_max_concurrency,
                     &route.request_min_start_interval_ms,
@@ -822,6 +856,7 @@ impl AdminKeyStore for PostgresControlRepository {
                 COALESCE(u.credit_missing_events, 0),
                 u.last_used_at_ms,
                 COALESCE(u.updated_at_ms, k.updated_at_ms),
+                r.preferred_pool_strategy AS preferred_pool_strategy,
                 r.kiro_latency_routing_enabled AS kiro_latency_routing_enabled,
                 r.kiro_protected_content_validation_enabled
                     AS kiro_protected_content_validation_enabled,
@@ -896,6 +931,7 @@ impl AdminKeyStore for PostgresControlRepository {
             fixed_account_name: None,
             auto_account_names_json: None,
             account_group_id: None,
+            preferred_pool_strategy: core_store::default_kiro_pool_strategy(),
             model_name_map_json: None,
             request_max_concurrency: key.request_max_concurrency.map(|value| value as i64),
             request_min_start_interval_ms: key
@@ -954,6 +990,9 @@ impl AdminKeyStore for PostgresControlRepository {
         }
         if let Some(value) = patch.route_strategy.as_ref() {
             bundle.route.route_strategy = value.clone();
+        }
+        if let Some(value) = patch.preferred_pool_strategy.as_ref() {
+            bundle.route.preferred_pool_strategy = value.clone();
         }
         if let Some(value) = patch.account_group_id.as_ref() {
             bundle.route.account_group_id = value.clone();

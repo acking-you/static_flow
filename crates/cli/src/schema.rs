@@ -11,7 +11,7 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use lance::{blob_field, BlobArrayBuilder};
 use serde::{Deserialize, Serialize};
-use static_flow_shared::embedding::{IMAGE_VECTOR_DIM, TEXT_VECTOR_DIM_EN, TEXT_VECTOR_DIM_ZH};
+use static_flow_embedding::{IMAGE_VECTOR_DIM, TEXT_VECTOR_DIM_EN, TEXT_VECTOR_DIM_ZH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArticleRecord {

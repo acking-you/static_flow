@@ -88,6 +88,12 @@ impl PgRow {
     fn get_optional_bool(&self, name: &str) -> Option<bool> {
         self.0.try_get::<Option<bool>, _>(name).ok().flatten()
     }
+
+    fn try_get_optional_string(&self, name: &str) -> anyhow::Result<Option<String>> {
+        self.0
+            .try_get::<Option<String>, _>(name)
+            .with_context(|| format!("decode sqlx postgres row column `{name}`"))
+    }
 }
 
 const POSTGRES_MAX_BIND_PARAMS: usize = 65_535;
@@ -118,6 +124,7 @@ struct KiroRouteCandidateRow {
     minimum_remaining_credits_before_block: f64,
     auth_profile_arn: Option<String>,
     api_region: Option<String>,
+    pool_strategy: String,
     proxy_mode: Option<String>,
     auth_proxy_config_id: Option<String>,
 }
@@ -434,6 +441,7 @@ struct KiroAdminAccountListRow {
     min_start_interval_ms: Option<i64>,
     auth_min_start_interval_ms: Option<i64>,
     minimum_remaining_credits_before_block: Option<f64>,
+    pool_strategy: String,
     proxy_mode: Option<String>,
     proxy_config_id: Option<String>,
     auth_proxy_config_id: Option<String>,
@@ -633,10 +641,11 @@ mod tests {
         provider::{ProtocolFamily, ProviderType, RouteStrategy},
         store::{
             AdminCodexAccountPageQuery, AdminCodexAccountSortMode, AdminCodexAccountStore,
-            AdminConfigStore, AdminKeyStore, AdminProxyConfigPatch, AdminProxyStore,
-            AdminReviewQueueStore, ControlStore, KeyUsageRollupDelta, NewAdminProxyConfig,
-            NewPublicAccountContributionRequest, PublicSubmissionStore, PublicUsageStore,
-            UsageEventSink, UsageRollupBatch, UsageRollupBatchSink,
+            AdminConfigStore, AdminKeyStore, AdminKiroAccountStore, AdminPageRequest,
+            AdminProxyConfigPatch, AdminProxyStore, AdminReviewQueueStore, ControlStore,
+            KeyUsageRollupDelta, NewAdminProxyConfig, NewPublicAccountContributionRequest,
+            PublicSubmissionStore, PublicUsageStore, UsageEventSink, UsageRollupBatch,
+            UsageRollupBatchSink,
         },
     };
     use serde::Serialize;
@@ -781,20 +790,20 @@ mod tests {
                  'active', 'kiro', 'anthropic', TRUE, 1000, 100, 100);
                      INSERT INTO llm_key_route_config (
                         key_id, route_strategy, fixed_account_name, auto_account_names_json,
-                        account_group_id, model_name_map_json, request_max_concurrency,
-                        request_min_start_interval_ms, codex_fast_enabled,
+                        account_group_id, preferred_pool_strategy, model_name_map_json,
+                        request_max_concurrency, request_min_start_interval_ms, codex_fast_enabled,
                         kiro_request_validation_enabled, kiro_cache_estimation_enabled,
                         kiro_zero_cache_debug_enabled, kiro_full_request_logging_enabled,
                         kiro_cache_policy_override_json,
                         kiro_billable_model_multipliers_override_json
                      ) VALUES
-                        ('kiro-key-new', 'auto', NULL, NULL, NULL, NULL, NULL, NULL, TRUE, TRUE, \
-                 TRUE, FALSE, FALSE, NULL, NULL),
-                        ('kiro-key-mid', 'fixed', 'kiro-a', NULL, 'group-beta', NULL, NULL, NULL, \
-                 TRUE, TRUE, TRUE, FALSE, FALSE, NULL, NULL),
+                        ('kiro-key-new', 'auto', NULL, NULL, NULL, 'credit_first', NULL, NULL, \
+                 NULL, TRUE, TRUE, TRUE, FALSE, FALSE, NULL, NULL),
+                        ('kiro-key-mid', 'fixed', 'kiro-a', NULL, 'group-beta', 'balanced', NULL, \
+                 NULL, NULL, TRUE, TRUE, TRUE, FALSE, FALSE, NULL, NULL),
                         ('kiro-key-old', 'auto', NULL, '[\"kiro-a\", \"kiro-d\", \
-                 \"kiro-a\"]'::jsonb, NULL, NULL, NULL, NULL, TRUE, TRUE, TRUE, FALSE, FALSE, \
-                 NULL, NULL);
+                 \"kiro-a\"]'::jsonb, NULL, 'balanced', NULL, NULL, NULL, TRUE, TRUE, TRUE, \
+                 FALSE, FALSE, NULL, NULL);
                      INSERT INTO llm_key_usage_rollups (
                         key_id, input_uncached_tokens, input_cached_tokens, output_tokens,
                         billable_tokens, credit_total, credit_missing_events, last_used_at_ms,
@@ -843,6 +852,35 @@ mod tests {
             ))
             .await
             .context("seed postgres kiro key page fixture")?;
+        client.close().await;
+        Ok(())
+    }
+
+    async fn seed_test_kiro_account_page_fixture(database_url: &str) -> anyhow::Result<()> {
+        let client = SqlxClient::connect(database_url)
+            .await
+            .context("connect postgres test database")?;
+        client
+            .batch_execute(
+                "INSERT INTO llm_kiro_accounts (
+                    account_name, auth_method, account_id, profile_arn, user_id,
+                    status, auth_json, max_concurrency, min_start_interval_ms,
+                    proxy_config_id, last_refresh_at_ms, last_error, created_at_ms,
+                    updated_at_ms
+                 ) VALUES
+                    (
+                        'kiro-credit', 'social', NULL, NULL, 'user-credit', 'active',
+                        '{\"poolStrategy\":\"credit_first\",\"region\":\"us-east-1\"}'::jsonb,
+                        1, 0, NULL, NULL, NULL, 20, 20
+                    ),
+                    (
+                        'kiro-balanced', 'social', NULL, NULL, 'user-balanced', 'active',
+                        '{\"poolStrategy\":\"balanced\",\"region\":\"us-east-1\"}'::jsonb,
+                        1, 0, NULL, NULL, NULL, 10, 10
+                    );",
+            )
+            .await
+            .context("insert postgres kiro account page fixture")?;
         client.close().await;
         Ok(())
     }
@@ -1840,7 +1878,9 @@ mod tests {
         let newest_summary = first_page.keys[0]
             .kiro_candidate_credit_summary
             .expect("newest key candidate summary");
+        assert_eq!(first_page.keys[0].preferred_pool_strategy, "credit_first");
         assert_eq!(newest_summary.candidate_count, 4);
+        assert_eq!(newest_summary.preferred_pool_candidate_count, 0);
         assert_eq!(newest_summary.loaded_balance_count, 3);
         assert_eq!(newest_summary.missing_balance_count, 1);
         assert_eq!(newest_summary.total_limit, 600.0);
@@ -1849,6 +1889,7 @@ mod tests {
             .kiro_candidate_credit_summary
             .expect("middle key candidate summary");
         assert_eq!(middle_summary.candidate_count, 2);
+        assert_eq!(middle_summary.preferred_pool_candidate_count, 2);
         assert_eq!(middle_summary.loaded_balance_count, 1);
         assert_eq!(middle_summary.missing_balance_count, 1);
         assert_eq!(middle_summary.total_limit, 200.0);
@@ -1869,10 +1910,59 @@ mod tests {
             .kiro_candidate_credit_summary
             .expect("oldest key candidate summary");
         assert_eq!(oldest_summary.candidate_count, 2);
+        assert_eq!(oldest_summary.preferred_pool_candidate_count, 2);
         assert_eq!(oldest_summary.loaded_balance_count, 2);
         assert_eq!(oldest_summary.missing_balance_count, 0);
         assert_eq!(oldest_summary.total_limit, 400.0);
         assert_eq!(oldest_summary.total_remaining, 130.0);
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_preserves_kiro_account_pool_strategy_on_pages() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        seed_test_kiro_account_page_fixture(&database_url)
+            .await
+            .expect("seed postgres kiro account page fixture");
+        let repo = super::PostgresControlRepository::connect(&database_url, None)
+            .await
+            .expect("connect postgres repository");
+
+        let page = repo
+            .list_admin_kiro_accounts_page(AdminPageRequest {
+                limit: 10,
+                offset: 0,
+            })
+            .await
+            .expect("list kiro account page");
+        let credit_account = page
+            .accounts
+            .iter()
+            .find(|account| account.name == "kiro-credit")
+            .expect("credit account");
+        assert_eq!(
+            credit_account.pool_strategy,
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST
+        );
+
+        let filtered = repo
+            .list_admin_kiro_accounts_filtered_page(Some("kiro-credit"), AdminPageRequest {
+                limit: 10,
+                offset: 0,
+            })
+            .await
+            .expect("list filtered kiro account page");
+        assert_eq!(filtered.accounts.len(), 1);
+        assert_eq!(
+            filtered.accounts[0].pool_strategy,
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST
+        );
     }
 
     #[tokio::test]

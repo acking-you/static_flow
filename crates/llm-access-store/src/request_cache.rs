@@ -37,6 +37,10 @@ const fn default_kiro_compact_trigger_tokens() -> u64 {
     DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS
 }
 
+fn default_kiro_pool_strategy() -> String {
+    llm_access_core::store::default_kiro_pool_strategy()
+}
+
 /// Shared Valkey configuration for the request-path cache layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestCacheConfig {
@@ -135,6 +139,9 @@ pub(crate) struct CachedKiroRequestSnapshot {
     pub account_group_id_at_event: Option<String>,
     pub selected_account_names: Vec<String>,
     pub use_all_active_accounts: bool,
+    /// Defaulted so Valkey payloads written before pool routing still decode.
+    #[serde(default = "default_kiro_pool_strategy")]
+    pub preferred_pool_strategy: String,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
     pub request_validation_enabled: bool,
@@ -232,6 +239,9 @@ pub(crate) struct CachedKiroAccountView {
     pub request_min_start_interval_ms: Option<u64>,
     pub disabled: bool,
     pub minimum_remaining_credits_before_block: f64,
+    /// Defaulted so Valkey payloads written before pool routing still decode.
+    #[serde(default = "default_kiro_pool_strategy")]
+    pub pool_strategy: String,
     pub api_region: String,
     pub proxy: Option<CachedProxyConfig>,
     pub routing_identity: String,

@@ -36,6 +36,7 @@ base64 = "0.22.1"
 ammonia = "4"
 
 # Shared crate
+llm-access-core = { path = "../llm-access-core" }
 static-flow-shared = { path = "../shared" }
 static-flow-media-types = { path = "../media-types" }
 

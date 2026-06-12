@@ -30,7 +30,7 @@ The script:
    - IDC/OIDC: `kirocli:odic:token`, `kirocli:oidc:token`
    - device registration: matching `device-registration` keys
 3. Creates the Kiro account through:
-   `POST /admin/kiro-gateway/accounts`
+   `POST /admin/kiro-gateway/accounts/import-auth`
 4. Sets standard scheduling:
    - `kiro_channel_max_concurrency = 3`
    - `kiro_channel_min_start_interval_ms = random[200, 1000]`

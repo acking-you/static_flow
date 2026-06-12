@@ -5,7 +5,7 @@ mod tests {
     use arrow_array::{Array, FixedSizeListArray, Int32Array, ListArray, StringArray};
     use arrow_schema::{DataType, TimeUnit};
     use sf_cli::schema::{self, ArticleRecord};
-    use static_flow_shared::embedding::{IMAGE_VECTOR_DIM, TEXT_VECTOR_DIM_EN, TEXT_VECTOR_DIM_ZH};
+    use static_flow_embedding::{IMAGE_VECTOR_DIM, TEXT_VECTOR_DIM_EN, TEXT_VECTOR_DIM_ZH};
 
     #[test]
     fn article_schema_has_expected_fields() {

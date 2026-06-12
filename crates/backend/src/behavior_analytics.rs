@@ -15,7 +15,7 @@ use axum::{
     response::Response,
 };
 use static_flow_runtime::request_ids::{REQUEST_ID_HEADER, TRACE_ID_HEADER};
-use static_flow_shared::lancedb_api::NewApiBehaviorEventInput;
+use static_flow_store::lancedb_api::NewApiBehaviorEventInput;
 use tokio::sync::Semaphore;
 
 use crate::state::AppState;

@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/frontend",
     "crates/shared",
+    "crates/store",
+    "crates/embedding",
     "crates/backend",
     "crates/cli",
     "crates/media-service",

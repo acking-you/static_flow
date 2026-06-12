@@ -6,7 +6,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use static_flow_shared::interactive_store::{
+use static_flow_store::interactive_store::{
     now_ms, InteractiveAssetRecord, InteractivePageLocaleRecord, InteractivePageRecord,
     InteractivePageStore, INTERACTIVE_PAGE_STATUS_READY, MIRROR_POLICY_WHITELISTED,
     TRANSLATION_SCOPE_ARTICLE_AND_INTERACTIVE, TRANSLATION_SCOPE_ARTICLE_ONLY,

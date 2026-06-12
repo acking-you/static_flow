@@ -147,6 +147,8 @@ impl PostgresControlRepository {
                     NULLIF(COALESCE(auth_json ->> 'profileArn', auth_json ->> 'profile_arn'), ''),
                     NULLIF(COALESCE(auth_json ->> 'apiRegion', auth_json ->> 'api_region', \
                  auth_json ->> 'region'), ''),
+                    NULLIF(COALESCE(auth_json ->> 'poolStrategy', auth_json ->> 'pool_strategy'), \
+                 ''),
                     NULLIF(COALESCE(auth_json ->> 'proxyMode', auth_json ->> 'proxy_mode'), ''),
                     NULLIF(COALESCE(auth_json ->> 'proxyConfigId', auth_json ->> \
                  'proxy_config_id'), '')
@@ -170,8 +172,11 @@ impl PostgresControlRepository {
                 minimum_remaining_credits_before_block: row.get::<_, f64>(8).max(0.0),
                 auth_profile_arn: row.get(9),
                 api_region: row.get(10),
-                proxy_mode: row.get(11),
-                auth_proxy_config_id: row.get(12),
+                pool_strategy: core_store::canonical_kiro_pool_strategy(
+                    row.get::<_, Option<String>>(11).as_deref(),
+                ),
+                proxy_mode: row.get(12),
+                auth_proxy_config_id: row.get(13),
             })
             .collect())
     }
@@ -218,6 +223,8 @@ impl PostgresControlRepository {
                     NULLIF(COALESCE(auth_json ->> 'profileArn', auth_json ->> 'profile_arn'), ''),
                     NULLIF(COALESCE(auth_json ->> 'apiRegion', auth_json ->> 'api_region', \
                  auth_json ->> 'region'), ''),
+                    NULLIF(COALESCE(auth_json ->> 'poolStrategy', auth_json ->> 'pool_strategy'), \
+                 ''),
                     NULLIF(COALESCE(auth_json ->> 'proxyMode', auth_json ->> 'proxy_mode'), ''),
                     NULLIF(COALESCE(auth_json ->> 'proxyConfigId', auth_json ->> \
                  'proxy_config_id'), '')
@@ -242,8 +249,11 @@ impl PostgresControlRepository {
                 minimum_remaining_credits_before_block: row.get::<_, f64>(8).max(0.0),
                 auth_profile_arn: row.get(9),
                 api_region: row.get(10),
-                proxy_mode: row.get(11),
-                auth_proxy_config_id: row.get(12),
+                pool_strategy: core_store::canonical_kiro_pool_strategy(
+                    row.get::<_, Option<String>>(11).as_deref(),
+                ),
+                proxy_mode: row.get(12),
+                auth_proxy_config_id: row.get(13),
             })
             .collect())
     }
@@ -610,6 +620,7 @@ impl ProviderRouteStore for PostgresControlRepository {
                 account_group_id_at_event: account_group_id_at_event.clone(),
                 route_strategy_at_event,
                 auth_json: String::new(),
+                pool_strategy: view.pool_strategy,
                 profile_arn: view.profile_arn,
                 api_region: view.api_region,
                 request_validation_enabled: snapshot.request_validation_enabled,
@@ -635,6 +646,7 @@ impl ProviderRouteStore for PostgresControlRepository {
                 billable_model_multipliers_json: snapshot.billable_model_multipliers_json.clone(),
                 request_max_concurrency: snapshot.request_max_concurrency,
                 request_min_start_interval_ms: snapshot.request_min_start_interval_ms,
+                preferred_pool_strategy: snapshot.preferred_pool_strategy.clone(),
                 account_request_max_concurrency: view.request_max_concurrency,
                 account_request_min_start_interval_ms: view.request_min_start_interval_ms,
                 proxy: proxy_from_cached_option(view.proxy),
@@ -682,6 +694,7 @@ impl ProviderRouteStore for PostgresControlRepository {
             account_group_id_at_event: None,
             route_strategy_at_event: RouteStrategy::Auto,
             auth_json: auth.auth_json,
+            pool_strategy: view.pool_strategy,
             profile_arn: view.profile_arn,
             api_region: view.api_region,
             request_validation_enabled: true,
@@ -715,6 +728,7 @@ impl ProviderRouteStore for PostgresControlRepository {
             billable_model_multipliers_json: runtime_config.kiro_billable_model_multipliers_json,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            preferred_pool_strategy: core_store::default_kiro_pool_strategy(),
             account_request_max_concurrency: view.request_max_concurrency,
             account_request_min_start_interval_ms: view.request_min_start_interval_ms,
             proxy: proxy_from_cached_option(view.proxy),

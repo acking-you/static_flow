@@ -7,10 +7,8 @@ use std::{
 use anyhow::{Context, Result};
 use image::GenericImageView;
 use regex::Regex;
-use static_flow_shared::{
-    embedding::{detect_language, embed_text_with_language, TextEmbeddingLanguage},
-    normalize_taxonomy_key,
-};
+use static_flow_embedding::{detect_language, embed_text_with_language, TextEmbeddingLanguage};
+use static_flow_shared::normalize_taxonomy_key;
 
 use crate::{
     db::{
@@ -453,7 +451,7 @@ fn build_image_record(path: &Path, config: &SyncConfig) -> Result<ImageRecord> {
         } else {
             None
         };
-        let vector = match static_flow_shared::embedding::embed_image_bytes(&rasterized.png_bytes) {
+        let vector = match static_flow_embedding::embed_image_bytes(&rasterized.png_bytes) {
             Ok(vector) => Some(vector),
             Err(err) => {
                 tracing::warn!(
@@ -476,7 +474,7 @@ fn build_image_record(path: &Path, config: &SyncConfig) -> Result<ImageRecord> {
                 } else {
                     None
                 };
-                let vector = match static_flow_shared::embedding::embed_image_bytes(&bytes) {
+                let vector = match static_flow_embedding::embed_image_bytes(&bytes) {
                     Ok(vector) => Some(vector),
                     Err(err) => {
                         tracing::warn!(
@@ -490,7 +488,7 @@ fn build_image_record(path: &Path, config: &SyncConfig) -> Result<ImageRecord> {
                 (vector, thumb)
             },
             Err(_) => {
-                let vector = match static_flow_shared::embedding::embed_image_bytes(&bytes) {
+                let vector = match static_flow_embedding::embed_image_bytes(&bytes) {
                     Ok(vector) => Some(vector),
                     Err(err) => {
                         tracing::warn!(

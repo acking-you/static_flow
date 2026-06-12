@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 #[cfg(not(feature = "mock"))]
 use gloo_net::http::{Request, RequestBuilder};
 use js_sys::Date;
+use llm_access_core::store as llm_store;
 #[cfg(not(feature = "mock"))]
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -6056,6 +6057,10 @@ const fn default_true() -> bool {
     true
 }
 
+fn default_kiro_pool_strategy() -> String {
+    llm_store::default_kiro_pool_strategy()
+}
+
 fn default_kiro_cache_policy_json() -> String {
     r#"{"small_input_high_credit_boost":{"target_input_tokens":100000,"credit_start":1.0,"credit_end":1.8},"prefix_tree_credit_ratio_bands":[{"credit_start":0.3,"credit_end":1.0,"cache_ratio_start":0.7,"cache_ratio_end":0.2},{"credit_start":1.0,"credit_end":2.5,"cache_ratio_start":0.2,"cache_ratio_end":0.0}],"high_credit_diagnostic_threshold":2.0}"#.to_string()
 }
@@ -6089,6 +6094,8 @@ pub struct AdminLlmGatewayKeyView {
     pub account_group_id: Option<String>,
     pub fixed_account_name: Option<String>,
     pub auto_account_names: Option<Vec<String>>,
+    #[serde(default = "default_kiro_pool_strategy")]
+    pub preferred_pool_strategy: String,
     pub model_name_map: Option<BTreeMap<String, String>>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
@@ -6130,6 +6137,7 @@ pub struct AdminLlmGatewayKeyView {
 #[serde(default)]
 pub struct AdminKiroKeyCandidateCreditSummaryView {
     pub candidate_count: usize,
+    pub preferred_pool_candidate_count: Option<usize>,
     pub loaded_balance_count: usize,
     pub missing_balance_count: usize,
     pub total_limit: f64,
@@ -8810,6 +8818,7 @@ pub async fn create_admin_llm_gateway_key(
             account_group_id: None,
             fixed_account_name: None,
             auto_account_names: None,
+            preferred_pool_strategy: default_kiro_pool_strategy(),
             model_name_map: None,
             request_max_concurrency,
             request_min_start_interval_ms,
@@ -8868,6 +8877,7 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub account_group_id: Option<&'a str>,
     pub fixed_account_name: Option<&'a str>,
     pub auto_account_names: Option<&'a [String]>,
+    pub preferred_pool_strategy: Option<&'a str>,
     pub model_name_map: Option<&'a BTreeMap<String, String>>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
@@ -8902,6 +8912,7 @@ pub async fn patch_admin_llm_gateway_key(
             request.account_group_id,
             request.fixed_account_name,
             request.auto_account_names,
+            request.preferred_pool_strategy,
             request.model_name_map,
             request.request_max_concurrency,
             request.request_min_start_interval_ms,
@@ -8980,6 +8991,12 @@ pub async fn patch_admin_llm_gateway_key(
                         .map(|value| serde_json::Value::String(value.clone()))
                         .collect(),
                 ),
+            );
+        }
+        if let Some(preferred_pool_strategy) = request.preferred_pool_strategy {
+            body.insert(
+                "preferred_pool_strategy".to_string(),
+                serde_json::Value::String(preferred_pool_strategy.to_string()),
             );
         }
         if let Some(model_name_map) = request.model_name_map {
@@ -10442,6 +10459,8 @@ pub struct KiroAccountView {
     pub kiro_channel_max_concurrency: u64,
     pub kiro_channel_min_start_interval_ms: u64,
     pub minimum_remaining_credits_before_block: f64,
+    #[serde(default = "default_kiro_pool_strategy")]
+    pub pool_strategy: String,
     pub proxy_mode: String,
     pub proxy_config_id: Option<String>,
     pub effective_proxy_source: String,
@@ -10472,6 +10491,7 @@ pub struct CreateManualKiroAccountInput {
     pub kiro_channel_max_concurrency: Option<u64>,
     pub kiro_channel_min_start_interval_ms: Option<u64>,
     pub minimum_remaining_credits_before_block: Option<f64>,
+    pub pool_strategy: Option<String>,
     pub disabled: bool,
 }
 
@@ -10481,6 +10501,7 @@ pub struct PatchKiroAccountInput {
     pub kiro_channel_max_concurrency: Option<u64>,
     pub kiro_channel_min_start_interval_ms: Option<u64>,
     pub minimum_remaining_credits_before_block: Option<f64>,
+    pub pool_strategy: Option<String>,
     pub proxy_mode: Option<String>,
     pub proxy_config_id: Option<String>,
 }
@@ -10882,6 +10903,7 @@ pub async fn create_admin_kiro_key(
             account_group_id: None,
             fixed_account_name: None,
             auto_account_names: None,
+            preferred_pool_strategy: default_kiro_pool_strategy(),
             model_name_map: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
@@ -10942,6 +10964,7 @@ pub async fn patch_admin_kiro_key(
             request.account_group_id,
             request.fixed_account_name,
             request.auto_account_names,
+            request.preferred_pool_strategy,
             request.model_name_map,
             request.request_max_concurrency,
             request.request_min_start_interval_ms,
@@ -11019,6 +11042,12 @@ pub async fn patch_admin_kiro_key(
                         .map(|value| serde_json::Value::String(value.clone()))
                         .collect(),
                 ),
+            );
+        }
+        if let Some(preferred_pool_strategy) = request.preferred_pool_strategy {
+            body.insert(
+                "preferred_pool_strategy".to_string(),
+                serde_json::Value::String(preferred_pool_strategy.to_string()),
             );
         }
         if let Some(model_name_map) = request.model_name_map {

@@ -8,7 +8,10 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use llm_access_core::proxy::{AccountProxyMode, AccountProxySelection};
+use llm_access_core::{
+    proxy::{AccountProxyMode, AccountProxySelection},
+    store::canonical_kiro_pool_strategy,
+};
 use serde::{Deserialize, Serialize};
 
 /// Default AWS region used for Kiro authentication and API calls when none is
@@ -96,6 +99,9 @@ pub struct KiroAuthRecord {
     /// or below.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minimum_remaining_credits_before_block: Option<f64>,
+    /// Scheduler pool this account belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool_strategy: Option<String>,
     /// Account-level proxy override mode. Defaults to inheriting the Kiro
     /// provider binding.
     #[serde(default)]
@@ -160,6 +166,7 @@ impl KiroAuthRecord {
             .minimum_remaining_credits_before_block
             .filter(|value| value.is_finite())
             .map(|value| value.max(0.0));
+        self.pool_strategy = Some(canonical_kiro_pool_strategy(self.pool_strategy.as_deref()));
         if !self.disabled {
             self.disabled_reason = None;
         }

@@ -1292,6 +1292,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     account_group_id: Some(&account_group_id_value),
                     fixed_account_name: None,
                     auto_account_names: None,
+                    preferred_pool_strategy: None,
                     model_name_map: None,
                     request_max_concurrency: request_max_concurrency_value,
                     request_min_start_interval_ms: request_min_start_interval_ms_value,

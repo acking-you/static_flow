@@ -1,108 +1,14 @@
-//! Shared types and storage helpers used by the StaticFlow backend, frontend,
-//! and CLI crates.
+//! Wasm-safe types shared by the StaticFlow backend, frontend, and CLI
+//! crates: content DTOs plus the task lifecycle status.
+//!
+//! Keep this crate free of host-only dependencies — the frontend compiles it
+//! for wasm and tests it on the host, so anything heavier (LanceDB storage,
+//! embedding models) belongs in `static-flow-store` / `static-flow-embedding`.
 
 use serde::{Deserialize, Serialize};
 
 /// Shared task lifecycle status for wish / request / comment workflows.
 pub mod task_status;
-
-/// Request/trace id helpers shared by backend and gateway.
-pub mod request_ids;
-
-#[cfg(not(target_arch = "wasm32"))]
-/// Native runtime logging helpers shared by backend and gateway.
-pub mod runtime_logging;
-
-/// Embedding helpers shared by content indexing and retrieval flows.
-#[allow(
-    missing_docs,
-    reason = "This module exports many embedding-specific items; enforcing item-level docs there \
-              is a separate documentation pass."
-)]
-pub mod embedding;
-
-#[cfg(not(target_arch = "wasm32"))]
-/// Comment moderation storage models and persistence helpers.
-#[allow(
-    missing_docs,
-    reason = "Store modules expose large DTO surfaces; the module contract is documented here \
-              while inner items are documented separately."
-)]
-pub mod comments_store;
-
-#[cfg(not(target_arch = "wasm32"))]
-/// Content database queries and article/image API data structures.
-#[allow(
-    missing_docs,
-    reason = "This storage module has a large public API surface that needs a dedicated \
-              documentation pass."
-)]
-pub mod lancedb_api;
-
-#[cfg(not(target_arch = "wasm32"))]
-/// Music storage records and related query helpers.
-#[allow(
-    missing_docs,
-    reason = "The module remains public for multiple crates, but documenting every exported \
-              record belongs in the module itself."
-)]
-pub mod music_store;
-
-#[cfg(not(target_arch = "wasm32"))]
-/// Music wish workflow storage records and helper functions.
-#[allow(
-    missing_docs,
-    reason = "The module exports many workflow DTOs; only the top-level contract is enforced in \
-              this pass."
-)]
-pub mod music_wish_store;
-
-#[cfg(not(target_arch = "wasm32"))]
-/// Article request worker storage models and status helpers.
-#[allow(
-    missing_docs,
-    reason = "The module is intentionally public for cross-crate reuse, but its item-level docs \
-              are deferred to a focused follow-up."
-)]
-pub mod article_request_store;
-
-#[cfg(not(target_arch = "wasm32"))]
-/// Interactive page mirror storage and asset management helpers.
-#[allow(
-    missing_docs,
-    reason = "The interactive store exports many records and helper methods; documenting every \
-              item is deferred."
-)]
-pub mod interactive_store;
-
-#[cfg(not(target_arch = "wasm32"))]
-/// Shared persistence types for the LLM and Kiro gateway features.
-#[allow(
-    missing_docs,
-    reason = "The gateway store module has a broad DTO surface that is better documented in place."
-)]
-pub mod llm_gateway_store;
-
-#[cfg(not(target_arch = "wasm32"))]
-/// LanceDB compaction and optimization helpers.
-#[allow(
-    missing_docs,
-    reason = "Optimization helpers expose a compact but still multi-type surface that will be \
-              documented in the module itself."
-)]
-pub mod optimize;
-
-#[cfg(not(target_arch = "wasm32"))]
-mod lance_schema_encoding;
-
-#[cfg(not(target_arch = "wasm32"))]
-/// Maintenance routines for rebuilding image embedding vectors.
-#[allow(
-    missing_docs,
-    reason = "The module remains public for backend and CLI reuse, while detailed item docs are \
-              deferred."
-)]
-pub mod image_vector_maintenance;
 
 /// Bilingual text payload used for localized summaries and similar fields.
 #[allow(

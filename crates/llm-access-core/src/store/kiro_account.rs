@@ -102,6 +102,9 @@ pub struct AdminKiroAccount {
     pub kiro_channel_min_start_interval_ms: u64,
     /// Cached-credit floor used before blocking the account locally.
     pub minimum_remaining_credits_before_block: f64,
+    /// Scheduler pool this account belongs to.
+    #[serde(default = "super::default_kiro_pool_strategy")]
+    pub pool_strategy: String,
     /// Account proxy mode.
     pub proxy_mode: String,
     /// Fixed proxy config id.
@@ -175,6 +178,8 @@ pub struct AdminKiroAccountPatch {
     pub min_start_interval_ms: Option<u64>,
     /// New cached-credit floor.
     pub minimum_remaining_credits_before_block: Option<f64>,
+    /// New scheduler-pool strategy.
+    pub pool_strategy: Option<String>,
     /// New account proxy mode.
     pub proxy_mode: Option<String>,
     /// New fixed proxy config id.

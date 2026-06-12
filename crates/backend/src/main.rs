@@ -28,7 +28,7 @@ use memory_profiler::ProfiledMiMalloc;
 use static_flow_runtime::runtime_logging::init_runtime_logging;
 
 const DEFAULT_LOG_FILTER: &str =
-    "warn,static_flow_backend=info,static_flow_shared::lancedb_api=info";
+    "warn,static_flow_backend=info,static_flow_store::lancedb_api=info";
 const GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS: u64 = 10;
 
 #[global_allocator]

@@ -8547,7 +8547,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "static-flow-embedding",
  "static-flow-shared",
+ "static-flow-store",
  "tempfile",
  "tokio",
  "tracing",
@@ -8943,6 +8945,7 @@ dependencies = [
  "static-flow-media-types",
  "static-flow-runtime",
  "static-flow-shared",
+ "static-flow-store",
  "tempfile",
  "tokio",
  "tower 0.4.13",
@@ -8970,6 +8973,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "static-flow-embedding"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fastembed",
+]
+
+[[package]]
 name = "static-flow-frontend"
 version = "0.1.0"
 dependencies = [
@@ -8979,6 +8990,7 @@ dependencies = [
  "gloo-net 0.6.0",
  "gloo-timers 0.3.0",
  "js-sys",
+ "llm-access-core",
  "pulldown-cmark 0.13.0",
  "serde",
  "serde_json",
@@ -9043,19 +9055,27 @@ name = "static-flow-shared"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "static-flow-store"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "arrow-array 57.3.0",
  "arrow-schema 57.3.0",
  "chrono",
- "fastembed",
  "fs2",
  "futures",
  "lance",
  "lancedb",
  "rand 0.8.5",
- "rusqlite",
  "serde",
  "serde_json",
- "static-flow-runtime",
+ "static-flow-embedding",
+ "static-flow-shared",
  "tokio",
  "tracing",
 ]
@@ -9080,7 +9100,6 @@ dependencies = [
  "serde_yaml",
  "signal-hook",
  "static-flow-runtime",
- "static-flow-shared",
  "tempfile",
  "tokio",
  "tracing",

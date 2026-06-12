@@ -17,7 +17,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use static_flow_shared::llm_gateway_store::{
+use static_flow_store::llm_gateway_store::{
     now_ms, Gpt2ApiAccountContributionRequestRecord, NewGpt2ApiAccountContributionRequestInput,
     LLM_GATEWAY_TOKEN_REQUEST_STATUS_FAILED as ACCOUNT_CONTRIBUTION_STATUS_FAILED,
     LLM_GATEWAY_TOKEN_REQUEST_STATUS_ISSUED as ACCOUNT_CONTRIBUTION_STATUS_ISSUED,

@@ -2,7 +2,7 @@ use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
 use image::{GenericImageView, ImageFormat};
-use static_flow_shared::embedding::embed_image_bytes;
+use static_flow_embedding::embed_image_bytes;
 
 use crate::{
     db::{connect_db, ensure_vector_index, optimize_table_indexes, upsert_images},

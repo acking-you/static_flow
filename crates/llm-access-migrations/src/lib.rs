@@ -113,6 +113,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "usage_rollup_applied_batches",
         sql: include_str!("../migrations/postgres/0025_usage_rollup_applied_batches.sql"),
     },
+    SqlMigration {
+        version: 26,
+        name: "kiro_pool_strategy",
+        sql: include_str!("../migrations/postgres/0026_kiro_pool_strategy.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.

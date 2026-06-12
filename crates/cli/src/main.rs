@@ -10,7 +10,8 @@ use anyhow::Result;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_LOG_FILTER: &str = "warn,sf_cli=info,static_flow_shared=info";
+const DEFAULT_LOG_FILTER: &str =
+    "warn,sf_cli=info,static_flow_store=info,static_flow_embedding=info";
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -191,6 +191,8 @@ pub struct ProviderKiroRoute {
     pub route_strategy_at_event: RouteStrategy,
     /// Persisted auth JSON for the selected account.
     pub auth_json: String,
+    /// Scheduler pool this selected account belongs to.
+    pub pool_strategy: String,
     /// Profile ARN used by Kiro upstream requests.
     pub profile_arn: Option<String>,
     /// Effective API region used by Kiro upstream requests.
@@ -243,6 +245,8 @@ pub struct ProviderKiroRoute {
     pub request_max_concurrency: Option<u64>,
     /// Minimum interval between request starts configured on this key route.
     pub request_min_start_interval_ms: Option<u64>,
+    /// Preferred scheduler pool configured on this key route.
+    pub preferred_pool_strategy: String,
     /// Request concurrency cap configured on the selected account.
     pub account_request_max_concurrency: Option<u64>,
     /// Minimum interval between request starts configured on the selected

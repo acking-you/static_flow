@@ -208,6 +208,13 @@ pub const DEFAULT_KIRO_CACHE_SNAPSHOT_MAX_ANCHOR_ENTRIES: u64 = 0;
 pub const DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY: u64 = 1;
 /// Default Kiro account request pacing interval retained in storage.
 pub const DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS: u64 = 0;
+/// Default Kiro account-pool strategy used by both accounts and keys.
+pub const KIRO_POOL_STRATEGY_BALANCED: &str = "balanced";
+/// Kiro account-pool strategy that prefers larger remaining-credit accounts.
+pub const KIRO_POOL_STRATEGY_CREDIT_FIRST: &str = "credit_first";
+/// Supported Kiro account-pool strategies in deterministic fallback order.
+pub const KIRO_POOL_STRATEGIES: [&str; 2] =
+    [KIRO_POOL_STRATEGY_BALANCED, KIRO_POOL_STRATEGY_CREDIT_FIRST];
 /// Pending status used by public token/account contribution requests.
 pub const PUBLIC_TOKEN_REQUEST_STATUS_PENDING: &str = "pending";
 /// Validated status used by account contribution requests after auth refresh
@@ -229,3 +236,25 @@ pub const PROVIDER_KIRO: &str = "kiro";
 pub const PROTOCOL_OPENAI: &str = "openai";
 /// Anthropic-compatible protocol family.
 pub const PROTOCOL_ANTHROPIC: &str = "anthropic";
+
+/// Default serialized Kiro account-pool strategy.
+pub fn default_kiro_pool_strategy() -> String {
+    KIRO_POOL_STRATEGY_BALANCED.to_string()
+}
+
+/// Parse one Kiro account-pool strategy into its canonical storage form.
+pub fn normalize_kiro_pool_strategy(raw: &str) -> Option<&'static str> {
+    match raw.trim() {
+        KIRO_POOL_STRATEGY_BALANCED => Some(KIRO_POOL_STRATEGY_BALANCED),
+        KIRO_POOL_STRATEGY_CREDIT_FIRST => Some(KIRO_POOL_STRATEGY_CREDIT_FIRST),
+        _ => None,
+    }
+}
+
+/// Normalize an optional Kiro account-pool strategy, defaulting old rows and
+/// stale cache payloads to the historic balanced behavior.
+pub fn canonical_kiro_pool_strategy(raw: Option<&str>) -> String {
+    raw.and_then(normalize_kiro_pool_strategy)
+        .unwrap_or(KIRO_POOL_STRATEGY_BALANCED)
+        .to_string()
+}

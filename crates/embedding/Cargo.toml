@@ -1,0 +1,11 @@
+[package]
+name = "static-flow-embedding"
+version = "0.1.0"
+edition = "2021"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+fastembed = "5"

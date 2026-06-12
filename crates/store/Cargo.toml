@@ -1,0 +1,24 @@
+[package]
+name = "static-flow-store"
+version = "0.1.0"
+edition = "2021"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+chrono = { workspace = true }
+fs2 = "0.4"
+futures = "0.3"
+lance = { workspace = true }
+lancedb = { workspace = true }
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { workspace = true }
+static-flow-embedding = { path = "../embedding" }
+static-flow-shared = { path = "../shared" }
+tokio = { workspace = true }
+tracing = "0.1"
