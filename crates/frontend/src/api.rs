@@ -8015,6 +8015,8 @@ pub async fn create_admin_llm_gateway_proxy_config(
             effective_source: "core".to_string(),
             has_node_override: false,
             can_edit_slot_metadata: true,
+            latest_codex_check: None,
+            latest_kiro_check: None,
         })
     }
 
@@ -8061,6 +8063,8 @@ pub async fn patch_admin_llm_gateway_proxy_config(
             effective_source: "core".to_string(),
             has_node_override: false,
             can_edit_slot_metadata: true,
+            latest_codex_check: None,
+            latest_kiro_check: None,
         })
     }
 
@@ -8837,6 +8841,8 @@ pub async fn create_admin_llm_gateway_key(
             effective_kiro_billable_model_multipliers_json:
                 default_kiro_billable_model_multipliers_json(),
             uses_global_kiro_billable_model_multipliers: true,
+            codex_fast_enabled: true,
+            kiro_candidate_credit_summary: None,
         })
     }
 
@@ -10560,6 +10566,7 @@ fn build_admin_kiro_cache_stats_url_for_ts(ts: u64) -> String {
     format!("{}/admin/kiro-gateway/cache-stats?_ts={ts}", llm_access_admin_base())
 }
 
+#[cfg(any(not(feature = "mock"), test))]
 fn build_admin_kiro_usage_event_detail_url(event_id: &str) -> String {
     format!(
         "{}/admin/kiro-gateway/usage/{}",
@@ -10922,6 +10929,8 @@ pub async fn create_admin_kiro_key(
             effective_kiro_billable_model_multipliers_json:
                 default_kiro_billable_model_multipliers_json(),
             uses_global_kiro_billable_model_multipliers: true,
+            codex_fast_enabled: true,
+            kiro_candidate_credit_summary: None,
         })
     }
 
