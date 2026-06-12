@@ -717,11 +717,22 @@ fn kiro_pool_strategy_label(strategy: &str) -> &'static str {
     }
 }
 
+fn kiro_pool_strategy_description(strategy: &str) -> &'static str {
+    match llm_store::normalize_kiro_pool_strategy(strategy) {
+        Some(llm_store::KIRO_POOL_STRATEGY_CREDIT_FIRST) => {
+            "池内优先消耗剩余额度最高的账号，其次才参考首字延迟与轮转。"
+        },
+        _ => "按会话亲和、首字延迟与轮转均衡调度（历史默认行为）。",
+    }
+}
+
 fn kiro_pool_strategy_options() -> Html {
     html! {
         <>
             { for llm_store::KIRO_POOL_STRATEGIES.iter().map(|value| html! {
-                <option value={*value}>{ kiro_pool_strategy_label(value) }</option>
+                <option value={*value} title={kiro_pool_strategy_description(value)}>
+                    { kiro_pool_strategy_label(value) }
+                </option>
             }) }
         </>
     }
@@ -763,6 +774,29 @@ fn kiro_preferred_pool_warning(
     Some(format!(
         "当前候选集中没有标记为 `{preferred_pool_label}` \
          的账号，优先池设置不会生效；请求会回退到其他池。"
+    ))
+}
+
+/// Positive companion to [`kiro_preferred_pool_warning`]: when the preferred
+/// pool does match candidates, surface how many so admins can confirm the
+/// preference is active without reading per-account settings.
+fn kiro_preferred_pool_candidate_note(
+    route_strategy: &str,
+    preferred_pool_strategy: &str,
+    summary: &AdminKiroKeyCandidateCreditSummaryView,
+) -> Option<String> {
+    if route_strategy == "fixed" || summary.candidate_count == 0 {
+        return None;
+    }
+    let preferred_pool_candidate_count = summary.preferred_pool_candidate_count?;
+    if preferred_pool_candidate_count == 0 {
+        return None;
+    }
+    Some(format!(
+        "优先池 `{}` 命中 {}/{} 个候选账号",
+        kiro_pool_strategy_label(preferred_pool_strategy),
+        preferred_pool_candidate_count,
+        summary.candidate_count
     ))
 }
 
@@ -1472,6 +1506,9 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                             >
                                 { kiro_pool_strategy_options() }
                             </select>
+                            <div class={classes!("mt-1", "text-[11px]", "text-[var(--muted)]")}>
+                                { kiro_pool_strategy_description((*pool_strategy).as_str()) }
+                            </div>
                         </label>
                         <label class={classes!("text-sm")}>
                             <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Proxy Mode" }</div>
@@ -2058,8 +2095,17 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         .key_item
         .kiro_candidate_credit_summary
         .unwrap_or_default();
-    let candidate_credit_summary_text =
-        format_kiro_key_candidate_credit_summary(&candidate_credit_summary);
+    let candidate_credit_summary_text = {
+        let base = format_kiro_key_candidate_credit_summary(&candidate_credit_summary);
+        match kiro_preferred_pool_candidate_note(
+            (*route_strategy).as_str(),
+            (*preferred_pool_strategy).as_str(),
+            &candidate_credit_summary,
+        ) {
+            Some(note) => format!("{base} · {note}"),
+            None => base,
+        }
+    };
     let preferred_pool_warning = kiro_preferred_pool_warning(
         (*route_strategy).as_str(),
         (*preferred_pool_strategy).as_str(),
@@ -2630,7 +2676,10 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                                     </select>
                                 </label>
                             } else {
-                                <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
+                                <label
+                                    class={classes!("flex", "items-center", "gap-2", "text-sm")}
+                                    title={kiro_pool_strategy_description((*preferred_pool_strategy).as_str())}
+                                >
                                     <span>{ "优先池" }</span>
                                     <select
                                         class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
@@ -4851,9 +4900,10 @@ pub fn admin_kiro_gateway_page() -> Html {
                         { text_input("Machine ID", &manual_machine_id, None) }
                         { text_input("Max Concurrency", &manual_scheduler_max, None) }
                         { text_input("Min Start Interval Ms", &manual_scheduler_min, None) }
-                        { text_input(
+                        { text_input_with_hint(
                             "Min Remaining Credits",
                             &manual_minimum_remaining_credits_before_block,
+                            None,
                             Some("0 keeps the historic zero-only behavior.")
                         ) }
                         <label class={classes!("text-sm")}>
@@ -4872,6 +4922,9 @@ pub fn admin_kiro_gateway_page() -> Html {
                             >
                                 { kiro_pool_strategy_options() }
                             </select>
+                            <div class={classes!("mt-1", "text-[11px]", "text-[var(--muted)]")}>
+                                { kiro_pool_strategy_description((*manual_pool_strategy).as_str()) }
+                            </div>
                         </label>
                     </div>
                     <div class={classes!("mt-4", "flex", "items-center", "gap-4", "flex-wrap", "text-sm", "text-[var(--muted)]")}>
@@ -5450,6 +5503,15 @@ fn normalized_str_option(state: &UseStateHandle<String>) -> Option<String> {
 }
 
 fn text_input(label: &str, state: &UseStateHandle<String>, extra_class: Option<&str>) -> Html {
+    text_input_with_hint(label, state, extra_class, None)
+}
+
+fn text_input_with_hint(
+    label: &str,
+    state: &UseStateHandle<String>,
+    extra_class: Option<&str>,
+    hint: Option<&str>,
+) -> Html {
     let state_handle = state.clone();
     let mut label_classes = classes!("block", "text-sm");
     if let Some(extra_class) = extra_class {
@@ -5466,6 +5528,11 @@ fn text_input(label: &str, state: &UseStateHandle<String>, extra_class: Option<&
                     state_handle.set(input.value());
                 })}
             />
+            if let Some(hint) = hint {
+                <div class={classes!("mt-1", "text-[11px]", "text-[var(--muted)]")}>
+                    { hint.to_string() }
+                </div>
+            }
         </label>
     }
 }
@@ -5537,10 +5604,10 @@ mod tests {
         build_kiro_cache_policy_override_patch, format_compact_bytes,
         format_kiro_cache_policy_summary, format_kiro_key_candidate_credit_summary,
         kiro_account_status_cta_text, kiro_account_status_route, kiro_cache_token_percent,
-        kiro_key_route_summary, kiro_preferred_pool_warning, parse_kiro_cache_policy_form_json,
-        sanitize_kiro_account_group_id, should_load_kiro_account_inventory,
-        should_load_kiro_group_inventory, should_load_kiro_group_options,
-        should_load_kiro_inventory, should_load_kiro_key_inventory,
+        kiro_key_route_summary, kiro_preferred_pool_candidate_note, kiro_preferred_pool_warning,
+        parse_kiro_cache_policy_form_json, sanitize_kiro_account_group_id,
+        should_load_kiro_account_inventory, should_load_kiro_group_inventory,
+        should_load_kiro_group_options, should_load_kiro_inventory, should_load_kiro_key_inventory,
         should_load_kiro_models_inventory, should_load_kiro_usage_preview,
         should_reset_kiro_cache_policy_editor, TAB_ACCOUNTS, TAB_GROUPS, TAB_KEYS, TAB_OVERVIEW,
         TAB_USAGE,
@@ -5662,6 +5729,66 @@ mod tests {
             ..summary
         };
         assert!(kiro_preferred_pool_warning(
+            "auto",
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST,
+            &missing_new_backend_field
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn kiro_preferred_pool_candidate_note_reports_matched_count() {
+        let note = kiro_preferred_pool_candidate_note(
+            "auto",
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST,
+            &AdminKiroKeyCandidateCreditSummaryView {
+                candidate_count: 5,
+                preferred_pool_candidate_count: Some(2),
+                loaded_balance_count: 5,
+                missing_balance_count: 0,
+                total_limit: 500.0,
+                total_remaining: 320.0,
+            },
+        )
+        .expect("matched preferred pool should produce a note");
+
+        assert_eq!(note, "优先池 `剩余额度优先` 命中 2/5 个候选账号");
+    }
+
+    #[test]
+    fn kiro_preferred_pool_candidate_note_silent_for_fixed_empty_or_unknown() {
+        let matched = AdminKiroKeyCandidateCreditSummaryView {
+            candidate_count: 5,
+            preferred_pool_candidate_count: Some(2),
+            loaded_balance_count: 5,
+            missing_balance_count: 0,
+            total_limit: 500.0,
+            total_remaining: 320.0,
+        };
+        assert!(kiro_preferred_pool_candidate_note(
+            "fixed",
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST,
+            &matched
+        )
+        .is_none());
+
+        // The empty-pool case is owned by kiro_preferred_pool_warning.
+        let empty_pool = AdminKiroKeyCandidateCreditSummaryView {
+            preferred_pool_candidate_count: Some(0),
+            ..matched
+        };
+        assert!(kiro_preferred_pool_candidate_note(
+            "auto",
+            llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST,
+            &empty_pool
+        )
+        .is_none());
+
+        let missing_new_backend_field = AdminKiroKeyCandidateCreditSummaryView {
+            preferred_pool_candidate_count: None,
+            ..matched
+        };
+        assert!(kiro_preferred_pool_candidate_note(
             "auto",
             llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST,
             &missing_new_backend_field
