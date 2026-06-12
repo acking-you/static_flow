@@ -8,6 +8,11 @@
 use yew::prelude::*;
 
 /// Props for [`SkeletonBlock`].
+#[allow(
+    dead_code,
+    reason = "The standalone block is part of the skeleton kit's public surface; page-specific \
+              skeletons compose it during the feedback-adoption phase."
+)]
 #[derive(Properties, PartialEq)]
 pub struct SkeletonBlockProps {
     /// Extra classes controlling the block's size/shape (width, height,

@@ -106,6 +106,11 @@ pub fn text_input(props: &TextInputProps) -> Html {
 }
 
 /// One option for [`SelectInput`].
+#[allow(
+    dead_code,
+    reason = "SelectInput is adopted by the admin form-component migration phase; the kit ships \
+              complete so consumers land as mechanical swaps."
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectOption {
     /// Submitted value.
@@ -115,6 +120,11 @@ pub struct SelectOption {
 }
 
 /// Props for [`SelectInput`].
+#[allow(
+    dead_code,
+    reason = "SelectInput is adopted by the admin form-component migration phase; the kit ships \
+              complete so consumers land as mechanical swaps."
+)]
 #[derive(Properties, PartialEq)]
 pub struct SelectInputProps {
     /// Id matching the surrounding [`FormField`].

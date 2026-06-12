@@ -27,6 +27,11 @@ pub enum ToastKind {
     /// A failed user action; sticks around longer.
     Error,
     /// Neutral informational notice.
+    #[allow(
+        dead_code,
+        reason = "Info toasts are adopted by the feedback-sweep phase; the kind set ships \
+                  complete."
+    )]
     Info,
 }
 
@@ -110,6 +115,11 @@ impl ToastHandle {
     }
 
     /// Show a neutral info toast (auto-dismisses).
+    #[allow(
+        dead_code,
+        reason = "Info toasts are adopted by the feedback-sweep phase; the kind set ships \
+                  complete."
+    )]
     pub fn info(&self, message: impl Into<String>) {
         self.dispatcher
             .dispatch(ToastAction::Push(ToastKind::Info, message.into()));
