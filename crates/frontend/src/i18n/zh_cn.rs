@@ -43,6 +43,16 @@ pub mod error_banner {
     pub const CLOSE_ARIA: &str = "关闭错误提示";
 }
 
+pub mod toast {
+    pub const CLOSE: &str = "关闭通知";
+}
+
+pub mod modal {
+    pub const CLOSE: &str = "关闭对话框";
+    pub const CONFIRM: &str = "确认";
+    pub const CANCEL: &str = "取消";
+}
+
 pub mod footer {
     pub const COPYRIGHT: &str = "© 2024 L_B__. All rights reserved.";
     pub const SOCIAL_ARIA: &str = "社交媒体";
@@ -444,6 +454,8 @@ pub mod music_wish {
     pub const EMAIL_HELP_TEXT: &str = "可选，但建议填写；任务完成后会自动通知你";
     pub const SUBMIT_BTN: &str = "提交心愿";
     pub const SUBMITTING: &str = "提交中...";
+    pub const SONG_NAME_REQUIRED: &str = "请填写歌曲名称";
+    pub const MESSAGE_REQUIRED: &str = "请填写留言";
     pub const STATUS_PENDING: &str = "等待审核";
     pub const STATUS_APPROVED: &str = "已通过";
     pub const STATUS_RUNNING: &str = "搜索中";

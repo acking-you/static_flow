@@ -4,9 +4,11 @@ use yew_router::prelude::*;
 use crate::{
     api,
     components::{
+        form::{FormField, TextArea, TextInput},
         icons::{Icon, IconName},
         image_with_loading::ImageWithLoading,
         pagination::Pagination,
+        toast::use_toast,
     },
     i18n::current::{header as header_t, music_wish as wish_t},
     music_context::{MusicAction, MusicPlayerContext},
@@ -76,8 +78,9 @@ pub fn music_library_page() -> Html {
     let wish_form_nickname = use_state(String::new);
     let wish_form_email = use_state(String::new);
     let wish_submitting = use_state(|| false);
-    let wish_submit_msg = use_state(|| None::<String>);
-    let wish_submit_err = use_state(|| None::<String>);
+    let wish_song_error = use_state(|| None::<String>);
+    let wish_message_error = use_state(|| None::<String>);
+    let toast = use_toast();
 
     // Hero search state
     let hero_query = use_state(String::new);
@@ -481,8 +484,9 @@ pub fn music_library_page() -> Html {
         let wish_form_nickname = wish_form_nickname.clone();
         let wish_form_email = wish_form_email.clone();
         let wish_submitting = wish_submitting.clone();
-        let wish_submit_msg = wish_submit_msg.clone();
-        let wish_submit_err = wish_submit_err.clone();
+        let wish_song_error = wish_song_error.clone();
+        let wish_message_error = wish_message_error.clone();
+        let toast = toast.clone();
         let wish_page = wish_page.clone();
         let wish_refresh_tick = wish_refresh_tick.clone();
         Callback::from(move |e: SubmitEvent| {
@@ -492,7 +496,11 @@ pub fn music_library_page() -> Html {
             let message = (*wish_form_message).trim().to_string();
             let nickname = (*wish_form_nickname).trim().to_string();
             let email = (*wish_form_email).trim().to_string();
-            if song.is_empty() || message.is_empty() {
+            let song_missing = song.is_empty();
+            let message_missing = message.is_empty();
+            wish_song_error.set(song_missing.then(|| wish_t::SONG_NAME_REQUIRED.to_string()));
+            wish_message_error.set(message_missing.then(|| wish_t::MESSAGE_REQUIRED.to_string()));
+            if song_missing || message_missing {
                 return;
             }
             let artist_opt = if artist.is_empty() { None } else { Some(artist.clone()) };
@@ -500,8 +508,7 @@ pub fn music_library_page() -> Html {
             let email_opt = if email.is_empty() { None } else { Some(email.clone()) };
             let frontend_page_url = web_sys::window().and_then(|w| w.location().href().ok());
             let wish_submitting = wish_submitting.clone();
-            let wish_submit_msg = wish_submit_msg.clone();
-            let wish_submit_err = wish_submit_err.clone();
+            let toast = toast.clone();
             let wish_page = wish_page.clone();
             let wish_refresh_tick = wish_refresh_tick.clone();
             let wish_form_song = wish_form_song.clone();
@@ -509,8 +516,6 @@ pub fn music_library_page() -> Html {
             let wish_form_message = wish_form_message.clone();
             let wish_form_email = wish_form_email.clone();
             wish_submitting.set(true);
-            wish_submit_msg.set(None);
-            wish_submit_err.set(None);
             wasm_bindgen_futures::spawn_local(async move {
                 match api::submit_music_wish(
                     &song,
@@ -523,7 +528,7 @@ pub fn music_library_page() -> Html {
                 .await
                 {
                     Ok(_) => {
-                        wish_submit_msg.set(Some(wish_t::SUBMIT_SUCCESS.to_string()));
+                        toast.success(wish_t::SUBMIT_SUCCESS);
                         wish_form_song.set(String::new());
                         wish_form_artist.set(String::new());
                         wish_form_message.set(String::new());
@@ -532,7 +537,7 @@ pub fn music_library_page() -> Html {
                         wish_refresh_tick.set(*wish_refresh_tick + 1);
                     },
                     Err(e) => {
-                        wish_submit_err.set(Some(e));
+                        toast.error(e);
                     },
                 }
                 wish_submitting.set(false);
@@ -703,65 +708,66 @@ pub fn music_library_page() -> Html {
                 <form id="music-wish-form" onsubmit={on_wish_submit}
                     class="bg-[var(--surface)] liquid-glass border border-[var(--border)] rounded-xl p-5 mb-8 \
                            grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-xs text-[var(--muted)] mb-1">{wish_t::SONG_NAME_LABEL}</label>
-                        <input type="text" placeholder={wish_t::SONG_NAME_PLACEHOLDER}
+                    <FormField
+                        label={wish_t::SONG_NAME_LABEL}
+                        id="wish-song"
+                        required=true
+                        error={(*wish_song_error).clone()}
+                    >
+                        <TextInput
+                            id="wish-song"
                             value={(*wish_form_song).clone()}
-                            oninput={let s = wish_form_song.clone(); Callback::from(move |e: InputEvent| {
-                                let input: web_sys::HtmlInputElement = e.target_unchecked_into();
-                                s.set(input.value());
-                            })}
-                            class="w-full px-3 py-2 rounded-lg bg-[var(--surface-alt)] border border-[var(--border)] \
-                                   text-[var(--text)] text-sm focus:outline-none focus:border-[var(--primary)]"
-                            required=true />
-                    </div>
-                    <div>
-                        <label class="block text-xs text-[var(--muted)] mb-1">{wish_t::ARTIST_LABEL}</label>
-                        <input type="text" placeholder={wish_t::ARTIST_PLACEHOLDER}
+                            placeholder={wish_t::SONG_NAME_PLACEHOLDER}
+                            invalid={wish_song_error.is_some()}
+                            on_change={let s = wish_form_song.clone(); Callback::from(move |v| s.set(v))}
+                        />
+                    </FormField>
+                    <FormField label={wish_t::ARTIST_LABEL} id="wish-artist">
+                        <TextInput
+                            id="wish-artist"
                             value={(*wish_form_artist).clone()}
-                            oninput={let s = wish_form_artist.clone(); Callback::from(move |e: InputEvent| {
-                                let input: web_sys::HtmlInputElement = e.target_unchecked_into();
-                                s.set(input.value());
-                            })}
-                            class="w-full px-3 py-2 rounded-lg bg-[var(--surface-alt)] border border-[var(--border)] \
-                                   text-[var(--text)] text-sm focus:outline-none focus:border-[var(--primary)]" />
-                    </div>
+                            placeholder={wish_t::ARTIST_PLACEHOLDER}
+                            on_change={let s = wish_form_artist.clone(); Callback::from(move |v| s.set(v))}
+                        />
+                    </FormField>
                     <div class="sm:col-span-2">
-                        <label class="block text-xs text-[var(--muted)] mb-1">{wish_t::MESSAGE_LABEL}</label>
-                        <textarea placeholder={wish_t::MESSAGE_PLACEHOLDER}
-                            value={(*wish_form_message).clone()}
-                            oninput={let s = wish_form_message.clone(); Callback::from(move |e: InputEvent| {
-                                let input: web_sys::HtmlTextAreaElement = e.target_unchecked_into();
-                                s.set(input.value());
-                            })}
-                            rows="3"
-                            class="w-full px-3 py-2 rounded-lg bg-[var(--surface-alt)] border border-[var(--border)] \
-                                   text-[var(--text)] text-sm focus:outline-none focus:border-[var(--primary)] resize-none"
-                            required=true />
+                        <FormField
+                            label={wish_t::MESSAGE_LABEL}
+                            id="wish-message"
+                            required=true
+                            error={(*wish_message_error).clone()}
+                        >
+                            <TextArea
+                                id="wish-message"
+                                value={(*wish_form_message).clone()}
+                                placeholder={wish_t::MESSAGE_PLACEHOLDER}
+                                rows={3}
+                                invalid={wish_message_error.is_some()}
+                                on_change={let s = wish_form_message.clone(); Callback::from(move |v| s.set(v))}
+                            />
+                        </FormField>
                     </div>
-                    <div>
-                        <label class="block text-xs text-[var(--muted)] mb-1">{wish_t::NICKNAME_LABEL}</label>
-                        <input type="text" placeholder={wish_t::NICKNAME_PLACEHOLDER}
+                    <FormField label={wish_t::NICKNAME_LABEL} id="wish-nickname">
+                        <TextInput
+                            id="wish-nickname"
                             value={(*wish_form_nickname).clone()}
-                            oninput={let s = wish_form_nickname.clone(); Callback::from(move |e: InputEvent| {
-                                let input: web_sys::HtmlInputElement = e.target_unchecked_into();
-                                s.set(input.value());
-                            })}
-                            class="w-full px-3 py-2 rounded-lg bg-[var(--surface-alt)] border border-[var(--border)] \
-                                   text-[var(--text)] text-sm focus:outline-none focus:border-[var(--primary)]" />
-                    </div>
-                    <div>
-                        <label class="block text-xs text-[var(--muted)] mb-1">{wish_t::EMAIL_LABEL}</label>
-                        <input type="email" placeholder={wish_t::EMAIL_PLACEHOLDER}
+                            placeholder={wish_t::NICKNAME_PLACEHOLDER}
+                            on_change={let s = wish_form_nickname.clone(); Callback::from(move |v| s.set(v))}
+                        />
+                    </FormField>
+                    <FormField
+                        label={wish_t::EMAIL_LABEL}
+                        id="wish-email"
+                        hint={wish_t::EMAIL_HELP_TEXT}
+                    >
+                        <TextInput
+                            id="wish-email"
+                            kind="email"
                             value={(*wish_form_email).clone()}
-                            oninput={let s = wish_form_email.clone(); Callback::from(move |e: InputEvent| {
-                                let input: web_sys::HtmlInputElement = e.target_unchecked_into();
-                                s.set(input.value());
-                            })}
-                            class="w-full px-3 py-2 rounded-lg bg-[var(--surface-alt)] border border-[var(--border)] \
-                                   text-[var(--text)] text-sm focus:outline-none focus:border-[var(--primary)]" />
-                        <p class="mt-1 text-[11px] text-[var(--muted)]">{wish_t::EMAIL_HELP_TEXT}</p>
-                    </div>
+                            placeholder={wish_t::EMAIL_PLACEHOLDER}
+                            on_change={let s = wish_form_email.clone(); Callback::from(move |v| s.set(v))}
+                        />
+                    </FormField>
                     <div class="flex items-end">
                         <button type="submit" disabled={*wish_submitting}
                             class="px-5 py-2 rounded-lg bg-[var(--primary)] text-white text-sm font-medium \
@@ -769,12 +775,6 @@ pub fn music_library_page() -> Html {
                             {if *wish_submitting { wish_t::SUBMITTING } else { wish_t::SUBMIT_BTN }}
                         </button>
                     </div>
-                    if let Some(ref msg) = *wish_submit_msg {
-                        <div class="sm:col-span-2 text-green-500 text-sm">{msg}</div>
-                    }
-                    if let Some(ref err) = *wish_submit_err {
-                        <div class="sm:col-span-2 text-red-500 text-sm">{err}</div>
-                    }
                 </form>
 
                 // Refresh button

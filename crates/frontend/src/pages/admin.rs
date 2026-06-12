@@ -49,8 +49,10 @@ use crate::{
     },
     components::{
         loading_spinner::{LoadingSpinner, SpinnerSize},
+        modal::ConfirmModal,
         pagination::Pagination,
         search_box::SearchBox,
+        toast::use_toast,
         view_trend_chart::ViewTrendChart,
     },
     pages::llm_access_shared::{confirm_destructive, format_ms},
@@ -448,6 +450,8 @@ fn copy_icon_button(text: &str) -> Html {
 #[function_component(AdminPage)]
 pub fn admin_page() -> Html {
     let load_error = use_state(|| None::<String>);
+    let pending_delete_published = use_state(|| None::<String>);
+    let toast = use_toast();
     let view_config = use_state(|| None::<ViewAnalyticsConfig>);
     let comment_config = use_state(|| None::<CommentRuntimeConfig>);
     let music_config = use_state(|| None::<MusicRuntimeConfig>);
@@ -1566,18 +1570,30 @@ pub fn admin_page() -> Html {
         })
     };
 
+    // Pilot for the ConfirmModal kit: the delete flow first parks the id in
+    // `pending_delete_published`, the modal confirms, then the action runs.
     let delete_published_action = {
+        let pending_delete_published = pending_delete_published.clone();
+        Callback::from(move |comment_id: String| {
+            pending_delete_published.set(Some(comment_id));
+        })
+    };
+
+    let confirm_delete_published = {
         let load_error = load_error.clone();
         let refresh_all = refresh_all.clone();
         let selected_published = selected_published.clone();
-        Callback::from(move |comment_id: String| {
-            if !confirm_destructive("确认删除这条已发布评论？此操作不可撤销。")
-            {
+        let pending_delete_published = pending_delete_published.clone();
+        let toast = toast.clone();
+        Callback::from(move |_: ()| {
+            let Some(comment_id) = (*pending_delete_published).clone() else {
                 return;
-            }
+            };
+            pending_delete_published.set(None);
             let load_error = load_error.clone();
             let refresh_all = refresh_all.clone();
             let selected_published = selected_published.clone();
+            let toast = toast.clone();
             let request = AdminTaskActionRequest {
                 operator: Some("admin-ui".to_string()),
                 admin_note: None,
@@ -1585,6 +1601,7 @@ pub fn admin_page() -> Html {
             wasm_bindgen_futures::spawn_local(async move {
                 match delete_admin_published_comment(&comment_id, &request).await {
                     Ok(_) => {
+                        toast.success("已删除该评论");
                         if selected_published
                             .as_ref()
                             .as_ref()
@@ -2320,6 +2337,17 @@ pub fn admin_page() -> Html {
 
     html! {
         <main class={classes!("container", "py-8")}>
+            <ConfirmModal
+                open={pending_delete_published.is_some()}
+                title="删除已发布评论"
+                message="确认删除这条已发布评论？此操作不可撤销。"
+                danger=true
+                on_confirm={confirm_delete_published}
+                on_cancel={{
+                    let pending_delete_published = pending_delete_published.clone();
+                    Callback::from(move |_| pending_delete_published.set(None))
+                }}
+            />
             <section class={classes!(
                 "bg-[var(--surface)]",
                 "border",

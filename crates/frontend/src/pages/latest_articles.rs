@@ -10,11 +10,8 @@ use yew_router::prelude::{use_location, Link};
 use crate::{
     api::{self, ArticleRequestItem},
     components::{
-        article_card::ArticleCard,
-        loading_spinner::{LoadingSpinner, SpinnerSize},
-        pagination::Pagination,
-        raw_html::RawHtml,
-        scroll_to_top_button::ScrollToTopButton,
+        article_card::ArticleCard, pagination::Pagination, raw_html::RawHtml,
+        scroll_to_top_button::ScrollToTopButton, skeleton::SkeletonCard,
     },
     i18n::current::{article_request as ar_t, latest_articles_page as t},
     router::Route,
@@ -728,8 +725,11 @@ pub fn latest_articles_page() -> Html {
                 {
                     if *loading {
                         html! {
-                            <div class={classes!("flex", "items-center", "justify-center", "min-h-[400px]")}>
-                                <LoadingSpinner size={SpinnerSize::Large} />
+                            <div class={classes!(
+                                "grid", "grid-cols-1", "md:grid-cols-2", "lg:grid-cols-3",
+                                "gap-6", "mb-12"
+                            )}>
+                                { for (0..6).map(|_| html! { <SkeletonCard /> }) }
                             </div>
                         }
                     } else if articles.is_empty() {
