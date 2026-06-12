@@ -1,7 +1,7 @@
 //! Postgres control-plane repository for `llm-access`.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     env,
     sync::Arc,
     time::{Duration, Instant},
@@ -13,7 +13,7 @@ use llm_access_core::{
     store::{
         self as core_store, AdminKiroBalanceView, AdminKiroCacheView, AdminProxyBinding,
         AdminProxyConfig, AdminProxyEndpointCheck, AuthenticatedKey, CodexRateLimitStatus,
-        ControlStore,
+        ControlStore, KeyUsageRollupDelta,
     },
     usage::UsageEvent,
 };
@@ -97,7 +97,7 @@ impl PgRow {
 }
 
 const POSTGRES_MAX_BIND_PARAMS: usize = 65_535;
-const USAGE_ROLLUP_PARAMS_PER_ROW: usize = 8;
+const USAGE_ROLLUP_PARAMS_PER_ROW: usize = 9;
 const USAGE_ROLLUP_BATCH_ROW_LIMIT: usize = POSTGRES_MAX_BIND_PARAMS / USAGE_ROLLUP_PARAMS_PER_ROW;
 const CODEX_STATUS_CACHE_TTL: Duration = Duration::from_secs(10);
 
@@ -129,48 +129,19 @@ struct KiroRouteCandidateRow {
     auth_proxy_config_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-struct UsageRollupDelta {
-    input_uncached_tokens: i64,
-    input_cached_tokens: i64,
-    output_tokens: i64,
-    billable_tokens: i64,
-    credit_total: f64,
-    credit_missing_events: i64,
-    last_used_at_ms: i64,
-}
-
-fn aggregate_usage_rollup_deltas<'a>(
-    events: &'a [UsageEvent],
-) -> anyhow::Result<Vec<(&'a str, UsageRollupDelta)>> {
-    let mut deltas = HashMap::<&'a str, UsageRollupDelta>::with_capacity(events.len());
+fn aggregate_usage_rollup_deltas(
+    events: &[UsageEvent],
+) -> anyhow::Result<Vec<KeyUsageRollupDelta>> {
+    let mut deltas = BTreeMap::<String, KeyUsageRollupDelta>::new();
     for event in events {
-        let credit_delta = event
-            .credit_usage
-            .as_deref()
-            .unwrap_or("0")
-            .parse::<f64>()
-            .context("parse usage event credit usage")?;
-        let delta = deltas.entry(event.key_id.as_str()).or_default();
-        delta.input_uncached_tokens = delta
-            .input_uncached_tokens
-            .saturating_add(event.input_uncached_tokens.max(0));
-        delta.input_cached_tokens = delta
-            .input_cached_tokens
-            .saturating_add(event.input_cached_tokens.max(0));
-        delta.output_tokens = delta
-            .output_tokens
-            .saturating_add(event.output_tokens.max(0));
-        delta.billable_tokens = delta
-            .billable_tokens
-            .saturating_add(event.billable_tokens.max(0));
-        delta.credit_total += credit_delta;
-        delta.credit_missing_events = delta
-            .credit_missing_events
-            .saturating_add(event.credit_usage_missing as i64);
-        delta.last_used_at_ms = delta.last_used_at_ms.max(event.created_at_ms);
+        let delta = KeyUsageRollupDelta::from_usage_event(event)
+            .context("aggregate postgres usage rollup delta")?;
+        deltas
+            .entry(delta.key_id.clone())
+            .and_modify(|current| current.add_assign(&delta))
+            .or_insert(delta);
     }
-    Ok(deltas.into_iter().collect())
+    Ok(deltas.into_values().collect())
 }
 
 #[derive(Clone)]
@@ -672,10 +643,12 @@ mod tests {
             AdminCodexAccountPageQuery, AdminCodexAccountSortMode, AdminCodexAccountStore,
             AdminConfigStore, AdminKeyStore, AdminKiroAccountStore, AdminPageRequest,
             AdminProxyConfigPatch, AdminProxyStore, AdminReviewQueueStore, ControlStore,
-            NewAdminProxyConfig, NewPublicAccountContributionRequest, PublicSubmissionStore,
-            PublicUsageStore, UsageEventSink,
+            KeyUsageRollupDelta, NewAdminProxyConfig, NewPublicAccountContributionRequest,
+            PublicSubmissionStore, PublicUsageStore, UsageEventSink, UsageRollupBatch,
+            UsageRollupBatchSink,
         },
     };
+    use serde::Serialize;
     use sha2::{Digest, Sha256};
 
     use super::SqlxClient;
@@ -718,6 +691,7 @@ mod tests {
                     llm_usage_segment_events,
                     llm_usage_segment_key_rollups,
                     llm_usage_segments,
+                    llm_key_usage_rollup_applied_batches,
                     llm_key_usage_rollups,
                     llm_key_route_config,
                     llm_keys CASCADE",
@@ -772,6 +746,27 @@ mod tests {
             .context("insert postgres test key config rows")?;
         client.close().await;
         Ok(())
+    }
+
+    #[derive(Serialize)]
+    struct TestLegacyJsonUsageRollupBatch<'a> {
+        batch_id: &'a str,
+        source_node_id: &'a Option<String>,
+        created_at_ms: i64,
+        source_event_count: u64,
+        deltas: &'a [KeyUsageRollupDelta],
+    }
+
+    fn legacy_json_rollup_digest(batch: &UsageRollupBatch) -> String {
+        let legacy = TestLegacyJsonUsageRollupBatch {
+            batch_id: &batch.batch_id,
+            source_node_id: &batch.source_node_id,
+            created_at_ms: batch.created_at_ms,
+            source_event_count: batch.source_event_count,
+            deltas: &batch.deltas,
+        };
+        let bytes = serde_json::to_vec(&legacy).expect("encode legacy digest");
+        format!("{:x}", Sha256::digest(bytes))
     }
 
     async fn seed_test_kiro_key_page_fixture(database_url: &str) -> anyhow::Result<()> {
@@ -1005,6 +1000,232 @@ mod tests {
             .expect("lookup result")
             .expect("key must exist");
         assert_eq!(key.key_name, "external");
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_applies_rollup_batches_idempotently() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        seed_test_key_bundle(&database_url)
+            .await
+            .expect("seed postgres test key bundle");
+        let repo = super::PostgresControlRepository::connect(&database_url, None)
+            .await
+            .expect("connect postgres repository");
+        let batch = UsageRollupBatch {
+            batch_id: "rollup-idempotent-1".to_string(),
+            source_node_id: Some("node-a".to_string()),
+            created_at_ms: 1_700_000_000_010,
+            source_event_count: 2,
+            deltas: vec![KeyUsageRollupDelta {
+                key_id: "key-1".to_string(),
+                input_uncached_tokens: 3,
+                input_cached_tokens: 5,
+                output_tokens: 7,
+                billable_tokens: 12,
+                credit_total: 0.25,
+                credit_missing_events: 1,
+                last_used_at_ms: Some(1_700_000_000_020),
+            }],
+            last_used_at_ms_counts: Vec::new(),
+        };
+
+        let first = repo
+            .apply_usage_rollup_batches(std::slice::from_ref(&batch))
+            .await
+            .expect("first rollup batch apply");
+        let replay = repo
+            .apply_usage_rollup_batches(std::slice::from_ref(&batch))
+            .await
+            .expect("rollup batch replay");
+
+        assert_eq!(first.applied_batch_count, 1);
+        assert_eq!(first.already_applied_batch_count, 0);
+        assert_eq!(replay.applied_batch_count, 0);
+        assert_eq!(replay.already_applied_batch_count, 1);
+
+        let client = SqlxClient::connect(&database_url)
+            .await
+            .expect("connect postgres test database");
+        let row = client
+            .query_one(
+                "SELECT input_uncached_tokens, input_cached_tokens, output_tokens,
+                        billable_tokens, credit_total, credit_missing_events,
+                        last_used_at_ms
+                 FROM llm_key_usage_rollups
+                 WHERE key_id = 'key-1'",
+                &[],
+            )
+            .await
+            .expect("load usage rollup row");
+        assert_eq!(row.get::<_, i64>("input_uncached_tokens"), 3);
+        assert_eq!(row.get::<_, i64>("input_cached_tokens"), 5);
+        assert_eq!(row.get::<_, i64>("output_tokens"), 7);
+        assert_eq!(row.get::<_, i64>("billable_tokens"), 12);
+        assert_eq!(row.get::<_, String>("credit_total"), "0.25");
+        assert_eq!(row.get::<_, i64>("credit_missing_events"), 1);
+        assert_eq!(row.get::<_, Option<i64>>("last_used_at_ms"), Some(1_700_000_000_020));
+        client.close().await;
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_accepts_legacy_json_rollup_marker_digest() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        seed_test_key_bundle(&database_url)
+            .await
+            .expect("seed postgres test key bundle");
+        let repo = super::PostgresControlRepository::connect(&database_url, None)
+            .await
+            .expect("connect postgres repository");
+        let batch = UsageRollupBatch {
+            batch_id: "rollup-legacy-digest-1".to_string(),
+            source_node_id: Some("node-a".to_string()),
+            created_at_ms: 1_700_000_000_010,
+            source_event_count: 2,
+            deltas: vec![KeyUsageRollupDelta {
+                key_id: "key-1".to_string(),
+                input_uncached_tokens: 3,
+                input_cached_tokens: 5,
+                output_tokens: 7,
+                billable_tokens: 12,
+                credit_total: 0.25,
+                credit_missing_events: 1,
+                last_used_at_ms: Some(1_700_000_000_020),
+            }],
+            last_used_at_ms_counts: Vec::new(),
+        };
+        let legacy_digest = legacy_json_rollup_digest(&batch);
+        let client = SqlxClient::connect(&database_url)
+            .await
+            .expect("connect postgres test database");
+        let source_event_count = i64::try_from(batch.source_event_count).expect("count fits");
+        let delta_count = i64::try_from(batch.deltas.len()).expect("delta count fits");
+        client
+            .execute(
+                "INSERT INTO llm_key_usage_rollup_applied_batches (
+                    batch_id, digest, source_node_id, source_event_count,
+                    delta_count, applied_at_ms
+                 ) VALUES ($1, $2, $3, $4, $5, $6)",
+                &[
+                    &batch.batch_id,
+                    &legacy_digest,
+                    &batch.source_node_id,
+                    &source_event_count,
+                    &delta_count,
+                    &1_700_000_000_030_i64,
+                ],
+            )
+            .await
+            .expect("insert legacy digest marker");
+
+        let report = repo
+            .apply_usage_rollup_batches(std::slice::from_ref(&batch))
+            .await
+            .expect("replay legacy digest marker");
+
+        assert_eq!(report.applied_batch_count, 0);
+        assert_eq!(report.already_applied_batch_count, 1);
+        let row = client
+            .query_one(
+                "SELECT digest FROM llm_key_usage_rollup_applied_batches WHERE batch_id = $1",
+                &[&batch.batch_id],
+            )
+            .await
+            .expect("load upgraded marker");
+        let upgraded_digest: String = row.get("digest");
+        assert_ne!(upgraded_digest, legacy_digest);
+        let row = client
+            .query_one(
+                "SELECT input_uncached_tokens, input_cached_tokens, output_tokens,
+                        billable_tokens, credit_total, credit_missing_events,
+                        last_used_at_ms
+                 FROM llm_key_usage_rollups
+                 WHERE key_id = 'key-1'",
+                &[],
+            )
+            .await
+            .expect("load unchanged usage rollup row");
+        assert_eq!(row.get::<_, i64>("input_uncached_tokens"), 0);
+        assert_eq!(row.get::<_, i64>("input_cached_tokens"), 0);
+        assert_eq!(row.get::<_, i64>("output_tokens"), 0);
+        assert_eq!(row.get::<_, i64>("billable_tokens"), 0);
+        assert_eq!(row.get::<_, String>("credit_total"), "0");
+        assert_eq!(row.get::<_, i64>("credit_missing_events"), 0);
+        assert_eq!(row.get::<_, Option<i64>>("last_used_at_ms"), None);
+        client.close().await;
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_prunes_old_rollup_batch_markers() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        let repo = super::PostgresControlRepository::connect(&database_url, None)
+            .await
+            .expect("connect postgres repository");
+        let client = SqlxClient::connect(&database_url)
+            .await
+            .expect("connect postgres test database");
+        let source_node_id: Option<String> = None;
+        let source_event_count = 1_i64;
+        let delta_count = 1_i64;
+        for (batch_id, applied_at_ms) in [
+            ("rollup-prune-old", 1_700_000_000_000_i64),
+            ("rollup-prune-new", 1_700_000_010_000_i64),
+        ] {
+            let digest = format!("{batch_id}-digest");
+            client
+                .execute(
+                    "INSERT INTO llm_key_usage_rollup_applied_batches (
+                        batch_id, digest, source_node_id, source_event_count,
+                        delta_count, applied_at_ms
+                     ) VALUES ($1, $2, $3, $4, $5, $6)",
+                    &[
+                        &batch_id,
+                        &digest,
+                        &source_node_id,
+                        &source_event_count,
+                        &delta_count,
+                        &applied_at_ms,
+                    ],
+                )
+                .await
+                .expect("insert marker");
+        }
+
+        let deleted = repo
+            .prune_usage_rollup_batch_markers(1_700_000_005_000)
+            .await
+            .expect("prune old markers");
+
+        assert_eq!(deleted, 1);
+        let row = client
+            .query_one(
+                "SELECT count(*)::BIGINT AS count FROM llm_key_usage_rollup_applied_batches",
+                &[],
+            )
+            .await
+            .expect("count remaining markers");
+        assert_eq!(row.get::<_, i64>("count"), 1);
+        client.close().await;
     }
 
     #[tokio::test]
@@ -1433,15 +1654,15 @@ mod tests {
 
         let deltas = super::aggregate_usage_rollup_deltas(&events).expect("aggregate usage deltas");
         assert_eq!(deltas.len(), 1);
-        let (key_id, delta) = deltas[0];
-        assert_eq!(key_id, "key-1");
+        let delta = &deltas[0];
+        assert_eq!(delta.key_id, "key-1");
         assert_eq!(delta.input_uncached_tokens, 14);
         assert_eq!(delta.input_cached_tokens, 1);
         assert_eq!(delta.output_tokens, 6);
         assert_eq!(delta.billable_tokens, 20);
         assert_eq!(delta.credit_total, 1.75);
         assert_eq!(delta.credit_missing_events, 1);
-        assert_eq!(delta.last_used_at_ms, 25);
+        assert_eq!(delta.last_used_at_ms, Some(25));
     }
 
     #[tokio::test]
@@ -1530,6 +1751,94 @@ mod tests {
         assert_eq!(key.usage_credit_total, 1.75);
         assert_eq!(key.usage_credit_missing_events, 0);
         assert_eq!(key.last_used_at_ms, Some(1_700_000_000_101));
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_skips_missing_key_usage_rollups() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        seed_test_key_bundle(&database_url)
+            .await
+            .expect("seed postgres test key bundle");
+        let repo = super::PostgresControlRepository::connect(&database_url, None)
+            .await
+            .expect("connect postgres repository");
+
+        let existing = llm_access_core::usage::UsageEvent {
+            event_id: "evt-existing".to_string(),
+            created_at_ms: 1_700_000_000_001,
+            provider_type: ProviderType::Codex,
+            protocol_family: ProtocolFamily::OpenAi,
+            key_id: "key-1".to_string(),
+            key_name: "external".to_string(),
+            account_name: Some("acct-1".to_string()),
+            account_group_id_at_event: None,
+            route_strategy_at_event: Some(RouteStrategy::Auto),
+            request_method: "POST".to_string(),
+            request_url: "https://ackingliu.top/v1/chat/completions".to_string(),
+            endpoint: "/v1/chat/completions".to_string(),
+            model: Some("gpt-4.1".to_string()),
+            mapped_model: Some("gpt-4.1".to_string()),
+            status_code: 200,
+            request_body_bytes: Some(256),
+            quota_failover_count: 0,
+            routing_diagnostics_json: None,
+            input_uncached_tokens: 10,
+            input_cached_tokens: 2,
+            output_tokens: 5,
+            billable_tokens: 15,
+            credit_usage: Some("1.25".to_string()),
+            usage_missing: false,
+            credit_usage_missing: false,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: None,
+            client_request_body_json: None,
+            upstream_request_body_json: None,
+            full_request_json: None,
+            error_message: None,
+            error_body: None,
+            response_body: None,
+            timing: llm_access_core::usage::UsageTiming {
+                latency_ms: Some(120),
+                ..Default::default()
+            },
+            stream: llm_access_core::usage::UsageStreamDetails::default(),
+        };
+        let missing = llm_access_core::usage::UsageEvent {
+            event_id: "evt-missing".to_string(),
+            key_id: "deleted-key".to_string(),
+            key_name: "deleted".to_string(),
+            input_uncached_tokens: 99,
+            input_cached_tokens: 1,
+            output_tokens: 7,
+            billable_tokens: 107,
+            credit_usage: Some("9.99".to_string()),
+            ..existing.clone()
+        };
+
+        repo.append_usage_events(&[existing, missing])
+            .await
+            .expect("append usage events with a missing key");
+
+        let key = repo
+            .get_public_usage_key_by_secret("secret")
+            .await
+            .expect("load usage lookup key")
+            .expect("public usage lookup row");
+        assert_eq!(key.usage_input_uncached_tokens, 10);
+        assert_eq!(key.usage_input_cached_tokens, 2);
+        assert_eq!(key.usage_output_tokens, 5);
+        assert_eq!(key.usage_billable_tokens, 15);
+        assert_eq!(key.usage_credit_total, 1.25);
+        assert_eq!(key.last_used_at_ms, Some(1_700_000_000_001));
     }
 
     #[tokio::test]

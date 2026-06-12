@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Lightweight gate: figure out which crates the change affects. Pure
   # stdlib (tomllib + git diff) -- no cargo, no submodules, no compilation --
@@ -70,7 +74,7 @@ jobs:
   test:
     name: test
     needs: changes
-    if: github.event_name == 'pull_request' && needs.changes.outputs.mode != 'none'
+    if: needs.changes.outputs.mode != 'none'
     runs-on: ubuntu-latest
 
     steps:
@@ -121,6 +125,63 @@ jobs:
             echo "LD_LIBRARY_PATH=$lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           } >> "$GITHUB_ENV"
 
+      - name: Check Neon CI credentials
+        if: >-
+          (needs.changes.outputs.mode == 'all' ||
+            contains(needs.changes.outputs.test_crates, 'llm-access-store')) &&
+          (github.event_name != 'pull_request' ||
+            github.event.pull_request.head.repo.fork == false)
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$NEON_API_KEY"
+          test -n "$NEON_PROJECT_ID"
+
+      - name: Explain skipped Neon CI branch
+        if: >-
+          (needs.changes.outputs.mode == 'all' ||
+            contains(needs.changes.outputs.test_crates, 'llm-access-store')) &&
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.fork == true
+        run: |
+          echo "Skipping Neon-backed Postgres tests for fork pull request; repository secrets are unavailable."
+
+      - name: Compute Neon branch expiration
+        if: >-
+          (needs.changes.outputs.mode == 'all' ||
+            contains(needs.changes.outputs.test_crates, 'llm-access-store')) &&
+          (github.event_name != 'pull_request' ||
+            github.event.pull_request.head.repo.fork == false)
+        run: echo "NEON_BRANCH_EXPIRES_AT=$(date -u --date '+1 day' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
+
+      - name: Create Neon test branch
+        id: create-neon-branch
+        if: >-
+          (needs.changes.outputs.mode == 'all' ||
+            contains(needs.changes.outputs.test_crates, 'llm-access-store')) &&
+          (github.event_name != 'pull_request' ||
+            github.event.pull_request.head.repo.fork == false)
+        uses: neondatabase/create-branch-action@v6
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+          branch_name: ci-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          database: llm_access_control
+          role: llm_access_owner
+          expires_at: ${{ env.NEON_BRANCH_EXPIRES_AT }}
+
+      - name: Export Neon test database URL
+        if: steps.create-neon-branch.outputs.branch_id != ''
+        env:
+          DB_URL: ${{ steps.create-neon-branch.outputs.db_url }}
+        run: |
+          set -euo pipefail
+          test -n "$DB_URL"
+          echo "::add-mask::$DB_URL"
+          printf 'TEST_POSTGRES_URL=%s\n' "$DB_URL" >> "$GITHUB_ENV"
+
       - name: Run tests for affected crates
         # subset -> test the changed crates + their dependents; all -> the
         # full workspace. See scripts/ci_affected.py.
@@ -128,3 +189,11 @@ jobs:
           MODE: ${{ needs.changes.outputs.mode }}
           CRATES: ${{ needs.changes.outputs.test_crates }}
         run: python3 scripts/ci_affected.py run-test
+
+      - name: Delete Neon test branch
+        if: always() && steps.create-neon-branch.outputs.branch_id != ''
+        uses: neondatabase/delete-branch-action@v3
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+          branch: ${{ steps.create-neon-branch.outputs.branch_id }}

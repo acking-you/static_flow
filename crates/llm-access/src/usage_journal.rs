@@ -104,7 +104,7 @@ impl UsageEventSink for JournalUsageEventSink {
             self.write_failures_total.fetch_add(1, Ordering::Relaxed);
             tracing::error!(
                 count = events.len(),
-                "dropped llm access usage journal events after rollup persistence: {err:#}"
+                "dropped llm access usage journal events: {err:#}"
             );
         }
         Ok(())
@@ -199,7 +199,7 @@ impl JournalUsageWriter for DiskJournalUsageWriter {
     }
 }
 
-fn journal_config_from_runtime(
+pub(crate) fn journal_config_from_runtime(
     root_dir: PathBuf,
     runtime_config: &AdminRuntimeConfig,
 ) -> JournalConfig {

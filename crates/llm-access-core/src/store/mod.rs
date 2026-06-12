@@ -40,7 +40,7 @@ pub use empty::{
     EmptyAdminKeyStore, EmptyAdminKiroAccountStore, EmptyAdminProxyStore,
     EmptyAdminReviewQueueStore, EmptyProviderRouteStore, EmptyPublicAccessStore,
     EmptyPublicCommunityStore, EmptyPublicStatusStore, EmptyPublicSubmissionStore,
-    EmptyPublicUsageStore, EmptyUsageAnalyticsStore, NoopUsageEventSink,
+    EmptyPublicUsageStore, EmptyUsageAnalyticsStore, NoopUsageEventSink, NoopUsageRollupBatchSink,
 };
 pub use groups::{
     AdminAccountGroup, AdminAccountGroupOption, AdminAccountGroupPatch, AdminAccountGroupsPage,
@@ -76,12 +76,15 @@ pub use traits::{
     AdminKiroAccountStore, AdminProxyStore, AdminReviewQueueStore, ControlStore,
     ProviderRouteStore, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
     PublicSubmissionStore, PublicUsageStore, UsageAnalyticsStore, UsageEventSink,
+    UsageRollupBatchSink,
 };
 pub use usage::{
-    AdminLegacyKiroProxyMigration, KiroLatencyRankingQuery, KiroLatencyRankingRow,
-    KiroLatencyRankingSnapshot, UsageChartPoint, UsageEventPage, UsageEventQuery, UsageEventSource,
-    UsageEventStatusKind, UsageEventTotals, UsageFilterOptions, UsageMetricsDimensionView,
-    UsageMetricsQuery, UsageMetricsSnapshot, UsageMetricsStatusCodeView, UsageMetricsSummary,
+    AdminLegacyKiroProxyMigration, KeyUsageRollupDelta, KeyUsageRollupLastUsedCount,
+    KiroLatencyRankingQuery, KiroLatencyRankingRow, KiroLatencyRankingSnapshot, UsageChartPoint,
+    UsageEventPage, UsageEventQuery, UsageEventSource, UsageEventStatusKind, UsageEventTotals,
+    UsageFilterOptions, UsageMetricsDimensionView, UsageMetricsQuery, UsageMetricsSnapshot,
+    UsageMetricsStatusCodeView, UsageMetricsSummary, UsageRollupApplyReport, UsageRollupBatch,
+    UsageRollupDigestMismatch,
 };
 
 /// Default public auth-cache TTL used when no runtime config row exists yet.

@@ -43,7 +43,7 @@ use super::{
     usage::{
         AdminLegacyKiroProxyMigration, KiroLatencyRankingQuery, KiroLatencyRankingSnapshot,
         UsageChartPoint, UsageEventPage, UsageEventQuery, UsageFilterOptions, UsageMetricsQuery,
-        UsageMetricsSnapshot,
+        UsageMetricsSnapshot, UsageRollupApplyReport, UsageRollupBatch,
     },
 };
 use crate::usage::UsageEvent;
@@ -801,5 +801,23 @@ pub trait UsageEventSink: Send + Sync {
     /// Persist an owned batch of usage events.
     async fn append_usage_events_owned(&self, events: Vec<UsageEvent>) -> anyhow::Result<()> {
         self.append_usage_events(&events).await
+    }
+}
+
+/// Idempotent control-plane usage rollup sink used by the billing/quota path.
+#[async_trait]
+pub trait UsageRollupBatchSink: Send + Sync {
+    /// Apply durable rollup batches exactly once by `batch_id`.
+    async fn apply_usage_rollup_batches(
+        &self,
+        batches: &[UsageRollupBatch],
+    ) -> anyhow::Result<UsageRollupApplyReport>;
+
+    /// Prune idempotency markers older than the guaranteed replay horizon.
+    async fn prune_usage_rollup_batch_markers(
+        &self,
+        _applied_before_ms: i64,
+    ) -> anyhow::Result<u64> {
+        Ok(0)
     }
 }

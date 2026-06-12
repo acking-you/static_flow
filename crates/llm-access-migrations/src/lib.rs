@@ -110,8 +110,13 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
     },
     SqlMigration {
         version: 25,
+        name: "usage_rollup_applied_batches",
+        sql: include_str!("../migrations/postgres/0025_usage_rollup_applied_batches.sql"),
+    },
+    SqlMigration {
+        version: 26,
         name: "kiro_pool_strategy",
-        sql: include_str!("../migrations/postgres/0025_kiro_pool_strategy.sql"),
+        sql: include_str!("../migrations/postgres/0026_kiro_pool_strategy.sql"),
     },
 ];
 
