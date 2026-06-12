@@ -139,6 +139,7 @@ pub(crate) struct CachedKiroRequestSnapshot {
     pub account_group_id_at_event: Option<String>,
     pub selected_account_names: Vec<String>,
     pub use_all_active_accounts: bool,
+    /// Defaulted so Valkey payloads written before pool routing still decode.
     #[serde(default = "default_kiro_pool_strategy")]
     pub preferred_pool_strategy: String,
     pub request_max_concurrency: Option<u64>,
@@ -238,6 +239,7 @@ pub(crate) struct CachedKiroAccountView {
     pub request_min_start_interval_ms: Option<u64>,
     pub disabled: bool,
     pub minimum_remaining_credits_before_block: f64,
+    /// Defaulted so Valkey payloads written before pool routing still decode.
     #[serde(default = "default_kiro_pool_strategy")]
     pub pool_strategy: String,
     pub api_region: String,

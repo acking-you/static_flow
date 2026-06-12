@@ -6496,16 +6496,29 @@ async fn create_or_replace_kiro_account(state: HttpState, auth: KiroAuthRecord) 
         Ok(account) => account,
         Err(response) => return response.into_response(),
     };
+    let account_name = account.name.clone();
     match state
         .admin_kiro_account_store
         .create_admin_kiro_account(account)
         .await
     {
         Ok(account) => {
+            tracing::info!(
+                account_name = %account.name,
+                auth_method = %account.auth_method,
+                source = account.source.as_deref().unwrap_or("unknown"),
+                region = account.region.as_deref().unwrap_or(""),
+                pool_strategy = %account.pool_strategy,
+                disabled = account.disabled,
+                "saved kiro account"
+            );
             sync_kiro_status_after_account_update(&state, &account).await;
             Json(account).into_response()
         },
-        Err(_) => internal_error("Failed to save Kiro account").into_response(),
+        Err(err) => {
+            tracing::warn!(account_name = %account_name, "failed to save kiro account: {err:#}");
+            internal_error("Failed to save Kiro account").into_response()
+        },
     }
 }
 

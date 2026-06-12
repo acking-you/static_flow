@@ -28,8 +28,13 @@ PROFILE_STATE_KEY = "api.codewhisperer.profile"
 DEFAULT_SQLITE = Path.home() / ".local/share/kiro-cli/data.sqlite3"
 DEFAULT_MINIMUM_REMAINING_CREDITS = 10.0
 DEFAULT_KIRO_REGION = "us-east-1"
-REQUIRED_PROXY_REGION = "us"
-US_PROXY_NAME_RE = re.compile(r"(^|[-_])us([_-]|\d|$)|homeus|aws_us|dmit-us|do-us", re.I)
+# Single source of truth for proxy-region support: maps a proxy region to the
+# proxy-name pattern used to select matching proxy configs. Kiro regions are
+# mapped onto these proxy regions by prefix in `proxy_region_for_kiro_region`.
+PROXY_REGION_NAME_PATTERNS: dict[str, re.Pattern[str]] = {
+    "us": re.compile(r"(^|[-_])us([_-]|\d|$)|homeus|aws_us|dmit-us|do-us", re.I),
+}
+KIRO_REGION_PREFIX_TO_PROXY_REGION = {"us-": "us"}
 
 
 @dataclass
@@ -237,22 +242,20 @@ def fetch_active_proxies(base_url: str, token: str | None) -> list[dict[str, Any
     ]
 
 
-def is_us_proxy(proxy: dict[str, Any]) -> bool:
-    return bool(US_PROXY_NAME_RE.search(str(proxy.get("name") or "")))
-
-
 def filter_required_region_proxies(
     proxies: list[dict[str, Any]], required_region: str
 ) -> list[dict[str, Any]]:
-    if required_region.lower() != REQUIRED_PROXY_REGION:
+    pattern = PROXY_REGION_NAME_PATTERNS.get(required_region.lower())
+    if pattern is None:
         raise ValueError(f"unsupported required proxy region: {required_region}")
-    return [proxy for proxy in proxies if is_us_proxy(proxy)]
+    return [proxy for proxy in proxies if pattern.search(str(proxy.get("name") or ""))]
 
 
 def proxy_region_for_kiro_region(region: str) -> str | None:
     value = region.strip().lower()
-    if value.startswith("us-"):
-        return "us"
+    for prefix, proxy_region in KIRO_REGION_PREFIX_TO_PROXY_REGION.items():
+        if value.startswith(prefix):
+            return proxy_region
     return None
 
 

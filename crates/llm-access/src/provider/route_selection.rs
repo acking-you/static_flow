@@ -336,6 +336,18 @@ pub async fn hydrate_kiro_route_for_dispatch(
 ///
 /// All routes in `routes` must come from the same key route config, so their
 /// preferred pool strategy is expected to be identical.
+///
+/// Ordering contract, highest precedence first:
+/// 1. proxy health: candidates whose proxy is in cooldown sort last (global, so
+///    a throttled preferred-pool route never shadows a healthy fallback);
+/// 2. fewest bound affinity sessions (global; only active when `session_counts`
+///    is supplied for new-session balancing, inert otherwise);
+/// 3. pool rank: the key's preferred pool first, then the remaining pools in
+///    `KIRO_POOL_STRATEGIES` order;
+/// 4. pool-specific tiebreakers — `balanced`: latency band, last-started,
+///    remaining credits desc; `credit_first`: remaining credits desc, latency
+///    band, last-started;
+/// 5. account name, as the deterministic final tiebreaker.
 pub fn selection_ordered_kiro_routes<'a>(
     routes: &'a [ProviderKiroRoute],
     scheduler: &KiroRequestScheduler,
@@ -526,22 +538,23 @@ pub fn selection_ordered_kiro_routes<'a>(
                 by_identity
             })
     });
-    let known_remaining_max_by_pool =
-        routes
-            .iter()
-            .fold(HashMap::new(), |mut max_by_pool, route| {
-                if let Some(remaining) = route
-                    .cached_remaining_credits
-                    .filter(|value| value.is_finite())
-                {
-                    let pool_strategy = route_pool_strategy(route);
-                    max_by_pool
-                        .entry(pool_strategy)
-                        .and_modify(|current: &mut f64| *current = current.max(remaining))
-                        .or_insert(remaining);
-                }
-                max_by_pool
-            });
+    // Best known balance inside the credit_first pool. Routes without a
+    // balance snapshot in that pool substitute this value so a fresh or
+    // just-refreshed account ties with the best candidate instead of being
+    // starved behind nearly-exhausted accounts with known balances.
+    let credit_first_known_max = routes
+        .iter()
+        .filter(|route| {
+            route_pool_strategy(route) == llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST
+        })
+        .filter_map(|route| {
+            route
+                .cached_remaining_credits
+                .filter(|value| value.is_finite())
+        })
+        .fold(None, |max: Option<f64>, remaining| {
+            Some(max.map_or(remaining, |current| current.max(remaining)))
+        });
     let preferred_pool_strategy = route_preferred_pool_strategy(&routes[0]);
     debug_assert!(
         routes
@@ -554,14 +567,15 @@ pub fn selection_ordered_kiro_routes<'a>(
         .map(|route| {
             let proxy_key = proxy_cooldown_key_for_route(route);
             let pool_strategy = route_pool_strategy(route);
+            // Unknown balances: credit_first ties with the pool's best known
+            // balance (anti-starvation, see above); balanced keeps the legacy
+            // -1.0 so routes without a snapshot stay last on this tiebreaker.
             let remaining_sort = route
                 .cached_remaining_credits
                 .filter(|value| value.is_finite())
                 .unwrap_or_else(|| {
                     if pool_strategy == llm_access_core::store::KIRO_POOL_STRATEGY_CREDIT_FIRST {
-                        *known_remaining_max_by_pool
-                            .get(pool_strategy)
-                            .unwrap_or(&0.0)
+                        credit_first_known_max.unwrap_or(0.0)
                     } else {
                         -1.0
                     }
