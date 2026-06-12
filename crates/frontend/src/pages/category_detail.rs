@@ -8,10 +8,7 @@ use yew::prelude::*;
 use yew_router::prelude::Link;
 
 use crate::{
-    components::{
-        loading_spinner::{LoadingSpinner, SpinnerSize},
-        scroll_to_top_button::ScrollToTopButton,
-    },
+    components::{scroll_to_top_button::ScrollToTopButton, skeleton::SkeletonCard},
     i18n::{current::category_detail_page as t, fill_one},
     pages::posts::group_articles_by_year,
     router::Route,
@@ -235,13 +232,8 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
                 {
                     if *loading {
                         html! {
-                            <div class={classes!(
-                                "flex",
-                                "min-h-[40vh]",
-                                "items-center",
-                                "justify-center"
-                            )}>
-                                <LoadingSpinner size={SpinnerSize::Large} />
+                            <div class={classes!("grid", "grid-cols-1", "md:grid-cols-2", "lg:grid-cols-3", "gap-6")}>
+                                { for (0..6).map(|_| html! { <SkeletonCard /> }) }
                             </div>
                         }
                     } else if grouped_by_year.is_empty() {

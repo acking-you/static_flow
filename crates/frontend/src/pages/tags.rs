@@ -2,10 +2,7 @@ use yew::prelude::*;
 use yew_router::prelude::Link;
 
 use crate::{
-    components::{
-        loading_spinner::{LoadingSpinner, SpinnerSize},
-        scroll_to_top_button::ScrollToTopButton,
-    },
+    components::{scroll_to_top_button::ScrollToTopButton, skeleton::SkeletonCard},
     i18n::{current::tags_page as t, fill_one, fill_two},
     router::Route,
 };
@@ -145,13 +142,8 @@ pub fn tags_page() -> Html {
                     {
                         if *loading {
                             html! {
-                                <div class={classes!(
-                                    "flex",
-                                    "items-center",
-                                    "justify-center",
-                                    "min-h-[400px]"
-                                )}>
-                                    <LoadingSpinner size={SpinnerSize::Large} />
+                                <div class={classes!("grid", "grid-cols-1", "md:grid-cols-2", "lg:grid-cols-3", "gap-6")}>
+                                    { for (0..6).map(|_| html! { <SkeletonCard /> }) }
                                 </div>
                             }
                         } else if tag_stats.is_empty() {

@@ -22,6 +22,8 @@ use crate::{
         raw_html::RawHtml,
         reading_progress::ReadingProgress,
         scroll_to_top_button::ScrollToTopButton,
+        skeleton::SkeletonArticle,
+        toast::use_toast,
         toc_button::TocButton,
         tooltip::{TooltipIconButton, TooltipPosition},
         view_trend_chart::ViewTrendChart,
@@ -426,6 +428,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     let selection_comment_input = use_state(String::new);
     let selection_submit_loading = use_state(|| false);
     let selection_submit_feedback = use_state(|| None::<(bool, String)>);
+    let toast = use_toast();
 
     // Back to where user came from (non-article route) with robust fallback.
     let handle_back = {
@@ -856,6 +859,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         let selection_modal_open = selection_modal_open.clone();
         let selection_button_pos = selection_button_pos.clone();
         let comments_refresh_key = comments_refresh_key.clone();
+        let toast = toast.clone();
         Callback::from(move |_| {
             let Some(draft) = (*selection_draft).clone() else {
                 selection_submit_feedback
@@ -889,16 +893,17 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             let selection_draft = selection_draft.clone();
             let selection_button_pos = selection_button_pos.clone();
             let comments_refresh_key = comments_refresh_key.clone();
+            let toast = toast.clone();
 
             selection_submit_loading.set(true);
             selection_submit_feedback.set(None);
             wasm_bindgen_futures::spawn_local(async move {
                 match submit_article_comment(request).await {
                     Ok(resp) => {
-                        selection_submit_feedback.set(Some((
-                            true,
-                            format!("评论已提交，等待审核（任务 {}）。", resp.task_id),
-                        )));
+                        // The selection modal closes on success, so the
+                        // confirmation must outlive it as a toast.
+                        toast.success(format!("评论已提交，等待审核（任务 {}）。", resp.task_id));
+                        selection_submit_feedback.set(None);
                         selection_comment_input.set(String::new());
                         selection_modal_open.set(false);
                         selection_draft.set(None);
@@ -1554,8 +1559,8 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     }
 
     let loading_view = html! {
-        <div class={classes!("flex", "min-h-[50vh]", "items-center", "justify-center")}>
-            <LoadingSpinner size={SpinnerSize::Large} />
+        <div class={classes!("mx-auto", "w-full", "max-w-[850px]", "px-4", "py-8")}>
+            <SkeletonArticle />
         </div>
     };
 

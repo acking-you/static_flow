@@ -11,7 +11,7 @@ use crate::{
     api::{self, ArticleRequestItem},
     components::{
         article_card::ArticleCard, pagination::Pagination, raw_html::RawHtml,
-        scroll_to_top_button::ScrollToTopButton, skeleton::SkeletonCard,
+        scroll_to_top_button::ScrollToTopButton, skeleton::SkeletonCard, toast::use_toast,
     },
     i18n::current::{article_request as ar_t, latest_articles_page as t},
     router::Route,
@@ -355,6 +355,7 @@ pub fn latest_articles_page() -> Html {
     let ar_form_email = use_state(String::new);
     let ar_submitting = use_state(|| false);
     let ar_submit_msg = use_state(|| None::<String>);
+    let toast = use_toast();
     let ar_submit_err = use_state(|| None::<String>);
     let ar_refresh_seq = use_state(|| 0_u32);
     let ar_parent_request = use_state(|| None::<ArticleRequestItem>);
@@ -609,6 +610,7 @@ pub fn latest_articles_page() -> Html {
         let ar_form_email = ar_form_email.clone();
         let ar_submitting = ar_submitting.clone();
         let ar_submit_msg = ar_submit_msg.clone();
+        let toast = toast.clone();
         let ar_submit_err = ar_submit_err.clone();
         let ar_page = ar_page.clone();
         let ar_parent_request = ar_parent_request.clone();
@@ -622,6 +624,7 @@ pub fn latest_articles_page() -> Html {
             let parent_id = (*ar_parent_request).as_ref().map(|r| r.request_id.clone());
             let ar_submitting = ar_submitting.clone();
             let ar_submit_msg = ar_submit_msg.clone();
+            let toast = toast.clone();
             let ar_submit_err = ar_submit_err.clone();
             let ar_form_url = ar_form_url.clone();
             let ar_form_title = ar_form_title.clone();
@@ -649,7 +652,8 @@ pub fn latest_articles_page() -> Html {
                 .await
                 {
                     Ok(_) => {
-                        ar_submit_msg.set(Some(ar_t::SUBMIT_SUCCESS.to_string()));
+                        toast.success(ar_t::SUBMIT_SUCCESS);
+                        ar_submit_msg.set(None);
                         ar_form_url.set(String::new());
                         ar_form_title.set(String::new());
                         ar_form_message.set(String::new());
