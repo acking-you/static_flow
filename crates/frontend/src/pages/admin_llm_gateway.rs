@@ -8896,8 +8896,9 @@ pub fn admin_llm_gateway_page() -> Html {
                                                 <button
                                                     class={classes!("btn-terminal", "btn-terminal-danger")}
                                                     onclick={Callback::from(move |_| on_delete.emit(acc_name_for_delete.clone()))}
+                                                    disabled={account_busy}
                                                 >
-                                                    { "删除" }
+                                                    { if account_busy { "..." } else { "删除" } }
                                                 </button>
                                             </div>
                                         </div>

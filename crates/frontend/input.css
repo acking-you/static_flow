@@ -121,6 +121,9 @@
 
 [data-theme=dark],
 [theme=dark] {
+  /* Theme the OS-rendered form internals (select popups, date pickers, number
+     spinners) and scrollbars to match the dark UI. */
+  color-scheme: dark;
   --bg: #1b1a1f;
   --text: #f4f4f5;
   --muted: #b3b9c6;
@@ -1623,6 +1626,7 @@ a:hover {
 }
 
 :root {
+  color-scheme: light;
   --article-layout-width: 850px;
   --article-main-current-width: var(--article-layout-width);
   --article-center-gap-global: 1rem;

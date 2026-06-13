@@ -2622,7 +2622,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                             }) }
                         </tbody>
                     </table>
-                    if filtered_accounts.is_empty() && !*loading {
+                    if filtered_accounts.is_empty() && !*loading && load_error.is_none() {
                         <EmptyState icon="fa-user-slash" title="No accounts to show." hint="Import access tokens or session JSON above, then refresh." />
                     }
                 </div>
@@ -2922,7 +2922,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                 }) }
                             </tbody>
                         </table>
-                        if proxy_configs.is_empty() && !*loading {
+                        if proxy_configs.is_empty() && !*loading && load_error.is_none() {
                             <EmptyState icon="fa-server" title="No proxy configs yet." hint="Create a proxy on the left to bind it to upstream accounts." />
                         }
                     </div>
@@ -3048,7 +3048,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                 </div>
 
                 <div class={classes!("grid", "gap-4", "2xl:grid-cols-2")}>
-                    if account_groups.is_empty() && !*loading {
+                    if account_groups.is_empty() && !*loading && load_error.is_none() {
                         <EmptyState icon="fa-layer-group" title="No account groups yet." hint="Create a group above to route keys to a subset of accounts." />
                     } else if filtered_account_groups.is_empty() {
                         <EmptyState icon="fa-magnifying-glass" title="No matching account groups." hint="Adjust the search to see more groups." />
@@ -3460,7 +3460,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                 }) }
                             </tbody>
                         </table>
-                        if keys.is_empty() && !*loading {
+                        if keys.is_empty() && !*loading && load_error.is_none() {
                             <EmptyState icon="fa-key" title="No API keys yet." hint="Create a key above to issue access for /gpt2api/login." />
                         }
                     </div>
@@ -3937,7 +3937,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                             </tr>
                         </thead>
                         <tbody>
-                            if usage.is_empty() && !*loading {
+                            if usage.is_empty() && !*loading && load_error.is_none() {
                                 <tr>
                                     <td colspan="15">
                                         <EmptyState icon="fa-inbox" title="No usage events for this filter" hint="Adjust the search, key filter, or limit to see more events." />
