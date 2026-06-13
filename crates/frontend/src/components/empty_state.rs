@@ -8,10 +8,6 @@
 use yew::prelude::*;
 
 /// Props for [`EmptyState`].
-#[allow(
-    dead_code,
-    reason = "Consumed by the in-progress admin empty/error-state rework; the kit ships complete."
-)]
 #[derive(Properties, PartialEq)]
 pub struct EmptyStateProps {
     /// FontAwesome icon class (e.g. `fa-inbox`, `fa-triangle-exclamation`).
@@ -31,10 +27,6 @@ pub struct EmptyStateProps {
 }
 
 /// A centered icon + title + hint + optional action block.
-#[allow(
-    dead_code,
-    reason = "Consumed by the in-progress admin empty/error-state rework; the kit ships complete."
-)]
 #[function_component(EmptyState)]
 pub fn empty_state(props: &EmptyStateProps) -> Html {
     let tone_class = (props.tone == "error").then_some("admin-empty--error");

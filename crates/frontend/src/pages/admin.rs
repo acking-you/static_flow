@@ -38,6 +38,7 @@ use crate::{
     components::{
         copy_button::CopyButton,
         drawer::Drawer,
+        empty_state::EmptyState,
         loading_spinner::{LoadingSpinner, SpinnerSize},
         modal::ConfirmModal,
         pagination::Pagination,
@@ -3856,9 +3857,9 @@ pub fn admin_page() -> Html {
                             </div>
                         }
                         if music_wishes.is_empty() {
-                            <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No wishes yet." }</p>
+                            <EmptyState icon="fa-music" title="暂无点歌" hint="还没有用户提交点歌请求。" />
                         } else if filtered_music_wishes.is_empty() {
-                            <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "当前过滤条件下没有匹配项。" }</p>
+                            <EmptyState icon="fa-filter" title="没有匹配项" hint="当前过滤条件下没有匹配的点歌，试试调整搜索。" />
                         } else {
                             <div class={classes!("overflow-x-auto")}>
                                 <table class={classes!("w-full", "text-sm")}>
@@ -3931,9 +3932,9 @@ pub fn admin_page() -> Html {
                             </div>
                         }
                         if article_requests.is_empty() {
-                            <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No article requests yet." }</p>
+                            <EmptyState icon="fa-file-lines" title="暂无投稿请求" hint="还没有用户提交文章投稿请求。" />
                         } else if filtered_article_requests.is_empty() {
-                            <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "当前过滤条件下没有匹配项。" }</p>
+                            <EmptyState icon="fa-filter" title="没有匹配项" hint="当前过滤条件下没有匹配的请求，试试调整搜索。" />
                         } else {
                             <div class={classes!("overflow-x-auto")}>
                                 <table class={classes!("w-full", "text-sm")}>
