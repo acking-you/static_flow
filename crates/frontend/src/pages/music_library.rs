@@ -8,6 +8,7 @@ use crate::{
         icons::{Icon, IconName},
         image_with_loading::ImageWithLoading,
         pagination::Pagination,
+        skeleton::SkeletonSongCard,
         toast::use_toast,
     },
     i18n::current::{header as header_t, music_wish as wish_t},
@@ -646,8 +647,8 @@ pub fn music_library_page() -> Html {
 
             if *display_mode == LibraryDisplayMode::RandomRecommended {
                 if *random_loading {
-                    <div class="flex justify-center py-20">
-                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--primary)]" />
+                    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5">
+                        { for (0..RANDOM_RECOMMEND_LIMIT).map(|_| html! { <SkeletonSongCard /> }) }
                     </div>
                 } else if let Some(ref err) = *random_error {
                     <div class="text-center py-20 text-red-500">
@@ -669,8 +670,8 @@ pub fn music_library_page() -> Html {
                 }
             } else {
                 if *loading {
-                    <div class="flex justify-center py-20">
-                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--primary)]" />
+                    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5">
+                        { for (0..PAGE_SIZE).map(|_| html! { <SkeletonSongCard /> }) }
                     </div>
                 } else if let Some(ref err) = *error {
                     <div class="text-center py-20 text-red-500">

@@ -44,13 +44,18 @@ pub struct Toast {
     pub kind: ToastKind,
     /// Already-localized message text.
     pub message: String,
+    /// True once the toast has begun its exit animation but is not yet removed.
+    pub leaving: bool,
 }
 
 /// Reducer actions for the toast stack.
 pub enum ToastAction {
     /// Append a toast (oldest is dropped beyond the stack cap).
     Push(ToastKind, String),
-    /// Remove a toast by id (timeout or manual close).
+    /// Mark a toast as leaving so it can play its exit animation before
+    /// removal.
+    StartLeave(u64),
+    /// Remove a toast by id (after the exit animation, or on overflow).
     Dismiss(u64),
 }
 
@@ -68,6 +73,8 @@ const TOAST_STACK_CAP: usize = 4;
 const TOAST_SUCCESS_MS: u32 = 4_000;
 /// Auto-dismiss delay for error toasts (longer: users must read these).
 const TOAST_ERROR_MS: u32 = 6_000;
+/// Window the exit animation gets to play before the node is actually removed.
+const TOAST_LEAVE_MS: u32 = 180;
 
 impl Reducible for ToastList {
     type Action = ToastAction;
@@ -80,11 +87,17 @@ impl Reducible for ToastList {
                     id: next.next_id,
                     kind,
                     message,
+                    leaving: false,
                 });
                 next.next_id += 1;
                 if next.items.len() > TOAST_STACK_CAP {
                     let overflow = next.items.len() - TOAST_STACK_CAP;
                     next.items.drain(..overflow);
+                }
+            },
+            ToastAction::StartLeave(id) => {
+                if let Some(toast) = next.items.iter_mut().find(|toast| toast.id == id) {
+                    toast.leaving = true;
                 }
             },
             ToastAction::Dismiss(id) => {
@@ -150,6 +163,10 @@ pub fn toast_provider(props: &ToastProviderProps) -> Html {
         let dispatcher = state.dispatcher();
         Callback::from(move |id: u64| dispatcher.dispatch(ToastAction::Dismiss(id)))
     };
+    let on_start_leave = {
+        let dispatcher = state.dispatcher();
+        Callback::from(move |id: u64| dispatcher.dispatch(ToastAction::StartLeave(id)))
+    };
     html! {
         <ContextProvider<ToastHandle> context={handle}>
             { props.children.clone() }
@@ -159,6 +176,7 @@ pub fn toast_provider(props: &ToastProviderProps) -> Html {
                         key={toast.id}
                         toast={toast.clone()}
                         on_dismiss={on_dismiss.clone()}
+                        on_start_leave={on_start_leave.clone()}
                     />
                 }) }
             </div>
@@ -171,6 +189,7 @@ pub fn toast_provider(props: &ToastProviderProps) -> Html {
 struct ToastItemProps {
     toast: Toast,
     on_dismiss: Callback<u64>,
+    on_start_leave: Callback<u64>,
 }
 
 /// A single toast row: kind icon, message, close button, auto-dismiss timer.
@@ -181,11 +200,25 @@ fn toast_item(props: &ToastItemProps) -> Html {
         ToastKind::Error => TOAST_ERROR_MS,
         ToastKind::Success | ToastKind::Info => TOAST_SUCCESS_MS,
     };
-    // Arms on mount; the hook cancels the timer when the item unmounts.
+    // Arms on mount; on timeout the toast begins its exit animation (it is not
+    // removed yet). The hook cancels the timer when the item unmounts.
     let _auto_timeout = {
-        let on_dismiss = props.on_dismiss.clone();
-        use_timeout(move || on_dismiss.emit(id), delay)
+        let on_start_leave = props.on_start_leave.clone();
+        use_timeout(move || on_start_leave.emit(id), delay)
     };
+
+    // Once the toast is marked leaving, wait out the exit animation and then
+    // actually remove it from the stack.
+    {
+        let on_dismiss = props.on_dismiss.clone();
+        let leaving = props.toast.leaving;
+        use_effect_with(leaving, move |leaving| {
+            let handle = leaving.then(|| {
+                gloo_timers::callback::Timeout::new(TOAST_LEAVE_MS, move || on_dismiss.emit(id))
+            });
+            move || drop(handle)
+        });
+    }
 
     let (kind_class, icon, role) = match props.toast.kind {
         ToastKind::Success => ("toast--success", "fa-circle-check", "status"),
@@ -193,11 +226,14 @@ fn toast_item(props: &ToastItemProps) -> Html {
         ToastKind::Info => ("toast--info", "fa-circle-info", "status"),
     };
     let on_close = {
-        let on_dismiss = props.on_dismiss.clone();
-        Callback::from(move |_| on_dismiss.emit(id))
+        let on_start_leave = props.on_start_leave.clone();
+        Callback::from(move |_| on_start_leave.emit(id))
     };
     html! {
-        <div class={classes!("toast", kind_class)} role={role}>
+        <div
+            class={classes!("toast", kind_class, props.toast.leaving.then_some("toast--leaving"))}
+            role={role}
+        >
             <i class={classes!("fas", icon, "toast-icon")} aria-hidden="true"></i>
             <span class={classes!("toast-message")}>{ &props.toast.message }</span>
             <button

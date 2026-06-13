@@ -64,12 +64,7 @@ pub fn article_card(props: &ArticleCardProps) -> Html {
             "flex",
             "flex-col",
             "h-full",
-            "transition-all",
-            "duration-300",
-            "ease-out",
-            "hover:shadow-[var(--shadow-8)]",
             "hover:border-[var(--primary)]",
-            "hover:-translate-y-2",
             "group"
         )}>
             {

@@ -320,6 +320,14 @@
     overflow: hidden;
   }
 
+  /* Reclaim horizontal room at phone widths (peer surfaces already cut their
+     padding at small sizes; the hero was the holdout). */
+  @media (max-width: 640px) {
+    .terminal-hero {
+      padding: 1.25rem;
+    }
+  }
+
   /* Terminal header bar */
   .terminal-header {
     display: flex;
@@ -4135,6 +4143,11 @@ button[aria-current="page"]:hover {
 .editorial-card {
   position: relative;
   will-change: transform, box-shadow, border-color;
+  /* Token motion shared with the stats/system cards on the same screen
+     (the lift itself lives in .editorial-card:hover, not a utility class). */
+  transition: transform var(--motion-fast) var(--ease-snap),
+    box-shadow var(--motion-base) var(--ease-spring),
+    border-color var(--motion-fast) var(--ease-snap);
 }
 
 .editorial-card--interactive {
@@ -4176,8 +4189,9 @@ button[aria-current="page"]:hover {
   z-index: 1;
 }
 
-/* Subtle glow on hover */
+/* Subtle glow + 2px lift on hover (matches the stats/system card vocabulary). */
 .editorial-card:hover {
+  transform: translateY(-2px);
   box-shadow: var(--shadow-8), 0 0 0 1px rgba(var(--primary-rgb), 0.2);
 }
 
@@ -4989,6 +5003,12 @@ html {
   opacity: 0.85;
 }
 
+.search-status-error {
+  color: #e11d48;
+  font-weight: 600;
+  opacity: 0.9;
+}
+
 /* Tech lines animation */
 .search-line-left,
 .search-line-right {
@@ -5632,6 +5652,18 @@ html {
   @keyframes toast-in {
     from { opacity: 0; transform: translateY(-6px); }
     to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Exit: mirror the spring entrance so toasts leave as gracefully as they
+     arrive (the JS keeps the node mounted for TOAST_LEAVE_MS while this runs). */
+  .toast--leaving {
+    animation: toast-out var(--motion-fast) var(--ease-spring) forwards;
+    pointer-events: none;
+  }
+
+  @keyframes toast-out {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0; transform: translateY(-6px); }
   }
 
   /* --- Modal (acrylic scrim + surface panel) --- */

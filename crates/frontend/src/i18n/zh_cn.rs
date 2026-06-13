@@ -162,6 +162,8 @@ pub mod search {
         "提示：你当前使用的是关键词检索。即使已有结果，也建议对比一下 Semantic 语义检索。";
     pub const SWITCH_TO_SEMANTIC: &str = "切换到 Semantic";
     pub const NO_RESULTS_TITLE: &str = "NO RESULTS FOUND";
+    pub const SEARCH_ERROR_STATUS: &str = "搜索出错，请稍后重试";
+    pub const SEARCH_FAILED_TITLE: &str = "SEARCH FAILED";
     pub const KEYWORD_EMPTY_CARD_DESC: &str =
         "关键词检索没命中，建议切换到 Semantic 语义检索，它更擅长找语义相关内容。";
     pub const SEMANTIC_EMPTY_CARD_DESC: &str = "未找到语义相关结果，可尝试更具体的关键词。";
@@ -249,6 +251,8 @@ pub mod tags_page {
     pub const ARTICLE_COUNT_TEMPLATE: &str = "{} 文章";
     pub const EMPTY: &str = "暂无标签";
     pub const CLOUD_ARIA: &str = "标签云";
+    pub const LOAD_ERROR_TITLE: &str = "加载失败";
+    pub const RETRY: &str = "重试";
 }
 
 pub mod posts_page {
@@ -263,6 +267,9 @@ pub mod posts_page {
     pub const FILTER_CLEAR: &str = "清除";
     pub const EMPTY: &str = "暂无文章可展示。";
 
+    pub const ERROR_TITLE: &str = "文章加载失败";
+    pub const ERROR_RETRY: &str = "重试";
+
     pub const YEAR_COUNT_TEMPLATE: &str = "{} 篇";
     pub const COLLAPSE: &str = "收起";
     pub const EXPAND_REMAINING_TEMPLATE: &str = "展开剩余 {} 篇";
@@ -276,6 +283,8 @@ pub mod latest_articles_page {
     pub const HERO_TITLE: &str = "最新文章";
     pub const HERO_DESC: &str = "甄选近期发布的内容，持续更新";
     pub const EMPTY: &str = "暂无文章";
+    pub const LOAD_ERROR_TITLE: &str = "Couldn't load articles";
+    pub const RETRY: &str = "Retry";
 }
 
 pub mod category_detail_page {
@@ -286,6 +295,8 @@ pub mod category_detail_page {
     pub const HIGHLIGHT_COUNT_TEMPLATE: &str = "{} 篇精选内容";
     pub const NO_CONTENT: &str = "暂无内容";
     pub const YEAR_POSTS_TEMPLATE: &str = "{} 篇文章";
+    pub const LOAD_ERROR_TITLE: &str = "加载失败";
+    pub const RETRY: &str = "重试";
 }
 
 pub mod tag_detail_page {
@@ -295,6 +306,8 @@ pub mod tag_detail_page {
     pub const ARCHIVE_BADGE: &str = "Tag Archive";
     pub const COLLECTED_COUNT_TEMPLATE: &str = "{} 篇收录文章";
     pub const NO_CONTENT: &str = "暂无文章";
+    pub const LOAD_ERROR_TITLE: &str = "加载失败";
+    pub const RETRY: &str = "重试";
 }
 
 pub mod article_detail_page {

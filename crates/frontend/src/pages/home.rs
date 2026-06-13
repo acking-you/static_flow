@@ -431,7 +431,7 @@ pub fn home_page() -> Html {
                                 <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
                                 <span class="terminal-content">{ t::CMD_SHOW_NAVIGATION }</span>
                             </div>
-                            <div class={classes!("flex", "flex-wrap", "gap-2", "mt-4", "ml-8")}>
+                            <div class={classes!("flex", "flex-wrap", "gap-2", "mt-4", "ml-2", "sm:ml-8")}>
                                 <Link<Route>
                                     to={Route::LatestArticles}
                                     classes={classes!("btn-terminal", "btn-terminal-primary")}
@@ -482,7 +482,7 @@ pub fn home_page() -> Html {
                                 <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
                                 <span class="terminal-content">{ t::CMD_SHOW_SOCIAL }</span>
                             </div>
-                            <div class={classes!("flex", "gap-3", "mt-3", "ml-8")}>
+                            <div class={classes!("flex", "gap-3", "mt-3", "ml-2", "sm:ml-8")}>
                                 <a
                                     href="https://github.com/ACking-you"
                                     target="_blank" rel="noopener noreferrer"

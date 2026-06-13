@@ -198,6 +198,12 @@ pub struct TooltipIconButtonProps {
 
     #[prop_or_default]
     pub disabled: bool,
+
+    /// Accessible name for the button; defaults to the tooltip text. The visual
+    /// tooltip is decorative (pointer-events-none) and not exposed to AT, so
+    /// the button needs its own name.
+    #[prop_or_default]
+    pub aria_label: Option<AttrValue>,
 }
 
 #[function_component(TooltipIconButton)]
@@ -212,7 +218,12 @@ pub fn tooltip_icon_button(props: &TooltipIconButtonProps) -> Html {
         onclick,
         class,
         disabled,
+        aria_label,
     } = props;
+
+    let label = aria_label
+        .clone()
+        .unwrap_or_else(|| AttrValue::from(tooltip.clone()));
 
     html! {
         <Tooltip text={tooltip.clone()} position={*position}>
@@ -222,6 +233,7 @@ pub fn tooltip_icon_button(props: &TooltipIconButtonProps) -> Html {
                 onclick={onclick}
                 class={class.clone()}
                 disabled={*disabled}
+                aria_label={label}
             />
         </Tooltip>
     }

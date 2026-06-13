@@ -11,12 +11,16 @@ use crate::{
 pub fn tags_page() -> Html {
     let tag_stats = use_state(Vec::<crate::api::TagInfo>::new);
     let loading = use_state(|| true);
+    let load_error = use_state(|| None::<String>);
+    let refresh_tick = use_state(|| 0_u64);
 
     {
         let tag_stats = tag_stats.clone();
         let loading = loading.clone();
-        use_effect_with((), move |_| {
+        let load_error = load_error.clone();
+        use_effect_with(*refresh_tick, move |_| {
             loading.set(true);
+            load_error.set(None);
             wasm_bindgen_futures::spawn_local(async move {
                 match crate::api::fetch_tags().await {
                     Ok(data) => {
@@ -25,6 +29,7 @@ pub fn tags_page() -> Html {
                     },
                     Err(e) => {
                         web_sys::console::error_1(&format!("Failed to fetch tags: {}", e).into());
+                        load_error.set(Some(e));
                         loading.set(false);
                     },
                 }
@@ -32,6 +37,13 @@ pub fn tags_page() -> Html {
             || ()
         });
     }
+
+    let on_retry = {
+        let refresh_tick = refresh_tick.clone();
+        Callback::from(move |_: MouseEvent| {
+            refresh_tick.set(*refresh_tick + 1);
+        })
+    };
 
     let total_tags = tag_stats.len();
     let total_articles: usize = tag_stats.iter().map(|t| t.count).sum();
@@ -144,6 +156,45 @@ pub fn tags_page() -> Html {
                             html! {
                                 <div class={classes!("grid", "grid-cols-1", "md:grid-cols-2", "lg:grid-cols-3", "gap-6")}>
                                     { for (0..6).map(|_| html! { <SkeletonCard /> }) }
+                                </div>
+                            }
+                        } else if let Some(err) = (*load_error).clone() {
+                            html! {
+                                <div class={classes!(
+                                    "empty-state",
+                                    "text-center",
+                                    "py-20",
+                                    "px-4",
+                                    "bg-[var(--surface)]",
+                                    "rounded-2xl",
+                                    "border",
+                                    "border-[var(--border)]"
+                                )}>
+                                    <i class={classes!(
+                                        "fas",
+                                        "fa-triangle-exclamation",
+                                        "text-6xl",
+                                        "text-amber-500",
+                                        "mb-6"
+                                    )}></i>
+                                    <p class={classes!(
+                                        "text-xl",
+                                        "font-semibold",
+                                        "text-[var(--text)]",
+                                        "mb-2"
+                                    )}>
+                                        { t::LOAD_ERROR_TITLE }
+                                    </p>
+                                    <p class={classes!("text-sm", "text-[var(--muted)]", "mb-6")}>
+                                        { err }
+                                    </p>
+                                    <button
+                                        onclick={on_retry.clone()}
+                                        class={classes!("btn-fluent-secondary")}
+                                    >
+                                        <i class={classes!("fas", "fa-rotate-right", "mr-1")}></i>
+                                        { t::RETRY }
+                                    </button>
                                 </div>
                             }
                         } else if tag_stats.is_empty() {

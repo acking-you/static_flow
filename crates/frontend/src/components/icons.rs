@@ -179,6 +179,10 @@ pub struct IconButtonProps {
 
     #[prop_or_default]
     pub disabled: bool,
+
+    /// Accessible name for this icon-only button (the SVG is decorative).
+    #[prop_or_default]
+    pub aria_label: AttrValue,
 }
 
 #[function_component(IconButton)]
@@ -189,6 +193,7 @@ pub fn icon_button(props: &IconButtonProps) -> Html {
         onclick,
         class,
         disabled,
+        aria_label,
     } = props;
 
     let button_class = classes!(
@@ -227,6 +232,7 @@ pub fn icon_button(props: &IconButtonProps) -> Html {
             onclick={onclick}
             disabled={*disabled}
             type="button"
+            aria-label={aria_label.clone()}
         >
             <Icon name={*icon} size={*size} />
         </button>

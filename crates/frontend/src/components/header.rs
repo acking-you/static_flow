@@ -275,7 +275,8 @@ pub fn header() -> Html {
                                         "hover:bg-[var(--surface-alt)]",
                                         "hover:scale-110"
                                     )}>
-                                        <i class={classes!("fas", *icon, "text-[1.1rem]")} title={*label}></i>
+                                        <i class={classes!("fas", *icon, "text-[1.1rem]")} title={*label} aria-hidden="true"></i>
+                                        <span class={classes!("sr-only")}>{ *label }</span>
                                     </Link<Route>>
                                 }
                             }) }
@@ -297,7 +298,8 @@ pub fn header() -> Html {
                                     "hover:scale-110"
                                 )}
                             >
-                                <i class={classes!("fas", "fa-image", "text-[1.1rem]")} title={t::IMAGE_LIBRARY_TITLE}></i>
+                                <i class={classes!("fas", "fa-image", "text-[1.1rem]")} title={t::IMAGE_LIBRARY_TITLE} aria-hidden="true"></i>
+                                <span class={classes!("sr-only")}>{ t::IMAGE_LIBRARY_TITLE }</span>
                             </Link<Route>>
                         </nav>
 

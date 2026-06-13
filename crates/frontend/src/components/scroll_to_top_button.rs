@@ -57,29 +57,35 @@ pub fn scroll_to_top_button() -> Html {
         }
     });
 
-    if *show {
-        html! {
-            <div class={classes!(
-                "fixed", "right-8", "bottom-8", "z-50",
-                "w-12", "h-12", "rounded-full",
-                "bg-[var(--primary)]", "text-white",
-                "flex", "items-center", "justify-center",
-                "shadow-[var(--shadow)]",
-                "transition-all", "duration-300", "ease-[var(--ease-spring)]",
-                "hover:bg-[var(--link)]", "hover:-translate-y-1", "hover:scale-105", "hover:shadow-[var(--shadow-lg)]",
-                "active:-translate-y-0.5", "active:scale-95",
-                "max-md:bottom-6", "max-md:right-6", "max-md:w-11", "max-md:h-11"
-            )}>
-                <TooltipIconButton
-                    icon={IconName::ArrowUp}
-                    tooltip={t::TOOLTIP}
-                    position={TooltipPosition::Top}
-                    onclick={onclick}
-                    size={20}
-                />
-            </div>
-        }
+    // Always mounted so the FAB can fade + scale in/out instead of hard-cutting
+    // when the node mounts/unmounts at the scroll threshold. Enter/exit ride
+    // opacity + scale (not translate-y) so they don't fight the hover lift.
+    let visibility = if *show {
+        "opacity-100 scale-100 pointer-events-auto"
     } else {
-        html! {}
+        "opacity-0 scale-90 pointer-events-none"
+    };
+
+    html! {
+        <div class={classes!(
+            "fixed", "right-8", "bottom-8", "z-50",
+            "w-12", "h-12", "rounded-full",
+            "bg-[var(--primary)]", "text-white",
+            "flex", "items-center", "justify-center",
+            "shadow-[var(--shadow)]",
+            "transition-all", "duration-[var(--motion-base)]", "ease-[var(--ease-spring)]",
+            "hover:bg-[var(--link)]", "hover:-translate-y-1", "hover:scale-105", "hover:shadow-[var(--shadow-lg)]",
+            "active:-translate-y-0.5", "active:scale-95",
+            "max-md:bottom-6", "max-md:right-6", "max-md:w-11", "max-md:h-11",
+            visibility
+        )}>
+            <TooltipIconButton
+                icon={IconName::ArrowUp}
+                tooltip={t::TOOLTIP}
+                position={TooltipPosition::Top}
+                onclick={onclick}
+                size={20}
+            />
+        </div>
     }
 }

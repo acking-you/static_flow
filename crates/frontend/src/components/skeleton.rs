@@ -71,6 +71,27 @@ pub fn skeleton_card() -> Html {
     }
 }
 
+/// Card-shaped skeleton matching the music song-card footprint: a square
+/// cover block and a compact footer with a title line and a meta line.
+#[function_component(SkeletonSongCard)]
+pub fn skeleton_song_card() -> Html {
+    html! {
+        <div
+            class={classes!(
+                "rounded-xl", "border", "border-[var(--border)]",
+                "bg-[var(--surface)]", "overflow-hidden"
+            )}
+            aria-hidden="true"
+        >
+            <div class={classes!("skeleton", "aspect-square", "w-full", "rounded-none")}></div>
+            <div class={classes!("p-3", "flex", "flex-col", "gap-2")}>
+                <div class={classes!("skeleton", "h-4", "w-4/5", "rounded")}></div>
+                <div class={classes!("skeleton", "h-3", "w-1/2", "rounded")}></div>
+            </div>
+        </div>
+    }
+}
+
 /// Reading-column skeleton for the article detail page: hero, title,
 /// meta row, and paragraph blocks sized to the article measure.
 #[function_component(SkeletonArticle)]

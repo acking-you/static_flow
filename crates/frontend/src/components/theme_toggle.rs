@@ -41,7 +41,15 @@ pub fn theme_toggle(props: &ThemeToggleProps) -> Html {
 
     let label = if *theme_state { t::SWITCH_TO_LIGHT } else { t::SWITCH_TO_DARK };
 
-    let icon_class = if *theme_state { "fa-sun" } else { "fa-moon" };
+    // Dark active -> reveal the sun (clicking goes to light); light active ->
+    // reveal the moon. The hidden glyph rotates + scales out while the visible
+    // one rotates + scales in, so the theme swap cross-fades on-token instead of
+    // hard-cutting one FontAwesome character to another.
+    let (sun_anim, moon_anim) = if *theme_state {
+        ("opacity-100 rotate-0 scale-100", "opacity-0 -rotate-90 scale-50")
+    } else {
+        ("opacity-0 rotate-90 scale-50", "opacity-100 rotate-0 scale-100")
+    };
 
     let button_class = classes!(
         "group",
@@ -51,7 +59,7 @@ pub fn theme_toggle(props: &ThemeToggleProps) -> Html {
         "bg-transparent",
         "hover:bg-[var(--surface-alt)]",
         "transition-all",
-        "duration-100",
+        "duration-[var(--motion-fast)]",
         "ease-[var(--ease-snap)]",
         class.clone()
     );
@@ -65,19 +73,26 @@ pub fn theme_toggle(props: &ThemeToggleProps) -> Html {
             title={label}
             aria-pressed={(*theme_state).to_string()}
         >
-            <i
-                class={classes!(
-                    "fas",
-                    icon_class,
-                    "fa-lg",
-                    "transition-all",
-                    "duration-100",
-                    "ease-[var(--ease-snap)]",
-                    "text-[var(--text)]",
-                    "group-hover:text-[var(--primary)]"
-                )}
-                aria-hidden="true"
-            ></i>
+            <span class="relative inline-flex h-[1.25em] w-[1.25em] items-center justify-center">
+                <i
+                    class={classes!(
+                        "fas", "fa-sun", "fa-lg", "absolute",
+                        "transition-all", "duration-[var(--motion-base)]", "ease-[var(--ease-spring)]",
+                        "text-[var(--text)]", "group-hover:text-[var(--primary)]",
+                        sun_anim
+                    )}
+                    aria-hidden="true"
+                ></i>
+                <i
+                    class={classes!(
+                        "fas", "fa-moon", "fa-lg", "absolute",
+                        "transition-all", "duration-[var(--motion-base)]", "ease-[var(--ease-spring)]",
+                        "text-[var(--text)]", "group-hover:text-[var(--primary)]",
+                        moon_anim
+                    )}
+                    aria-hidden="true"
+                ></i>
+            </span>
             <span class="sr-only">{ label }</span>
         </button>
     }

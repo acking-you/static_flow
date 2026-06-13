@@ -341,6 +341,8 @@ pub fn latest_articles_page() -> Html {
     let current_page = use_state(|| 1_usize);
     let total = use_state(|| 0_usize);
     let fetch_seq = use_mut_ref(|| 0_u64);
+    let load_error = use_state(|| None::<String>);
+    let grid_refresh_tick = use_state(|| 0_u32);
 
     // Article request state
     let ar_requests = use_state(Vec::<ArticleRequestItem>::new);
@@ -354,9 +356,7 @@ pub fn latest_articles_page() -> Html {
     let ar_form_nickname = use_state(String::new);
     let ar_form_email = use_state(String::new);
     let ar_submitting = use_state(|| false);
-    let ar_submit_msg = use_state(|| None::<String>);
     let toast = use_toast();
-    let ar_submit_err = use_state(|| None::<String>);
     let ar_refresh_seq = use_state(|| 0_u32);
     let ar_parent_request = use_state(|| None::<ArticleRequestItem>);
 
@@ -375,8 +375,10 @@ pub fn latest_articles_page() -> Html {
         let loading = loading.clone();
         let total = total.clone();
         let fetch_seq = fetch_seq.clone();
+        let load_error = load_error.clone();
         let page = *current_page;
-        use_effect_with(page, move |page| {
+        let tick = *grid_refresh_tick;
+        use_effect_with((page, tick), move |(page, _)| {
             let offset = (*page - 1) * PAGE_SIZE;
             let request_id = {
                 let mut seq = fetch_seq.borrow_mut();
@@ -384,10 +386,12 @@ pub fn latest_articles_page() -> Html {
                 *seq
             };
             loading.set(true);
+            load_error.set(None);
             let articles = articles.clone();
             let loading = loading.clone();
             let total = total.clone();
             let fetch_seq = fetch_seq.clone();
+            let load_error = load_error.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 match crate::api::fetch_articles(None, None, Some(PAGE_SIZE), Some(offset)).await {
                     Ok(data) => {
@@ -396,6 +400,7 @@ pub fn latest_articles_page() -> Html {
                         }
                         total.set(data.total);
                         articles.set(data.articles);
+                        load_error.set(None);
                     },
                     Err(e) => {
                         if *fetch_seq.borrow() != request_id {
@@ -404,6 +409,7 @@ pub fn latest_articles_page() -> Html {
                         web_sys::console::error_1(
                             &format!("Failed to fetch articles: {}", e).into(),
                         );
+                        load_error.set(Some(e.to_string()));
                     },
                 }
                 if *fetch_seq.borrow() != request_id {
@@ -609,9 +615,7 @@ pub fn latest_articles_page() -> Html {
         let ar_form_nickname = ar_form_nickname.clone();
         let ar_form_email = ar_form_email.clone();
         let ar_submitting = ar_submitting.clone();
-        let ar_submit_msg = ar_submit_msg.clone();
         let toast = toast.clone();
-        let ar_submit_err = ar_submit_err.clone();
         let ar_page = ar_page.clone();
         let ar_parent_request = ar_parent_request.clone();
         Callback::from(move |e: SubmitEvent| {
@@ -623,17 +627,13 @@ pub fn latest_articles_page() -> Html {
             let email = (*ar_form_email).clone();
             let parent_id = (*ar_parent_request).as_ref().map(|r| r.request_id.clone());
             let ar_submitting = ar_submitting.clone();
-            let ar_submit_msg = ar_submit_msg.clone();
             let toast = toast.clone();
-            let ar_submit_err = ar_submit_err.clone();
             let ar_form_url = ar_form_url.clone();
             let ar_form_title = ar_form_title.clone();
             let ar_form_message = ar_form_message.clone();
             let ar_page = ar_page.clone();
             let ar_parent_request = ar_parent_request.clone();
             ar_submitting.set(true);
-            ar_submit_msg.set(None);
-            ar_submit_err.set(None);
             let frontend_page_url = web_sys::window().and_then(|w| w.location().href().ok());
             wasm_bindgen_futures::spawn_local(async move {
                 let title_opt = if title.trim().is_empty() { None } else { Some(title.trim()) };
@@ -653,7 +653,6 @@ pub fn latest_articles_page() -> Html {
                 {
                     Ok(_) => {
                         toast.success(ar_t::SUBMIT_SUCCESS);
-                        ar_submit_msg.set(None);
                         ar_form_url.set(String::new());
                         ar_form_title.set(String::new());
                         ar_form_message.set(String::new());
@@ -661,7 +660,7 @@ pub fn latest_articles_page() -> Html {
                         ar_parent_request.set(None);
                     },
                     Err(err) => {
-                        ar_submit_err.set(Some(err));
+                        toast.error(&err);
                     },
                 }
                 ar_submitting.set(false);
@@ -734,6 +733,39 @@ pub fn latest_articles_page() -> Html {
                                 "gap-6", "mb-12"
                             )}>
                                 { for (0..6).map(|_| html! { <SkeletonCard /> }) }
+                            </div>
+                        }
+                    } else if let Some(err) = (*load_error).clone() {
+                        let on_retry = {
+                            let grid_refresh_tick = grid_refresh_tick.clone();
+                            Callback::from(move |_| grid_refresh_tick.set(*grid_refresh_tick + 1))
+                        };
+                        html! {
+                            <div class={classes!(
+                                "empty-state",
+                                "text-center",
+                                "py-20",
+                                "px-4",
+                                "bg-[var(--surface)]",
+                                "rounded-2xl",
+                                "border",
+                                "border-[var(--border)]"
+                            )}>
+                                <i class={classes!("fas", "fa-triangle-exclamation", "text-6xl", "text-amber-500", "mb-6")}></i>
+                                <p class={classes!("text-xl", "font-bold", "text-[var(--text)]", "mb-3")}>
+                                    { t::LOAD_ERROR_TITLE }
+                                </p>
+                                <p class={classes!("text-base", "text-[var(--muted)]", "mb-6")}>
+                                    { err }
+                                </p>
+                                <button
+                                    type="button"
+                                    class={classes!("btn-fluent-secondary", "!rounded-full")}
+                                    onclick={on_retry}
+                                >
+                                    <i class={classes!("fas", "fa-rotate-right", "mr-2")}></i>
+                                    { t::RETRY }
+                                </button>
                             </div>
                         }
                     } else if articles.is_empty() {
@@ -872,12 +904,6 @@ pub fn latest_articles_page() -> Html {
                                 {if *ar_submitting { ar_t::SUBMITTING } else { ar_t::SUBMIT_BTN }}
                             </button>
                         </div>
-                        if let Some(ref msg) = *ar_submit_msg {
-                            <div class="sm:col-span-2 text-green-500 text-sm">{msg}</div>
-                        }
-                        if let Some(ref err) = *ar_submit_err {
-                            <div class="sm:col-span-2 text-red-500 text-sm">{err}</div>
-                        }
                     </form>
 
                     // Refresh button
