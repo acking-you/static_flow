@@ -8,10 +8,6 @@
 use yew::prelude::*;
 
 /// Props for [`Drawer`].
-#[allow(
-    dead_code,
-    reason = "Consumed by the in-progress admin detail-panel rework; the kit ships complete."
-)]
 #[derive(Properties, PartialEq)]
 pub struct DrawerProps {
     /// Whether the drawer is visible.
@@ -29,10 +25,6 @@ pub struct DrawerProps {
 }
 
 /// A dismissible right-side panel.
-#[allow(
-    dead_code,
-    reason = "Consumed by the in-progress admin detail-panel rework; the kit ships complete."
-)]
 #[function_component(Drawer)]
 pub fn drawer(props: &DrawerProps) -> Html {
     let open_class = props.open.then_some("admin-drawer-root--open");

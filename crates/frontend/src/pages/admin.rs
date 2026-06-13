@@ -37,6 +37,7 @@ use crate::{
     },
     components::{
         copy_button::CopyButton,
+        drawer::Drawer,
         loading_spinner::{LoadingSpinner, SpinnerSize},
         modal::ConfirmModal,
         pagination::Pagination,
@@ -3164,18 +3165,28 @@ pub fn admin_page() -> Html {
                             }) }
                         </div>
 
-                        if let Some(task) = (*selected_task).clone() {
-                            <div class={classes!("mt-4", "rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-4")}>
-                                <h3 class={classes!("m-0", "mb-3", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
-                                    { format!("Task Detail: {}", task.task_id) }
-                                </h3>
+                        <Drawer
+                            open={selected_task.is_some()}
+                            on_close={{
+                                let selected_task_id = selected_task_id.clone();
+                                let selected_task = selected_task.clone();
+                                let selected_task_ai_output = selected_task_ai_output.clone();
+                                Callback::from(move |_| {
+                                    selected_task_id.set(None);
+                                    selected_task.set(None);
+                                    selected_task_ai_output.set(None);
+                                })
+                            }}
+                            title={(*selected_task).as_ref().map(|t| AttrValue::from(format!("任务详情 · {}", t.task_id))).unwrap_or_default()}
+                        >
+                            if let Some(task) = (*selected_task).clone() {
                                 <p class={classes!("m-0", "mb-2", "text-sm", "text-[var(--muted)]")}>
                                     { format!("status={} created={} updated={}", task.status, format_ms(task.created_at), format_ms(task.updated_at)) }
                                 </p>
                                 <label class={classes!("block", "text-sm", "mb-2")}>
                                     { "comment_text" }
                                     <textarea
-                                        class={classes!("mt-1", "w-full", "min-h-[120px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                        class={classes!("mt-1", "w-full", "min-h-[120px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                         value={task.comment_text.clone()}
                                         oninput={on_selected_task_comment_change}
                                     />
@@ -3183,7 +3194,7 @@ pub fn admin_page() -> Html {
                                 <label class={classes!("block", "text-sm", "mb-2")}>
                                     { "admin_note" }
                                     <textarea
-                                        class={classes!("mt-1", "w-full", "min-h-[90px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                        class={classes!("mt-1", "w-full", "min-h-[90px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                         value={task.admin_note.clone().unwrap_or_default()}
                                         oninput={on_selected_task_note_change}
                                     />
@@ -3255,8 +3266,8 @@ pub fn admin_page() -> Html {
                                         </ul>
                                     </div>
                                 }
-                            </div>
-                        }
+                            }
+                        </Drawer>
                     </>
                     }
                     <div class={classes!("mt-4")}>
@@ -3322,15 +3333,23 @@ pub fn admin_page() -> Html {
                             </table>
                         </div>
 
-                        if let Some(comment) = (*selected_published).clone() {
-                            <div class={classes!("mt-4", "rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-4")}>
-                                <h3 class={classes!("m-0", "mb-3", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
-                                    { format!("Published Detail: {}", comment.comment_id) }
-                                </h3>
+                        <Drawer
+                            open={selected_published.is_some()}
+                            on_close={{
+                                let selected_published_id = selected_published_id.clone();
+                                let selected_published = selected_published.clone();
+                                Callback::from(move |_| {
+                                    selected_published_id.set(None);
+                                    selected_published.set(None);
+                                })
+                            }}
+                            title={(*selected_published).as_ref().map(|c| AttrValue::from(format!("已发布详情 · {}", c.comment_id))).unwrap_or_default()}
+                        >
+                            if let Some(comment) = (*selected_published).clone() {
                                 <label class={classes!("block", "text-sm", "mb-2")}>
                                     { "comment_text" }
                                     <textarea
-                                        class={classes!("mt-1", "w-full", "min-h-[100px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                        class={classes!("mt-1", "w-full", "min-h-[100px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                         value={comment.comment_text.clone()}
                                         oninput={on_selected_published_comment_change}
                                     />
@@ -3338,14 +3357,14 @@ pub fn admin_page() -> Html {
                                 <label class={classes!("block", "text-sm", "mb-2")}>
                                     { "ai_reply_markdown" }
                                     <textarea
-                                        class={classes!("mt-1", "w-full", "min-h-[140px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                        class={classes!("mt-1", "w-full", "min-h-[140px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                         value={comment.ai_reply_markdown.clone().unwrap_or_default()}
                                         oninput={on_selected_published_ai_change}
                                     />
                                 </label>
                                 <button class={classes!("btn-fluent-primary")} onclick={on_save_published}>{ "Save Published Update" }</button>
-                            </div>
-                        }
+                            }
+                        </Drawer>
                     </>
                     }
                     <div class={classes!("mt-4")}>
