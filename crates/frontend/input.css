@@ -597,6 +597,31 @@
     transform: translateY(0) scale(0.97);
   }
 
+  /* Danger variant of the terminal button (destructive actions on the gateway
+     admin pages) — keeps the terminal layout, swaps in a clear red treatment so
+     deletes don't read as ordinary buttons. Pair with the base .btn-terminal. */
+  .btn-terminal-danger {
+    border-color: rgba(239, 68, 68, 0.42);
+    background: rgba(239, 68, 68, 0.08);
+    color: #dc2626;
+  }
+  .btn-terminal-danger:hover {
+    border-color: rgba(239, 68, 68, 0.65);
+    background: rgba(239, 68, 68, 0.16);
+    color: #b91c1c;
+  }
+  [data-theme="dark"] .btn-terminal-danger,
+  [theme="dark"] .btn-terminal-danger {
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.42);
+    background: rgba(239, 68, 68, 0.13);
+  }
+  [data-theme="dark"] .btn-terminal-danger:hover,
+  [theme="dark"] .btn-terminal-danger:hover {
+    color: #fecaca;
+    background: rgba(239, 68, 68, 0.22);
+  }
+
   .btn-terminal-primary {
     background: var(--primary);
     color: #fff;

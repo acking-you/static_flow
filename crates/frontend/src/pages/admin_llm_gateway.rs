@@ -1427,7 +1427,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     >
                         { "复制" }
                     </button>
-                    <button class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")} onclick={on_delete} disabled={*saving}>
+                    <button class={classes!("btn-terminal", "btn-terminal-danger")} onclick={on_delete} disabled={*saving}>
                         { "删除" }
                     </button>
                 </div>
@@ -8915,7 +8915,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     </button>
                                                 }
                                                 <button
-                                                    class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")}
+                                                    class={classes!("btn-terminal", "btn-terminal-danger")}
                                                     onclick={Callback::from(move |_| on_delete.emit(acc_name_for_delete.clone()))}
                                                 >
                                                     { "删除" }
@@ -9435,7 +9435,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                                 }
                                                 if item.status == "pending" || item.status == "failed" {
                                                     <button
-                                                        class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")}
+                                                        class={classes!("btn-terminal", "btn-terminal-danger")}
                                                         onclick={Callback::from(move |_| reject_cb.emit(reject_request_id.clone()))}
                                                         disabled={action_busy}
                                                     >
@@ -9619,7 +9619,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     }
                                                 if item.status == "pending" || item.status == "failed" {
                                                     <button
-                                                        class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")}
+                                                        class={classes!("btn-terminal", "btn-terminal-danger")}
                                                         onclick={Callback::from(move |_| reject_cb.emit(reject_request_id.clone()))}
                                                         disabled={action_busy}
                                                     >
@@ -9772,7 +9772,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     </button>
                                                 }
                                                 <button
-                                                    class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")}
+                                                    class={classes!("btn-terminal", "btn-terminal-danger")}
                                                     onclick={Callback::from(move |_| delete_cb.emit(delete_request_id.clone()))}
                                                     disabled={action_busy}
                                                 >
