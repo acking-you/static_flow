@@ -55,7 +55,7 @@ use crate::{
         toast::use_toast,
         view_trend_chart::ViewTrendChart,
     },
-    pages::llm_access_shared::{confirm_destructive, format_ms},
+    pages::llm_access_shared::format_ms,
     router::Route,
 };
 
@@ -451,6 +451,9 @@ fn copy_icon_button(text: &str) -> Html {
 pub fn admin_page() -> Html {
     let load_error = use_state(|| None::<String>);
     let pending_delete_published = use_state(|| None::<String>);
+    let pending_delete_task = use_state(|| None::<String>);
+    let pending_delete_wish = use_state(|| None::<String>);
+    let pending_delete_request = use_state(|| None::<String>);
     let toast = use_toast();
     let view_config = use_state(|| None::<ViewAnalyticsConfig>);
     let comment_config = use_state(|| None::<CommentRuntimeConfig>);
@@ -1436,7 +1439,7 @@ pub fn admin_page() -> Html {
         })
     };
 
-    let run_task_action = {
+    let execute_task_action = {
         let load_error = load_error.clone();
         let refresh_all = refresh_all.clone();
         let selected_task = selected_task.clone();
@@ -1444,12 +1447,6 @@ pub fn admin_page() -> Html {
         let task_action_inflight = task_action_inflight.clone();
         Callback::from(move |(task_id, action): (String, String)| {
             if task_action_inflight.contains(&task_id) {
-                return;
-            }
-            // Confirm before any destructive action. Keep non-destructive flows silent.
-            if action == "delete"
-                && !confirm_destructive("确认删除这条 comment task？此操作不可撤销。")
-            {
                 return;
             }
             {
@@ -1504,6 +1501,19 @@ pub fn admin_page() -> Html {
                 next.remove(&task_id);
                 task_action_inflight.set(next);
             });
+        })
+    };
+
+    // Deletes park the id for ConfirmModal; everything else executes directly.
+    let run_task_action = {
+        let execute_task_action = execute_task_action.clone();
+        let pending_delete_task = pending_delete_task.clone();
+        Callback::from(move |(task_id, action): (String, String)| {
+            if action == "delete" {
+                pending_delete_task.set(Some(task_id));
+                return;
+            }
+            execute_task_action.emit((task_id, action));
         })
     };
 
@@ -2161,16 +2171,11 @@ pub fn admin_page() -> Html {
 
     // Single dispatcher used by MusicWishRow children. Beats allocating
     // four `Callback::from` closures per row, per render.
-    let on_music_wish_action = {
+    let execute_music_wish_action = {
         let music_wishes = music_wishes.clone();
         let music_wish_action_inflight = music_wish_action_inflight.clone();
         let load_error = load_error.clone();
         Callback::from(move |(wid, action): (String, WishAction)| {
-            if action == WishAction::Delete
-                && !confirm_destructive("确认删除这条 music wish？此操作不可撤销。")
-            {
-                return;
-            }
             let music_wishes = music_wishes.clone();
             let inflight = music_wish_action_inflight.clone();
             let load_error = load_error.clone();
@@ -2240,18 +2245,26 @@ pub fn admin_page() -> Html {
         })
     };
 
+    // Deletes park the id for ConfirmModal; everything else executes directly.
+    let on_music_wish_action = {
+        let execute_music_wish_action = execute_music_wish_action.clone();
+        let pending_delete_wish = pending_delete_wish.clone();
+        Callback::from(move |(wid, action): (String, WishAction)| {
+            if action == WishAction::Delete {
+                pending_delete_wish.set(Some(wid));
+                return;
+            }
+            execute_music_wish_action.emit((wid, action));
+        })
+    };
+
     // Mirror of on_music_wish_action for the Article Requests tab. Same shape
     // (single dispatcher, match on enum) so both tabs look the same.
-    let on_article_request_action = {
+    let execute_article_request_action = {
         let article_requests = article_requests.clone();
         let article_request_action_inflight = article_request_action_inflight.clone();
         let load_error = load_error.clone();
         Callback::from(move |(rid, action): (String, ArticleRequestAction)| {
-            if action == ArticleRequestAction::Delete
-                && !confirm_destructive("确认删除这条 article request？此操作不可撤销。")
-            {
-                return;
-            }
             let article_requests = article_requests.clone();
             let inflight = article_request_action_inflight.clone();
             let load_error = load_error.clone();
@@ -2325,6 +2338,19 @@ pub fn admin_page() -> Html {
         })
     };
 
+    // Deletes park the id for ConfirmModal; everything else executes directly.
+    let on_article_request_action = {
+        let execute_article_request_action = execute_article_request_action.clone();
+        let pending_delete_request = pending_delete_request.clone();
+        Callback::from(move |(rid, action): (String, ArticleRequestAction)| {
+            if action == ArticleRequestAction::Delete {
+                pending_delete_request.set(Some(rid));
+                return;
+            }
+            execute_article_request_action.emit((rid, action));
+        })
+    };
+
     #[cfg(feature = "local-media")]
     let local_media_link = html! {
         <Link<Route> to={Route::AdminLocalMedia} classes={classes!("btn-fluent-secondary")}>
@@ -2346,6 +2372,66 @@ pub fn admin_page() -> Html {
                 on_cancel={{
                     let pending_delete_published = pending_delete_published.clone();
                     Callback::from(move |_| pending_delete_published.set(None))
+                }}
+            />
+            <ConfirmModal
+                open={pending_delete_task.is_some()}
+                title="删除 Comment Task"
+                message="确认删除这条 comment task？此操作不可撤销。"
+                danger=true
+                on_confirm={{
+                    let pending_delete_task = pending_delete_task.clone();
+                    let execute_task_action = execute_task_action.clone();
+                    Callback::from(move |_: ()| {
+                        if let Some(task_id) = (*pending_delete_task).clone() {
+                            pending_delete_task.set(None);
+                            execute_task_action.emit((task_id, "delete".to_string()));
+                        }
+                    })
+                }}
+                on_cancel={{
+                    let pending_delete_task = pending_delete_task.clone();
+                    Callback::from(move |_| pending_delete_task.set(None))
+                }}
+            />
+            <ConfirmModal
+                open={pending_delete_wish.is_some()}
+                title="删除 Music Wish"
+                message="确认删除这条 music wish？此操作不可撤销。"
+                danger=true
+                on_confirm={{
+                    let pending_delete_wish = pending_delete_wish.clone();
+                    let execute_music_wish_action = execute_music_wish_action.clone();
+                    Callback::from(move |_: ()| {
+                        if let Some(wid) = (*pending_delete_wish).clone() {
+                            pending_delete_wish.set(None);
+                            execute_music_wish_action.emit((wid, WishAction::Delete));
+                        }
+                    })
+                }}
+                on_cancel={{
+                    let pending_delete_wish = pending_delete_wish.clone();
+                    Callback::from(move |_| pending_delete_wish.set(None))
+                }}
+            />
+            <ConfirmModal
+                open={pending_delete_request.is_some()}
+                title="删除 Article Request"
+                message="确认删除这条 article request？此操作不可撤销。"
+                danger=true
+                on_confirm={{
+                    let pending_delete_request = pending_delete_request.clone();
+                    let execute_article_request_action = execute_article_request_action.clone();
+                    Callback::from(move |_: ()| {
+                        if let Some(rid) = (*pending_delete_request).clone() {
+                            pending_delete_request.set(None);
+                            execute_article_request_action.emit((rid, ArticleRequestAction::Delete));
+                        }
+                    })
+                }}
+                on_cancel={{
+                    let pending_delete_request = pending_delete_request.clone();
+                    Callback::from(move |_| pending_delete_request.set(None))
                 }}
             />
             <section class={classes!(
