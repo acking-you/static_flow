@@ -21,7 +21,7 @@ pub struct StatusBadgeProps {
 fn tone_and_icon(status: &str) -> (&'static str, &'static str) {
     match status {
         "pending" | "queued" | "waiting" => ("status-badge--pending", "fa-clock"),
-        "approved" | "active" | "enabled" | "ok" | "healthy" | "valid" => {
+        "approved" | "approve" | "active" | "enabled" | "ok" | "healthy" | "valid" => {
             ("status-badge--approved", "fa-circle-check")
         },
         "running" | "processing" | "in_progress" | "in-progress" => {
@@ -30,10 +30,10 @@ fn tone_and_icon(status: &str) -> (&'static str, &'static str) {
         "done" | "success" | "succeeded" | "completed" | "ingested" => {
             ("status-badge--done", "fa-circle-check")
         },
-        "failed" | "error" | "errored" | "invalid" => {
+        "failed" | "error" | "errored" | "invalid" | "delete" | "deleted" | "remove" => {
             ("status-badge--failed", "fa-circle-exclamation")
         },
-        "rejected" | "disabled" | "expired" | "cancelled" | "canceled" | "revoked" => {
+        "rejected" | "reject" | "disabled" | "expired" | "cancelled" | "canceled" | "revoked" => {
             ("status-badge--rejected", "fa-ban")
         },
         _ => ("status-badge--neutral", "fa-circle-info"),

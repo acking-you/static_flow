@@ -3147,12 +3147,13 @@ pub fn admin_page() -> Html {
                                                                 <td class={classes!("py-2", "pr-3")}>{ task.attempt_count }</td>
                                                                 <td class={classes!("py-2", "pr-3")}>{ format_ms(task.created_at) }</td>
                                                                 <td class={classes!("py-2", "pr-3")}>
-                                                                    <div class={classes!("flex", "gap-2", "flex-wrap")}>
+                                                                    <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
                                                                         <button class={classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs")} onclick={approve_click} disabled={!can_approve}>{ "Approve" }</button>
                                                                         <button class={classes!("btn-fluent-primary", "!px-2", "!py-1", "!text-xs")} onclick={approve_run_click} disabled={!can_approve_run}>{ "Approve+Codex" }</button>
                                                                         <button class={classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs")} onclick={retry_click} disabled={!can_retry}>{ "Retry" }</button>
+                                                                        <span class={classes!("mx-0.5", "h-4", "w-px", "bg-[var(--border)]")} aria-hidden="true" />
                                                                         <button class={classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs")} onclick={reject_click} disabled={!can_reject}>{ "Reject" }</button>
-                                                                        <button class={classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs")} onclick={delete_click} disabled={!can_delete}>{ "Delete" }</button>
+                                                                        <button class={classes!("btn-fluent-danger", "!px-2", "!py-1", "!text-xs")} onclick={delete_click} disabled={!can_delete}>{ "Delete" }</button>
                                                                     </div>
                                                                 </td>
                                                             </tr>
@@ -3430,7 +3431,7 @@ pub fn admin_page() -> Html {
                                         <tr class={classes!("border-t", "border-[var(--border)]")}>
                                             <td class={classes!("py-2", "pr-3")}>{ log.log_id.clone() }</td>
                                             <td class={classes!("py-2", "pr-3")}>{ log.task_id.clone() }</td>
-                                            <td class={classes!("py-2", "pr-3")}>{ log.action.clone() }</td>
+                                            <td class={classes!("py-2", "pr-3")}><StatusBadge status={log.action.clone()} /></td>
                                             <td class={classes!("py-2", "pr-3")}>{ log.operator.clone() }</td>
                                             <td class={classes!("py-2", "pr-3")}>{ format_ms(log.created_at) }</td>
                                         </tr>
@@ -3489,8 +3490,9 @@ pub fn admin_page() -> Html {
                                     type="number"
                                     value={(*behavior_status_filter).clone()}
                                     oninput={on_behavior_status_filter_change}
-                                    placeholder="status"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[110px]")}
+                                    placeholder="HTTP 状态码 (200)"
+                                    title="按 HTTP 状态码筛选，例如 200 / 404 / 500"
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[150px]")}
                                 />
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_behavior_apply.clone()}>{ "Apply" }</button>
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_behavior_cleanup}>{ "Cleanup Old Logs" }</button>
