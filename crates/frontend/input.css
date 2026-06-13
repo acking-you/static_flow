@@ -21,17 +21,6 @@
   --acrylic-light: var(--acrylic-bg-light);
   --acrylic-dark: var(--acrylic-bg-dark);
   --header-bg: var(--acrylic-bg-light);
-  --glass-opacity: 0.8;
-  --glass-noise-light: 0.1;
-  --glass-noise-dark: 0.15;
-  --glass-noise-svg: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='4' stitchTiles='stitch'/></filter><rect width='200' height='200' filter='url(%23n)' opacity='0.1'/></svg>");
-  --glass-blur-far: 100px;
-  --glass-blur-mid: 80px;
-  --glass-blur-near: 60px;
-  --glass-alpha-far: 0.5;
-  --glass-alpha-mid: 0.65;
-  --glass-alpha-near: 0.8;
-  --glass-saturate: 1.8;
 
   /* Fluent 2 shadows & rounding */
   --shadow-sm: 0 0 2px rgba(0, 0, 0, 0.05), 0 2px 4px rgba(0, 0, 0, 0.13);
@@ -117,8 +106,6 @@
   --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.55), 0 20px 36px rgba(0, 0, 0, 0.65);
   --shadow-16: 0 12px 32px rgba(0, 0, 0, 0.55), 0 26px 50px rgba(0, 0, 0, 0.68);
   --header-bg: var(--acrylic-bg-dark);
-  --glass-opacity: 0.75;
-  --glass-noise-svg: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='4' stitchTiles='stitch'/></filter><rect width='200' height='200' filter='url(%23n)' opacity='0.15'/></svg>");
 
   /* === vNext: skeleton surfaces (dark) === */
   --skeleton-base: #2c2e36;
@@ -1275,13 +1262,10 @@
     will-change: transform;
   }
 
+/* vNext: selection tint follows the theme primary (light and dark
+   --primary-rgb both resolve) instead of hardcoded off-palette blues. */
 ::selection {
-  background-color: rgba(29, 158, 216, .2)
-}
-
-[data-theme=dark] ::selection,
-[theme=dark] ::selection {
-  background-color: rgba(117, 201, 255, .25)
+  background-color: rgba(var(--primary-rgb), .22)
 }
 
 ::-webkit-scrollbar {
@@ -2478,12 +2462,6 @@ a:hover {
   border: 2px solid var(--primary);
   background: var(--surface);
   box-shadow: 0 0 0 4px var(--bg)
-}
-
-.empty-hint {
-  text-align: center;
-  color: var(--muted);
-  margin: 2rem 0
 }
 
 .muted {
@@ -4557,7 +4535,7 @@ html {
   .tag-badge,
   .editorial-timeline,
   .timeline-year-section,
-  .year-label::after,
+
   .article-card-editorial article {
     animation: none !important;
     transition: none !important;
