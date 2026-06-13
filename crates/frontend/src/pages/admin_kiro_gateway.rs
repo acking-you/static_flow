@@ -2805,16 +2805,17 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             </div>
 
             <div class={classes!("mt-4", "flex", "items-center", "gap-2", "flex-wrap")}>
-                <button type="button" class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_save}>
+                <button type="button" class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_save} disabled={*saving}>
                     { if *saving { "Saving..." } else { "Save" } }
                 </button>
-                <button type="button" class={classes!("btn-terminal")} onclick={on_disable}>
-                    { "Disable" }
+                <button type="button" class={classes!("btn-terminal")} onclick={on_disable} disabled={*saving}>
+                    { if *saving { "Disabling..." } else { "Disable" } }
                 </button>
                 <button
                     type="button"
                     class={classes!("btn-terminal", "btn-terminal-danger")}
                     onclick={on_delete}
+                    disabled={*saving}
                 >
                     { "Delete" }
                 </button>

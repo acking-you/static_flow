@@ -281,9 +281,9 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
                 if let Some(err) = (*stream_error).clone() {
                     <p class={classes!("mt-2", "m-0", "text-sm", "text-red-700", "dark:text-red-200")}>{ err }</p>
                 }
-                <p class={classes!("mt-2", "m-0", "text-sm", "text-[var(--muted)]")}>
-                    { format!("stream_status={}", *stream_status) }
-                </p>
+                <div class={classes!("mt-2")}>
+                    <StatusBadge status={(*stream_status).clone()} label={Some(AttrValue::from(format!("stream: {}", *stream_status)))} />
+                </div>
             </section>
 
             if *loading {

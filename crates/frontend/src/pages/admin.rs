@@ -86,63 +86,11 @@ fn format_ratio_percent(ratio: f64) -> String {
     format!("{:.2}%", ratio * 100.0)
 }
 
-fn status_badge_class(status: &str) -> Classes {
-    let base = classes!(
-        "inline-flex",
-        "items-center",
-        "rounded-full",
-        "px-2",
-        "py-0.5",
-        "text-xs",
-        "font-semibold",
-        "uppercase",
-        "tracking-[0.06em]"
-    );
-    match status {
-        "pending" => classes!(base, "bg-amber-500/15", "text-amber-700", "dark:text-amber-200"),
-        "approved" => classes!(base, "bg-sky-500/15", "text-sky-700", "dark:text-sky-200"),
-        "running" => classes!(base, "bg-indigo-500/15", "text-indigo-700", "dark:text-indigo-200"),
-        "done" => classes!(base, "bg-emerald-500/15", "text-emerald-700", "dark:text-emerald-200"),
-        "failed" => classes!(base, "bg-red-500/15", "text-red-700", "dark:text-red-200"),
-        "rejected" => classes!(base, "bg-slate-500/15", "text-slate-700", "dark:text-slate-200"),
-        _ => classes!(base, "bg-[var(--surface-alt)]", "text-[var(--muted)]"),
-    }
-}
-
 fn article_request_has_article(req: &ArticleRequestItem) -> bool {
     req.ingested_article_id
         .as_deref()
         .map(str::trim)
         .is_some_and(|id| !id.is_empty())
-}
-
-fn article_request_status_badge_class(req: &ArticleRequestItem) -> Classes {
-    if req.status == "done" && !article_request_has_article(req) {
-        classes!(
-            "inline-flex",
-            "items-center",
-            "rounded-full",
-            "px-2",
-            "py-0.5",
-            "text-xs",
-            "font-semibold",
-            "uppercase",
-            "tracking-[0.06em]",
-            "bg-amber-500/15",
-            "text-amber-700",
-            "dark:text-amber-200"
-        )
-    } else {
-        status_badge_class(&req.status)
-    }
-}
-
-fn article_request_status_label(req: &ArticleRequestItem) -> String {
-    if req.status == "done" && !article_request_has_article(req) {
-        "done/no-article".to_string()
-    } else {
-        req.status.clone()
-    }
 }
 
 /// Destructive-ish actions fired from a Music Wish row. The parent builds a
@@ -252,9 +200,11 @@ fn article_request_row(props: &ArticleRequestRowProps) -> Html {
             <td class={classes!("py-2", "pr-3", "max-w-[150px]", "truncate")}>{ req.title_hint.clone().unwrap_or_default() }</td>
             <td class={classes!("py-2", "pr-3")}>{ req.nickname.clone() }</td>
             <td class={classes!("py-2", "pr-3")}>
-                <span class={article_request_status_badge_class(req)}>
-                    { article_request_status_label(req) }
-                </span>
+                if req.status == "done" && !article_request_has_article(req) {
+                    <StatusBadge status="pending" label={Some(AttrValue::from("done/no-article"))} />
+                } else {
+                    <StatusBadge status={req.status.clone()} />
+                }
             </td>
             <td class={classes!("py-2", "pr-3")}>{ req.ip_region.clone() }</td>
             <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format_ms(req.created_at) }</td>
@@ -437,6 +387,10 @@ pub fn admin_page() -> Html {
     let pending_delete_task = use_state(|| None::<String>);
     let pending_delete_wish = use_state(|| None::<String>);
     let pending_delete_request = use_state(|| None::<String>);
+    // Destructive maintenance actions (irreversible row deletes) park a flag for
+    // ConfirmModal instead of firing on the first click.
+    let pending_cleanup_failed = use_state(|| false);
+    let pending_cleanup_logs = use_state(|| false);
     let toast = use_toast();
     let view_config = use_state(|| None::<ViewAnalyticsConfig>);
     let comment_config = use_state(|| None::<CommentRuntimeConfig>);
@@ -2417,6 +2371,42 @@ pub fn admin_page() -> Html {
                     Callback::from(move |_| pending_delete_request.set(None))
                 }}
             />
+            <ConfirmModal
+                open={*pending_cleanup_failed}
+                title="清理失败任务"
+                message="确认删除全部失败的 comment task？此操作不可撤销。"
+                danger=true
+                on_confirm={{
+                    let pending_cleanup_failed = pending_cleanup_failed.clone();
+                    let on_cleanup = on_cleanup.clone();
+                    Callback::from(move |_: ()| {
+                        pending_cleanup_failed.set(false);
+                        on_cleanup.emit(());
+                    })
+                }}
+                on_cancel={{
+                    let pending_cleanup_failed = pending_cleanup_failed.clone();
+                    Callback::from(move |_| pending_cleanup_failed.set(false))
+                }}
+            />
+            <ConfirmModal
+                open={*pending_cleanup_logs}
+                title="清理旧日志"
+                message="确认按保留天数删除旧的 API 行为日志？此操作不可撤销。"
+                danger=true
+                on_confirm={{
+                    let pending_cleanup_logs = pending_cleanup_logs.clone();
+                    let on_behavior_cleanup = on_behavior_cleanup.clone();
+                    Callback::from(move |_: ()| {
+                        pending_cleanup_logs.set(false);
+                        on_behavior_cleanup.emit(());
+                    })
+                }}
+                on_cancel={{
+                    let pending_cleanup_logs = pending_cleanup_logs.clone();
+                    Callback::from(move |_| pending_cleanup_logs.set(false))
+                }}
+            />
             <section class={classes!(
                 "bg-[var(--surface)]",
                 "border",
@@ -2501,7 +2491,7 @@ pub fn admin_page() -> Html {
                                 <input
                                     type="number"
                                     value={cfg.dedupe_window_seconds.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let view_config = view_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2523,7 +2513,7 @@ pub fn admin_page() -> Html {
                                 <input
                                     type="number"
                                     value={cfg.trend_default_days.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let view_config = view_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2545,7 +2535,7 @@ pub fn admin_page() -> Html {
                                 <input
                                     type="number"
                                     value={cfg.trend_max_days.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let view_config = view_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2577,7 +2567,7 @@ pub fn admin_page() -> Html {
                                 <input
                                     type="number"
                                     value={cfg.submit_rate_limit_seconds.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let comment_config = comment_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2599,7 +2589,7 @@ pub fn admin_page() -> Html {
                                 <input
                                     type="number"
                                     value={cfg.list_default_limit.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let comment_config = comment_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2621,7 +2611,7 @@ pub fn admin_page() -> Html {
                                 <input
                                     type="number"
                                     value={cfg.cleanup_retention_days.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let comment_config = comment_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2653,7 +2643,7 @@ pub fn admin_page() -> Html {
                                 <input
                                     type="number"
                                     value={cfg.play_dedupe_window_seconds.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let music_config = music_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2675,7 +2665,7 @@ pub fn admin_page() -> Html {
                                 <input
                                     type="number"
                                     value={cfg.comment_rate_limit_seconds.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let music_config = music_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2697,7 +2687,7 @@ pub fn admin_page() -> Html {
                                 <input
                                     type="number"
                                     value={cfg.list_default_limit.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let music_config = music_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2729,7 +2719,7 @@ pub fn admin_page() -> Html {
                                 <input
                                     type="number"
                                     value={cfg.retention_days.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let behavior_config = behavior_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2751,7 +2741,7 @@ pub fn admin_page() -> Html {
                                 <input
                                     type="number"
                                     value={cfg.default_days.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let behavior_config = behavior_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2773,7 +2763,7 @@ pub fn admin_page() -> Html {
                                 <input
                                     type="number"
                                     value={cfg.max_days.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let behavior_config = behavior_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2796,7 +2786,7 @@ pub fn admin_page() -> Html {
                                     type="number"
                                     min="1"
                                     value={cfg.flush_batch_size.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let behavior_config = behavior_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2819,7 +2809,7 @@ pub fn admin_page() -> Html {
                                     type="number"
                                     min="1"
                                     value={cfg.flush_interval_seconds.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let behavior_config = behavior_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2842,7 +2832,7 @@ pub fn admin_page() -> Html {
                                     type="number"
                                     min="1024"
                                     value={cfg.flush_max_buffer_bytes.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let behavior_config = behavior_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2897,7 +2887,7 @@ pub fn admin_page() -> Html {
                                 <input
                                     type="number"
                                     value={cfg.scan_interval_seconds.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let compaction_config = compaction_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2919,7 +2909,7 @@ pub fn admin_page() -> Html {
                                 <input
                                     type="number"
                                     value={cfg.fragment_threshold.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let compaction_config = compaction_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2941,7 +2931,7 @@ pub fn admin_page() -> Html {
                                 <input
                                     type="number"
                                     value={cfg.prune_older_than_hours.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let compaction_config = compaction_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -2964,7 +2954,7 @@ pub fn admin_page() -> Html {
                                     type="number"
                                     min="1"
                                     value={cfg.worker_count.to_string()}
-                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                    class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                     oninput={{
                                         let compaction_config = compaction_config.clone();
                                         Callback::from(move |event: InputEvent| {
@@ -3003,26 +2993,26 @@ pub fn admin_page() -> Html {
                 "p-5",
                 "mb-5"
             )}>
-                <div class="admin-tab-bar mb-4">
-                    <button class={if *active_tab == Some(AdminTab::Tasks) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_tasks}>
+                <div class="admin-tab-bar mb-4" role="tablist" aria-label="管理控制台分区">
+                    <button role="tab" aria-selected={if *active_tab == Some(AdminTab::Tasks) { "true" } else { "false" }} class={if *active_tab == Some(AdminTab::Tasks) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_tasks}>
                         <i class="fas fa-list-check text-xs" aria-hidden="true"></i>{ "Tasks" }
                     </button>
-                    <button class={if *active_tab == Some(AdminTab::Published) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_published}>
+                    <button role="tab" aria-selected={if *active_tab == Some(AdminTab::Published) { "true" } else { "false" }} class={if *active_tab == Some(AdminTab::Published) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_published}>
                         <i class="fas fa-check-circle text-xs" aria-hidden="true"></i>{ "Published" }
                     </button>
-                    <button class={if *active_tab == Some(AdminTab::Audit) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_audit}>
+                    <button role="tab" aria-selected={if *active_tab == Some(AdminTab::Audit) { "true" } else { "false" }} class={if *active_tab == Some(AdminTab::Audit) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_audit}>
                         <i class="fas fa-scroll text-xs" aria-hidden="true"></i>{ "Audit" }
                     </button>
-                    <button class={if *active_tab == Some(AdminTab::Behavior) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_behavior}>
+                    <button role="tab" aria-selected={if *active_tab == Some(AdminTab::Behavior) { "true" } else { "false" }} class={if *active_tab == Some(AdminTab::Behavior) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_behavior}>
                         <i class="fas fa-chart-line text-xs" aria-hidden="true"></i>{ "Behavior" }
                     </button>
-                    <button class={if *active_tab == Some(AdminTab::RuntimeMemory) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_runtime_memory}>
+                    <button role="tab" aria-selected={if *active_tab == Some(AdminTab::RuntimeMemory) { "true" } else { "false" }} class={if *active_tab == Some(AdminTab::RuntimeMemory) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_runtime_memory}>
                         <i class="fas fa-memory text-xs" aria-hidden="true"></i>{ "Memory" }
                     </button>
-                    <button class={if *active_tab == Some(AdminTab::MusicWishes) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_music_wishes}>
+                    <button role="tab" aria-selected={if *active_tab == Some(AdminTab::MusicWishes) { "true" } else { "false" }} class={if *active_tab == Some(AdminTab::MusicWishes) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_music_wishes}>
                         <i class="fas fa-music text-xs" aria-hidden="true"></i>{ "Music" }
                     </button>
-                    <button class={if *active_tab == Some(AdminTab::ArticleRequests) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_article_requests}>
+                    <button role="tab" aria-selected={if *active_tab == Some(AdminTab::ArticleRequests) { "true" } else { "false" }} class={if *active_tab == Some(AdminTab::ArticleRequests) { "admin-tab admin-tab--active" } else { "admin-tab" }} onclick={tab_article_requests}>
                         <i class="fas fa-newspaper text-xs" aria-hidden="true"></i>{ "Articles" }
                     </button>
                 </div>
@@ -3050,7 +3040,7 @@ pub fn admin_page() -> Html {
                                     value={(*status_filter).clone()}
                                     oninput={on_filter_change}
                                     placeholder="status filter: pending/approved/failed"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[280px]")}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]", "text-sm", "w-full", "md:w-[280px]")}
                                 />
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_tasks_apply}>{ "Apply" }</button>
                             </div>
@@ -3064,7 +3054,7 @@ pub fn admin_page() -> Html {
 
                         <div class={classes!("mb-4", "text-sm", "text-[var(--muted)]", "flex", "gap-2", "flex-wrap")}>
                             { for grouped_status_counts.iter().map(|(status, count)| html! {
-                                <span class={status_badge_class(status)}>{ format!("{}: {}", status, count) }</span>
+                                <StatusBadge status={status.clone()} label={Some(AttrValue::from(format!("{}: {}", status, count)))} />
                             }) }
                         </div>
 
@@ -3078,7 +3068,7 @@ pub fn admin_page() -> Html {
                                         </header>
                                         <div class={classes!("mb-3", "flex", "gap-2", "flex-wrap")}>
                                             { for group.status_counts.iter().map(|(status, count)| html! {
-                                                <span class={status_badge_class(status)}>{ format!("{}: {}", status, count) }</span>
+                                                <StatusBadge status={status.clone()} label={Some(AttrValue::from(format!("{}: {}", status, count)))} />
                                             }) }
                                         </div>
                                         <div class={classes!("overflow-x-auto")}>
@@ -3188,7 +3178,7 @@ pub fn admin_page() -> Html {
                                 <label class={classes!("block", "text-sm", "mb-2")}>
                                     { "comment_text" }
                                     <textarea
-                                        class={classes!("mt-1", "w-full", "min-h-[120px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
+                                        class={classes!("mt-1", "w-full", "min-h-[120px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]", "bg-[var(--surface)]", "text-[var(--text)]")}
                                         value={task.comment_text.clone()}
                                         oninput={on_selected_task_comment_change}
                                     />
@@ -3196,7 +3186,7 @@ pub fn admin_page() -> Html {
                                 <label class={classes!("block", "text-sm", "mb-2")}>
                                     { "admin_note" }
                                     <textarea
-                                        class={classes!("mt-1", "w-full", "min-h-[90px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
+                                        class={classes!("mt-1", "w-full", "min-h-[90px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]", "bg-[var(--surface)]", "text-[var(--text)]")}
                                         value={task.admin_note.clone().unwrap_or_default()}
                                         oninput={on_selected_task_note_change}
                                     />
@@ -3355,7 +3345,7 @@ pub fn admin_page() -> Html {
                                 <label class={classes!("block", "text-sm", "mb-2")}>
                                     { "comment_text" }
                                     <textarea
-                                        class={classes!("mt-1", "w-full", "min-h-[100px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
+                                        class={classes!("mt-1", "w-full", "min-h-[100px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]", "bg-[var(--surface)]", "text-[var(--text)]")}
                                         value={comment.comment_text.clone()}
                                         oninput={on_selected_published_comment_change}
                                     />
@@ -3363,7 +3353,7 @@ pub fn admin_page() -> Html {
                                 <label class={classes!("block", "text-sm", "mb-2")}>
                                     { "ai_reply_markdown" }
                                     <textarea
-                                        class={classes!("mt-1", "w-full", "min-h-[140px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
+                                        class={classes!("mt-1", "w-full", "min-h-[140px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]", "bg-[var(--surface)]", "text-[var(--text)]")}
                                         value={comment.ai_reply_markdown.clone().unwrap_or_default()}
                                         oninput={on_selected_published_ai_change}
                                     />
@@ -3393,14 +3383,14 @@ pub fn admin_page() -> Html {
                                     value={(*audit_task_filter).clone()}
                                     oninput={on_audit_task_filter_change}
                                     placeholder="task_id"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[180px]")}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]", "text-sm", "w-full", "md:w-[180px]")}
                                 />
                                 <input
                                     type="text"
                                     value={(*audit_action_filter).clone()}
                                     oninput={on_audit_action_filter_change}
                                     placeholder="action"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[150px]")}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]", "text-sm", "w-full", "md:w-[150px]")}
                                 />
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_refresh_audit_click}>{ "Apply" }</button>
                             </div>
@@ -3456,35 +3446,40 @@ pub fn admin_page() -> Html {
                                     value={(*behavior_days).clone()}
                                     oninput={on_behavior_days_change}
                                     placeholder="days"
+                                    aria-label="按最近天数筛选行为日志"
                                     disabled={!(*behavior_date).is_empty()}
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[110px]")}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]", "text-sm", "w-full", "md:w-[110px]")}
                                 />
                                 <input
                                     type="date"
                                     value={(*behavior_date).clone()}
                                     oninput={on_behavior_date_change}
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[160px]")}
+                                    aria-label="按具体日期筛选行为日志"
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]", "text-sm", "w-full", "md:w-[160px]")}
                                 />
                                 <input
                                     type="text"
                                     value={(*behavior_path_filter).clone()}
                                     oninput={on_behavior_path_filter_change}
                                     placeholder="path contains"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[170px]")}
+                                    aria-label="按请求路径包含内容筛选"
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]", "text-sm", "w-full", "md:w-[170px]")}
                                 />
                                 <input
                                     type="text"
                                     value={(*behavior_page_filter).clone()}
                                     oninput={on_behavior_page_filter_change}
                                     placeholder="page contains"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[170px]")}
+                                    aria-label="按页面标识包含内容筛选"
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]", "text-sm", "w-full", "md:w-[170px]")}
                                 />
                                 <input
                                     type="text"
                                     value={(*behavior_device_filter).clone()}
                                     oninput={on_behavior_device_filter_change}
                                     placeholder="device"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[120px]")}
+                                    aria-label="按设备筛选"
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]", "text-sm", "w-full", "md:w-[120px]")}
                                 />
                                 <input
                                     type="number"
@@ -3492,10 +3487,14 @@ pub fn admin_page() -> Html {
                                     oninput={on_behavior_status_filter_change}
                                     placeholder="HTTP 状态码 (200)"
                                     title="按 HTTP 状态码筛选，例如 200 / 404 / 500"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[150px]")}
+                                    aria-label="按 HTTP 状态码筛选"
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]", "text-sm", "w-full", "md:w-[150px]")}
                                 />
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_behavior_apply.clone()}>{ "Apply" }</button>
-                                <button class={classes!("btn-fluent-secondary")} onclick={on_behavior_cleanup}>{ "Cleanup Old Logs" }</button>
+                                <button class={classes!("btn-fluent-danger")} onclick={{
+                                    let pending_cleanup_logs = pending_cleanup_logs.clone();
+                                    Callback::from(move |_| pending_cleanup_logs.set(true))
+                                }}>{ "Cleanup Old Logs" }</button>
                             </div>
                         </div>
 
@@ -3659,7 +3658,7 @@ pub fn admin_page() -> Html {
                                     oninput={on_memory_top_change}
                                     min="1"
                                     placeholder="top"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[110px]")}
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]", "text-sm", "w-full", "md:w-[110px]")}
                                 />
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_memory_refresh}>{ "Refresh" }</button>
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_memory_reset} disabled={*memory_action_loading}>
@@ -3745,7 +3744,7 @@ pub fn admin_page() -> Html {
                                             min="1"
                                             value={config.sample_rate.to_string()}
                                             oninput={on_memory_sample_rate_change}
-                                            class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                            class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                         />
                                     </label>
                                     <label class={classes!("block", "text-sm")}>
@@ -3755,7 +3754,7 @@ pub fn admin_page() -> Html {
                                             min="1"
                                             value={config.min_alloc_bytes.to_string()}
                                             oninput={on_memory_min_alloc_change}
-                                            class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                            class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                         />
                                     </label>
                                     <label class={classes!("block", "text-sm")}>
@@ -3765,7 +3764,7 @@ pub fn admin_page() -> Html {
                                             min="1"
                                             value={config.max_tracked_allocations.to_string()}
                                             oninput={on_memory_max_tracked_change}
-                                            class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                            class={classes!("mt-1", "w-full", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                         />
                                     </label>
                                 </div>
@@ -3998,9 +3997,12 @@ pub fn admin_page() -> Html {
                         type="number"
                         value={(*cleanup_days).clone()}
                         oninput={on_cleanup_days_change}
-                        class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "w-full", "md:w-[180px]")}
+                        class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]", "w-full", "md:w-[180px]")}
                     />
-                    <button class={classes!("btn-fluent-secondary")} onclick={on_cleanup}>
+                    <button class={classes!("btn-fluent-danger")} onclick={{
+                        let pending_cleanup_failed = pending_cleanup_failed.clone();
+                        Callback::from(move |_| pending_cleanup_failed.set(true))
+                    }}>
                         { "Cleanup Failed Tasks" }
                     </button>
                 </div>

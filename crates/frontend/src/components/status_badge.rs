@@ -22,7 +22,7 @@ fn tone_and_icon(status: &str) -> (&'static str, &'static str) {
     match status {
         "pending" | "queued" | "waiting" => ("status-badge--pending", "fa-clock"),
         "approved" | "approve" => ("status-badge--approved", "fa-circle-check"),
-        "running" | "processing" | "in_progress" | "in-progress" => {
+        "running" | "processing" | "in_progress" | "in-progress" | "streaming" => {
             ("status-badge--running", "fa-spinner fa-spin")
         },
         "done" | "success" | "succeeded" | "completed" | "ingested" | "issued" | "active"

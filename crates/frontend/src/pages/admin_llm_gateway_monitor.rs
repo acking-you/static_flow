@@ -416,6 +416,13 @@ pub fn admin_llm_gateway_monitor_page() -> Html {
 
             if *loading && snapshot_value.generated_at_ms == 0 {
                 <LoadingSpinner size={SpinnerSize::Large} />
+            } else if (*error).is_some() && snapshot_value.generated_at_ms == 0 {
+                <EmptyState
+                    tone="error"
+                    icon="fa-triangle-exclamation"
+                    title="加载运行监控数据失败"
+                    hint={(*error).clone().map(AttrValue::from)}
+                />
             } else {
                 <section class={classes!("mt-5", "grid", "gap-4", "md:grid-cols-2", "xl:grid-cols-4")}>
                     <SummaryCard
