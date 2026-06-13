@@ -2,14 +2,11 @@ use yew::prelude::*;
 use yew_router::prelude::*;
 
 use crate::{
-    components::{footer::Footer, header::Header, spotlight::Spotlight},
+    components::{footer::Footer, header::Header},
     music_context::{MusicAction, MusicPlayerContext},
     pages,
 };
 
-fn is_article_detail_path(path: &str) -> bool {
-    path.contains("/posts/")
-}
 
 #[derive(Routable, Clone, PartialEq, Debug)]
 pub enum Route {
@@ -333,7 +330,6 @@ pub fn app_router() -> Html {
 
 #[function_component(AppRouterInner)]
 fn app_router_inner() -> Html {
-    let location = use_location();
     let route = use_route::<Route>();
 
     // Auto-minimize player when navigating away from MusicPlayer page
@@ -359,17 +355,8 @@ fn app_router_inner() -> Html {
         });
     }
 
-    // 判断是否在文章详情页（不显示Spotlight）
-    let show_spotlight = location
-        .as_ref()
-        .map(|loc| !is_article_detail_path(loc.path()))
-        .unwrap_or(true);
-
     html! {
         <div class="flex flex-col bg-[var(--bg)]" style="min-height: 100vh; min-height: 100svh;">
-            if show_spotlight {
-                <Spotlight />
-            }
             <Header />
             <div class="flex-1 min-w-0 pt-[var(--space-sm)]">
                 <Switch<Route> render={switch} />

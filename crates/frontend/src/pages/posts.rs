@@ -56,16 +56,20 @@ pub fn posts_page() -> Html {
 
     let articles = use_state(Vec::<ArticleListItem>::new);
     let loading = use_state(|| true);
+    let load_error = use_state(|| None::<String>);
+    let refresh = use_state(|| 0u32);
     let expanded_years = use_state(HashMap::<i32, bool>::new);
 
     {
         let articles = articles.clone();
         let loading = loading.clone();
+        let load_error = load_error.clone();
         let tag = query.tag.clone();
         let category = query.category.clone();
 
-        use_effect_with((tag.clone(), category.clone()), move |_| {
+        use_effect_with((tag.clone(), category.clone(), *refresh), move |_| {
             loading.set(true);
+            load_error.set(None);
             wasm_bindgen_futures::spawn_local(async move {
                 let tag_ref = tag.as_deref();
                 let category_ref = category.as_deref();
@@ -76,6 +80,7 @@ pub fn posts_page() -> Html {
                         web_sys::console::error_1(
                             &format!("Failed to fetch articles: {}", e).into(),
                         );
+                        load_error.set(Some(e.to_string()));
                     },
                 }
                 loading.set(false);
@@ -353,6 +358,39 @@ pub fn posts_page() -> Html {
                                 }) }
                             </div>
                         }
+                    } else if let Some(err) = (*load_error).clone() {
+                        let on_retry = {
+                            let refresh = refresh.clone();
+                            Callback::from(move |_| refresh.set(*refresh + 1))
+                        };
+                        html! {
+                            <div class={classes!(
+                                "empty-state",
+                                "text-center",
+                                "py-20",
+                                "px-4",
+                                "bg-[var(--surface)]",
+                                "rounded-2xl",
+                                "border",
+                                "border-[var(--border)]"
+                            )}>
+                                <i class={classes!("fas", "fa-triangle-exclamation", "text-6xl", "text-amber-500", "mb-6")}></i>
+                                <p class={classes!("text-xl", "font-bold", "text-[var(--text)]", "mb-3")}>
+                                    { t::ERROR_TITLE }
+                                </p>
+                                <p class={classes!("text-base", "text-[var(--muted)]", "mb-6")}>
+                                    { err }
+                                </p>
+                                <button
+                                    type="button"
+                                    class={classes!("btn-fluent-secondary", "!rounded-full")}
+                                    onclick={on_retry}
+                                >
+                                    <i class={classes!("fas", "fa-rotate-right", "mr-2")}></i>
+                                    { t::ERROR_RETRY }
+                                </button>
+                            </div>
+                        }
                     } else if grouped_by_year.is_empty() {
                         html! {
                             <div class={classes!(
@@ -361,7 +399,6 @@ pub fn posts_page() -> Html {
                                 "py-20",
                                 "px-4",
                                 "bg-[var(--surface)]",
-                                "liquid-glass",
                                 "rounded-2xl",
                                 "border",
                                 "border-[var(--border)]"
@@ -446,7 +483,6 @@ pub fn posts_page() -> Html {
                                                             <article class={classes!(
                                                                 "article-card",
                                                                 "bg-[var(--surface)]",
-                                                                "liquid-glass",
                                                                 "rounded-xl",
                                                                 "border",
                                                                 "border-[var(--border)]",
@@ -487,7 +523,7 @@ pub fn posts_page() -> Html {
                                                                     if !article.summary.is_empty() {
                                                                         html! {
                                                                             <p class={classes!(
-                                                                                "text-sm",
+                                                                                "text-base",
                                                                                 "text-[var(--muted)]",
                                                                                 "leading-relaxed",
                                                                                 "line-clamp-3",
@@ -515,9 +551,9 @@ pub fn posts_page() -> Html {
                                                                                     html! {
                                                                                         <span class={classes!(
                                                                                             "text-xs",
-                                                                                            "px-2",
+                                                                                            "px-3",
                                                                                             "py-1",
-                                                                                            "rounded",
+                                                                                            "rounded-full",
                                                                                             "bg-[var(--surface-alt)]",
                                                                                             "text-[var(--muted)]",
                                                                                             "border",

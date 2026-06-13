@@ -2,10 +2,7 @@ use yew::prelude::*;
 use yew_router::prelude::Link;
 
 use crate::{
-    components::{
-        loading_spinner::{LoadingSpinner, SpinnerSize},
-        scroll_to_top_button::ScrollToTopButton,
-    },
+    components::{scroll_to_top_button::ScrollToTopButton, skeleton::SkeletonCard},
     i18n::{current::categories_page as t, fill_one, fill_two},
     router::Route,
 };
@@ -14,12 +11,16 @@ use crate::{
 pub fn categories_page() -> Html {
     let categories = use_state(Vec::<crate::api::CategoryInfo>::new);
     let loading = use_state(|| true);
+    let load_error = use_state(|| None::<String>);
+    let refresh_tick = use_state(|| 0_u64);
 
     {
         let categories = categories.clone();
         let loading = loading.clone();
-        use_effect_with((), move |_| {
+        let load_error = load_error.clone();
+        use_effect_with(*refresh_tick, move |_| {
             loading.set(true);
+            load_error.set(None);
             wasm_bindgen_futures::spawn_local(async move {
                 match crate::api::fetch_categories().await {
                     Ok(data) => {
@@ -30,6 +31,7 @@ pub fn categories_page() -> Html {
                         web_sys::console::error_1(
                             &format!("Failed to fetch categories: {}", e).into(),
                         );
+                        load_error.set(Some(e.to_string()));
                         loading.set(false);
                     },
                 }
@@ -37,6 +39,13 @@ pub fn categories_page() -> Html {
             || ()
         });
     }
+
+    let on_retry = {
+        let refresh_tick = refresh_tick.clone();
+        Callback::from(move |_: MouseEvent| {
+            refresh_tick.set(*refresh_tick + 1);
+        })
+    };
 
     let total_categories = categories.len();
     let total_articles: usize = categories.iter().map(|c| c.count).sum();
@@ -143,13 +152,48 @@ pub fn categories_page() -> Html {
                 {
                     if *loading {
                         html! {
+                            <div class={classes!("grid", "grid-cols-1", "md:grid-cols-2", "lg:grid-cols-3", "gap-6")}>
+                                    { for (0..6).map(|_| html! { <SkeletonCard /> }) }
+                                </div>
+                        }
+                    } else if let Some(err) = (*load_error).clone() {
+                        html! {
                             <div class={classes!(
-                                "flex",
-                                "items-center",
-                                "justify-center",
-                                "min-h-[400px]"
+                                "empty-state",
+                                "text-center",
+                                "py-20",
+                                "px-4",
+                                "bg-[var(--surface)]",
+                                "rounded-2xl",
+                                "border",
+                                "border-[var(--border)]"
                             )}>
-                                <LoadingSpinner size={SpinnerSize::Large} />
+                                <i class={classes!(
+                                    "fas",
+                                    "fa-triangle-exclamation",
+                                    "text-6xl",
+                                    "text-amber-500",
+                                    "mb-6"
+                                )}></i>
+                                <p class={classes!(
+                                    "text-xl",
+                                    "font-bold",
+                                    "text-[var(--text)]",
+                                    "mb-2"
+                                )}>
+                                    { "Couldn't load" }
+                                </p>
+                                <p class={classes!("text-base", "text-[var(--muted)]", "mb-6")}>
+                                    { err }
+                                </p>
+                                <button
+                                    onclick={on_retry.clone()}
+                                    class={classes!("btn-fluent-secondary")}
+                                    type="button"
+                                >
+                                    <i class={classes!("fas", "fa-rotate-right", "mr-2")}></i>
+                                    { "Retry" }
+                                </button>
                             </div>
                         }
                     } else if categories.is_empty() {
@@ -160,7 +204,6 @@ pub fn categories_page() -> Html {
                                 "py-20",
                                 "px-4",
                                 "bg-[var(--surface)]",
-                                "liquid-glass",
                                 "rounded-2xl",
                                 "border",
                                 "border-[var(--border)]"
@@ -209,7 +252,6 @@ pub fn categories_page() -> Html {
                                                 "hover:border-[var(--primary)]",
                                                 "hover:shadow-[0_4px_12px_rgba(var(--primary-rgb),0.4)]",
                                                 "hover:-translate-y-1",
-                                                "liquid-glass"
                                             )}
                                         >
                                             <div class={classes!("flex", "flex-col", "gap-3", "h-full")}>

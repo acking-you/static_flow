@@ -11,8 +11,10 @@ workspace = true
 # 使用 workspace 级别的依赖版本
 yew = { workspace = true }
 yew-router = { workspace = true }
+gloo-events = "0.2"
 gloo-net = { workspace = true }
 gloo-timers = "0.3"
+gloo-utils = "0.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 wasm-bindgen = { workspace = true }
@@ -25,7 +27,8 @@ web-sys = { workspace = true, features = [
   "DomTokenList", "DomRect", "Navigator", "HtmlTextAreaElement", "Selection", "Range", "Node", "HtmlButtonElement",
   "Event", "MessageEvent", "EventSource", "HtmlAudioElement", "MediaError", "HtmlInputElement",
   "ClipboardEvent", "DataTransfer",
-  "TimeRanges", "File", "Blob", "FileList", "FormData"
+  "TimeRanges", "File", "Blob", "FileList", "FormData",
+  "IntersectionObserver", "IntersectionObserverEntry", "IntersectionObserverInit"
 ] }
 js-sys = { workspace = true }
 pulldown-cmark = { workspace = true }

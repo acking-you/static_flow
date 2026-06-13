@@ -60,17 +60,19 @@ pub fn pagination(props: &PaginationProps) -> Html {
         "text-sm",
         "font-semibold",
         "transition-all",
-        "duration-150",
+        "duration-[var(--motion-fast)]",
         "ease-[var(--ease-snap)]",
         "hover:bg-[var(--primary)]",
         "hover:text-white",
         "hover:border-[var(--primary)]",
         "hover:shadow-[0_2px_8px_rgba(0,120,212,0.3)]",
+        "hover:-translate-y-0.5",
+        "active:translate-y-0",
+        "active:scale-95",
         "disabled:opacity-50",
         "disabled:cursor-not-allowed",
         "disabled:hover:bg-[var(--surface)]",
-        "disabled:hover:text-[#27272a]",
-        "disabled:hover:border-[#a1a1aa]",
+        "disabled:hover:translate-y-0",
         "disabled:hover:shadow-none"
     );
 
@@ -83,7 +85,7 @@ pub fn pagination(props: &PaginationProps) -> Html {
     let next_classes = classes!(base_btn_classes.clone(), "text-[var(--text)]");
 
     html! {
-        <nav class="flex flex-wrap items-center gap-2" aria-label={t::ARIA_NAV}>
+        <nav class="pagination flex flex-wrap items-center gap-2" aria-label={t::ARIA_NAV}>
             <button
                 type="button"
                 class={prev_classes}

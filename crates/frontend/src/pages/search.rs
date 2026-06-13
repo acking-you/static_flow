@@ -162,6 +162,7 @@ pub fn search_page() -> Html {
     let semantic_advanced_open = use_state(|| hybrid);
     let music_results = use_state(Vec::<crate::api::SongSearchResult>::new);
     let music_loading = use_state(|| false);
+    let music_error = use_state(|| Option::<String>::None);
     let player_ctx = use_context::<MusicPlayerContext>();
     let hybrid_rrf_k_input = use_state(|| hybrid_rrf_k.to_string());
     let hybrid_vector_limit_input = use_state(|| {
@@ -453,6 +454,7 @@ pub fn search_page() -> Html {
     {
         let music_results = music_results.clone();
         let music_loading = music_loading.clone();
+        let music_error = music_error.clone();
         let keyword = keyword.clone();
         let mode = mode.clone();
         let music_sub_mode = music_sub_mode.clone();
@@ -463,10 +465,13 @@ pub fn search_page() -> Html {
                 if mode != "music" || kw.trim().is_empty() {
                     music_loading.set(false);
                     music_results.set(vec![]);
+                    music_error.set(None);
                 } else {
                     music_loading.set(true);
+                    music_error.set(None);
                     let music_results = music_results.clone();
                     let music_loading = music_loading.clone();
+                    let music_error = music_error.clone();
                     let q = kw.clone();
                     let api_mode = match sub_mode.as_str() {
                         "semantic" => Some("semantic"),
@@ -482,8 +487,17 @@ pub fn search_page() -> Html {
                         )
                         .await
                         {
-                            Ok(data) => music_results.set(data),
-                            Err(_) => music_results.set(vec![]),
+                            Ok(data) => {
+                                music_results.set(data);
+                                music_error.set(None);
+                            },
+                            Err(e) => {
+                                web_sys::console::error_1(
+                                    &format!("Music search failed: {}", e).into(),
+                                );
+                                music_results.set(vec![]);
+                                music_error.set(Some(e.to_string()));
+                            },
                         }
                         music_loading.set(false);
                     });
@@ -1388,6 +1402,11 @@ pub fn search_page() -> Html {
                                     <i class={classes!("fas", "fa-spinner", "fa-spin", "mr-2")}></i>
                                     { t::MUSIC_SEARCHING }
                                 </span>
+                            } else if music_error.is_some() {
+                                <span class={classes!("search-status-error")}>
+                                    <i class={classes!("fas", "fa-triangle-exclamation", "mr-2")}></i>
+                                    { t::SEARCH_ERROR_STATUS }
+                                </span>
                             } else if music_results.is_empty() {
                                 { fill_one(t::MUSIC_MISS_TEMPLATE, &keyword) }
                             } else {
@@ -1859,7 +1878,6 @@ pub fn search_page() -> Html {
                             "border",
                             "border-[var(--primary)]/30",
                             "bg-[var(--surface)]",
-                            "liquid-glass",
                             "px-4",
                             "py-4"
                         )}>
@@ -2140,7 +2158,6 @@ pub fn search_page() -> Html {
                                         "py-10",
                                         "px-4",
                                         "bg-[var(--surface)]",
-                                        "liquid-glass",
                                         "rounded-2xl",
                                         "border",
                                         "border-[var(--primary)]/30"
@@ -2256,7 +2273,6 @@ pub fn search_page() -> Html {
                                     "py-12",
                                     "px-4",
                                     "bg-[var(--surface)]",
-                                    "liquid-glass",
                                     "rounded-2xl",
                                     "border",
                                     "border-[var(--primary)]/30"
@@ -2384,7 +2400,6 @@ pub fn search_page() -> Html {
                                         "py-10",
                                         "px-4",
                                         "bg-[var(--surface)]",
-                                        "liquid-glass",
                                         "rounded-2xl",
                                         "border",
                                         "border-[var(--primary)]/30"
@@ -2469,7 +2484,6 @@ pub fn search_page() -> Html {
                                     "py-10",
                                     "px-4",
                                     "bg-[var(--surface)]",
-                                    "liquid-glass",
                                     "rounded-2xl",
                                     "border",
                                     "border-[var(--primary)]/30"
@@ -2500,6 +2514,32 @@ pub fn search_page() -> Html {
                             )}></i>
                             <span style="font-family: 'Space Mono', monospace;">{ t::SEARCHING_SHORT }</span>
                         </div>
+                    } else if mode == "music" && music_error.is_some() {
+                        <div class={classes!(
+                            "search-empty",
+                            "text-center",
+                            "py-16",
+                            "px-4",
+                            "bg-[var(--surface)]",
+                            "rounded-2xl",
+                            "border",
+                            "border-rose-500/30"
+                        )}>
+                            <i class={classes!(
+                                "fas",
+                                "fa-triangle-exclamation",
+                                "text-6xl",
+                                "text-rose-500",
+                                "mb-6",
+                                "opacity-70"
+                            )}></i>
+                            <p class={classes!("text-xl", "mb-2", "font-bold")} style="font-family: 'Space Mono', monospace;">
+                                { t::SEARCH_FAILED_TITLE }
+                            </p>
+                            <p class={classes!("text-base", "text-[var(--muted)]", "opacity-70")}>
+                                { (*music_error).clone().unwrap_or_default() }
+                            </p>
+                        </div>
                     } else if mode == "music" && !music_results.is_empty() {
                         <div class={classes!(
                             "grid",
@@ -2514,7 +2554,7 @@ pub fn search_page() -> Html {
                                 let id = r.id.clone();
                                 html! {
                                     <Link<Route> to={Route::MusicPlayer { id }}>
-                                        <div class="group bg-[var(--surface)] liquid-glass border border-[var(--border)] rounded-xl \
+                                        <div class="group bg-[var(--surface)] border border-[var(--border)] rounded-xl \
                                                     overflow-hidden flex flex-col transition-all duration-300 ease-out \
                                                     hover:shadow-[var(--shadow-8)] hover:border-[var(--primary)] hover:-translate-y-2">
                                             <div class="aspect-square bg-[var(--surface-alt)] relative overflow-hidden">
@@ -2560,7 +2600,6 @@ pub fn search_page() -> Html {
                             "py-16",
                             "px-4",
                             "bg-[var(--surface)]",
-                            "liquid-glass",
                             "rounded-2xl",
                             "border",
                             "border-[var(--primary)]/30"
@@ -2654,7 +2693,6 @@ pub fn search_page() -> Html {
                             "py-16",
                             "px-4",
                             "bg-[var(--surface)]",
-                            "liquid-glass",
                             "rounded-2xl",
                             "border",
                             "border-[var(--primary)]/30"
@@ -2926,7 +2964,6 @@ fn render_search_result(result: &SearchResult) -> Html {
         <article class={classes!(
             "search-result-card",
             "bg-[var(--surface)]",
-            "liquid-glass",
             "border-2",
             "border-[var(--primary)]/20",
             "rounded-xl",

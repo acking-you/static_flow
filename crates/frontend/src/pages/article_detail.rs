@@ -3,6 +3,7 @@ use static_flow_shared::{Article, ArticleKind, ArticleListItem};
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{
     window, Element, HtmlImageElement, HtmlSelectElement, HtmlTextAreaElement, KeyboardEvent, Node,
+    TouchEvent,
 };
 use yew::{prelude::*, virtual_dom::AttrValue};
 use yew_router::prelude::{use_navigator, use_route, Link};
@@ -19,7 +20,10 @@ use crate::{
         image_with_loading::ImageWithLoading,
         loading_spinner::{LoadingSpinner, SpinnerSize},
         raw_html::RawHtml,
+        reading_progress::ReadingProgress,
         scroll_to_top_button::ScrollToTopButton,
+        skeleton::SkeletonArticle,
+        toast::use_toast,
         toc_button::TocButton,
         tooltip::{TooltipIconButton, TooltipPosition},
         view_trend_chart::ViewTrendChart,
@@ -424,6 +428,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     let selection_comment_input = use_state(String::new);
     let selection_submit_loading = use_state(|| false);
     let selection_submit_feedback = use_state(|| None::<(bool, String)>);
+    let toast = use_toast();
 
     // Back to where user came from (non-article route) with robust fallback.
     let handle_back = {
@@ -854,6 +859,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         let selection_modal_open = selection_modal_open.clone();
         let selection_button_pos = selection_button_pos.clone();
         let comments_refresh_key = comments_refresh_key.clone();
+        let toast = toast.clone();
         Callback::from(move |_| {
             let Some(draft) = (*selection_draft).clone() else {
                 selection_submit_feedback
@@ -887,16 +893,17 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             let selection_draft = selection_draft.clone();
             let selection_button_pos = selection_button_pos.clone();
             let comments_refresh_key = comments_refresh_key.clone();
+            let toast = toast.clone();
 
             selection_submit_loading.set(true);
             selection_submit_feedback.set(None);
             wasm_bindgen_futures::spawn_local(async move {
                 match submit_article_comment(request).await {
                     Ok(resp) => {
-                        selection_submit_feedback.set(Some((
-                            true,
-                            format!("评论已提交，等待审核（任务 {}）。", resp.task_id),
-                        )));
+                        // The selection modal closes on success, so the
+                        // confirmation must outlive it as a toast.
+                        toast.success(format!("评论已提交，等待审核（任务 {}）。", resp.task_id));
+                        selection_submit_feedback.set(None);
                         selection_comment_input.set(String::new());
                         selection_modal_open.set(false);
                         selection_draft.set(None);
@@ -1265,6 +1272,79 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
         })
     };
 
+    // Touch gestures for the lightbox: two-finger pinch drives the zoom
+    // state, a quick double-tap toggles 1x <-> 2x. One-finger panning stays
+    // native (the container scrolls; touch-action pan-x pan-y suppresses the
+    // browser's own pinch so ours wins).
+    let pinch_state = use_mut_ref(|| None::<(f64, f64)>);
+    let last_tap = use_mut_ref(|| None::<(f64, i32, i32)>);
+
+    fn touch_distance(event: &TouchEvent) -> Option<f64> {
+        let touches = event.touches();
+        let (a, b) = (touches.get(0)?, touches.get(1)?);
+        let dx = (a.client_x() - b.client_x()) as f64;
+        let dy = (a.client_y() - b.client_y()) as f64;
+        Some((dx * dx + dy * dy).sqrt())
+    }
+
+    let lightbox_touch_start = {
+        let pinch_state = pinch_state.clone();
+        let last_tap = last_tap.clone();
+        let preview_zoom = preview_zoom.clone();
+        Callback::from(move |event: TouchEvent| {
+            let touches = event.touches();
+            if touches.length() == 2 {
+                if let Some(distance) = touch_distance(&event) {
+                    *pinch_state.borrow_mut() = Some((distance, *preview_zoom));
+                }
+                return;
+            }
+            if touches.length() == 1 {
+                let Some(touch) = touches.get(0) else {
+                    return;
+                };
+                let now = js_sys::Date::now();
+                let (x, y) = (touch.client_x(), touch.client_y());
+                let previous_tap = *last_tap.borrow();
+                let is_double = previous_tap.is_some_and(|(at, lx, ly)| {
+                    now - at < 300.0 && (x - lx).abs() < 30 && (y - ly).abs() < 30
+                });
+                if is_double {
+                    *last_tap.borrow_mut() = None;
+                    preview_zoom.set(if (*preview_zoom - 1.0).abs() < 0.01 { 2.0 } else { 1.0 });
+                } else {
+                    *last_tap.borrow_mut() = Some((now, x, y));
+                }
+            }
+        })
+    };
+    let lightbox_touch_move = {
+        let pinch_state = pinch_state.clone();
+        let preview_zoom = preview_zoom.clone();
+        Callback::from(move |event: TouchEvent| {
+            let state = *pinch_state.borrow();
+            if let Some((start_distance, start_zoom)) = state {
+                if event.touches().length() == 2 {
+                    if let Some(distance) = touch_distance(&event) {
+                        if start_distance > 0.0 {
+                            let next = (start_zoom * distance / start_distance)
+                                .clamp(LIGHTBOX_MIN_ZOOM, LIGHTBOX_MAX_ZOOM);
+                            preview_zoom.set(next);
+                        }
+                    }
+                }
+            }
+        })
+    };
+    let lightbox_touch_end = {
+        let pinch_state = pinch_state.clone();
+        Callback::from(move |event: TouchEvent| {
+            if event.touches().length() < 2 {
+                *pinch_state.borrow_mut() = None;
+            }
+        })
+    };
+
     let markdown_render_key = if let Some(article) = article_data.as_ref() {
         let lang_key = if *content_language == ArticleContentLanguage::En { "en" } else { "zh" };
         format!("{}:{lang_key}", article.id)
@@ -1479,8 +1559,8 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
     }
 
     let loading_view = html! {
-        <div class={classes!("flex", "min-h-[50vh]", "items-center", "justify-center")}>
-            <LoadingSpinner size={SpinnerSize::Large} />
+        <div class={classes!("mx-auto", "w-full", "max-w-[850px]", "px-4", "py-8")}>
+            <SkeletonArticle />
         </div>
     };
 
@@ -2338,6 +2418,9 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                         "border",
                                         "border-[var(--primary)]/22",
                                         "bg-[linear-gradient(135deg,rgba(15,123,95,0.12),rgba(250,240,214,0.92))]",
+                                        "dark:bg-[linear-gradient(135deg,rgba(58,160,255,0.10),rgba(var(--surface-rgb),0.94))]",
+                                        "dark:border-[var(--border)]",
+                                        "dark:shadow-[0_18px_40px_rgba(0,0,0,0.45)]",
                                         "p-5",
                                         "shadow-[0_18px_40px_rgba(15,123,95,0.12)]",
                                         "sm:mb-5",
@@ -3196,7 +3279,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                     "sm:rounded-[22px]",
                                     "sm:p-4"
                                 )}>
-                                    <p class={classes!("m-0", "text-[1rem]", "leading-[1.8]", "text-[var(--ink)]")}>
+                                    <p class={classes!("m-0", "text-[1rem]", "leading-[1.8]", "text-[#1d1f23]")}>
                                         { interactive_prompt_desc }
                                     </p>
                                     <p class={classes!("m-0", "mt-3", "text-sm", "font-medium", "leading-[1.7]", "text-[var(--primary)]")}>
@@ -3516,7 +3599,11 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                     "overflow-auto",
                                     "shadow-[var(--shadow-lg)]"
                                 )}
+                                style="touch-action: pan-x pan-y;"
                                 onclick={stop_lightbox_bubble.clone()}
+                                ontouchstart={lightbox_touch_start.clone()}
+                                ontouchmove={lightbox_touch_move.clone()}
+                                ontouchend={lightbox_touch_end.clone()}
                             >
                                 {
                                     if let Some(src) = (*preview_image_url).clone() {
@@ -3791,6 +3878,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             if !is_overlay_open {
                 <ScrollToTopButton />
                 <TocButton />
+                <ReadingProgress />
             }
         </main>
     }

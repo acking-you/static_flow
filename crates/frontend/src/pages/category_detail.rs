@@ -8,10 +8,7 @@ use yew::prelude::*;
 use yew_router::prelude::Link;
 
 use crate::{
-    components::{
-        loading_spinner::{LoadingSpinner, SpinnerSize},
-        scroll_to_top_button::ScrollToTopButton,
-    },
+    components::{scroll_to_top_button::ScrollToTopButton, skeleton::SkeletonCard},
     i18n::{current::category_detail_page as t, fill_one},
     pages::posts::group_articles_by_year,
     router::Route,
@@ -32,13 +29,18 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
 
     let articles = use_state(Vec::<ArticleListItem>::new);
     let loading = use_state(|| true);
+    let load_error = use_state(|| None::<String>);
+    let refresh_tick = use_state(|| 0_u64);
 
     {
         let articles = articles.clone();
         let category = filter_value.clone();
         let loading = loading.clone();
-        use_effect_with(category.clone(), move |_| {
+        let load_error = load_error.clone();
+        let tick = *refresh_tick;
+        use_effect_with((category.clone(), tick), move |_| {
             loading.set(true);
+            load_error.set(None);
             wasm_bindgen_futures::spawn_local(async move {
                 let category_ref = category.as_deref();
                 match crate::api::fetch_all_articles(None, category_ref).await {
@@ -50,6 +52,7 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
                         web_sys::console::error_1(
                             &format!("Failed to fetch articles: {}", e).into(),
                         );
+                        load_error.set(Some(e.to_string()));
                         loading.set(false);
                     },
                 }
@@ -57,6 +60,13 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
             || ()
         });
     }
+
+    let on_retry = {
+        let refresh_tick = refresh_tick.clone();
+        Callback::from(move |_: MouseEvent| {
+            refresh_tick.set(*refresh_tick + 1);
+        })
+    };
 
     let filtered = (*articles).clone();
 
@@ -235,13 +245,52 @@ pub fn category_detail_page(props: &CategoryDetailProps) -> Html {
                 {
                     if *loading {
                         html! {
+                            <div class={classes!("grid", "grid-cols-1", "md:grid-cols-2", "lg:grid-cols-3", "gap-6")}>
+                                { for (0..6).map(|_| html! { <SkeletonCard /> }) }
+                            </div>
+                        }
+                    } else if let Some(err) = (*load_error).clone() {
+                        html! {
                             <div class={classes!(
-                                "flex",
-                                "min-h-[40vh]",
-                                "items-center",
-                                "justify-center"
+                                "empty-state",
+                                "text-center",
+                                "py-16",
+                                "px-8",
+                                "rounded-2xl",
+                                "bg-[var(--surface)]/50",
+                                "border",
+                                "border-[var(--border)]"
                             )}>
-                                <LoadingSpinner size={SpinnerSize::Large} />
+                                <i class={classes!(
+                                    "fas",
+                                    "fa-triangle-exclamation",
+                                    "text-5xl",
+                                    "text-amber-500",
+                                    "mb-4"
+                                )}></i>
+                                <p class={classes!(
+                                    "text-lg",
+                                    "font-semibold",
+                                    "text-[var(--text)]",
+                                    "mb-2"
+                                )}>
+                                    { t::LOAD_ERROR_TITLE }
+                                </p>
+                                <p class={classes!(
+                                    "text-sm",
+                                    "text-[var(--muted)]",
+                                    "mb-6",
+                                    "break-words"
+                                )}>
+                                    { err }
+                                </p>
+                                <button
+                                    onclick={on_retry.clone()}
+                                    class={classes!("btn-fluent-secondary")}
+                                >
+                                    <i class="fas fa-rotate-right mr-2"></i>
+                                    { t::RETRY }
+                                </button>
                             </div>
                         }
                     } else if grouped_by_year.is_empty() {

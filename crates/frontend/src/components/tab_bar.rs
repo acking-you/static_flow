@@ -10,6 +10,7 @@
 //! the first / last tab — matches the WAI-ARIA tab pattern so keyboard-only
 //! users can navigate without reaching for the mouse.
 
+use wasm_bindgen::JsCast;
 use web_sys::KeyboardEvent;
 use yew::prelude::*;
 
@@ -57,12 +58,24 @@ pub fn render_tab_bar(
                         _ => return,
                     };
                     e.prevent_default();
-                    on_select_key.emit(tab_ids_for_key[target].clone());
+                    let target_id = tab_ids_for_key[target].clone();
+                    on_select_key.emit(target_id.clone());
+                    // Move real DOM focus to the rotated-to tab so the roving
+                    // tabindex stays in sync (focus() ignores the momentary
+                    // tabindex=-1; the re-render flips it back to 0).
+                    if let Some(el) = web_sys::window()
+                        .and_then(|w| w.document())
+                        .and_then(|d| d.get_element_by_id(&format!("sf-admin-tab-{target_id}")))
+                        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+                    {
+                        let _ = el.focus();
+                    }
                 });
                 html! {
                     <button
                         type="button"
                         role="tab"
+                        id={format!("sf-admin-tab-{id}")}
                         aria-selected={is_active.to_string()}
                         tabindex={if is_active { "0" } else { "-1" }}
                         class={classes!(

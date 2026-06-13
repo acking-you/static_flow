@@ -1,15 +1,15 @@
 use serde::Deserialize;
-use web_sys::HtmlInputElement;
-use yew::{events::InputEvent, prelude::*};
+use yew::prelude::*;
 use yew_router::prelude::*;
 
 use crate::{
     components::{
         icons::IconName,
+        search_suggest::SearchSuggest,
         theme_toggle::ThemeToggle,
         tooltip::{TooltipIconButton, TooltipPosition},
     },
-    i18n::current::{common as common_text, header as t},
+    i18n::current::header as t,
     router::Route,
 };
 
@@ -55,15 +55,6 @@ pub fn header() -> Html {
         Callback::from(move |_| mobile_menu_open.set(false))
     };
 
-    let on_search_input = {
-        let search_query = search_query.clone();
-        Callback::from(move |event: InputEvent| {
-            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
-                search_query.set(target.value());
-            }
-        })
-    };
-
     let clear_search = {
         let search_query = search_query.clone();
         Callback::from(move |_| search_query.set(String::new()))
@@ -96,34 +87,6 @@ pub fn header() -> Html {
     };
 
     // Enter键搜索
-    let on_search_keypress = {
-        let search_query = search_query.clone();
-        let route = route.clone();
-        let location = location.clone();
-        Callback::from(move |e: KeyboardEvent| {
-            if e.key() == "Enter" {
-                let query = (*search_query).trim();
-                if !query.is_empty() {
-                    let encoded_query = urlencoding::encode(query);
-                    let search_url =
-                        build_search_url(route.clone(), location.clone(), &encoded_query);
-                    if let Some(window) = web_sys::window() {
-                        if let Ok(history) = window.history() {
-                            let _ = history.push_state_with_url(
-                                &wasm_bindgen::JsValue::NULL,
-                                "",
-                                Some(&search_url),
-                            );
-                            if let Ok(event) = web_sys::Event::new("popstate") {
-                                let _ = window.dispatch_event(&event);
-                            }
-                        }
-                    }
-                }
-            }
-        })
-    };
-
     let mobile_menu_classes = classes!(
         "fixed",
         "inset-0",
@@ -142,9 +105,10 @@ pub fn header() -> Html {
         "absolute",
         "inset-0",
         "bg-[var(--acrylic-bg-light)]",
-        "[.dark_&]:bg-[var(--acrylic-bg-dark)]",
+        "dark:bg-[var(--acrylic-bg-dark)]",
         "text-[var(--text)]",
-        "p-[4.5rem_1.5rem_2rem]",
+        "px-6",
+        "pb-8",
         "flex",
         "flex-col",
         "gap-5",
@@ -202,43 +166,14 @@ pub fn header() -> Html {
         (t::NAV_LLM, Route::LlmAccess, "fa-key"),
     ];
 
-    let mobile_search_input = on_search_input.clone();
-    let mobile_search_keypress = {
-        let search_query = search_query.clone();
+    // Mobile search submits through the shared SearchSuggest (live results);
+    // navigate to /search and close the menu.
+    let mobile_search_submit = {
         let route = route.clone();
         let location = location.clone();
         let mobile_menu_open = mobile_menu_open.clone();
-        Callback::from(move |e: KeyboardEvent| {
-            if e.key() == "Enter" {
-                let query = (*search_query).trim();
-                if !query.is_empty() {
-                    let encoded_query = urlencoding::encode(query);
-                    let search_url =
-                        build_search_url(route.clone(), location.clone(), &encoded_query);
-                    if let Some(window) = web_sys::window() {
-                        if let Ok(history) = window.history() {
-                            let _ = history.push_state_with_url(
-                                &wasm_bindgen::JsValue::NULL,
-                                "",
-                                Some(&search_url),
-                            );
-                            if let Ok(event) = web_sys::Event::new("popstate") {
-                                let _ = window.dispatch_event(&event);
-                            }
-                        }
-                    }
-                    mobile_menu_open.set(false);
-                }
-            }
-        })
-    };
-    let mobile_do_search = {
-        let search_query = search_query.clone();
-        let route = route.clone();
-        let location = location.clone();
-        let mobile_menu_open = mobile_menu_open.clone();
-        Callback::from(move |_: MouseEvent| {
-            let query = (*search_query).trim();
+        Callback::from(move |query: String| {
+            let query = query.trim();
             if !query.is_empty() {
                 let encoded_query = urlencoding::encode(query);
                 let search_url = build_search_url(route.clone(), location.clone(), &encoded_query);
@@ -302,7 +237,8 @@ pub fn header() -> Html {
                                         "hover:bg-[var(--surface-alt)]",
                                         "hover:scale-110"
                                     )}>
-                                        <i class={classes!("fas", *icon, "text-[1.1rem]")} title={*label}></i>
+                                        <i class={classes!("fas", *icon, "text-[1.1rem]")} title={*label} aria-hidden="true"></i>
+                                        <span class={classes!("sr-only")}>{ *label }</span>
                                     </Link<Route>>
                                 }
                             }) }
@@ -324,19 +260,46 @@ pub fn header() -> Html {
                                     "hover:scale-110"
                                 )}
                             >
-                                <i class={classes!("fas", "fa-image", "text-[1.1rem]")} title={t::IMAGE_LIBRARY_TITLE}></i>
+                                <i class={classes!("fas", "fa-image", "text-[1.1rem]")} title={t::IMAGE_LIBRARY_TITLE} aria-hidden="true"></i>
+                                <span class={classes!("sr-only")}>{ t::IMAGE_LIBRARY_TITLE }</span>
                             </Link<Route>>
                         </nav>
 
-                        // Search
+                        // Search (with suggestion dropdown)
                         <div class={classes!("flex", "items-center", "gap-1")}>
-                            <input
-                                type="text"
-                                placeholder={common_text::SEARCH_PLACEHOLDER}
+                            <SearchSuggest
                                 value={(*search_query).clone()}
-                                oninput={on_search_input.clone()}
-                                onkeypress={on_search_keypress.clone()}
-                                class={classes!(
+                                on_change={{
+                                    let search_query = search_query.clone();
+                                    Callback::from(move |value: String| search_query.set(value))
+                                }}
+                                on_submit={{
+                                    let route = route.clone();
+                                    let location = location.clone();
+                                    Callback::from(move |query: String| {
+                                        let encoded_query = urlencoding::encode(&query);
+                                        let search_url = build_search_url(
+                                            route.clone(),
+                                            location.clone(),
+                                            &encoded_query,
+                                        );
+                                        if let Some(window) = web_sys::window() {
+                                            if let Ok(history) = window.history() {
+                                                let _ = history.push_state_with_url(
+                                                    &wasm_bindgen::JsValue::NULL,
+                                                    "",
+                                                    Some(&search_url),
+                                                );
+                                                if let Ok(event) =
+                                                    web_sys::Event::new("popstate")
+                                                {
+                                                    let _ = window.dispatch_event(&event);
+                                                }
+                                            }
+                                        }
+                                    })
+                                }}
+                                input_class={classes!(
                                     "search-minimal",
                                     "w-[180px]", "lg:w-[220px]",
                                     "border", "border-[var(--border)]", "rounded-lg",
@@ -468,8 +431,15 @@ pub fn header() -> Html {
                     role="dialog"
                     aria-modal="true"
                 >
-                    // Close button
-                    <div class={classes!("absolute", "right-5", "top-5", "z-10")}>
+                    // Close button — sticky strip so it stays reachable while the
+                    // menu scrolls (it used to scroll away on short/landscape phones).
+                    <div class={classes!(
+                        "sticky", "top-0", "z-10",
+                        "flex", "justify-end",
+                        "pt-5", "pb-3", "-mx-6", "px-6",
+                        "bg-[var(--acrylic-bg-light)]", "dark:bg-[var(--acrylic-bg-dark)]",
+                        "[backdrop-filter:blur(50px)_saturate(var(--acrylic-saturate))]"
+                    )}>
                         <TooltipIconButton
                             icon={IconName::ArrowLeft}
                             tooltip={t::CLOSE_TOOLTIP}
@@ -487,15 +457,16 @@ pub fn header() -> Html {
                     </div>
 
                     // Mobile search
-                    <div class={classes!("flex", "gap-2", "items-center", "mb-3")}>
-                        <input
-                            type="text"
-                            placeholder={common_text::SEARCH_PLACEHOLDER}
+                    <div class={classes!("mobile-search-suggest", "flex", "gap-2", "items-center", "mb-3")}>
+                        <SearchSuggest
                             value={(*search_query).clone()}
-                            oninput={mobile_search_input.clone()}
-                            onkeypress={mobile_search_keypress.clone()}
-                            class={classes!(
-                                "flex-1",
+                            on_change={{
+                                let search_query = search_query.clone();
+                                Callback::from(move |value: String| search_query.set(value))
+                            }}
+                            on_submit={mobile_search_submit.clone()}
+                            input_class={classes!(
+                                "w-full",
                                 "border", "border-[var(--border)]", "rounded-lg",
                                 "px-4", "h-12",
                                 "bg-[var(--surface)]",
@@ -506,22 +477,9 @@ pub fn header() -> Html {
                         />
                         <button
                             type="button"
-                            onclick={mobile_do_search.clone()}
-                            class={classes!(
-                                "w-12", "h-12",
-                                "rounded-lg",
-                                "border", "border-[var(--border)]",
-                                "bg-[var(--surface)]",
-                                "text-[var(--muted)]",
-                                "hover:text-[var(--primary)]"
-                            )}
-                        >
-                            <i class="fas fa-search"></i>
-                        </button>
-                        <button
-                            type="button"
                             onclick={mobile_clear_search.clone()}
                             disabled={search_query.is_empty()}
+                            aria-label={t::CLEAR_ARIA}
                             class={classes!(
                                 "w-12", "h-12",
                                 "rounded-lg",
@@ -532,7 +490,7 @@ pub fn header() -> Html {
                                 "disabled:opacity-30"
                             )}
                         >
-                            <i class="fas fa-times"></i>
+                            <i class="fas fa-times" aria-hidden="true"></i>
                         </button>
                     </div>
 
