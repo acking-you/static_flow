@@ -4,7 +4,10 @@
 pub mod admin_local_media_uploads;
 pub mod article_card;
 pub mod audio_player;
+pub mod copy_button;
 pub mod date_range_picker;
+pub mod drawer;
+pub mod empty_state;
 pub mod error_banner;
 pub mod footer;
 pub mod form;
@@ -24,6 +27,7 @@ pub mod search_suggest;
 pub mod skeleton;
 pub mod spotlight;
 pub mod stats_card;
+pub mod status_badge;
 pub mod stream_chunk_batcher;
 pub mod synced_lyrics;
 pub mod tab_bar;

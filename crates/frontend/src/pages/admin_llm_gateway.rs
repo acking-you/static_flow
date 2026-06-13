@@ -58,7 +58,7 @@ use crate::{
     },
     components::{
         date_range_picker::DateRangePicker, pagination::Pagination, search_box::SearchBox,
-        tab_bar::render_tab_bar,
+        status_badge::StatusBadge, tab_bar::render_tab_bar,
     },
     pages::llm_access_shared::{
         confirm_destructive, credit_usage_missing_label, format_ms, format_number_i64,
@@ -940,27 +940,6 @@ fn is_gpt_pro_account(plan_type: Option<&str>) -> bool {
 }
 
 // Render a compact status pill that matches the current key state.
-fn key_status_badge(status: &str) -> Classes {
-    let base = classes!(
-        "inline-flex",
-        "items-center",
-        "rounded-full",
-        "px-2.5",
-        "py-1",
-        "text-xs",
-        "font-semibold",
-        "uppercase",
-        "tracking-[0.16em]"
-    );
-    match status {
-        "active" => {
-            classes!(base, "bg-emerald-500/12", "text-emerald-700", "dark:text-emerald-200")
-        },
-        "disabled" => classes!(base, "bg-slate-500/14", "text-slate-700", "dark:text-slate-200"),
-        _ => classes!(base, "bg-[var(--surface-alt)]", "text-[var(--muted)]"),
-    }
-}
-
 // Keep copy affordances visually small so dense diagnostics tables stay
 // readable.
 fn copy_icon_button(text: &str, on_copy: &Callback<(String, String)>) -> Html {
@@ -1398,7 +1377,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
         )}>
             <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                 <div class={classes!("flex", "items-center", "gap-2")}>
-                    <div class={key_status_badge(&key_item.status)}>{ key_item.status.clone() }</div>
+                    <StatusBadge status={key_item.status.clone()} />
                     <h3 class={classes!("m-0", "text-base", "font-bold")}>{ key_item.name.clone() }</h3>
                     <span class={classes!("text-xs", "text-[var(--muted)]")}>{ format_ms(key_item.created_at) }</span>
                 </div>
@@ -1427,7 +1406,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     >
                         { "复制" }
                     </button>
-                    <button class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")} onclick={on_delete} disabled={*saving}>
+                    <button class={classes!("btn-terminal", "btn-terminal-danger")} onclick={on_delete} disabled={*saving}>
                         { "删除" }
                     </button>
                 </div>
@@ -8915,7 +8894,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     </button>
                                                 }
                                                 <button
-                                                    class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")}
+                                                    class={classes!("btn-terminal", "btn-terminal-danger")}
                                                     onclick={Callback::from(move |_| on_delete.emit(acc_name_for_delete.clone()))}
                                                 >
                                                     { "删除" }
@@ -9355,21 +9334,12 @@ pub fn admin_llm_gateway_page() -> Html {
                                 let approve_cb = on_approve_token_request.clone();
                                 let reject_cb = on_reject_token_request.clone();
                                 let action_busy = token_request_action_inflight.contains(&request_id);
-                                let status_class = match item.status.as_str() {
-                                    "pending" => classes!("bg-amber-500/10", "text-amber-700", "dark:text-amber-200", "border-amber-500/20"),
-                                    "failed" => classes!("bg-red-500/10", "text-red-700", "dark:text-red-200", "border-red-500/20"),
-                                    "issued" => classes!("bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200", "border-emerald-500/20"),
-                                    "rejected" => classes!("bg-slate-500/10", "text-slate-700", "dark:text-slate-200", "border-slate-500/20"),
-                                    _ => classes!("bg-[var(--surface-alt)]", "text-[var(--muted)]", "border-[var(--border)]"),
-                                };
                                 html! {
                                     <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
                                         <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
                                             <div class={classes!("min-w-0", "space-y-1")}>
                                                 <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                                                    <span class={classes!("inline-flex", "rounded-full", "border", "px-2.5", "py-1", "text-xs", "font-semibold", status_class)}>
-                                                        { item.status.clone() }
-                                                    </span>
+                                                    <StatusBadge status={item.status.clone()} />
                                                     <span class={classes!("font-semibold")}>{ item.requester_email.clone() }</span>
                                                     <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>{ item.request_id.clone() }</span>
                                                 </div>
@@ -9435,7 +9405,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                                 }
                                                 if item.status == "pending" || item.status == "failed" {
                                                     <button
-                                                        class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")}
+                                                        class={classes!("btn-terminal", "btn-terminal-danger")}
                                                         onclick={Callback::from(move |_| reject_cb.emit(reject_request_id.clone()))}
                                                         disabled={action_busy}
                                                     >
@@ -9619,7 +9589,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     }
                                                 if item.status == "pending" || item.status == "failed" {
                                                     <button
-                                                        class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")}
+                                                        class={classes!("btn-terminal", "btn-terminal-danger")}
                                                         onclick={Callback::from(move |_| reject_cb.emit(reject_request_id.clone()))}
                                                         disabled={action_busy}
                                                     >
@@ -9772,7 +9742,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     </button>
                                                 }
                                                 <button
-                                                    class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")}
+                                                    class={classes!("btn-terminal", "btn-terminal-danger")}
                                                     onclick={Callback::from(move |_| delete_cb.emit(delete_request_id.clone()))}
                                                     disabled={action_busy}
                                                 >

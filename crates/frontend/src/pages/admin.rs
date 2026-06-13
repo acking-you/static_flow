@@ -1,19 +1,7 @@
 use std::collections::HashSet;
 
-use wasm_bindgen::prelude::*;
 use web_sys::{HtmlInputElement, HtmlTextAreaElement};
 use yew::prelude::*;
-
-#[wasm_bindgen(inline_js = r#"
-export function copy_text(text) {
-    if (navigator.clipboard) {
-        navigator.clipboard.writeText(text).catch(function(){});
-    }
-}
-"#)]
-extern "C" {
-    fn copy_text(text: &str);
-}
 use yew_router::prelude::Link;
 
 use crate::{
@@ -48,10 +36,14 @@ use crate::{
         ViewAnalyticsConfig,
     },
     components::{
+        copy_button::CopyButton,
+        drawer::Drawer,
+        empty_state::EmptyState,
         loading_spinner::{LoadingSpinner, SpinnerSize},
         modal::ConfirmModal,
         pagination::Pagination,
         search_box::SearchBox,
+        status_badge::StatusBadge,
         toast::use_toast,
         view_trend_chart::ViewTrendChart,
     },
@@ -202,7 +194,7 @@ fn music_wish_row(props: &MusicWishRowProps) -> Html {
             <td class={classes!("py-2", "pr-3", "max-w-[180px]", "truncate")} title={wish.song_name.clone()}>{ wish.song_name.clone() }</td>
             <td class={classes!("py-2", "pr-3")}>{ wish.artist_hint.clone().unwrap_or_default() }</td>
             <td class={classes!("py-2", "pr-3")}>{ wish.nickname.clone() }</td>
-            <td class={classes!("py-2", "pr-3")}><span class={status_badge_class(&status)}>{ status.clone() }</span></td>
+            <td class={classes!("py-2", "pr-3")}><StatusBadge status={status.clone()} /></td>
             <td class={classes!("py-2", "pr-3")}>{ wish.ip_region.clone() }</td>
             <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format_ms(wish.created_at) }</td>
             <td class={classes!("py-2", "pr-3")}>
@@ -219,7 +211,7 @@ fn music_wish_row(props: &MusicWishRowProps) -> Html {
                             { "AI Output" }
                         </Link<Route>>
                     }
-                    <button class={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs", "text-red-600", "dark:text-red-400")} disabled={inflight} onclick={dispatch(WishAction::Delete)}>{ "Delete" }</button>
+                    <button class={classes!("btn-fluent-danger", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={dispatch(WishAction::Delete)}>{ "Delete" }</button>
                 </div>
             </td>
         </tr>
@@ -280,7 +272,7 @@ fn article_request_row(props: &ArticleRequestRowProps) -> Html {
                             { "AI Output" }
                         </Link<Route>>
                     }
-                    <button class={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs", "text-red-600", "dark:text-red-400")} disabled={inflight} onclick={dispatch(ArticleRequestAction::Delete)}>{ "Delete" }</button>
+                    <button class={classes!("btn-fluent-danger", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={dispatch(ArticleRequestAction::Delete)}>{ "Delete" }</button>
                 </div>
             </td>
         </tr>
@@ -437,15 +429,6 @@ fn memory_stack_list(entries: &[MemoryStackEntry]) -> Html {
     }
 }
 
-fn copy_icon_button(text: &str) -> Html {
-    let text = text.to_string();
-    let on_copy = Callback::from(move |_: MouseEvent| copy_text(&text));
-    html! {
-        <button class="btn-copy-inline" onclick={on_copy} title="Copy">
-            <i class="fas fa-copy text-[10px]" aria-hidden="true"></i>
-        </button>
-    }
-}
 
 #[function_component(AdminPage)]
 pub fn admin_page() -> Html {
@@ -3159,17 +3142,18 @@ pub fn admin_page() -> Html {
                                                                     </button>
                                                                 </td>
                                                                 <td class={classes!("py-2", "pr-3")}>
-                                                                    <span class={status_badge_class(&status)}>{ status }</span>
+                                                                    <StatusBadge status={status.clone()} />
                                                                 </td>
                                                                 <td class={classes!("py-2", "pr-3")}>{ task.attempt_count }</td>
                                                                 <td class={classes!("py-2", "pr-3")}>{ format_ms(task.created_at) }</td>
                                                                 <td class={classes!("py-2", "pr-3")}>
-                                                                    <div class={classes!("flex", "gap-2", "flex-wrap")}>
+                                                                    <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
                                                                         <button class={classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs")} onclick={approve_click} disabled={!can_approve}>{ "Approve" }</button>
                                                                         <button class={classes!("btn-fluent-primary", "!px-2", "!py-1", "!text-xs")} onclick={approve_run_click} disabled={!can_approve_run}>{ "Approve+Codex" }</button>
                                                                         <button class={classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs")} onclick={retry_click} disabled={!can_retry}>{ "Retry" }</button>
+                                                                        <span class={classes!("mx-0.5", "h-4", "w-px", "bg-[var(--border)]")} aria-hidden="true" />
                                                                         <button class={classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs")} onclick={reject_click} disabled={!can_reject}>{ "Reject" }</button>
-                                                                        <button class={classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs")} onclick={delete_click} disabled={!can_delete}>{ "Delete" }</button>
+                                                                        <button class={classes!("btn-fluent-danger", "!px-2", "!py-1", "!text-xs")} onclick={delete_click} disabled={!can_delete}>{ "Delete" }</button>
                                                                     </div>
                                                                 </td>
                                                             </tr>
@@ -3183,18 +3167,28 @@ pub fn admin_page() -> Html {
                             }) }
                         </div>
 
-                        if let Some(task) = (*selected_task).clone() {
-                            <div class={classes!("mt-4", "rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-4")}>
-                                <h3 class={classes!("m-0", "mb-3", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
-                                    { format!("Task Detail: {}", task.task_id) }
-                                </h3>
+                        <Drawer
+                            open={selected_task.is_some()}
+                            on_close={{
+                                let selected_task_id = selected_task_id.clone();
+                                let selected_task = selected_task.clone();
+                                let selected_task_ai_output = selected_task_ai_output.clone();
+                                Callback::from(move |_| {
+                                    selected_task_id.set(None);
+                                    selected_task.set(None);
+                                    selected_task_ai_output.set(None);
+                                })
+                            }}
+                            title={(*selected_task).as_ref().map(|t| AttrValue::from(format!("任务详情 · {}", t.task_id))).unwrap_or_default()}
+                        >
+                            if let Some(task) = (*selected_task).clone() {
                                 <p class={classes!("m-0", "mb-2", "text-sm", "text-[var(--muted)]")}>
                                     { format!("status={} created={} updated={}", task.status, format_ms(task.created_at), format_ms(task.updated_at)) }
                                 </p>
                                 <label class={classes!("block", "text-sm", "mb-2")}>
                                     { "comment_text" }
                                     <textarea
-                                        class={classes!("mt-1", "w-full", "min-h-[120px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                        class={classes!("mt-1", "w-full", "min-h-[120px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                         value={task.comment_text.clone()}
                                         oninput={on_selected_task_comment_change}
                                     />
@@ -3202,7 +3196,7 @@ pub fn admin_page() -> Html {
                                 <label class={classes!("block", "text-sm", "mb-2")}>
                                     { "admin_note" }
                                     <textarea
-                                        class={classes!("mt-1", "w-full", "min-h-[90px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                        class={classes!("mt-1", "w-full", "min-h-[90px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                         value={task.admin_note.clone().unwrap_or_default()}
                                         oninput={on_selected_task_note_change}
                                     />
@@ -3274,8 +3268,8 @@ pub fn admin_page() -> Html {
                                         </ul>
                                     </div>
                                 }
-                            </div>
-                        }
+                            }
+                        </Drawer>
                     </>
                     }
                     <div class={classes!("mt-4")}>
@@ -3299,6 +3293,9 @@ pub fn admin_page() -> Html {
                                 <span>{ "Loading published comments..." }</span>
                             </div>
                         }
+                        if published_comments.is_empty() {
+                            <EmptyState icon="fa-comments" title="暂无已发布评论" hint="审核通过的评论会显示在这里。" />
+                        } else {
                         <div class={classes!("overflow-x-auto")}>
                             <table class={classes!("w-full", "text-sm")}>
                                 <thead>
@@ -3331,7 +3328,7 @@ pub fn admin_page() -> Html {
                                                 <td class={classes!("py-2", "pr-3") }>
                                                     <div class={classes!("flex", "gap-2", "flex-wrap")}>
                                                         <button class={classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs")} onclick={select_click}>{ "Update" }</button>
-                                                        <button class={classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs")} onclick={delete_click}>{ "Delete" }</button>
+                                                        <button class={classes!("btn-fluent-danger", "!px-2", "!py-1", "!text-xs")} onclick={delete_click}>{ "Delete" }</button>
                                                     </div>
                                                 </td>
                                             </tr>
@@ -3340,16 +3337,25 @@ pub fn admin_page() -> Html {
                                 </tbody>
                             </table>
                         </div>
+                        }
 
-                        if let Some(comment) = (*selected_published).clone() {
-                            <div class={classes!("mt-4", "rounded-[var(--radius)]", "border", "border-[var(--border)]", "p-4")}>
-                                <h3 class={classes!("m-0", "mb-3", "text-sm", "uppercase", "tracking-[0.08em]", "text-[var(--muted)]")}>
-                                    { format!("Published Detail: {}", comment.comment_id) }
-                                </h3>
+                        <Drawer
+                            open={selected_published.is_some()}
+                            on_close={{
+                                let selected_published_id = selected_published_id.clone();
+                                let selected_published = selected_published.clone();
+                                Callback::from(move |_| {
+                                    selected_published_id.set(None);
+                                    selected_published.set(None);
+                                })
+                            }}
+                            title={(*selected_published).as_ref().map(|c| AttrValue::from(format!("已发布详情 · {}", c.comment_id))).unwrap_or_default()}
+                        >
+                            if let Some(comment) = (*selected_published).clone() {
                                 <label class={classes!("block", "text-sm", "mb-2")}>
                                     { "comment_text" }
                                     <textarea
-                                        class={classes!("mt-1", "w-full", "min-h-[100px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                        class={classes!("mt-1", "w-full", "min-h-[100px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                         value={comment.comment_text.clone()}
                                         oninput={on_selected_published_comment_change}
                                     />
@@ -3357,14 +3363,14 @@ pub fn admin_page() -> Html {
                                 <label class={classes!("block", "text-sm", "mb-2")}>
                                     { "ai_reply_markdown" }
                                     <textarea
-                                        class={classes!("mt-1", "w-full", "min-h-[140px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2")}
+                                        class={classes!("mt-1", "w-full", "min-h-[140px]", "rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "bg-[var(--surface)]", "text-[var(--text)]")}
                                         value={comment.ai_reply_markdown.clone().unwrap_or_default()}
                                         oninput={on_selected_published_ai_change}
                                     />
                                 </label>
                                 <button class={classes!("btn-fluent-primary")} onclick={on_save_published}>{ "Save Published Update" }</button>
-                            </div>
-                        }
+                            }
+                        </Drawer>
                     </>
                     }
                     <div class={classes!("mt-4")}>
@@ -3406,6 +3412,9 @@ pub fn admin_page() -> Html {
                             </div>
                         }
 
+                        if audit_logs.is_empty() {
+                            <EmptyState icon="fa-clipboard-list" title="暂无审计记录" hint="对任务的操作会记录在这里。" />
+                        } else {
                         <div class={classes!("overflow-x-auto")}>
                             <table class={classes!("w-full", "text-sm")}>
                                 <thead>
@@ -3422,7 +3431,7 @@ pub fn admin_page() -> Html {
                                         <tr class={classes!("border-t", "border-[var(--border)]")}>
                                             <td class={classes!("py-2", "pr-3")}>{ log.log_id.clone() }</td>
                                             <td class={classes!("py-2", "pr-3")}>{ log.task_id.clone() }</td>
-                                            <td class={classes!("py-2", "pr-3")}>{ log.action.clone() }</td>
+                                            <td class={classes!("py-2", "pr-3")}><StatusBadge status={log.action.clone()} /></td>
                                             <td class={classes!("py-2", "pr-3")}>{ log.operator.clone() }</td>
                                             <td class={classes!("py-2", "pr-3")}>{ format_ms(log.created_at) }</td>
                                         </tr>
@@ -3430,6 +3439,7 @@ pub fn admin_page() -> Html {
                                 </tbody>
                             </table>
                         </div>
+                        }
                     </>
                     }
                     <div class={classes!("mt-4")}>
@@ -3480,8 +3490,9 @@ pub fn admin_page() -> Html {
                                     type="number"
                                     value={(*behavior_status_filter).clone()}
                                     oninput={on_behavior_status_filter_change}
-                                    placeholder="status"
-                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[110px]")}
+                                    placeholder="HTTP 状态码 (200)"
+                                    title="按 HTTP 状态码筛选，例如 200 / 404 / 500"
+                                    class={classes!("rounded-lg", "border", "border-[var(--border)]", "px-3", "py-2", "text-sm", "w-full", "md:w-[150px]")}
                                 />
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_behavior_apply.clone()}>{ "Apply" }</button>
                                 <button class={classes!("btn-fluent-secondary")} onclick={on_behavior_cleanup}>{ "Cleanup Old Logs" }</button>
@@ -3595,13 +3606,13 @@ pub fn admin_page() -> Html {
                                                 <td class={classes!("py-2", "pr-3", "max-w-[220px]")}>
                                                     <div class={classes!("flex", "items-center", "gap-1")}>
                                                         <span class={classes!("truncate")} title={event.page_path.clone()}>{ event.page_path.clone() }</span>
-                                                        { copy_icon_button(&event.page_path) }
+                                                        <CopyButton text={event.page_path.clone()} />
                                                     </div>
                                                 </td>
                                                 <td class={classes!("py-2", "pr-3", "max-w-[260px]")}>
                                                     <div class={classes!("flex", "items-center", "gap-1")}>
                                                         <span class={classes!("truncate")} title={format!("{} {}?{}", event.method, event.path, event.query)}>{ format!("{} {}", event.method, event.path) }</span>
-                                                        { copy_icon_button(&format!("{} {}?{}", event.method, event.path, event.query)) }
+                                                        <CopyButton text={format!("{} {}?{}", event.method, event.path, event.query)} />
                                                     </div>
                                                 </td>
                                                 <td class={classes!("py-2", "pr-3")}>{ event.status_code }</td>
@@ -3610,7 +3621,7 @@ pub fn admin_page() -> Html {
                                                 <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>
                                                     <div class={classes!("flex", "items-center", "gap-1")}>
                                                         <span>{ format!("{}/{}", event.client_ip, event.ip_region) }</span>
-                                                        { copy_icon_button(&format!("{}/{}", event.client_ip, event.ip_region)) }
+                                                        <CopyButton text={format!("{}/{}", event.client_ip, event.ip_region)} />
                                                     </div>
                                                 </td>
                                                 <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format!("{} ms", event.latency_ms) }</td>
@@ -3856,9 +3867,9 @@ pub fn admin_page() -> Html {
                             </div>
                         }
                         if music_wishes.is_empty() {
-                            <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No wishes yet." }</p>
+                            <EmptyState icon="fa-music" title="暂无点歌" hint="还没有用户提交点歌请求。" />
                         } else if filtered_music_wishes.is_empty() {
-                            <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "当前过滤条件下没有匹配项。" }</p>
+                            <EmptyState icon="fa-filter" title="没有匹配项" hint="当前过滤条件下没有匹配的点歌，试试调整搜索。" />
                         } else {
                             <div class={classes!("overflow-x-auto")}>
                                 <table class={classes!("w-full", "text-sm")}>
@@ -3931,9 +3942,9 @@ pub fn admin_page() -> Html {
                             </div>
                         }
                         if article_requests.is_empty() {
-                            <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No article requests yet." }</p>
+                            <EmptyState icon="fa-file-lines" title="暂无投稿请求" hint="还没有用户提交文章投稿请求。" />
                         } else if filtered_article_requests.is_empty() {
-                            <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "当前过滤条件下没有匹配项。" }</p>
+                            <EmptyState icon="fa-filter" title="没有匹配项" hint="当前过滤条件下没有匹配的请求，试试调整搜索。" />
                         } else {
                             <div class={classes!("overflow-x-auto")}>
                                 <table class={classes!("w-full", "text-sm")}>
