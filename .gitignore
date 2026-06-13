@@ -18,6 +18,9 @@ perf.data.old
 
 # IDE 配置
 .vscode/
+
+# 本机预览/调试配置（含机器专属路径，不入库）
+.claude/launch.json
 .idea/
 *.swp
 *.swo
