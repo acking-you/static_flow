@@ -9,6 +9,9 @@ pub mod common {
     pub const BILIBILI: &str = "Bilibili";
     pub const SEARCH_PLACEHOLDER: &str = "搜索...";
     pub const LOADING: &str = "加载中...";
+    pub const SEARCH_SUGGEST_LOADING: &str = "正在搜索…";
+    pub const SEARCH_SUGGEST_EMPTY: &str = "没有找到相关文章";
+    pub const SEARCH_SUGGEST_FOOTER: &str = "回车搜索全部结果";
     pub const TERMINAL_PROMPT_CMD: &str = "$ ";
     pub const TERMINAL_PROMPT_OUTPUT: &str = "> ";
     pub const ARROW_RIGHT: &str = "→";

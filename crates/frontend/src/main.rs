@@ -28,13 +28,17 @@ mod utils;
 
 use yew::prelude::*;
 
-use crate::{components::toast::ToastProvider, music_context::MusicPlayerProvider};
+use crate::{
+    components::{spotlight::Spotlight, toast::ToastProvider},
+    music_context::MusicPlayerProvider,
+};
 
 #[function_component(App)]
 fn app() -> Html {
     html! {
         <ToastProvider>
             <MusicPlayerProvider>
+                <Spotlight />
                 <router::AppRouter />
             </MusicPlayerProvider>
         </ToastProvider>

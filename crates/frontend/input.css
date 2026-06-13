@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/* Drive Tailwind's `dark:` variant from the app's own theme switch
+   (`<html data-theme="dark">`) instead of the default
+   `prefers-color-scheme` media query. Without this, the 260+ `dark:`
+   utilities across the app only responded to the OS theme and ignored the
+   in-app toggle — every `dark:`-styled island stayed light when a
+   light-OS user switched the site to dark. Matching the element itself or
+   any ancestor covers `<html>` and all descendants. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 @theme {
   /* Fluent 2 colors */
   --bg: #f3f2f1;
@@ -1297,6 +1306,46 @@ body {
   -moz-osx-font-smoothing: grayscale;
   transition: background-color .35s ease, color .35s ease;
   min-height: -webkit-fill-available;
+}
+
+/* vNext restore: cursor-following spotlight — dark mode only.
+   A soft cool glow that trails the pointer with eased follow (driven by
+   components/spotlight.rs). Screen-blended so it only ever lifts the
+   canvas, never darkens it; invisible in light mode and under
+   reduced-motion. The cool tint tracks --interactive-rgb so it stays on
+   palette instead of the old flat white. */
+.spotlight {
+  position: fixed;
+  width: 820px;
+  height: 820px;
+  border-radius: 50%;
+  top: 0;
+  left: 0;
+  transform: translate(-50%, -50%) translateZ(0);
+  pointer-events: none;
+  z-index: 999;
+  opacity: 0;
+  will-change: left, top;
+  mix-blend-mode: screen;
+  background: radial-gradient(
+    circle at center,
+    rgba(255, 255, 255, 0.10) 0%,
+    rgba(var(--interactive-rgb), 0.13) 26%,
+    rgba(var(--interactive-rgb), 0.05) 52%,
+    transparent 72%
+  );
+  transition: opacity 0.6s ease;
+}
+
+[data-theme=dark] .spotlight,
+[theme=dark] .spotlight {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spotlight {
+    display: none;
+  }
 }
 
 /* Header acrylic treatment (Fluent 2) */
@@ -5709,10 +5758,20 @@ html {
     border: 1px solid var(--border);
     background: var(--surface-alt);
     color: var(--text);
-    padding: 0.5rem 0.75rem;
-    font-size: 0.875rem;
+    padding: 0.62rem 0.85rem;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    /* Subtle recess so the control reads as a field, not a flat box, even
+       when the card behind it is nearly the same tone. */
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.045);
     transition: border-color var(--motion-fast) var(--ease-snap),
-      box-shadow var(--motion-fast) var(--ease-snap);
+      box-shadow var(--motion-fast) var(--ease-snap),
+      background-color var(--motion-fast) var(--ease-snap);
+  }
+
+  .form-input::placeholder {
+    color: var(--muted);
+    opacity: 0.7;
   }
 
   .form-input--mono {
@@ -5720,10 +5779,25 @@ html {
       "Liberation Mono", "Courier New", monospace;
   }
 
+  .form-input:hover:not(:disabled):not(:focus) {
+    border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
+  }
+
   .form-input:focus-visible {
     outline: none;
     border-color: var(--primary);
-    box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.25);
+    /* Lift to the brighter base surface on focus so the active field
+       stands out from the recessed resting state (works in both themes). */
+    background: var(--surface);
+    box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.18);
+  }
+
+  [data-theme=dark] .form-input {
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22);
+  }
+
+  [data-theme=dark] .form-input:focus-visible {
+    box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.28);
   }
 
   .form-input[aria-invalid="true"] {
@@ -5752,6 +5826,104 @@ html {
     margin: 0;
     font-size: 0.78rem;
     color: var(--muted);
+  }
+}
+
+/* === vNext: music wish form — give the request card an intentional,
+   on-brand frame instead of a plain bordered box === */
+@layer components {
+  .music-wish-form {
+    position: relative;
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--primary) 5%, var(--surface)),
+      var(--surface) 58%
+    );
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-2);
+    overflow: hidden;
+  }
+
+  /* Thin gradient accent across the top edge. */
+  .music-wish-form::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 3px;
+    background: linear-gradient(
+      90deg,
+      rgba(var(--primary-rgb), 0.75),
+      rgba(var(--interactive-rgb), 0.5),
+      transparent 78%
+    );
+  }
+
+  [data-theme=dark] .music-wish-form {
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--primary) 9%, var(--surface)),
+      var(--surface) 58%
+    );
+  }
+
+  /* Wish status chips — theme-aware palettes. The old fixed `-600` text
+     shades muddied on the dark `/10` tint; these brighten in dark mode so
+     the label stays legible against the chip in both themes. */
+  .wish-status {
+    border-style: solid;
+  }
+
+  .wish-status--pending {
+    background: rgba(234, 179, 8, 0.12);
+    color: #b45309;
+    border-color: rgba(234, 179, 8, 0.3);
+  }
+  .wish-status--running {
+    background: rgba(59, 130, 246, 0.12);
+    color: #1d4ed8;
+    border-color: rgba(59, 130, 246, 0.3);
+  }
+  .wish-status--done {
+    background: rgba(34, 197, 94, 0.12);
+    color: #15803d;
+    border-color: rgba(34, 197, 94, 0.3);
+  }
+  .wish-status--failed {
+    background: rgba(239, 68, 68, 0.12);
+    color: #b91c1c;
+    border-color: rgba(239, 68, 68, 0.3);
+  }
+  .wish-status--default {
+    background: rgba(100, 116, 139, 0.12);
+    color: #475569;
+    border-color: rgba(100, 116, 139, 0.3);
+  }
+
+  [data-theme=dark] .wish-status--pending {
+    background: rgba(234, 179, 8, 0.16);
+    color: #fcd34d;
+    border-color: rgba(234, 179, 8, 0.36);
+  }
+  [data-theme=dark] .wish-status--running {
+    background: rgba(59, 130, 246, 0.18);
+    color: #93c5fd;
+    border-color: rgba(59, 130, 246, 0.38);
+  }
+  [data-theme=dark] .wish-status--done {
+    background: rgba(34, 197, 94, 0.16);
+    color: #86efac;
+    border-color: rgba(34, 197, 94, 0.36);
+  }
+  [data-theme=dark] .wish-status--failed {
+    background: rgba(239, 68, 68, 0.18);
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.38);
+  }
+  [data-theme=dark] .wish-status--default {
+    background: rgba(148, 163, 184, 0.16);
+    color: #cbd5e1;
+    border-color: rgba(148, 163, 184, 0.36);
   }
 }
 
@@ -5788,36 +5960,72 @@ html {
     position: relative;
   }
 
-  .search-suggest-list {
+  /* Floating acrylic panel — absolutely positioned and anchored to the
+     input's right edge, so it overlays the header instead of reflowing it.
+     Grows leftward (the input is right-aligned in the header). */
+  .search-suggest-panel {
     position: absolute;
-    top: calc(100% + 0.4rem);
-    left: 0;
+    top: calc(100% + 0.5rem);
     right: 0;
-    min-width: 260px;
+    left: auto;
+    width: 24rem;
+    max-width: 92vw;
     z-index: 110;
-    margin: 0;
-    padding: 0.3rem;
-    list-style: none;
+    padding: 0.35rem;
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-8);
+    box-shadow: var(--shadow-16);
     overflow: hidden;
+    transform-origin: top right;
+    animation: search-suggest-in 0.16s var(--ease-spring);
+  }
+
+  @keyframes search-suggest-in {
+    from {
+      opacity: 0;
+      transform: translateY(-6px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  .search-suggest-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    max-height: 22rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .search-suggest-item {
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
+    align-items: center;
     gap: 0.6rem;
-    padding: 0.5rem 0.65rem;
+    padding: 0.55rem 0.65rem;
     border-radius: var(--radius);
     cursor: pointer;
-    transition: background-color var(--motion-fast) var(--ease-snap);
+    transition: background-color var(--motion-fast) var(--ease-snap),
+      color var(--motion-fast) var(--ease-snap);
   }
 
   .search-suggest-item:hover,
   .search-suggest-item--active {
-    background: var(--surface-alt);
+    background: color-mix(in srgb, var(--primary) 13%, transparent);
+  }
+
+  .search-suggest-icon {
+    flex-shrink: 0;
+    font-size: 0.8rem;
+    color: var(--muted);
+    transition: color var(--motion-fast) var(--ease-snap);
+  }
+
+  .search-suggest-item:hover .search-suggest-icon,
+  .search-suggest-item--active .search-suggest-icon {
+    color: var(--primary);
   }
 
   .search-suggest-title {
@@ -5832,7 +6040,103 @@ html {
 
   .search-suggest-meta {
     flex-shrink: 0;
+    max-width: 7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.66rem;
+    line-height: 1.6;
+    padding: 0.08rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--primary) 9%, var(--surface-alt));
+    color: var(--muted);
+  }
+
+  /* Footer hint — Enter affordance / in-flight status. */
+  .search-suggest-footer {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.5rem 0.65rem 0.4rem;
+    margin-top: 0.2rem;
+    border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
     font-size: 0.72rem;
     color: var(--muted);
+  }
+
+  .search-suggest-kbd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+      "Liberation Mono", "Courier New", monospace;
+    font-size: 0.66rem;
+    padding: 0.06rem 0.4rem;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--surface-alt);
+    color: var(--text);
+  }
+
+  /* Empty state. */
+  .search-suggest-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 1.6rem 1rem;
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+
+  .search-suggest-empty i {
+    font-size: 1.4rem;
+    opacity: 0.45;
+  }
+
+  /* Loading skeleton rows (reuse the shared .skeleton shimmer). */
+  .search-suggest-status {
+    display: flex;
+    flex-direction: column;
+    padding: 0.3rem 0.3rem 0;
+  }
+
+  .search-suggest-skel-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem 0.35rem;
+  }
+
+  .search-suggest-skel-icon {
+    display: block;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 5px;
+    flex-shrink: 0;
+  }
+
+  .search-suggest-skel-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .search-suggest-skel-line {
+    display: block;
+    height: 0.62rem;
+    width: 100%;
+    border-radius: 999px;
+  }
+
+  .search-suggest-skel-line--short {
+    width: 52%;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .search-suggest-panel {
+      animation: none;
+    }
   }
 }

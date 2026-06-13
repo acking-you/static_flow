@@ -706,7 +706,7 @@ pub fn music_library_page() -> Html {
                 <p class="text-[var(--muted)] text-sm mb-6">{wish_t::SECTION_SUBTITLE}</p>
 
                 <form id="music-wish-form" onsubmit={on_wish_submit}
-                    class="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5 mb-8 \
+                    class="music-wish-form p-5 mb-8 \
                            grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <FormField
                         label={wish_t::SONG_NAME_LABEL}
@@ -921,11 +921,11 @@ fn wish_card(props: &WishCardProps) -> Html {
     let w = &props.wish;
 
     let status_class = match w.status.as_str() {
-        "pending" => "bg-yellow-500/10 text-yellow-600 border-yellow-500/20",
-        "approved" | "running" => "bg-blue-500/10 text-blue-600 border-blue-500/20",
-        "done" => "bg-green-500/10 text-green-600 border-green-500/20",
-        "failed" => "bg-red-500/10 text-red-600 border-red-500/20",
-        _ => "bg-gray-500/10 text-gray-600 border-gray-500/20",
+        "pending" => "wish-status wish-status--pending",
+        "approved" | "running" => "wish-status wish-status--running",
+        "done" => "wish-status wish-status--done",
+        "failed" => "wish-status wish-status--failed",
+        _ => "wish-status wish-status--default",
     };
     let status_text = match w.status.as_str() {
         "pending" => wish_t::STATUS_PENDING,

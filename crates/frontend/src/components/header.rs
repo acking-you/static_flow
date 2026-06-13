@@ -115,7 +115,7 @@ pub fn header() -> Html {
         "absolute",
         "inset-0",
         "bg-[var(--acrylic-bg-light)]",
-        "[.dark_&]:bg-[var(--acrylic-bg-dark)]",
+        "dark:bg-[var(--acrylic-bg-dark)]",
         "text-[var(--text)]",
         "p-[4.5rem_1.5rem_2rem]",
         "flex",
