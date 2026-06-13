@@ -6047,6 +6047,25 @@ html {
     position: relative;
   }
 
+  /* In the mobile menu the suggestion component fills its flex row, and its
+     panel drops into normal flow so the menu's own scroll area reveals it —
+     an absolute panel would be clipped by the menu's overflow-y-auto. */
+  .mobile-search-suggest .search-suggest {
+    flex: 1;
+    min-width: 0;
+  }
+
+  @media (max-width: 768px) {
+    .mobile-search-suggest .search-suggest-panel {
+      position: static;
+      width: 100%;
+      max-width: 100%;
+      margin-top: 0.5rem;
+      box-shadow: var(--shadow-4);
+      animation: none;
+    }
+  }
+
   /* Floating acrylic panel — absolutely positioned and anchored to the
      input's right edge, so it overlays the header instead of reflowing it.
      Grows leftward (the input is right-aligned in the header). */
