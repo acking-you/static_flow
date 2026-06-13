@@ -3276,7 +3276,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                     "sm:rounded-[22px]",
                                     "sm:p-4"
                                 )}>
-                                    <p class={classes!("m-0", "text-[1rem]", "leading-[1.8]", "text-[var(--ink)]")}>
+                                    <p class={classes!("m-0", "text-[1rem]", "leading-[1.8]", "text-[#1d1f23]")}>
                                         { interactive_prompt_desc }
                                     </p>
                                     <p class={classes!("m-0", "mt-3", "text-sm", "font-medium", "leading-[1.7]", "text-[var(--primary)]")}>

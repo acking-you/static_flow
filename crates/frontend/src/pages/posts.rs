@@ -513,9 +513,9 @@ pub fn posts_page() -> Html {
                                                                                     html! {
                                                                                         <span class={classes!(
                                                                                             "text-xs",
-                                                                                            "px-2",
+                                                                                            "px-3",
                                                                                             "py-1",
-                                                                                            "rounded",
+                                                                                            "rounded-full",
                                                                                             "bg-[var(--surface-alt)]",
                                                                                             "text-[var(--muted)]",
                                                                                             "border",

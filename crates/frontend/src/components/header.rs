@@ -506,6 +506,7 @@ pub fn header() -> Html {
                         <button
                             type="button"
                             onclick={mobile_do_search.clone()}
+                            aria-label={t::SEARCH_ARIA}
                             class={classes!(
                                 "w-12", "h-12",
                                 "rounded-lg",
@@ -515,12 +516,13 @@ pub fn header() -> Html {
                                 "hover:text-[var(--primary)]"
                             )}
                         >
-                            <i class="fas fa-search"></i>
+                            <i class="fas fa-search" aria-hidden="true"></i>
                         </button>
                         <button
                             type="button"
                             onclick={mobile_clear_search.clone()}
                             disabled={search_query.is_empty()}
+                            aria-label={t::CLEAR_ARIA}
                             class={classes!(
                                 "w-12", "h-12",
                                 "rounded-lg",
@@ -531,7 +533,7 @@ pub fn header() -> Html {
                                 "disabled:opacity-30"
                             )}
                         >
-                            <i class="fas fa-times"></i>
+                            <i class="fas fa-times" aria-hidden="true"></i>
                         </button>
                     </div>
 

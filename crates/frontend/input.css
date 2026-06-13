@@ -9,6 +9,31 @@
    any ancestor covers `<html>` and all descendants. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
+/* Animatable angle for the iridescent search borders (CSS Houdini).
+   Registering the custom property as an <angle> lets the conic-gradient `from`
+   value interpolate, so the colorful edge rotates continuously instead of
+   sitting static. Browsers without @property fall back to the static 135deg
+   gradient (the element also sets the value literally), so the border still
+   renders — it just doesn't spin. */
+@property --sf-iris-angle {
+  syntax: "<angle>";
+  initial-value: 135deg;
+  inherits: false;
+}
+
+@keyframes sf-iris-spin {
+  to {
+    --sf-iris-angle: 495deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-fluent-search-hero,
+  .music-search-hero {
+    animation: none;
+  }
+}
+
 @theme {
   /* Fluent 2 colors */
   --bg: #f3f2f1;
@@ -544,7 +569,11 @@
     font-size: 0.82rem;
     font-weight: 600;
     letter-spacing: 0.03em;
-    transition: all 0.15s ease;
+    transition: background-color var(--motion-fast) var(--ease-snap),
+      color var(--motion-fast) var(--ease-snap),
+      border-color var(--motion-fast) var(--ease-snap),
+      box-shadow var(--motion-fast) var(--ease-snap),
+      transform var(--motion-fast) var(--ease-snap);
     text-decoration: none;
     cursor: pointer;
   }
@@ -557,7 +586,7 @@
   }
 
   .btn-terminal:active {
-    transform: scale(0.97);
+    transform: translateY(0) scale(0.97);
   }
 
   .btn-terminal-primary {
@@ -621,10 +650,12 @@
     gap: 0.5rem;
     background: rgba(var(--surface-rgb), 0.8);
     border: 1.5px solid rgba(var(--primary-rgb), 0.2);
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     padding: 1.25rem 1rem;
     font-family: 'Space Mono', monospace;
-    transition: all 0.2s ease;
+    transition: transform var(--motion-fast) var(--ease-snap),
+      box-shadow var(--motion-base) var(--ease-spring),
+      border-color var(--motion-fast) var(--ease-snap);
     box-shadow: 0 2px 8px rgba(var(--primary-rgb), 0.08);
     text-decoration: none;
     color: inherit;
@@ -633,7 +664,7 @@
 
   .system-panel-compact:hover {
     border-color: var(--primary);
-    transform: translateY(-3px);
+    transform: translateY(-2px);
     box-shadow:
       0 6px 20px rgba(var(--primary-rgb), 0.18),
       inset 0 1px 0 rgba(255, 255, 255, 0.08);
@@ -688,12 +719,13 @@
     gap: 0.5rem;
     position: relative;
     padding: 0.66rem 1.2rem;
-    /* Static iridescent border via the robust dual-background technique:
+    /* Animated iridescent border via the robust dual-background technique:
        surface in the padding box, the colorful gradient in the border box.
-       (The old ::before + mask ring sat at inset:-1px and was clipped by
-       overflow:hidden down to a ~0.5px sliver — effectively invisible.) */
+       The conic `from` angle is an animated custom property (see
+       --sf-iris-angle / sf-iris-spin) so the colors rotate around the edge. */
     border: 1.6px solid transparent;
     border-radius: var(--radius);
+    --sf-iris-angle: 135deg;
     background:
       linear-gradient(
         135deg,
@@ -701,9 +733,10 @@
         rgba(var(--surface-rgb), 0.88)
       ) padding-box,
       conic-gradient(
-        from 135deg,
+        from var(--sf-iris-angle),
         #58a6ff, #8b5cf6, #f472b6, #38bdf8, #58a6ff
       ) border-box;
+    animation: sf-iris-spin 5s linear infinite;
     color: var(--text);
     font-family: var(--font-mono);
     font-weight: 600;
@@ -782,8 +815,12 @@
   .btn-fluent-icon {
     position: relative;
     overflow: hidden;
+    /* All four hover channels share one timing so the color/background change
+       eases with the scale + shadow instead of snapping instantly. */
     transition: transform var(--motion-fast) var(--ease-snap),
-      box-shadow var(--motion-fast) var(--ease-snap);
+      box-shadow var(--motion-fast) var(--ease-snap),
+      background-color var(--motion-fast) var(--ease-snap),
+      color var(--motion-fast) var(--ease-snap);
   }
 
   .btn-fluent-primary:hover,
@@ -848,7 +885,7 @@
         rgba(var(--surface-rgb), 0.74)
       ) padding-box,
       conic-gradient(
-        from 135deg,
+        from var(--sf-iris-angle),
         #58a6ff, #8b5cf6, #f472b6, #38bdf8, #58a6ff
       ) border-box;
   }
@@ -1247,19 +1284,23 @@
 
   .hero-avatar {
     display: block;
-    transition: transform .4s var(--ease-spring);
     will-change: transform;
   }
 
-  /* Restore the hover spin: the avatar turns slowly while pointed at, on
-     top of the trigger's lift. Reduced-motion users get the lift only. */
+  /* Hover spin that keeps accelerating the longer the avatar is pointed at
+     (strong ease-in over many turns), and — because there is deliberately no
+     transform transition here — snaps straight back to rest the instant the
+     pointer leaves. Reduced-motion users get the trigger's lift only. */
   .hero-avatar-trigger--hovered .hero-avatar {
-    animation: hero-avatar-spin 6s linear infinite;
+    animation: hero-avatar-accel 9s cubic-bezier(0.5, 0, 0.92, 0.35) forwards;
   }
 
-  @keyframes hero-avatar-spin {
+  @keyframes hero-avatar-accel {
+    from {
+      transform: rotate(0deg);
+    }
     to {
-      transform: rotate(360deg);
+      transform: rotate(2880deg);
     }
   }
 
@@ -1370,7 +1411,7 @@ a {
 }
 
 a:hover {
-  color: #0b5f93;
+  color: var(--primary);
   text-decoration: underline;
   text-decoration-color: currentColor
 }
@@ -3757,20 +3798,18 @@ button[aria-current="page"]:hover {
     color: var(--muted);
     background: transparent;
     border: 1px solid transparent;
-    transition: all 0.15s ease-out;
+    transition: background-color var(--motion-fast) var(--ease-snap),
+      color var(--motion-fast) var(--ease-snap),
+      border-color var(--motion-fast) var(--ease-snap);
     cursor: pointer;
   }
   .admin-tab:hover {
     color: var(--text);
     background: var(--surface-alt);
   }
-  .admin-tab--active {
-    color: var(--primary);
-    background: rgba(var(--primary-rgb), 0.08);
-    border-color: rgba(var(--primary-rgb), 0.2);
-    font-weight: 600;
-  }
-  .admin-tab--active::after {
+  /* Always-present underline that grows in with a spring on activation,
+     instead of a per-active pseudo-element that pops into existence. */
+  .admin-tab::after {
     content: "";
     position: absolute;
     bottom: -2px;
@@ -3779,6 +3818,18 @@ button[aria-current="page"]:hover {
     height: 2px;
     background: var(--primary);
     border-radius: 1px;
+    transform: scaleX(0);
+    transform-origin: center;
+    transition: transform var(--motion-base) var(--ease-spring);
+  }
+  .admin-tab--active {
+    color: var(--primary);
+    background: rgba(var(--primary-rgb), 0.08);
+    border-color: rgba(var(--primary-rgb), 0.2);
+    font-weight: 600;
+  }
+  .admin-tab--active::after {
+    transform: scaleX(1);
   }
 
   /* Horizontal fill bar for distribution lists */
@@ -3991,7 +4042,7 @@ button[aria-current="page"]:hover {
   background: linear-gradient(
     135deg,
     rgba(var(--primary-rgb), 0.15),
-    rgba(138, 43, 226, 0.08)
+    rgba(139, 92, 246, 0.08)
   );
   border-radius: inherit;
   opacity: 0;
@@ -4505,7 +4556,7 @@ button[aria-current="page"]:hover {
   background: linear-gradient(
     135deg,
     rgba(var(--primary-rgb), 0.1),
-    rgba(138, 43, 226, 0.05)
+    rgba(139, 92, 246, 0.05)
   );
   opacity: 0;
   transition: opacity 0.3s ease;
@@ -5135,8 +5186,9 @@ html {
   position: relative;
   border: 1.6px solid transparent;
   border-radius: var(--radius-lg);
-  /* Static iridescent border, same robust dual-background technique as the
-     hero search button (replaces the overflow-clipped ::before ring). */
+  --sf-iris-angle: 135deg;
+  /* Animated iridescent border, same technique as the hero search button —
+     the conic `from` angle rotates via --sf-iris-angle / sf-iris-spin. */
   background:
     linear-gradient(
       135deg,
@@ -5144,13 +5196,14 @@ html {
       rgba(var(--surface-rgb), 0.88)
     ) padding-box,
     conic-gradient(
-      from 135deg,
+      from var(--sf-iris-angle),
       #58a6ff, #8b5cf6, #f472b6, #38bdf8, #58a6ff
     ) border-box;
   overflow: hidden;
   transform: translateZ(0);
   isolation: isolate;
   margin-bottom: 1.5rem;
+  animation: sf-iris-spin 5s linear infinite;
   transition: box-shadow var(--motion-base) var(--ease-spring);
 }
 
@@ -5164,7 +5217,7 @@ html {
       rgba(var(--surface-rgb), 0.82)
     ) padding-box,
     conic-gradient(
-      from 135deg,
+      from var(--sf-iris-angle),
       #58a6ff, #8b5cf6, #f472b6, #38bdf8, #58a6ff
     ) border-box;
 }
@@ -5238,8 +5291,20 @@ html {
     font-size: 1rem;
   }
   .music-search-btn {
-    width: 2rem;
-    height: 2rem;
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+}
+
+/* Touch comfort: relax the high-frequency icon / pagination controls to the
+   44px hit-size token on pointers without hover (phones), leaving the denser
+   desktop sizing untouched. Mirrors the copy-button idiom. */
+@media (hover: none) {
+  .nav-icon-btn,
+  .icon-btn,
+  .pagination button {
+    min-width: var(--hit-size);
+    min-height: var(--hit-size);
   }
 }
 

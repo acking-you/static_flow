@@ -155,6 +155,8 @@ pub fn icon(props: &IconProps) -> Html {
             stroke-linecap="round"
             stroke-linejoin="round"
             xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+            focusable="false"
         >
             <path d={name.path()} />
         </svg>

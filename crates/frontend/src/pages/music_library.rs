@@ -946,7 +946,8 @@ fn wish_card(props: &WishCardProps) -> Html {
 
     html! {
         <div class="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4 \
-                    flex flex-col gap-2">
+                    flex flex-col gap-2 transition-all duration-[var(--motion-base)] \
+                    ease-[var(--ease-spring)] hover:border-[var(--primary)] hover:shadow-[var(--shadow-4)]">
             <div class="flex items-start justify-between gap-2">
                 <h3 class="text-sm font-semibold text-[var(--text)] truncate">{&w.song_name}</h3>
                 <span class={classes!("text-[10px]", "px-2", "py-0.5", "rounded-full", "border",
