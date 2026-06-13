@@ -1,19 +1,7 @@
 use std::collections::HashSet;
 
-use wasm_bindgen::prelude::*;
 use web_sys::{HtmlInputElement, HtmlTextAreaElement};
 use yew::prelude::*;
-
-#[wasm_bindgen(inline_js = r#"
-export function copy_text(text) {
-    if (navigator.clipboard) {
-        navigator.clipboard.writeText(text).catch(function(){});
-    }
-}
-"#)]
-extern "C" {
-    fn copy_text(text: &str);
-}
 use yew_router::prelude::Link;
 
 use crate::{
@@ -48,10 +36,12 @@ use crate::{
         ViewAnalyticsConfig,
     },
     components::{
+        copy_button::CopyButton,
         loading_spinner::{LoadingSpinner, SpinnerSize},
         modal::ConfirmModal,
         pagination::Pagination,
         search_box::SearchBox,
+        status_badge::StatusBadge,
         toast::use_toast,
         view_trend_chart::ViewTrendChart,
     },
@@ -202,7 +192,7 @@ fn music_wish_row(props: &MusicWishRowProps) -> Html {
             <td class={classes!("py-2", "pr-3", "max-w-[180px]", "truncate")} title={wish.song_name.clone()}>{ wish.song_name.clone() }</td>
             <td class={classes!("py-2", "pr-3")}>{ wish.artist_hint.clone().unwrap_or_default() }</td>
             <td class={classes!("py-2", "pr-3")}>{ wish.nickname.clone() }</td>
-            <td class={classes!("py-2", "pr-3")}><span class={status_badge_class(&status)}>{ status.clone() }</span></td>
+            <td class={classes!("py-2", "pr-3")}><StatusBadge status={status.clone()} /></td>
             <td class={classes!("py-2", "pr-3")}>{ wish.ip_region.clone() }</td>
             <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format_ms(wish.created_at) }</td>
             <td class={classes!("py-2", "pr-3")}>
@@ -219,7 +209,7 @@ fn music_wish_row(props: &MusicWishRowProps) -> Html {
                             { "AI Output" }
                         </Link<Route>>
                     }
-                    <button class={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs", "text-red-600", "dark:text-red-400")} disabled={inflight} onclick={dispatch(WishAction::Delete)}>{ "Delete" }</button>
+                    <button class={classes!("btn-fluent-danger", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={dispatch(WishAction::Delete)}>{ "Delete" }</button>
                 </div>
             </td>
         </tr>
@@ -280,7 +270,7 @@ fn article_request_row(props: &ArticleRequestRowProps) -> Html {
                             { "AI Output" }
                         </Link<Route>>
                     }
-                    <button class={classes!("btn-fluent-secondary", "!px-2", "!py-0.5", "!text-xs", "text-red-600", "dark:text-red-400")} disabled={inflight} onclick={dispatch(ArticleRequestAction::Delete)}>{ "Delete" }</button>
+                    <button class={classes!("btn-fluent-danger", "!px-2", "!py-0.5", "!text-xs")} disabled={inflight} onclick={dispatch(ArticleRequestAction::Delete)}>{ "Delete" }</button>
                 </div>
             </td>
         </tr>
@@ -437,15 +427,6 @@ fn memory_stack_list(entries: &[MemoryStackEntry]) -> Html {
     }
 }
 
-fn copy_icon_button(text: &str) -> Html {
-    let text = text.to_string();
-    let on_copy = Callback::from(move |_: MouseEvent| copy_text(&text));
-    html! {
-        <button class="btn-copy-inline" onclick={on_copy} title="Copy">
-            <i class="fas fa-copy text-[10px]" aria-hidden="true"></i>
-        </button>
-    }
-}
 
 #[function_component(AdminPage)]
 pub fn admin_page() -> Html {
@@ -3159,7 +3140,7 @@ pub fn admin_page() -> Html {
                                                                     </button>
                                                                 </td>
                                                                 <td class={classes!("py-2", "pr-3")}>
-                                                                    <span class={status_badge_class(&status)}>{ status }</span>
+                                                                    <StatusBadge status={status.clone()} />
                                                                 </td>
                                                                 <td class={classes!("py-2", "pr-3")}>{ task.attempt_count }</td>
                                                                 <td class={classes!("py-2", "pr-3")}>{ format_ms(task.created_at) }</td>
@@ -3595,13 +3576,13 @@ pub fn admin_page() -> Html {
                                                 <td class={classes!("py-2", "pr-3", "max-w-[220px]")}>
                                                     <div class={classes!("flex", "items-center", "gap-1")}>
                                                         <span class={classes!("truncate")} title={event.page_path.clone()}>{ event.page_path.clone() }</span>
-                                                        { copy_icon_button(&event.page_path) }
+                                                        <CopyButton text={event.page_path.clone()} />
                                                     </div>
                                                 </td>
                                                 <td class={classes!("py-2", "pr-3", "max-w-[260px]")}>
                                                     <div class={classes!("flex", "items-center", "gap-1")}>
                                                         <span class={classes!("truncate")} title={format!("{} {}?{}", event.method, event.path, event.query)}>{ format!("{} {}", event.method, event.path) }</span>
-                                                        { copy_icon_button(&format!("{} {}?{}", event.method, event.path, event.query)) }
+                                                        <CopyButton text={format!("{} {}?{}", event.method, event.path, event.query)} />
                                                     </div>
                                                 </td>
                                                 <td class={classes!("py-2", "pr-3")}>{ event.status_code }</td>
@@ -3610,7 +3591,7 @@ pub fn admin_page() -> Html {
                                                 <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>
                                                     <div class={classes!("flex", "items-center", "gap-1")}>
                                                         <span>{ format!("{}/{}", event.client_ip, event.ip_region) }</span>
-                                                        { copy_icon_button(&format!("{}/{}", event.client_ip, event.ip_region)) }
+                                                        <CopyButton text={format!("{}/{}", event.client_ip, event.ip_region)} />
                                                     </div>
                                                 </td>
                                                 <td class={classes!("py-2", "pr-3", "whitespace-nowrap")}>{ format!("{} ms", event.latency_ms) }</td>
