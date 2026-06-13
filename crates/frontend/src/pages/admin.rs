@@ -3292,6 +3292,9 @@ pub fn admin_page() -> Html {
                                 <span>{ "Loading published comments..." }</span>
                             </div>
                         }
+                        if published_comments.is_empty() {
+                            <EmptyState icon="fa-comments" title="暂无已发布评论" hint="审核通过的评论会显示在这里。" />
+                        } else {
                         <div class={classes!("overflow-x-auto")}>
                             <table class={classes!("w-full", "text-sm")}>
                                 <thead>
@@ -3324,7 +3327,7 @@ pub fn admin_page() -> Html {
                                                 <td class={classes!("py-2", "pr-3") }>
                                                     <div class={classes!("flex", "gap-2", "flex-wrap")}>
                                                         <button class={classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs")} onclick={select_click}>{ "Update" }</button>
-                                                        <button class={classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs")} onclick={delete_click}>{ "Delete" }</button>
+                                                        <button class={classes!("btn-fluent-danger", "!px-2", "!py-1", "!text-xs")} onclick={delete_click}>{ "Delete" }</button>
                                                     </div>
                                                 </td>
                                             </tr>
@@ -3333,6 +3336,7 @@ pub fn admin_page() -> Html {
                                 </tbody>
                             </table>
                         </div>
+                        }
 
                         <Drawer
                             open={selected_published.is_some()}
@@ -3407,6 +3411,9 @@ pub fn admin_page() -> Html {
                             </div>
                         }
 
+                        if audit_logs.is_empty() {
+                            <EmptyState icon="fa-clipboard-list" title="暂无审计记录" hint="对任务的操作会记录在这里。" />
+                        } else {
                         <div class={classes!("overflow-x-auto")}>
                             <table class={classes!("w-full", "text-sm")}>
                                 <thead>
@@ -3431,6 +3438,7 @@ pub fn admin_page() -> Html {
                                 </tbody>
                             </table>
                         </div>
+                        }
                     </>
                     }
                     <div class={classes!("mt-4")}>
