@@ -8,7 +8,7 @@ use crate::{
         AdminKiroAccountStatusesQuery, AdminKiroAccountStatusesResponse,
         AdminUpstreamProxyConfigView,
     },
-    components::pagination::Pagination,
+    components::{empty_state::EmptyState, pagination::Pagination},
     pages::admin_kiro_gateway::KiroAccountCard,
     router::Route,
 };
@@ -253,8 +253,12 @@ pub fn admin_kiro_account_status_page() -> Html {
                 .as_ref()
                 .is_some_and(|value| value.accounts.is_empty())
             {
-                <section class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface)]", "p-5", "text-sm", "text-[var(--muted)]")}>
-                    { "当前筛选条件下没有匹配到任何 Kiro 账号。" }
+                <section class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
+                    <EmptyState
+                        icon="fa-inbox"
+                        title="没有匹配的 Kiro 账号"
+                        hint="当前筛选条件下没有匹配到任何 Kiro 账号。"
+                    />
                 </section>
             } else if let Some(status_response) = response.as_ref().as_ref() {
                 <>

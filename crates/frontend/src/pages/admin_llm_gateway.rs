@@ -57,8 +57,8 @@ use crate::{
         ProcessMemoryRuntimeStats, DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION,
     },
     components::{
-        date_range_picker::DateRangePicker, pagination::Pagination, search_box::SearchBox,
-        status_badge::StatusBadge, tab_bar::render_tab_bar,
+        date_range_picker::DateRangePicker, empty_state::EmptyState, pagination::Pagination,
+        search_box::SearchBox, status_badge::StatusBadge, tab_bar::render_tab_bar,
     },
     pages::llm_access_shared::{
         confirm_destructive, credit_usage_missing_label, format_ms, format_number_i64,
@@ -9322,8 +9322,8 @@ pub fn admin_llm_gateway_page() -> Html {
                     </div>
 
                     if token_requests.is_empty() && !*token_request_loading {
-                        <div class={classes!("mt-4", "rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
-                            { "当前筛选下还没有 token 许愿。" }
+                        <div class={classes!("mt-4")}>
+                            <EmptyState icon="fa-inbox" title="当前筛选下还没有 token 许愿。" />
                         </div>
                     } else {
                         <div class={classes!("mt-4", "space-y-3")}>
@@ -9464,8 +9464,8 @@ pub fn admin_llm_gateway_page() -> Html {
                     </div>
 
                     if account_contribution_requests.is_empty() && !*account_contribution_request_loading {
-                        <div class={classes!("mt-4", "rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
-                            { "当前筛选下还没有账号贡献申请。" }
+                        <div class={classes!("mt-4")}>
+                            <EmptyState icon="fa-inbox" title="当前筛选下还没有账号贡献申请。" />
                         </div>
                     } else {
                         <div class={classes!("mt-4", "space-y-3")}>
@@ -9480,22 +9480,12 @@ pub fn admin_llm_gateway_page() -> Html {
                                 let on_copy = on_copy.clone();
                                 let action_busy =
                                     account_contribution_request_action_inflight.contains(&request_id);
-                                let status_class = match item.status.as_str() {
-                                        "pending" => classes!("bg-amber-500/10", "text-amber-700", "dark:text-amber-200", "border-amber-500/20"),
-                                        "validated" => classes!("bg-sky-500/10", "text-sky-700", "dark:text-sky-200", "border-sky-500/20"),
-                                        "failed" => classes!("bg-red-500/10", "text-red-700", "dark:text-red-200", "border-red-500/20"),
-                                    "issued" => classes!("bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200", "border-emerald-500/20"),
-                                    "rejected" => classes!("bg-slate-500/10", "text-slate-700", "dark:text-slate-200", "border-slate-500/20"),
-                                    _ => classes!("bg-[var(--surface-alt)]", "text-[var(--muted)]", "border-[var(--border)]"),
-                                };
                                 html! {
                                     <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
                                         <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
                                             <div class={classes!("min-w-0", "space-y-1")}>
                                                 <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                                                    <span class={classes!("inline-flex", "rounded-full", "border", "px-2.5", "py-1", "text-xs", "font-semibold", status_class.clone())}>
-                                                        { item.status.clone() }
-                                                    </span>
+                                                    <StatusBadge status={item.status.clone()} />
                                                     <span class={classes!("font-semibold")}>{ item.account_name.clone() }</span>
                                                         if !item.requester_email.trim().is_empty() {
                                                             <span class={classes!("text-xs", "text-[var(--muted)]")}>{ item.requester_email.clone() }</span>
@@ -9650,8 +9640,8 @@ pub fn admin_llm_gateway_page() -> Html {
                     </div>
 
                     if sponsor_requests.is_empty() && !*sponsor_request_loading {
-                        <div class={classes!("mt-4", "rounded-xl", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-10", "text-center", "text-[var(--muted)]")}>
-                            { "当前筛选下还没有 Sponsor 请求。" }
+                        <div class={classes!("mt-4")}>
+                            <EmptyState icon="fa-inbox" title="当前筛选下还没有 Sponsor 请求。" />
                         </div>
                     } else {
                         <div class={classes!("mt-4", "space-y-3")}>
@@ -9662,20 +9652,12 @@ pub fn admin_llm_gateway_page() -> Html {
                                 let approve_cb = on_approve_sponsor_request.clone();
                                 let delete_cb = on_delete_sponsor_request.clone();
                                 let action_busy = sponsor_request_action_inflight.contains(&request_id);
-                                let status_class = match item.status.as_str() {
-                                    "submitted" => classes!("bg-amber-500/10", "text-amber-700", "dark:text-amber-200", "border-amber-500/20"),
-                                    "payment_email_sent" => classes!("bg-sky-500/10", "text-sky-700", "dark:text-sky-200", "border-sky-500/20"),
-                                    "approved" => classes!("bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200", "border-emerald-500/20"),
-                                    _ => classes!("bg-[var(--surface-alt)]", "text-[var(--muted)]", "border-[var(--border)]"),
-                                };
                                 html! {
                                     <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
                                         <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
                                             <div class={classes!("min-w-0", "space-y-1")}>
                                                 <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                                                    <span class={classes!("inline-flex", "rounded-full", "border", "px-2.5", "py-1", "text-xs", "font-semibold", status_class.clone())}>
-                                                        { item.status.clone() }
-                                                    </span>
+                                                    <StatusBadge status={item.status.clone()} />
                                                     <span class={classes!("font-semibold")}>{ item.requester_email.clone() }</span>
                                                     <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>{ item.request_id.clone() }</span>
                                                 </div>

@@ -5,6 +5,8 @@ use wasm_bindgen_futures::{spawn_local, JsFuture};
 use web_sys::{Event, File, HtmlInputElement};
 use yew::prelude::*;
 
+use crate::components::empty_state::EmptyState;
+
 const CHUNK_BYTES: u64 = static_flow_media_types::LOCAL_MEDIA_UPLOAD_CHUNK_BYTES as u64;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -190,19 +192,25 @@ pub fn admin_local_media_uploads(props: &AdminLocalMediaUploadsProps) -> Html {
                 class="mt-3 block w-full text-sm text-[var(--text)]"
                 onchange={on_change}
             />
-            <div class="mt-4 space-y-3">
-                { for tasks.iter().map(|task| {
-                    let has_local_file = attached_files.contains_key(&task.task_id);
-                    let task_transfer_stats = transfer_stats.get(&task.task_id).copied();
-                    render_upload_task_card(
-                        task,
-                        (*active_task_id).as_deref(),
-                        has_local_file,
-                        task_transfer_stats,
-                        on_cancel.clone(),
-                    )
-                }) }
-            </div>
+            if tasks.is_empty() && (*error).is_none() {
+                <div class="mt-4">
+                    <EmptyState icon="fa-cloud-arrow-up" title="No uploads yet" hint="Select a video above to start uploading into this directory." />
+                </div>
+            } else {
+                <div class="mt-4 space-y-3">
+                    { for tasks.iter().map(|task| {
+                        let has_local_file = attached_files.contains_key(&task.task_id);
+                        let task_transfer_stats = transfer_stats.get(&task.task_id).copied();
+                        render_upload_task_card(
+                            task,
+                            (*active_task_id).as_deref(),
+                            has_local_file,
+                            task_transfer_stats,
+                            on_cancel.clone(),
+                        )
+                    }) }
+                </div>
+            }
         </section>
     }
 }
@@ -467,7 +475,7 @@ fn render_upload_task_card(
                 static_flow_media_types::UploadTaskStatus::Completed
                     | static_flow_media_types::UploadTaskStatus::Canceled
             ) {
-                <button type="button" class="btn-fluent-secondary mt-3" onclick={cancel}>
+                <button type="button" class="btn-fluent-danger mt-3" onclick={cancel}>
                     { "Cancel" }
                 </button>
             }

@@ -9,7 +9,10 @@ use crate::{
         AdminLlmGatewayUsageMetricsQuery, AdminLlmGatewayUsageMetricsResponse,
         AdminLlmGatewayUsageMetricsStatusCodeView,
     },
-    components::loading_spinner::{LoadingSpinner, SpinnerSize},
+    components::{
+        empty_state::EmptyState,
+        loading_spinner::{LoadingSpinner, SpinnerSize},
+    },
     pages::llm_access_shared::format_ms,
     router::Route,
 };
@@ -134,8 +137,8 @@ fn metrics_table(props: &MetricsTableProps) -> Html {
                     <tbody>
                         if props.rows.is_empty() {
                             <tr>
-                                <td colspan="7" class={classes!("px-4", "py-6", "text-center", "text-[var(--muted)]")}>
-                                    { "当前窗口内没有数据。" }
+                                <td colspan="7">
+                                    <EmptyState icon="fa-chart-line" title="当前窗口内没有数据。" hint="调整窗口、数据源或 Provider，或稍后再试。" />
                                 </td>
                             </tr>
                         } else {
@@ -201,7 +204,7 @@ fn metrics_table(props: &MetricsTableProps) -> Html {
 fn render_status_code_distribution(rows: &[AdminLlmGatewayUsageMetricsStatusCodeView]) -> Html {
     if rows.is_empty() {
         return html! {
-            <div class={classes!("text-sm", "text-[var(--muted)]")}>{ "当前窗口没有非 200 状态码。" }</div>
+            <EmptyState icon="fa-circle-check" title="当前窗口没有非 200 状态码。" hint="所有请求均返回 2xx。" />
         };
     }
     html! {

@@ -7,6 +7,7 @@ use crate::{
     api::{
         fetch_admin_local_media_list, LocalMediaEntry, LocalMediaEntryKind, LocalMediaListResponse,
     },
+    components::empty_state::EmptyState,
     router::Route,
 };
 
@@ -111,9 +112,7 @@ pub fn admin_local_media_page() -> Html {
             }
         } else if response.entries.is_empty() {
             html! {
-                <div class="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-6 text-sm text-[var(--muted)]">
-                    { "This directory is empty." }
-                </div>
+                <EmptyState icon="fa-folder-open" title="This directory is empty." hint="Upload a video or open another folder to get started." />
             }
         } else {
             html! {

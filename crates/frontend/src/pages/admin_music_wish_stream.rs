@@ -1,5 +1,5 @@
 use wasm_bindgen::{closure::Closure, JsCast};
-use web_sys::{Event, EventSource, MessageEvent};
+use web_sys::{Event, EventSource, MessageEvent, ScrollToOptions};
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
@@ -8,7 +8,9 @@ use crate::{
         build_admin_music_wish_ai_stream_url, fetch_admin_music_wish_ai_output,
         MusicWishAiRunChunk, MusicWishAiRunRecord,
     },
-    components::stream_chunk_batcher::ChunkBatcher,
+    components::{
+        empty_state::EmptyState, status_badge::StatusBadge, stream_chunk_batcher::ChunkBatcher,
+    },
     pages::llm_access_shared::format_ms_iso,
     router::Route,
 };
@@ -46,6 +48,7 @@ pub fn admin_music_wish_runs_page(props: &Props) -> Html {
     let stream_status = use_state(|| "idle".to_string());
     let stream_error = use_state(|| None::<String>);
     let stream_ref = use_mut_ref(|| None::<StreamHandle>);
+    let chunks_list_ref = use_node_ref();
 
     let wish_id = props.wish_id.clone();
 
@@ -211,6 +214,20 @@ pub fn admin_music_wish_runs_page(props: &Props) -> Html {
         rows
     };
 
+    // Auto-scroll the streaming output list to the newest chunk.
+    {
+        let chunks_list_ref = chunks_list_ref.clone();
+        use_effect_with(chunk_rows.len(), move |_| {
+            if let Some(list) = chunks_list_ref.cast::<web_sys::HtmlElement>() {
+                let opts = ScrollToOptions::new();
+                opts.set_top(list.scroll_height() as f64);
+                opts.set_behavior(web_sys::ScrollBehavior::Smooth);
+                list.scroll_to_with_scroll_to_options(&opts);
+            }
+            || ()
+        });
+    }
+
     html! {
         <main class={classes!("container", "py-8")}>
             <section class={classes!(
@@ -249,19 +266,25 @@ pub fn admin_music_wish_runs_page(props: &Props) -> Html {
                     <h2 class={classes!("m-0", "mb-3", "text-lg", "font-semibold")}>
                         { format!("Runs ({})", runs.len()) }
                     </h2>
-                    <div class={classes!("flex", "gap-2", "flex-wrap")}>
+                    <div class={classes!("flex", "gap-2", "flex-wrap", "items-center")}>
                         { for (*runs).iter().map(|run| {
                             html! {
-                                <span class={classes!(
-                                    "inline-flex", "items-center", "rounded-full",
-                                    "px-2", "py-0.5", "text-xs", "font-semibold",
-                                    "bg-[var(--surface-alt)]", "text-[var(--muted)]"
-                                )}>
-                                    { format!("{} · {}", run.status, &run.run_id[..8.min(run.run_id.len())]) }
+                                <span class={classes!("inline-flex", "items-center", "gap-2")}>
+                                    <StatusBadge status={run.status.clone()} />
+                                    <span class={classes!("text-xs", "font-mono", "text-[var(--muted)]")}>
+                                        { run.run_id[..8.min(run.run_id.len())].to_string() }
+                                    </span>
                                 </span>
                             }
                         }) }
                     </div>
+                </section>
+            } else if !*loading {
+                <section class={classes!(
+                    "bg-[var(--surface)]", "border", "border-[var(--border)]",
+                    "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5", "mb-5"
+                )}>
+                    <EmptyState icon="fa-inbox" title="暂无运行记录" hint="该愿望尚未触发 AI 运行" />
                 </section>
             }
 
@@ -273,9 +296,14 @@ pub fn admin_music_wish_runs_page(props: &Props) -> Html {
                     { format!("Stream Chunks ({})", chunk_rows.len()) }
                 </h2>
                 if chunk_rows.is_empty() {
-                    <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No chunks yet." }</p>
+                    if !*loading {
+                        <EmptyState icon="fa-stream" title="暂无流式输出" hint="AI 运行开始后输出将实时显示在此处" />
+                    }
                 } else {
-                    <ul class={classes!("m-0", "p-0", "list-none", "flex", "flex-col", "gap-2")}>
+                    <ul
+                        ref={chunks_list_ref}
+                        class={classes!("m-0", "p-0", "list-none", "flex", "flex-col", "gap-2", "max-h-[28rem]", "overflow-y-auto", "scroll-smooth")}
+                    >
                         { for chunk_rows.into_iter().map(|chunk| {
                             let badge = if chunk.stream == "stderr" {
                                 classes!("inline-flex", "rounded-full", "px-2", "py-0.5", "text-xs", "font-semibold", "bg-red-500/15", "text-red-700", "dark:text-red-200")

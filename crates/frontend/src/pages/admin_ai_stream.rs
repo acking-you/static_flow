@@ -8,7 +8,9 @@ use crate::{
         build_admin_comment_ai_stream_url, fetch_admin_comment_task_ai_output,
         AdminCommentAiRunChunk, AdminCommentAiStreamEvent, AdminCommentTaskAiOutputResponse,
     },
-    components::stream_chunk_batcher::ChunkBatcher,
+    components::{
+        empty_state::EmptyState, status_badge::StatusBadge, stream_chunk_batcher::ChunkBatcher,
+    },
     pages::llm_access_shared::format_ms_iso,
     router::Route,
 };
@@ -27,6 +29,7 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
     let stream_chunks = use_state(Vec::<AdminCommentAiRunChunk>::new);
     let stream_status = use_state(|| "idle".to_string());
     let stream_error = use_state(|| None::<String>);
+    let chunk_scroll_ref = use_node_ref();
     let stream_ref = use_mut_ref(|| {
         None::<(
             EventSource,
@@ -239,6 +242,17 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
         rows
     };
 
+    // Keep the chunk list pinned to the newest entry as tokens stream in.
+    {
+        let chunk_scroll_ref = chunk_scroll_ref.clone();
+        use_effect_with(chunk_rows.len(), move |_| {
+            if let Some(el) = chunk_scroll_ref.cast::<web_sys::HtmlElement>() {
+                el.set_scroll_top(el.scroll_height());
+            }
+            || ()
+        });
+    }
+
     html! {
         <main class={classes!("container", "py-8")}>
             <section class={classes!(
@@ -286,7 +300,7 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
                 )}>
                     <h2 class={classes!("m-0", "mb-3", "text-lg", "font-semibold")}>{ "Runs" }</h2>
                     if data.runs.is_empty() {
-                        <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No runs." }</p>
+                        <EmptyState icon="fa-inbox" title="No runs." hint="This task has no AI runs yet." />
                     } else {
                         <div class={classes!("flex", "gap-2", "flex-wrap")}>
                             { for data.runs.iter().map(|run| {
@@ -301,11 +315,12 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
                                 };
                                 html! {
                                     <button
-                                        class={if selected { classes!("btn-fluent-primary", "!px-2", "!py-1", "!text-xs") } else { classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs") }}
+                                        class={if selected { classes!("btn-fluent-primary", "!px-2", "!py-1", "!text-xs", "inline-flex", "items-center", "gap-2") } else { classes!("btn-fluent-secondary", "!px-2", "!py-1", "!text-xs", "inline-flex", "items-center", "gap-2") }}
                                         onclick={click}
                                         aria-label={format!("Select run {}", run.run_id)}
                                     >
-                                        { format!("{} · {}", run.status, run.run_id) }
+                                        <StatusBadge status={run.status.clone()} />
+                                        { run.run_id.clone() }
                                     </button>
                                 }
                             }) }
@@ -328,9 +343,11 @@ pub fn admin_comment_runs_page(props: &AdminCommentRunsProps) -> Html {
                     { format!("Stream Chunks ({})", chunk_rows.len()) }
                 </h2>
                 if chunk_rows.is_empty() {
-                    <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No chunks yet." }</p>
+                    if !*loading {
+                        <EmptyState icon="fa-inbox" title="No chunks yet." hint="Output will appear here as the run streams." />
+                    }
                 } else {
-                    <ul class={classes!("m-0", "p-0", "list-none", "flex", "flex-col", "gap-2")}>
+                    <ul ref={chunk_scroll_ref.clone()} class={classes!("m-0", "p-0", "list-none", "flex", "flex-col", "gap-2", "max-h-[60vh]", "overflow-y-auto")}>
                         { for chunk_rows.into_iter().map(|chunk| {
                             let stream_badge = if chunk.stream == "stderr" {
                                 classes!("inline-flex", "rounded-full", "px-2", "py-0.5", "text-xs", "font-semibold", "bg-red-500/15", "text-red-700", "dark:text-red-200")

@@ -8,7 +8,9 @@ use crate::{
         build_admin_article_request_ai_stream_url, fetch_admin_article_request_ai_output,
         ArticleRequestAiRunChunk, ArticleRequestAiRunRecord,
     },
-    components::stream_chunk_batcher::ChunkBatcher,
+    components::{
+        empty_state::EmptyState, status_badge::StatusBadge, stream_chunk_batcher::ChunkBatcher,
+    },
     pages::llm_access_shared::format_ms_iso,
     router::Route,
 };
@@ -46,6 +48,8 @@ pub fn admin_article_request_runs_page(props: &Props) -> Html {
     let stream_status = use_state(|| "idle".to_string());
     let stream_error = use_state(|| None::<String>);
     let stream_ref = use_mut_ref(|| None::<StreamHandle>);
+    // Scrollable chunk container; we pin it to the newest entry on new chunks.
+    let chunk_scroll_ref = use_node_ref();
 
     let request_id = props.request_id.clone();
 
@@ -212,6 +216,17 @@ pub fn admin_article_request_runs_page(props: &Props) -> Html {
         rows
     };
 
+    // Keep the chunk list pinned to the newest entry as tokens stream in.
+    {
+        let chunk_scroll_ref = chunk_scroll_ref.clone();
+        use_effect_with(chunk_rows.len(), move |_| {
+            if let Some(el) = chunk_scroll_ref.cast::<web_sys::HtmlElement>() {
+                el.set_scroll_top(el.scroll_height());
+            }
+            || ()
+        });
+    }
+
     html! {
         <main class={classes!("container", "py-8")}>
             <section class={classes!(
@@ -242,7 +257,7 @@ pub fn admin_article_request_runs_page(props: &Props) -> Html {
 
             if *loading {
                 <section class={classes!("text-sm", "text-[var(--muted)]")}>{ "Loading..." }</section>
-            } else if !runs.is_empty() {
+            } else {
                 <section class={classes!(
                     "bg-[var(--surface)]", "border", "border-[var(--border)]",
                     "rounded-[var(--radius)]", "shadow-[var(--shadow)]", "p-5", "mb-5"
@@ -250,19 +265,18 @@ pub fn admin_article_request_runs_page(props: &Props) -> Html {
                     <h2 class={classes!("m-0", "mb-3", "text-lg", "font-semibold")}>
                         { format!("Runs ({})", runs.len()) }
                     </h2>
-                    <div class={classes!("flex", "gap-2", "flex-wrap")}>
-                        { for (*runs).iter().map(|run| {
-                            html! {
-                                <span class={classes!(
-                                    "inline-flex", "items-center", "rounded-full",
-                                    "px-2", "py-0.5", "text-xs", "font-semibold",
-                                    "bg-[var(--surface-alt)]", "text-[var(--muted)]"
-                                )}>
-                                    { format!("{} · {}", run.status, &run.run_id[..8.min(run.run_id.len())]) }
-                                </span>
-                            }
-                        }) }
-                    </div>
+                    if runs.is_empty() {
+                        <EmptyState icon="fa-inbox" title="No runs yet." hint="This request has not triggered any AI run." />
+                    } else {
+                        <div class={classes!("flex", "gap-2", "flex-wrap")}>
+                            { for (*runs).iter().map(|run| {
+                                let label = format!("{} · {}", run.status, &run.run_id[..8.min(run.run_id.len())]);
+                                html! {
+                                    <StatusBadge status={run.status.clone()} label={Some(AttrValue::from(label))} />
+                                }
+                            }) }
+                        </div>
+                    }
                 </section>
             }
 
@@ -274,9 +288,11 @@ pub fn admin_article_request_runs_page(props: &Props) -> Html {
                     { format!("Stream Chunks ({})", chunk_rows.len()) }
                 </h2>
                 if chunk_rows.is_empty() {
-                    <p class={classes!("m-0", "text-sm", "text-[var(--muted)]")}>{ "No chunks yet." }</p>
+                    if !*loading {
+                        <EmptyState icon="fa-inbox" title="No chunks yet." hint="Output will appear here as the run streams." />
+                    }
                 } else {
-                    <ul class={classes!("m-0", "p-0", "list-none", "flex", "flex-col", "gap-2")}>
+                    <ul ref={chunk_scroll_ref.clone()} class={classes!("m-0", "p-0", "list-none", "flex", "flex-col", "gap-2", "max-h-[60vh]", "overflow-y-auto")}>
                         { for chunk_rows.into_iter().map(|chunk| {
                             let badge = if chunk.stream == "stderr" {
                                 classes!("inline-flex", "rounded-full", "px-2", "py-0.5", "text-xs", "font-semibold", "bg-red-500/15", "text-red-700", "dark:text-red-200")

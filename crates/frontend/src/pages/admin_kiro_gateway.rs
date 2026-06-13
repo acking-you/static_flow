@@ -31,7 +31,10 @@ use crate::{
         LlmGatewayRuntimeConfig, PatchAdminAccountGroupInput, PatchAdminLlmGatewayKeyRequest,
         PatchKiroAccountInput,
     },
-    components::{pagination::Pagination, search_box::SearchBox, tab_bar::render_tab_bar},
+    components::{
+        empty_state::EmptyState, pagination::Pagination, search_box::SearchBox,
+        tab_bar::render_tab_bar,
+    },
     pages::llm_access_shared::{
         confirm_destructive, format_float2, format_kiro_disabled_reason, format_ms,
         format_number_i64, format_number_u64, format_reset_hint, kiro_credit_ratio,
@@ -1388,7 +1391,7 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                     <button type="button" class={classes!("btn-terminal")} onclick={on_toggle_disabled.clone()} disabled={*busy}>
                         { if account.disabled { "Enable" } else { "Disable" } }
                     </button>
-                    <button type="button" class={classes!("btn-terminal", "!text-red-600", "dark:!text-red-300")} onclick={on_delete_account.clone()} disabled={*busy}>
+                    <button type="button" class={classes!("btn-terminal", "btn-terminal-danger")} onclick={on_delete_account.clone()} disabled={*busy}>
                         { "Delete" }
                     </button>
                 </div>
@@ -2810,7 +2813,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                 </button>
                 <button
                     type="button"
-                    class={classes!("btn-terminal", "text-red-600", "dark:text-red-400")}
+                    class={classes!("btn-terminal", "btn-terminal-danger")}
                     onclick={on_delete}
                 >
                     { "Delete" }
@@ -3007,7 +3010,7 @@ fn kiro_account_group_editor_card(props: &KiroAccountGroupEditorCardProps) -> Ht
                     >
                         { if *expanded { "收起 ▲" } else { "展开 ▼" } }
                     </button>
-                    <button class={classes!("btn-terminal", "text-red-600", "dark:text-red-300")} onclick={on_delete} disabled={*saving}>
+                    <button class={classes!("btn-terminal", "btn-terminal-danger")} onclick={on_delete} disabled={*saving}>
                         { "删除" }
                     </button>
                 </div>
@@ -4998,12 +5001,21 @@ pub fn admin_kiro_gateway_page() -> Html {
                         { "正在加载 Kiro 账号摘要…" }
                     </div>
                 } else if let Some(err) = (*inventory_error).clone() {
-                    <div class={classes!("mt-4", "rounded-xl", "border", "border-dashed", "border-red-400/50", "bg-red-500/10", "p-5", "text-sm", "text-red-700", "dark:text-red-200")}>
-                        { format!("Kiro 账号摘要加载失败：{err}") }
+                    <div class={classes!("mt-4")}>
+                        <EmptyState
+                            tone="error"
+                            icon="fa-triangle-exclamation"
+                            title="Kiro 账号摘要加载失败"
+                            hint={Some(AttrValue::from(err))}
+                        />
                     </div>
                 } else if (*accounts).is_empty() {
-                    <div class={classes!("mt-4", "rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface)]", "p-5", "text-sm", "text-[var(--muted)]")}>
-                        { "当前还没有导入任何 Kiro 账号。可以先从上面的 SQLite 导入，或者手动填写字段生成一个账号文件。" }
+                    <div class={classes!("mt-4")}>
+                        <EmptyState
+                            icon="fa-inbox"
+                            title="当前还没有导入任何 Kiro 账号"
+                            hint="可以先从上面的 SQLite 导入，或者手动填写字段生成一个账号文件。"
+                        />
                     </div>
                 }
             </section>
@@ -5096,21 +5108,27 @@ pub fn admin_kiro_gateway_page() -> Html {
                             }
                         } else if let Some(err) = (*inventory_error).clone() {
                             html! {
-                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-red-400/50", "bg-red-500/10", "p-5", "text-sm", "text-red-700", "dark:text-red-200")}>
-                                    { format!("Kiro key 清单加载失败：{err}") }
-                                </div>
+                                <EmptyState
+                                    tone="error"
+                                    icon="fa-triangle-exclamation"
+                                    title="Kiro key 清单加载失败"
+                                    hint={Some(AttrValue::from(err))}
+                                />
                             }
                         } else if (*keys).is_empty() {
                             html! {
-                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface)]", "p-5", "text-sm", "text-[var(--muted)]")}>
-                                    { "还没有 Kiro key。先创建一个，然后把 base URL 和 key 发给 Claude Code 或 Anthropic SDK 使用。" }
-                                </div>
+                                <EmptyState
+                                    icon="fa-inbox"
+                                    title="还没有 Kiro key"
+                                    hint="先创建一个，然后把 base URL 和 key 发给 Claude Code 或 Anthropic SDK 使用。"
+                                />
                             }
                         } else if filtered_keys.is_empty() {
                             html! {
-                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface)]", "p-5", "text-sm", "text-[var(--muted)]")}>
-                                    { "当前过滤条件下没有匹配的 Kiro key。" }
-                                </div>
+                                <EmptyState
+                                    icon="fa-magnifying-glass"
+                                    title="当前过滤条件下没有匹配的 Kiro key"
+                                />
                             }
                         } else {
                             html! {
@@ -5221,13 +5239,17 @@ pub fn admin_kiro_gateway_page() -> Html {
                                         { "正在加载 Kiro 账号…" }
                                     </div>
                                 } else if let Some(err) = (*inventory_error).clone() {
-                                    <div class={classes!("rounded-lg", "border", "border-dashed", "border-red-400/50", "bg-red-500/10", "px-3", "py-3", "text-xs", "text-red-700", "dark:text-red-200")}>
-                                        { format!("Kiro 账号加载失败：{err}") }
-                                    </div>
+                                    <EmptyState
+                                        tone="error"
+                                        icon="fa-triangle-exclamation"
+                                        title="Kiro 账号加载失败"
+                                        hint={Some(AttrValue::from(err))}
+                                    />
                                 } else if accounts.is_empty() {
-                                    <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "px-3", "py-3", "text-xs", "text-[var(--muted)]")}>
-                                        { "当前没有可加入账号组的 Kiro 账号。" }
-                                    </div>
+                                    <EmptyState
+                                        icon="fa-inbox"
+                                        title="当前没有可加入账号组的 Kiro 账号"
+                                    />
                                 } else {
                                     <div class={classes!("grid", "gap-2", "xl:grid-cols-2")}>
                                         { for accounts.iter().map(|account| {
@@ -5306,21 +5328,26 @@ pub fn admin_kiro_gateway_page() -> Html {
                             }
                         } else if let Some(err) = (*inventory_error).clone() {
                             html! {
-                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-red-400/50", "bg-red-500/10", "p-5", "text-sm", "text-red-700", "dark:text-red-200")}>
-                                    { format!("Kiro 账号组加载失败：{err}") }
-                                </div>
+                                <EmptyState
+                                    tone="error"
+                                    icon="fa-triangle-exclamation"
+                                    title="Kiro 账号组加载失败"
+                                    hint={Some(AttrValue::from(err))}
+                                />
                             }
                         } else if account_groups_page_items.is_empty() {
                             html! {
-                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-5", "text-sm", "text-[var(--muted)]")}>
-                                    { "当前还没有 Kiro 账号组。" }
-                                </div>
+                                <EmptyState
+                                    icon="fa-inbox"
+                                    title="当前还没有 Kiro 账号组"
+                                />
                             }
                         } else if filtered_account_groups.is_empty() {
                             html! {
-                                <div class={classes!("rounded-xl", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-5", "text-sm", "text-[var(--muted)]")}>
-                                    { "当前过滤条件下没有匹配的账号组。" }
-                                </div>
+                                <EmptyState
+                                    icon="fa-magnifying-glass"
+                                    title="当前过滤条件下没有匹配的账号组"
+                                />
                             }
                         } else {
                             html! {
@@ -5370,11 +5397,18 @@ pub fn admin_kiro_gateway_page() -> Html {
                         <span>{ "加载中" }</span>
                     </div>
                 } else if let Some(err) = (*usage_error).clone() {
-                    <div class={classes!("mt-3", "rounded-lg", "bg-red-500/10", "px-3", "py-2", "text-sm", "text-red-700", "dark:text-red-200")}>
-                        { err }
+                    <div class={classes!("mt-3")}>
+                        <EmptyState
+                            tone="error"
+                            icon="fa-triangle-exclamation"
+                            title="加载 usage events 失败"
+                            hint={Some(AttrValue::from(err))}
+                        />
                     </div>
                 } else if (*usage_events).is_empty() {
-                    <div class={classes!("mt-3", "font-mono", "text-sm", "text-[var(--muted)]")}>{ "暂无记录" }</div>
+                    <div class={classes!("mt-3")}>
+                        <EmptyState icon="fa-inbox" title="暂无记录" />
+                    </div>
                 } else {
                     <div class={classes!("mt-3", "space-y-2")}>
                         { for (*usage_events).iter().take(5).map(|event| {

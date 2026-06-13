@@ -79,7 +79,10 @@ use crate::{
         AdminGpt2ApiRsUpdateKeyRequest, AdminGpt2ApiRsUpdateProxyConfigRequest,
         AdminGpt2ApiRsUsageEventView, AdminGpt2ApiRsUsageEventsQuery, Gpt2ApiRsConfig,
     },
-    components::{search_box::SearchBox, tab_bar::render_tab_bar},
+    components::{
+        empty_state::EmptyState, search_box::SearchBox, status_badge::StatusBadge,
+        tab_bar::render_tab_bar,
+    },
     pages::llm_access_shared::{confirm_destructive, format_ms, MaskedSecretCode},
     router::Route,
 };
@@ -308,7 +311,7 @@ fn gpt2api_account_group_editor(props: &Gpt2ApiAccountGroupEditorProps) -> Html 
                             <button class={classes!("btn-terminal")} onclick={on_save} disabled={*saving}>
                                 { if *saving { "Saving..." } else { "Save" } }
                             </button>
-                            <button class={classes!("btn-terminal", "text-red-600")} onclick={on_delete} disabled={*saving}>
+                            <button class={classes!("btn-terminal", "btn-terminal-danger")} onclick={on_delete} disabled={*saving}>
                                 { "Delete" }
                             </button>
                         </div>
@@ -2581,7 +2584,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                                         { "Advanced" }
                                                 </button>
                                                 <button
-                                                    class={classes!("btn-fluent-secondary")}
+                                                    class={classes!("btn-fluent-danger")}
                                                     onclick={Callback::from(move |_| {
                                                         if !confirm_destructive("确认删除这个 gpt2api-rs 账户？此操作不可撤销。") {
                                                             return;
@@ -2619,6 +2622,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
                             }) }
                         </tbody>
                     </table>
+                    if filtered_accounts.is_empty() && !*loading {
+                        <EmptyState icon="fa-user-slash" title="No accounts to show." hint="Import access tokens or session JSON above, then refresh." />
+                    }
                 </div>
 
                 <details class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
@@ -2905,7 +2911,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                                         let on_check_proxy_config = on_check_proxy_config.clone();
                                                         Callback::from(move |_| on_check_proxy_config.emit(proxy_for_check.clone()))
                                                     }} disabled={*checking_proxy}>{ if *checking_proxy { "Checking..." } else { "Check" } }</button>
-                                                    <button class={classes!("btn-fluent-secondary")} onclick={{
+                                                    <button class={classes!("btn-fluent-danger")} onclick={{
                                                         let on_delete_proxy_config = on_delete_proxy_config.clone();
                                                         Callback::from(move |_| on_delete_proxy_config.emit(proxy_for_delete.clone()))
                                                     }}>{ "Delete" }</button>
@@ -2916,8 +2922,8 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                 }) }
                             </tbody>
                         </table>
-                        if proxy_configs.is_empty() {
-                            <p class={classes!("m-0", "mt-3", "text-sm", "text-[var(--muted)]")}>{ "No proxy configs yet." }</p>
+                        if proxy_configs.is_empty() && !*loading {
+                            <EmptyState icon="fa-server" title="No proxy configs yet." hint="Create a proxy on the left to bind it to upstream accounts." />
                         }
                     </div>
                 </div>
@@ -3043,13 +3049,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
 
                 <div class={classes!("grid", "gap-4", "2xl:grid-cols-2")}>
                     if account_groups.is_empty() && !*loading {
-                        <div class={classes!("rounded", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-8", "text-center", "text-[var(--muted)]")}>
-                            { "No account groups yet." }
-                        </div>
+                        <EmptyState icon="fa-layer-group" title="No account groups yet." hint="Create a group above to route keys to a subset of accounts." />
                     } else if filtered_account_groups.is_empty() {
-                        <div class={classes!("rounded", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-8", "text-center", "text-[var(--muted)]")}>
-                            { "No matching account groups." }
-                        </div>
+                        <EmptyState icon="fa-magnifying-glass" title="No matching account groups." hint="Adjust the search to see more groups." />
                     } else {
                         { for filtered_account_groups.iter().map(|group| html! {
                             <Gpt2ApiAccountGroupEditor
@@ -3249,14 +3251,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                                 >
                                                     <div class={classes!("flex", "items-center", "justify-between", "gap-3")}>
                                                         <span class={classes!("font-mono", "text-sm", "font-semibold")}>{ account.name.clone() }</span>
-                                                        <span class={classes!(
-                                                            "rounded-full", "px-2", "py-0.5", "text-xs",
-                                                            if account.status == "active" {
-                                                                "bg-emerald-500/10 text-emerald-700 dark:text-emerald-200"
-                                                            } else {
-                                                                "bg-amber-500/10 text-amber-700 dark:text-amber-200"
-                                                            }
-                                                        )}>{ account.status.clone() }</span>
+                                                        <StatusBadge status={account.status.clone()} />
                                                     </div>
                                                     <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
                                                         { format!(
@@ -3405,21 +3400,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                             </span>
                                         </td>
                                         <td class="py-2 pr-3">
-                                            <span class={classes!(
-                                                "inline-flex",
-                                                "rounded-full",
-                                                "px-2.5",
-                                                "py-1",
-                                                "text-xs",
-                                                "font-medium",
-                                                match key.status.as_str() {
-                                                    "active" => "bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
-                                                    "disabled" => "bg-red-500/10 text-red-700 dark:text-red-200",
-                                                    _ => "bg-amber-500/10 text-amber-700 dark:text-amber-200",
-                                                }
-                                            )}>
-                                                { key.status.clone() }
-                                            </span>
+                                            <StatusBadge status={key.status.clone()} />
                                         </td>
                                         <td class="py-2 pr-3">{ format!("{}/{}", key.quota_used_calls, key.quota_total_calls) }</td>
                                         <td class="py-2 pr-3">
@@ -3464,7 +3445,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                                     { "Reissue" }
                                                 </button>
                                                 <button
-                                                    class={classes!("btn-terminal", "!px-2.5", "!py-1.5", "!text-xs", "text-red-600")}
+                                                    class={classes!("btn-terminal", "btn-terminal-danger", "!px-2.5", "!py-1.5", "!text-xs")}
                                                     onclick={{
                                                         let on_delete_key = on_delete_key.clone();
                                                         let key = key.clone();
@@ -3479,6 +3460,9 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                 }) }
                             </tbody>
                         </table>
+                        if keys.is_empty() && !*loading {
+                            <EmptyState icon="fa-key" title="No API keys yet." hint="Create a key above to issue access for /gpt2api/login." />
+                        }
                     </div>
                 </article>
             </section>
@@ -3549,9 +3533,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                 </div>
 
                 if contribution_requests.is_empty() && !*contribution_loading {
-                    <div class={classes!("rounded", "border", "border-dashed", "border-[var(--border)]", "px-4", "py-8", "text-center", "text-[var(--muted)]")}>
-                        { "No GPT contribution requests for this filter." }
-                    </div>
+                    <EmptyState icon="fa-inbox" title="No GPT contribution requests for this filter." hint="Adjust the status filter or wait for new submissions." />
                 } else {
                     <div class={classes!("grid", "gap-4")}>
                         { for contribution_requests.iter().map(|item| {
@@ -3574,16 +3556,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                         <div class={classes!("min-w-0")}>
                                             <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
                                                 <h3 class={classes!("m-0", "font-mono", "text-base", "font-semibold")}>{ item.account_name.clone() }</h3>
-                                                <span class={classes!(
-                                                    "rounded-full", "px-2.5", "py-1", "text-xs", "font-semibold",
-                                                    match item.status.as_str() {
-                                                        "pending" => "bg-amber-500/10 text-amber-700 dark:text-amber-200",
-                                                        "issued" => "bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
-                                                        "failed" => "bg-red-500/10 text-red-700 dark:text-red-200",
-                                                        "rejected" => "bg-slate-500/10 text-slate-700 dark:text-slate-200",
-                                                        _ => "bg-sky-500/10 text-sky-700 dark:text-sky-200",
-                                                    }
-                                                )}>{ item.status.clone() }</span>
+                                                <StatusBadge status={item.status.clone()} />
                                             </div>
                                             <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
                                                 { format!("{} · {} · {}", item.request_id, item.requester_email, credential_type) }
@@ -3601,7 +3574,7 @@ pub fn admin_gpt2api_rs_page() -> Html {
                                                 { if approving { "Working..." } else { "Approve & Issue" } }
                                             </button>
                                             <button
-                                                class={classes!("btn-fluent-secondary")}
+                                                class={classes!("btn-fluent-danger")}
                                                 disabled={approving || finalized}
                                                 onclick={{
                                                     let on_reject_contribution = on_reject_contribution.clone();
@@ -3964,9 +3937,11 @@ pub fn admin_gpt2api_rs_page() -> Html {
                             </tr>
                         </thead>
                         <tbody>
-                            if usage.is_empty() {
+                            if usage.is_empty() && !*loading {
                                 <tr>
-                                    <td colspan="15" class="py-8 text-center text-[var(--muted)]">{ "No usage events for this filter" }</td>
+                                    <td colspan="15">
+                                        <EmptyState icon="fa-inbox" title="No usage events for this filter" hint="Adjust the search, key filter, or limit to see more events." />
+                                    </td>
                                 </tr>
                             } else {
                                 { for usage.iter().map(|item| {
