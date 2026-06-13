@@ -36,7 +36,7 @@ pub struct CopyButtonProps {
 pub fn copy_button(props: &CopyButtonProps) -> Html {
     let copied = use_state(|| false);
     let onclick = {
-        let text = props.text.to_string();
+        let text = props.text.clone();
         let copied = copied.clone();
         Callback::from(move |_: MouseEvent| {
             sf_copy_text(&text);

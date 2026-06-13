@@ -32,7 +32,7 @@ pub fn empty_state(props: &EmptyStateProps) -> Html {
     let tone_class = (props.tone == "error").then_some("admin-empty--error");
     html! {
         <div class={classes!("admin-empty", tone_class)}>
-            <i class={classes!("fas", props.icon.to_string(), "admin-empty__icon")} aria-hidden="true"></i>
+            <i class={classes!("fas", props.icon.clone(), "admin-empty__icon")} aria-hidden="true"></i>
             <p class={classes!("admin-empty__title")}>{ props.title.clone() }</p>
             if let Some(hint) = props.hint.clone() {
                 <p class={classes!("admin-empty__hint")}>{ hint }</p>

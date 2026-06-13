@@ -31,7 +31,7 @@ pub fn drawer(props: &DrawerProps) -> Html {
     html! {
         <div
             class={classes!("admin-drawer-root", open_class)}
-            aria-hidden={(!props.open).to_string()}
+            aria-hidden={if props.open { "false" } else { "true" }}
         >
             <div class={classes!("admin-drawer-backdrop")} onclick={props.on_close.clone()} />
             <aside class={classes!("admin-drawer", props.class.clone())} role="dialog" aria-modal="true">
