@@ -205,6 +205,49 @@ pub fn token_usage_missing_label() -> &'static str {
     "token usage unavailable"
 }
 
+/// Tailwind class tuple `(border, bg, text, dark:text)` for a latency badge — maps a
+/// latency value onto a green→red scale. Shared so the admin usage tables and the
+/// public usage lookup render latency identically.
+pub type LatencyBadgeColor = (&'static str, &'static str, &'static str, &'static str);
+
+/// Render a latency in milliseconds as `"{n} ms"`, clamping negatives to 0.
+pub fn format_latency_ms(latency_ms: i32) -> String {
+    format!("{} ms", latency_ms.max(0))
+}
+
+/// Color scale for **first-token latency (首字延迟 / TTFT)**. This only covers the
+/// window up to the first streamed byte, which stays small even when the upstream is
+/// slow, so the thresholds are tight: `<3s` healthy · `<10s` warning · `>=10s` slow.
+pub fn first_token_latency_color(latency_ms: i32) -> LatencyBadgeColor {
+    if latency_ms < 3_000 {
+        ("border-emerald-500/20", "bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200")
+    } else if latency_ms < 10_000 {
+        ("border-amber-500/20", "bg-amber-500/10", "text-amber-700", "dark:text-amber-200")
+    } else {
+        ("border-red-500/20", "bg-red-500/10", "text-red-700", "dark:text-red-200")
+    }
+}
+
+/// Color scale for **total request latency (整体延迟)**. This spans the whole
+/// generation, so a streaming reasoning request can legitimately run well over a
+/// minute. The range is therefore much wider than first-token latency and uses five
+/// steps (keeping the original `1 : 3 : 6 : 12` spacing) so the common band still shows
+/// gradient detail: `<8s` emerald · `<24s` lime · `<48s` amber · `<96s` orange ·
+/// `>=96s` red.
+pub fn total_latency_color(latency_ms: i32) -> LatencyBadgeColor {
+    if latency_ms < 8_000 {
+        ("border-emerald-500/20", "bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200")
+    } else if latency_ms < 24_000 {
+        ("border-lime-500/20", "bg-lime-500/10", "text-lime-700", "dark:text-lime-200")
+    } else if latency_ms < 48_000 {
+        ("border-amber-500/20", "bg-amber-500/10", "text-amber-700", "dark:text-amber-200")
+    } else if latency_ms < 96_000 {
+        ("border-orange-500/20", "bg-orange-500/10", "text-orange-700", "dark:text-orange-200")
+    } else {
+        ("border-red-500/20", "bg-red-500/10", "text-red-700", "dark:text-red-200")
+    }
+}
+
 pub fn credit_usage_missing_label() -> &'static str {
     "credit usage unavailable"
 }
@@ -407,8 +450,8 @@ fn parse_gpt_model_rank(slug: &str) -> Option<(i32, i32, i32, i32)> {
 mod tests {
     use super::{
         codex_model_catalog_download_command, codex_provider_config, credit_usage_missing_label,
-        format_kiro_disabled_reason, preferred_model_slug_from_catalog_json,
-        token_usage_missing_label,
+        first_token_latency_color, format_kiro_disabled_reason, format_latency_ms,
+        preferred_model_slug_from_catalog_json, token_usage_missing_label, total_latency_color,
     };
 
     #[test]
@@ -478,5 +521,30 @@ mod tests {
     fn usage_missing_badge_labels_are_specific() {
         assert_eq!(token_usage_missing_label(), "token usage unavailable");
         assert_eq!(credit_usage_missing_label(), "credit usage unavailable");
+    }
+
+    #[test]
+    fn format_latency_ms_clamps_negatives() {
+        assert_eq!(format_latency_ms(1_234), "1234 ms");
+        assert_eq!(format_latency_ms(0), "0 ms");
+        assert_eq!(format_latency_ms(-5), "0 ms");
+    }
+
+    #[test]
+    fn first_token_latency_color_uses_tight_thresholds() {
+        // healthy < 3s, warning < 10s, slow otherwise — boundaries are exclusive.
+        assert_eq!(first_token_latency_color(2_999).0, "border-emerald-500/20");
+        assert_eq!(first_token_latency_color(3_000).0, "border-amber-500/20");
+        assert_eq!(first_token_latency_color(9_999).0, "border-amber-500/20");
+        assert_eq!(first_token_latency_color(10_000).0, "border-red-500/20");
+    }
+
+    #[test]
+    fn total_latency_color_spans_a_wider_five_step_range() {
+        assert_eq!(total_latency_color(7_999).0, "border-emerald-500/20");
+        assert_eq!(total_latency_color(8_000).0, "border-lime-500/20");
+        assert_eq!(total_latency_color(24_000).0, "border-amber-500/20");
+        assert_eq!(total_latency_color(48_000).0, "border-orange-500/20");
+        assert_eq!(total_latency_color(96_000).0, "border-red-500/20");
     }
 }

@@ -61,8 +61,9 @@ use crate::{
         search_box::SearchBox, status_badge::StatusBadge, tab_bar::render_tab_bar,
     },
     pages::llm_access_shared::{
-        confirm_destructive, credit_usage_missing_label, format_ms, format_number_i64,
-        format_number_u64, token_usage_missing_label, MaskedSecretCode,
+        confirm_destructive, credit_usage_missing_label, first_token_latency_color,
+        format_latency_ms, format_ms, format_number_i64, format_number_u64, total_latency_color,
+        token_usage_missing_label, MaskedSecretCode,
     },
     router::Route,
 };
@@ -295,10 +296,6 @@ enum KeySortMode {
     QuotaDesc,
     UsageAsc,
     UsageDesc,
-}
-
-fn format_latency_ms(latency_ms: i32) -> String {
-    format!("{} ms", latency_ms.max(0))
 }
 
 fn format_optional_latency_ms(latency_ms: Option<i32>) -> String {
@@ -6540,13 +6537,11 @@ pub fn admin_llm_gateway_page() -> Html {
                                                             })
                                                         };
                                                         let latency_ms_val = event.latency_ms.unwrap_or(0) as i32;
-                                                        let latency_color = if latency_ms_val < 3000 {
-                                                            ("border-emerald-500/20", "bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200")
-                                                        } else if latency_ms_val < 10000 {
-                                                            ("border-amber-500/20", "bg-amber-500/10", "text-amber-700", "dark:text-amber-200")
-                                                        } else {
-                                                            ("border-red-500/20", "bg-red-500/10", "text-red-700", "dark:text-red-200")
-                                                        };
+                                                        let latency_color = total_latency_color(latency_ms_val);
+                                                        let first_token = event.first_sse_write_ms.map(|first_ms| {
+                                                            let first_ms = first_ms.clamp(0, i32::MAX as i64) as i32;
+                                                            (first_ms, first_token_latency_color(first_ms))
+                                                        });
                                                         let status_ok = event.status_code >= 200 && event.status_code < 300;
                                                         html! {
                                                             <tr class={classes!("border-t", "border-[var(--border)]", "align-top")}>
@@ -6594,12 +6589,14 @@ pub fn admin_llm_gateway_page() -> Html {
                                                                         <span class={classes!("inline-flex", "rounded-full", "border", "px-2", "py-0.5", "text-[11px]", "font-semibold", latency_color.0, latency_color.1, latency_color.2, latency_color.3)}>
                                                                             { format_latency_ms(latency_ms_val) }
                                                                         </span>
-                                                                        <div class={classes!("mt-0.5", "text-[10px]", "text-[var(--muted)]")}>
-                                                                            { if let Some(first_ms) = event.first_sse_write_ms {
-                                                                                format!("首字 {}ms", first_ms.max(0))
+                                                                        <div class={classes!("mt-0.5")}>
+                                                                            if let Some((first_ms, first_color)) = first_token {
+                                                                                <span class={classes!("inline-flex", "rounded-full", "border", "px-1.5", "py-0.5", "text-[10px]", "font-semibold", first_color.0, first_color.1, first_color.2, first_color.3)}>
+                                                                                    { format!("首字 {}", format_latency_ms(first_ms)) }
+                                                                                </span>
                                                                             } else {
-                                                                                "-".to_string()
-                                                                            }}
+                                                                                <span class={classes!("text-[10px]", "text-[var(--muted)]")}>{ "首字 -" }</span>
+                                                                            }
                                                                         </div>
                                                                     } else {
                                                                         <span class={classes!("text-xs", "text-[var(--muted)]")}>{ "-" }</span>
@@ -9174,14 +9171,11 @@ pub fn admin_llm_gateway_page() -> Html {
                                             &event.request_url,
                                             &event.endpoint,
                                         );
-                                        let latency_ms_val = event.latency_ms;
-                                        let latency_color = if latency_ms_val < 3000 {
-                                            ("border-emerald-500/20", "bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200")
-                                        } else if latency_ms_val < 10000 {
-                                            ("border-amber-500/20", "bg-amber-500/10", "text-amber-700", "dark:text-amber-200")
-                                        } else {
-                                            ("border-red-500/20", "bg-red-500/10", "text-red-700", "dark:text-red-200")
-                                        };
+                                        let latency_color = total_latency_color(event.latency_ms);
+                                        let first_token = event.first_sse_write_ms.map(|first_ms| {
+                                            let first_ms = first_ms.max(0);
+                                            (first_ms, first_token_latency_color(first_ms))
+                                        });
                                         let status_ok = event.status_code == 200;
                                         html! {
                                             <tr class={classes!("border-t", "border-[var(--border)]", "align-top")}>
@@ -9228,12 +9222,14 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     <span class={classes!("inline-flex", "rounded-full", "border", "px-2", "py-0.5", "text-[11px]", "font-semibold", latency_color.0, latency_color.1, latency_color.2, latency_color.3)}>
                                                         { format_latency_ms(event.latency_ms) }
                                                     </span>
-                                                    <div class={classes!("mt-0.5", "text-[10px]", "text-[var(--muted)]")}>
-                                                        { if let Some(first_ms) = event.first_sse_write_ms {
-                                                            format!("首字 {}ms", first_ms.max(0))
+                                                    <div class={classes!("mt-0.5")}>
+                                                        if let Some((first_ms, first_color)) = first_token {
+                                                            <span class={classes!("inline-flex", "rounded-full", "border", "px-1.5", "py-0.5", "text-[10px]", "font-semibold", first_color.0, first_color.1, first_color.2, first_color.3)}>
+                                                                { format!("首字 {}", format_latency_ms(first_ms)) }
+                                                            </span>
                                                         } else {
-                                                            "-".to_string()
-                                                        }}
+                                                            <span class={classes!("text-[10px]", "text-[var(--muted)]")}>{ "首字 -" }</span>
+                                                        }
                                                     </div>
                                                 </td>
                                                 <td class={classes!("py-2.5", "pr-3", "whitespace-nowrap", "font-mono", "text-[11px]")}>

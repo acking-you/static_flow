@@ -10,7 +10,8 @@ use crate::{
     },
     components::{pagination::Pagination, token_usage_trend_chart::TokenUsageTrendChart},
     pages::llm_access_shared::{
-        format_ms, format_number_i64, format_number_u64, token_usage_missing_label,
+        first_token_latency_color, format_latency_ms, format_ms, format_number_i64,
+        format_number_u64, token_usage_missing_label, total_latency_color,
     },
     router::Route,
 };
@@ -397,7 +398,6 @@ pub fn llm_access_usage_page() -> Html {
                                 <thead class={classes!("border-b", "border-[var(--border)]", "font-mono", "text-[11px]", "uppercase", "tracking-[0.12em]", "text-[var(--muted)]")}>
                                     <tr>
                                         <th class={classes!("py-2", "pr-3")}>{ "时间 / Event ID" }</th>
-                                        <th class={classes!("py-2", "pr-3")}>{ "账号" }</th>
                                         <th class={classes!("py-2", "pr-3")}>{ "请求" }</th>
                                         <th class={classes!("py-2", "pr-3")}>{ "模型 / 状态" }</th>
                                         <th class={classes!("py-2", "pr-3")}>{ "延迟" }</th>
@@ -407,6 +407,11 @@ pub fn llm_access_usage_page() -> Html {
                                 </thead>
                                 <tbody>
                                     { for response.events.iter().map(|event| {
+                                        let latency_color = total_latency_color(event.latency_ms);
+                                        let first_token = event.first_sse_write_ms.map(|first_ms| {
+                                            let first_ms = first_ms.max(0);
+                                            (first_ms, first_token_latency_color(first_ms))
+                                        });
                                         html! {
                                             <tr key={event.id.clone()} class={classes!("border-b", "border-[var(--border)]", "align-top")}>
                                                 <td class={classes!("py-3", "pr-3", "min-w-[13rem]", "whitespace-nowrap", "font-mono", "text-xs")}>
@@ -414,11 +419,6 @@ pub fn llm_access_usage_page() -> Html {
                                                     <div class={classes!("mt-1", "max-w-[10rem]", "truncate", "text-[11px]", "text-[var(--muted)]")} title={event.id.clone()}>
                                                         { event.id.clone() }
                                                     </div>
-                                                </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[10rem]")}>
-                                                    <span class={classes!("inline-flex", "rounded-full", "border", "border-emerald-500/20", "bg-emerald-500/10", "px-2.5", "py-1", "text-xs", "font-semibold", "text-emerald-700", "dark:text-emerald-200")}>
-                                                        { event.account_name.clone().unwrap_or_else(|| "legacy auth".to_string()) }
-                                                    </span>
                                                 </td>
                                                 <td class={classes!("py-3", "pr-3", "min-w-[22rem]")}>
                                                     <div class={classes!("flex", "items-start", "gap-2")}>
@@ -444,8 +444,19 @@ pub fn llm_access_usage_page() -> Html {
                                                         </div>
                                                     }
                                                 </td>
-                                                <td class={classes!("py-3", "pr-3", "whitespace-nowrap", "font-mono", "text-xs")}>
-                                                    { format!("{} ms", event.latency_ms) }
+                                                <td class={classes!("py-3", "pr-3", "whitespace-nowrap")}>
+                                                    <span class={classes!("inline-flex", "rounded-full", "border", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", latency_color.0, latency_color.1, latency_color.2, latency_color.3)}>
+                                                        { format_latency_ms(event.latency_ms) }
+                                                    </span>
+                                                    <div class={classes!("mt-1")}>
+                                                        if let Some((first_ms, first_color)) = first_token {
+                                                            <span class={classes!("inline-flex", "rounded-full", "border", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", first_color.0, first_color.1, first_color.2, first_color.3)}>
+                                                                { format!("首字 {}", format_latency_ms(first_ms)) }
+                                                            </span>
+                                                        } else {
+                                                            <span class={classes!("font-mono", "text-[11px]", "text-[var(--muted)]")}>{ "首字 -" }</span>
+                                                        }
+                                                    </div>
                                                 </td>
                                                 <td class={classes!("py-3", "pr-3", "whitespace-nowrap", "font-mono", "text-xs")}>
                                                     { format!("{}/{}", event.client_ip, event.ip_region) }
