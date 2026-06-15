@@ -19,6 +19,7 @@ use super::{
 };
 
 const HOUR_MS: i64 = 60 * 60 * 1000;
+const MAX_PROXY_TRAFFIC_BUCKETS: usize = 10_000;
 
 #[cfg(feature = "duckdb-runtime")]
 #[derive(Debug, Clone, Default)]
@@ -356,9 +357,16 @@ fn proxy_key_sql(proxy_config_sql: &str, proxy_url_sql: &str, proxy_source_sql: 
 
 #[cfg(feature = "duckdb-runtime")]
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
-    value
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else if trimmed.len() == value.len() {
+            Some(value)
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -368,7 +376,9 @@ fn proxy_traffic_bucket_count(start_ms: i64, end_ms: i64, bucket_ms: i64) -> usi
     }
     let span = end_ms.saturating_sub(start_ms);
     let count = span.saturating_add(bucket_ms - 1).div_euclid(bucket_ms);
-    usize::try_from(count).unwrap_or(usize::MAX)
+    usize::try_from(count)
+        .unwrap_or(usize::MAX)
+        .min(MAX_PROXY_TRAFFIC_BUCKETS)
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -386,5 +396,29 @@ fn proxy_traffic_query_as_segment_filter(query: &ProxyTrafficQuery) -> UsageEven
         end_ms: Some(query.end_ms),
         limit: 1,
         offset: 0,
+    }
+}
+
+#[cfg(all(test, feature = "duckdb-runtime"))]
+mod tests {
+    use llm_access_core::store::{ProxyTrafficQuery, UsageEventSource};
+
+    use super::{proxy_traffic_bucket_count, ProxyTrafficAccumulator, MAX_PROXY_TRAFFIC_BUCKETS};
+
+    #[test]
+    fn proxy_traffic_bucket_count_limits_allocated_points() {
+        let query = ProxyTrafficQuery {
+            proxy_config_id: None,
+            provider_type: None,
+            source: UsageEventSource::Hot,
+            start_ms: 0,
+            end_ms: i64::MAX,
+            bucket_ms: 1,
+        };
+
+        let accumulator = ProxyTrafficAccumulator::new(&query);
+
+        assert_eq!(proxy_traffic_bucket_count(0, i64::MAX, 1), MAX_PROXY_TRAFFIC_BUCKETS);
+        assert_eq!(accumulator.points.len(), MAX_PROXY_TRAFFIC_BUCKETS);
     }
 }

@@ -91,6 +91,7 @@ pub fn duckdb_usage_connection_sql(
         SET checkpoint_threshold={};
         SET threads=1;
         SET preserve_insertion_order=false;
+        SET TimeZone='UTC';
         SET temp_directory={};
         SET max_temp_directory_size={};
         ",

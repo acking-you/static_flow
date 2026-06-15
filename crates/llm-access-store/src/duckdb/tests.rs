@@ -421,6 +421,7 @@ fn duckdb_usage_connection_config_formats_runtime_limits() {
 
     assert!(sql.contains("SET memory_limit='1024MB'"));
     assert!(sql.contains("SET checkpoint_threshold='32MB'"));
+    assert!(sql.contains("SET TimeZone='UTC'"));
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -436,6 +437,7 @@ fn duckdb_compact_connection_config_uses_runtime_memory_limit() {
 
     assert!(sql.contains("SET memory_limit='2048MB'"));
     assert!(sql.contains("SET max_temp_directory_size='8GB'"));
+    assert!(sql.contains("SET TimeZone='UTC'"));
 }
 
 #[cfg(feature = "duckdb-runtime")]
@@ -3155,6 +3157,153 @@ async fn proxy_traffic_rollup_does_not_double_count_replayed_events() {
     assert_eq!(snapshot.totals.total_bytes, 1_024);
 
     std::fs::remove_dir_all(&root).expect("cleanup proxy traffic dedupe test directory");
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[test]
+fn proxy_traffic_migration_backfill_collapses_metadata_drift() {
+    let root = std::env::temp_dir().join(format!(
+        "llm-access-duckdb-test-{}-proxy-traffic-backfill-drift",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("create proxy traffic backfill test directory");
+    let db_path = root.join("usage.duckdb");
+    let conn = duckdb::Connection::open(&db_path).expect("open duckdb");
+    let migrations = llm_access_migrations::duckdb_migrations();
+    conn.execute_batch(migrations[0].sql)
+        .expect("initialize v1 schema");
+    conn.execute_batch(
+        r#"
+        INSERT INTO usage_events (
+            source_seq,
+            source_event_id,
+            event_id,
+            created_at_ms,
+            created_at,
+            created_date,
+            created_hour,
+            provider_type,
+            protocol_family,
+            key_id,
+            key_name,
+            key_status_at_event,
+            endpoint,
+            status_code,
+            request_body_bytes,
+            bytes_streamed,
+            input_uncached_tokens,
+            input_cached_tokens,
+            output_tokens,
+            billable_tokens,
+            usage_missing,
+            credit_usage_missing,
+            proxy_source_at_event,
+            proxy_config_id_at_event,
+            proxy_config_name_at_event,
+            proxy_url_at_event
+        ) VALUES
+            (
+                1,
+                'source-proxy-drift-1',
+                'proxy-drift-1',
+                1700000000000,
+                to_timestamp(1700000000),
+                CAST(to_timestamp(1700000000) AS DATE),
+                date_trunc('hour', to_timestamp(1700000000)),
+                'kiro',
+                'anthropic',
+                'key-1',
+                'Key 1',
+                'active',
+                '/cc/v1/messages',
+                200,
+                100,
+                400,
+                0,
+                0,
+                0,
+                0,
+                false,
+                false,
+                'fixed',
+                'proxy-drift',
+                'Proxy Old',
+                'http://127.0.0.1:18080'
+            ),
+            (
+                2,
+                'source-proxy-drift-2',
+                'proxy-drift-2',
+                1700000600000,
+                to_timestamp(1700000600),
+                CAST(to_timestamp(1700000600) AS DATE),
+                date_trunc('hour', to_timestamp(1700000600)),
+                'kiro',
+                'anthropic',
+                'key-1',
+                'Key 1',
+                'active',
+                '/cc/v1/messages',
+                200,
+                200,
+                800,
+                0,
+                0,
+                0,
+                0,
+                false,
+                false,
+                'binding',
+                'proxy-drift',
+                'Proxy New',
+                'http://127.0.0.1:18081'
+            );
+        "#,
+    )
+    .expect("insert drifted usage events");
+
+    conn.execute_batch(migrations[2].sql)
+        .expect("backfill proxy traffic rollups with drifted metadata");
+
+    let row = conn
+        .query_row(
+            "SELECT
+                count(*),
+                max(request_count),
+                max(request_bytes),
+                max(response_bytes),
+                max(total_bytes),
+                max(proxy_source),
+                max(proxy_config_name),
+                max(proxy_url)
+             FROM proxy_traffic_rollups_hourly",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            },
+        )
+        .expect("query backfilled proxy traffic rollup");
+
+    assert_eq!(row.0, 1);
+    assert_eq!(row.1, 2);
+    assert_eq!(row.2, 300);
+    assert_eq!(row.3, 1_200);
+    assert_eq!(row.4, 1_500);
+    assert_eq!(row.5, "binding");
+    assert_eq!(row.6, "Proxy New");
+    assert_eq!(row.7, "http://127.0.0.1:18081");
+
+    std::fs::remove_dir_all(&root).expect("cleanup proxy traffic backfill test directory");
 }
 
 #[cfg(feature = "duckdb-runtime")]

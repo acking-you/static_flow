@@ -31,6 +31,7 @@ const DEFAULT_PROXY_TRAFFIC_BUCKET_MS: i64 = 60 * 60 * 1000;
 const MIN_PROXY_TRAFFIC_BUCKET_MS: i64 = 5 * 60 * 1000;
 const MAX_PROXY_TRAFFIC_BUCKET_MS: i64 = 24 * 60 * 60 * 1000;
 const MAX_PROXY_TRAFFIC_BUCKETS: i64 = 1_000;
+const HOUR_MS: i64 = 60 * 60 * 1000;
 
 /// Query options for usage list endpoints.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -621,31 +622,32 @@ fn normalize_proxy_traffic_query(
             .ok_or("source must be one of hot, archive, or all")?,
         None => UsageEventSource::All,
     };
-    let default_end_ms = now_ms.max(0);
-    let (start_ms, end_ms) = match (request.start_ms, request.end_ms) {
-        (Some(start), Some(end)) => normalize_required_usage_time_range(start, end),
-        (Some(start), None) => normalize_required_usage_time_range(start, default_end_ms),
-        (None, Some(end)) => normalize_required_usage_time_range(
-            end.saturating_sub(DEFAULT_PROXY_TRAFFIC_WINDOW_MS),
-            end,
-        ),
-        (None, None) => {
-            (default_end_ms.saturating_sub(DEFAULT_PROXY_TRAFFIC_WINDOW_MS), default_end_ms)
-        },
-    };
-    if end_ms <= start_ms {
-        return Err("end_ms must be greater than start_ms");
-    }
     let bucket_ms = request
         .bucket_ms
         .unwrap_or(DEFAULT_PROXY_TRAFFIC_BUCKET_MS)
         .clamp(MIN_PROXY_TRAFFIC_BUCKET_MS, MAX_PROXY_TRAFFIC_BUCKET_MS);
+    let default_window_ms =
+        DEFAULT_PROXY_TRAFFIC_WINDOW_MS.min(bucket_ms.saturating_mul(MAX_PROXY_TRAFFIC_BUCKETS));
+    let default_end_ms = align_up_ms(now_ms.max(0), HOUR_MS);
+    let (start_ms, end_ms) = match (request.start_ms, request.end_ms) {
+        (Some(start), Some(end)) => normalize_required_usage_time_range(start, end),
+        (Some(start), None) => normalize_required_usage_time_range(start, default_end_ms),
+        (None, Some(end)) => {
+            normalize_required_usage_time_range(end.saturating_sub(default_window_ms), end)
+        },
+        (None, None) => (default_end_ms.saturating_sub(default_window_ms), default_end_ms),
+    };
+    if end_ms <= start_ms {
+        return Err("end_ms must be greater than start_ms");
+    }
     let bucket_count = end_ms
         .saturating_sub(start_ms)
         .saturating_add(bucket_ms - 1)
         .div_euclid(bucket_ms);
     if bucket_count > MAX_PROXY_TRAFFIC_BUCKETS {
-        return Err("time range produces too many buckets");
+        return Err(
+            "time range produces too many buckets; narrow the time range or increase bucket_ms"
+        );
     }
     Ok(ProxyTrafficQuery {
         proxy_config_id: request
@@ -659,6 +661,16 @@ fn normalize_proxy_traffic_query(
         end_ms,
         bucket_ms,
     })
+}
+
+fn align_up_ms(value: i64, quantum_ms: i64) -> i64 {
+    if value <= 0 || quantum_ms <= 0 {
+        return value.max(0);
+    }
+    value
+        .saturating_add(quantum_ms - 1)
+        .div_euclid(quantum_ms)
+        .saturating_mul(quantum_ms)
 }
 
 fn normalize_required_usage_time_range(start_ms: i64, end_ms: i64) -> (i64, i64) {
@@ -875,15 +887,34 @@ mod tests {
 
     #[test]
     fn normalize_proxy_traffic_query_defaults_to_last_30_days_and_all_sources() {
-        let now_ms = 1_700_000_000_000;
+        let now_ms = 1_700_000_000_123;
+        let expected_end_ms = 1_700_002_800_000;
         let query = normalize_proxy_traffic_query(ProxyTrafficRequest::default(), now_ms)
             .expect("default proxy traffic query should be valid");
 
         assert_eq!(query.source, UsageEventSource::All);
-        assert_eq!(query.start_ms, now_ms - 30 * 24 * 60 * 60 * 1000);
-        assert_eq!(query.end_ms, now_ms);
+        assert_eq!(query.start_ms, expected_end_ms - 30 * 24 * 60 * 60 * 1000);
+        assert_eq!(query.end_ms, expected_end_ms);
         assert_eq!(query.bucket_ms, 60 * 60 * 1000);
         assert_eq!(query.proxy_config_id, None);
+    }
+
+    #[test]
+    fn normalize_proxy_traffic_query_narrows_default_window_for_small_buckets() {
+        let now_ms = 1_700_000_000_123;
+        let expected_end_ms = 1_700_002_800_000;
+        let query = normalize_proxy_traffic_query(
+            ProxyTrafficRequest {
+                bucket_ms: Some(5 * 60 * 1000),
+                ..ProxyTrafficRequest::default()
+            },
+            now_ms,
+        )
+        .expect("default 5m proxy traffic query should stay within bucket cap");
+
+        assert_eq!(query.bucket_ms, 5 * 60 * 1000);
+        assert_eq!(query.end_ms, expected_end_ms);
+        assert_eq!(query.start_ms, expected_end_ms - 1_000 * 5 * 60 * 1000);
     }
 
     #[test]

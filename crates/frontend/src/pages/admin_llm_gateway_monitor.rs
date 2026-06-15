@@ -685,7 +685,7 @@ pub fn admin_llm_gateway_monitor_page() -> Html {
                                     class={classes!("mt-1", "w-full", "rounded-md", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
                                     value={(*traffic_start_ms).clone()}
                                     oninput={on_traffic_start_input}
-                                    placeholder="default 30d"
+                                    placeholder="auto window"
                                 />
                             </label>
                             <label class={classes!("text-xs", "text-[var(--muted)]")}>

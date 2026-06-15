@@ -33,6 +33,7 @@ pub fn duckdb_compact_connection_sql(
         SET memory_limit={};
         SET threads=1;
         SET preserve_insertion_order=false;
+        SET TimeZone='UTC';
         SET temp_directory={};
         SET max_temp_directory_size={};
         ",
