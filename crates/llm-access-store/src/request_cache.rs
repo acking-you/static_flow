@@ -239,6 +239,8 @@ pub(crate) struct CachedKiroAccountView {
     pub request_min_start_interval_ms: Option<u64>,
     pub disabled: bool,
     pub minimum_remaining_credits_before_block: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_usage_limit: Option<f64>,
     /// Defaulted so Valkey payloads written before pool routing still decode.
     #[serde(default = "default_kiro_pool_strategy")]
     pub pool_strategy: String,

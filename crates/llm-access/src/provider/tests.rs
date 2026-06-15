@@ -1457,6 +1457,8 @@ fn static_kiro_route() -> ProviderKiroRoute {
             current_usage: 0.0,
             usage_limit: 100.0,
             remaining: 100.0,
+            upstream_usage_limit: None,
+            manual_usage_limit: None,
             next_reset_at: None,
             subscription_title: None,
             user_id: Some("kiro-a".to_string()),
@@ -1470,6 +1472,7 @@ fn static_kiro_route() -> ProviderKiroRoute {
         }),
         status_refresh_interval_seconds: 300,
         minimum_remaining_credits_before_block: 0.0,
+        manual_usage_limit: None,
     }
 }
 

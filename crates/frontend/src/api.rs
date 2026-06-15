@@ -10352,6 +10352,8 @@ pub struct KiroBalanceView {
     pub current_usage: f64,
     pub usage_limit: f64,
     pub remaining: f64,
+    pub upstream_usage_limit: Option<f64>,
+    pub manual_usage_limit: Option<f64>,
     pub next_reset_at: Option<i64>,
     pub subscription_title: Option<String>,
 }
@@ -10465,6 +10467,7 @@ pub struct KiroAccountView {
     pub kiro_channel_max_concurrency: u64,
     pub kiro_channel_min_start_interval_ms: u64,
     pub minimum_remaining_credits_before_block: f64,
+    pub manual_usage_limit: Option<f64>,
     #[serde(default = "default_kiro_pool_strategy")]
     pub pool_strategy: String,
     pub proxy_mode: String,
@@ -10497,6 +10500,7 @@ pub struct CreateManualKiroAccountInput {
     pub kiro_channel_max_concurrency: Option<u64>,
     pub kiro_channel_min_start_interval_ms: Option<u64>,
     pub minimum_remaining_credits_before_block: Option<f64>,
+    pub manual_usage_limit: Option<f64>,
     pub pool_strategy: Option<String>,
     pub disabled: bool,
 }
@@ -10507,6 +10511,8 @@ pub struct PatchKiroAccountInput {
     pub kiro_channel_max_concurrency: Option<u64>,
     pub kiro_channel_min_start_interval_ms: Option<u64>,
     pub minimum_remaining_credits_before_block: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manual_usage_limit: Option<Option<f64>>,
     pub pool_strategy: Option<String>,
     pub proxy_mode: Option<String>,
     pub proxy_config_id: Option<String>,
@@ -11567,6 +11573,8 @@ pub async fn refresh_admin_kiro_account_balance(name: &str) -> Result<KiroBalanc
             current_usage: 0.0,
             usage_limit: 1_000.0,
             remaining: 1_000.0,
+            upstream_usage_limit: None,
+            manual_usage_limit: None,
             next_reset_at: None,
             subscription_title: Some(format!("mock-{name}")),
         })

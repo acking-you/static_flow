@@ -43,7 +43,7 @@ use llm_usage_journal::{
     JournalPreviewReader, JournalPreviewReport, JournalStatusSnapshot, WorkerProgressSnapshot,
 };
 use lru::LruCache;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::OwnedSemaphorePermit;
 
@@ -731,6 +731,8 @@ struct KiroAuthRequestFields {
     #[serde(default)]
     minimum_remaining_credits_before_block: Option<f64>,
     #[serde(default)]
+    manual_usage_limit: Option<Option<f64>>,
+    #[serde(default)]
     pool_strategy: Option<String>,
     #[serde(default)]
     disabled: bool,
@@ -762,12 +764,23 @@ pub(crate) struct PatchKiroAccountRequest {
     kiro_channel_min_start_interval_ms: Option<u64>,
     #[serde(default)]
     minimum_remaining_credits_before_block: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_present_optional_f64")]
+    manual_usage_limit: Option<Option<f64>>,
     #[serde(default)]
     pool_strategy: Option<String>,
     #[serde(default)]
     proxy_mode: Option<String>,
     #[serde(default)]
     proxy_config_id: Option<String>,
+}
+
+fn deserialize_present_optional_f64<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<f64>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<f64>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Deserialize)]
@@ -2742,7 +2755,8 @@ pub(crate) async fn refresh_admin_kiro_account_balance(
     let route_store = state.provider_state.route_store();
     match kiro_refresh::fetch_usage_limits_for_route(&route, route_store.as_ref(), true).await {
         Ok(usage) => {
-            let balance = admin_kiro_balance_from_usage(&usage);
+            let balance = admin_kiro_balance_from_usage(&usage)
+                .with_manual_usage_limit(route.manual_usage_limit);
             let cache = core_store::AdminKiroCacheView {
                 status: "ready".to_string(),
                 last_checked_at: Some(now),
@@ -6408,6 +6422,7 @@ fn kiro_auth_from_request_fields(
         kiro_channel_max_concurrency,
         kiro_channel_min_start_interval_ms,
         minimum_remaining_credits_before_block,
+        manual_usage_limit,
         pool_strategy,
         disabled,
     } = request;
@@ -6419,6 +6434,11 @@ fn kiro_auth_from_request_fields(
     if let Some(value) = minimum_remaining_credits_before_block {
         if !value.is_finite() || value < 0.0 {
             return Err(bad_request("minimum_remaining_credits_before_block must be >= 0"));
+        }
+    }
+    if let Some(Some(value)) = manual_usage_limit {
+        if !value.is_finite() || value < 0.0 {
+            return Err(bad_request("manual_usage_limit must be >= 0"));
         }
     }
     let pool_strategy = pool_strategy
@@ -6452,6 +6472,7 @@ fn kiro_auth_from_request_fields(
         kiro_channel_max_concurrency,
         kiro_channel_min_start_interval_ms,
         minimum_remaining_credits_before_block,
+        manual_usage_limit: manual_usage_limit.flatten(),
         pool_strategy,
         disabled,
         disabled_reason: None,
@@ -6600,6 +6621,11 @@ fn normalize_kiro_account_patch(
             return Err(bad_request("minimum_remaining_credits_before_block must be >= 0"));
         }
     }
+    if let Some(Some(value)) = request.manual_usage_limit {
+        if !value.is_finite() || value < 0.0 {
+            return Err(bad_request("manual_usage_limit must be >= 0"));
+        }
+    }
     let pool_strategy = request
         .pool_strategy
         .as_deref()
@@ -6627,6 +6653,7 @@ fn normalize_kiro_account_patch(
         max_concurrency: request.kiro_channel_max_concurrency,
         min_start_interval_ms: request.kiro_channel_min_start_interval_ms,
         minimum_remaining_credits_before_block: request.minimum_remaining_credits_before_block,
+        manual_usage_limit: request.manual_usage_limit,
         pool_strategy,
         proxy_mode,
         proxy_config_id,
@@ -6668,6 +6695,8 @@ fn admin_kiro_balance_from_usage(
         current_usage,
         usage_limit,
         remaining: (usage_limit - current_usage).max(0.0),
+        upstream_usage_limit: None,
+        manual_usage_limit: None,
         next_reset_at: usage
             .usage_breakdown_list
             .first()
@@ -7118,6 +7147,7 @@ mod tests {
             kiro_channel_max_concurrency: 1,
             kiro_channel_min_start_interval_ms: 0,
             minimum_remaining_credits_before_block: 0.0,
+            manual_usage_limit: None,
             pool_strategy: core_store::default_kiro_pool_strategy(),
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
@@ -7129,6 +7159,8 @@ mod tests {
                 current_usage: (limit - remaining).max(0.0),
                 usage_limit: limit,
                 remaining,
+                upstream_usage_limit: None,
+                manual_usage_limit: None,
                 next_reset_at: None,
                 subscription_title: Some("Pro".to_string()),
                 user_id: Some(format!("user-{name}")),
@@ -8110,12 +8142,74 @@ mod tests {
             kiro_channel_max_concurrency: None,
             kiro_channel_min_start_interval_ms: None,
             minimum_remaining_credits_before_block: None,
+            manual_usage_limit: None,
             proxy_mode: None,
             proxy_config_id: None,
         })
         .expect("kiro account patch should normalize");
 
         assert_eq!(patch.pool_strategy.as_deref(), Some(core_store::KIRO_POOL_STRATEGY_BALANCED));
+    }
+
+    #[test]
+    fn normalize_kiro_account_patch_accepts_manual_usage_limit_updates() {
+        let patch = normalize_kiro_account_patch(PatchKiroAccountRequest {
+            manual_usage_limit: Some(Some(500.0)),
+            status: None,
+            kiro_channel_max_concurrency: None,
+            kiro_channel_min_start_interval_ms: None,
+            minimum_remaining_credits_before_block: None,
+            pool_strategy: None,
+            proxy_mode: None,
+            proxy_config_id: None,
+        })
+        .expect("manual Kiro usage limit should normalize");
+
+        assert_eq!(patch.manual_usage_limit, Some(Some(500.0)));
+
+        let patch = normalize_kiro_account_patch(PatchKiroAccountRequest {
+            manual_usage_limit: Some(None),
+            status: None,
+            kiro_channel_max_concurrency: None,
+            kiro_channel_min_start_interval_ms: None,
+            minimum_remaining_credits_before_block: None,
+            pool_strategy: None,
+            proxy_mode: None,
+            proxy_config_id: None,
+        })
+        .expect("clearing manual Kiro usage limit should normalize");
+
+        assert_eq!(patch.manual_usage_limit, Some(None));
+    }
+
+    #[test]
+    fn patch_kiro_account_request_deserializes_manual_usage_limit_clear() {
+        let request = serde_json::from_value::<PatchKiroAccountRequest>(serde_json::json!({
+            "manual_usage_limit": null
+        }))
+        .expect("manual usage limit null should deserialize");
+        assert_eq!(request.manual_usage_limit, Some(None));
+
+        let request = serde_json::from_value::<PatchKiroAccountRequest>(serde_json::json!({}))
+            .expect("missing manual usage limit should deserialize");
+        assert_eq!(request.manual_usage_limit, None);
+    }
+
+    #[test]
+    fn normalize_kiro_account_patch_rejects_invalid_manual_usage_limit() {
+        let err = normalize_kiro_account_patch(PatchKiroAccountRequest {
+            manual_usage_limit: Some(Some(-1.0)),
+            status: None,
+            kiro_channel_max_concurrency: None,
+            kiro_channel_min_start_interval_ms: None,
+            minimum_remaining_credits_before_block: None,
+            pool_strategy: None,
+            proxy_mode: None,
+            proxy_config_id: None,
+        })
+        .expect_err("negative manual Kiro usage limit should be rejected");
+
+        assert!(err.message.contains("manual_usage_limit"));
     }
 
     #[test]
@@ -8142,6 +8236,7 @@ mod tests {
                 kiro_channel_max_concurrency: Some(32),
                 kiro_channel_min_start_interval_ms: Some(123),
                 minimum_remaining_credits_before_block: Some(10.0),
+                manual_usage_limit: Some(Some(500.0)),
                 pool_strategy: Some(core_store::KIRO_POOL_STRATEGY_CREDIT_FIRST.to_string()),
                 disabled: false,
             },
@@ -8162,6 +8257,7 @@ mod tests {
         assert_eq!(auth.last_imported_at, Some(1_780_988_532_000));
         assert_eq!(auth.kiro_channel_max_concurrency, Some(32));
         assert_eq!(auth.kiro_channel_min_start_interval_ms, Some(123));
+        assert_eq!(auth.manual_usage_limit, Some(500.0));
         assert_eq!(
             auth.pool_strategy.as_deref(),
             Some(core_store::KIRO_POOL_STRATEGY_CREDIT_FIRST)

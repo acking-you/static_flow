@@ -122,11 +122,16 @@ struct KiroRouteCandidateRow {
     proxy_config_id: Option<String>,
     disabled: bool,
     minimum_remaining_credits_before_block: f64,
+    manual_usage_limit: Option<f64>,
     auth_profile_arn: Option<String>,
     api_region: Option<String>,
     pool_strategy: String,
     proxy_mode: Option<String>,
     auth_proxy_config_id: Option<String>,
+}
+
+fn normalize_manual_usage_limit(value: f64) -> Option<f64> {
+    value.is_finite().then(|| value.max(0.0))
 }
 
 fn aggregate_usage_rollup_deltas(
@@ -441,6 +446,7 @@ struct KiroAdminAccountListRow {
     min_start_interval_ms: Option<i64>,
     auth_min_start_interval_ms: Option<i64>,
     minimum_remaining_credits_before_block: Option<f64>,
+    manual_usage_limit: Option<f64>,
     pool_strategy: String,
     proxy_mode: Option<String>,
     proxy_config_id: Option<String>,
