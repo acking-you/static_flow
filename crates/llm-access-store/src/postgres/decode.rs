@@ -383,16 +383,16 @@ pub fn decode_kiro_admin_account_list_row(row: PgRow) -> anyhow::Result<KiroAdmi
         auth_min_start_interval_ms: row.get(23),
         minimum_remaining_credits_before_block: row.get(24),
         manual_usage_limit: row
-            .get::<_, Option<f64>>(25)
+            .get::<_, Option<f64>>("manual_usage_limit")
             .and_then(super::normalize_manual_usage_limit),
         pool_strategy: row
             .try_get_optional_string("pool_strategy")?
             .unwrap_or_else(core_store::default_kiro_pool_strategy),
-        proxy_mode: row.get(26),
-        proxy_config_id: row.get(27),
-        auth_proxy_config_id: row.get(28),
-        proxy_url: row.get(29),
-        last_error: row.get(30),
+        proxy_mode: row.get("proxy_mode"),
+        proxy_config_id: row.get("proxy_config_id"),
+        auth_proxy_config_id: row.get("auth_proxy_config_id"),
+        proxy_url: row.get("proxy_url"),
+        last_error: row.get("last_error"),
     })
 }
 

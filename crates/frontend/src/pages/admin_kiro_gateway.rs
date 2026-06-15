@@ -5658,7 +5658,7 @@ fn quota_progress_bar(balance: &KiroBalanceView, account_sub_title: Option<Strin
     let pct = (ratio * 100.0).round() as i32;
     let upstream_limit_label = balance
         .upstream_usage_limit
-        .filter(|value| (value - balance.usage_limit).abs() > f64::EPSILON)
+        .filter(|value| *value != balance.usage_limit)
         .map(|value| format!("upstream {}", format_float2(value)));
     let manual_limit_label = balance
         .manual_usage_limit

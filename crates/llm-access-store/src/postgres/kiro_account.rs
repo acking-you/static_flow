@@ -200,7 +200,7 @@ impl PostgresControlRepository {
                         WHEN jsonb_typeof(auth_json -> 'manual_usage_limit') = 'number'
                         THEN (auth_json ->> 'manual_usage_limit')::double precision
                         ELSE NULL
-                    END,
+                    END AS manual_usage_limit,
                     NULLIF(
                         BTRIM(
                             COALESCE(
@@ -209,8 +209,8 @@ impl PostgresControlRepository {
                             )
                         ),
                         ''
-                    ),
-                    proxy_config_id,
+                    ) AS proxy_mode,
+                    proxy_config_id AS proxy_config_id,
                     NULLIF(
                         BTRIM(
                             COALESCE(
@@ -219,7 +219,7 @@ impl PostgresControlRepository {
                             )
                         ),
                         ''
-                    ),
+                    ) AS auth_proxy_config_id,
                     NULLIF(
                         BTRIM(
                             COALESCE(
@@ -228,8 +228,8 @@ impl PostgresControlRepository {
                             )
                         ),
                         ''
-                    ),
-                    last_error,
+                    ) AS proxy_url,
+                    last_error AS last_error,
                     NULLIF(
                         BTRIM(
                             COALESCE(
@@ -455,7 +455,7 @@ impl PostgresControlRepository {
                         WHEN jsonb_typeof(auth_json -> 'manual_usage_limit') = 'number'
                         THEN (auth_json ->> 'manual_usage_limit')::double precision
                         ELSE NULL
-                    END,
+                    END AS manual_usage_limit,
                     NULLIF(
                         BTRIM(
                             COALESCE(
@@ -464,8 +464,8 @@ impl PostgresControlRepository {
                             )
                         ),
                         ''
-                    ),
-                    proxy_config_id,
+                    ) AS proxy_mode,
+                    proxy_config_id AS proxy_config_id,
                     NULLIF(
                         BTRIM(
                             COALESCE(
@@ -474,7 +474,7 @@ impl PostgresControlRepository {
                             )
                         ),
                         ''
-                    ),
+                    ) AS auth_proxy_config_id,
                     NULLIF(
                         BTRIM(
                             COALESCE(
@@ -483,8 +483,8 @@ impl PostgresControlRepository {
                             )
                         ),
                         ''
-                    ),
-                    last_error,
+                    ) AS proxy_url,
+                    last_error AS last_error,
                     NULLIF(
                         BTRIM(
                             COALESCE(
@@ -634,7 +634,7 @@ impl PostgresControlRepository {
                         WHEN jsonb_typeof(auth_json -> 'manual_usage_limit') = 'number'
                         THEN (auth_json ->> 'manual_usage_limit')::double precision
                         ELSE NULL
-                    END,
+                    END AS manual_usage_limit,
                     NULLIF(
                         BTRIM(
                             COALESCE(
@@ -643,8 +643,8 @@ impl PostgresControlRepository {
                             )
                         ),
                         ''
-                    ),
-                    proxy_config_id,
+                    ) AS proxy_mode,
+                    proxy_config_id AS proxy_config_id,
                     NULLIF(
                         BTRIM(
                             COALESCE(
@@ -653,7 +653,7 @@ impl PostgresControlRepository {
                             )
                         ),
                         ''
-                    ),
+                    ) AS auth_proxy_config_id,
                     NULLIF(
                         BTRIM(
                             COALESCE(
@@ -662,8 +662,8 @@ impl PostgresControlRepository {
                             )
                         ),
                         ''
-                    ),
-                    last_error,
+                    ) AS proxy_url,
+                    last_error AS last_error,
                     NULLIF(
                         BTRIM(
                             COALESCE(
@@ -1319,12 +1319,7 @@ impl AdminKiroAccountStore for PostgresControlRepository {
         let Some((balance, _cache)) = self.get_kiro_cached_status_parts_row(name).await? else {
             return Ok(None);
         };
-        let manual_usage_limit = self
-            .get_kiro_account_row(name)
-            .await?
-            .and_then(|record| serde_json::from_str::<serde_json::Value>(&record.auth_json).ok())
-            .and_then(|auth| kiro_manual_usage_limit_from_auth_json(&auth));
-        Ok(calibrate_kiro_balance(balance, manual_usage_limit))
+        Ok(balance)
     }
 
     async fn resolve_admin_kiro_account_route(
@@ -1463,14 +1458,8 @@ impl AdminKiroAccountStore for PostgresControlRepository {
 
     async fn save_admin_kiro_status_cache(
         &self,
-        mut update: AdminKiroStatusCacheUpdate,
+        update: AdminKiroStatusCacheUpdate,
     ) -> anyhow::Result<()> {
-        let manual_usage_limit = self
-            .get_kiro_account_row(&update.account_name)
-            .await?
-            .and_then(|record| serde_json::from_str::<serde_json::Value>(&record.auth_json).ok())
-            .and_then(|auth| kiro_manual_usage_limit_from_auth_json(&auth));
-        update.balance = calibrate_kiro_balance(update.balance, manual_usage_limit);
         self.ensure_connection_alive()?;
         self.client
             .execute(
