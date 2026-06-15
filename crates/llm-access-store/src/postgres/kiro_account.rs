@@ -23,10 +23,23 @@ use super::{
         optional_json_u64_any, set_json_optional_bool, set_json_optional_f64,
         set_json_optional_string, set_json_optional_u64,
     },
+    normalize_manual_usage_limit,
     proxy_support::resolve_provider_proxy_config_from_context,
     KiroAdminAccountListRow, KiroAdminAccountViewContext, PostgresControlRepository,
 };
 use crate::records::KiroAccountRecord;
+
+fn kiro_manual_usage_limit_from_auth_json(auth: &serde_json::Value) -> Option<f64> {
+    optional_json_f64_any(auth, &["manualUsageLimit", "manual_usage_limit"])
+        .and_then(normalize_manual_usage_limit)
+}
+
+fn calibrate_kiro_balance(
+    balance: Option<AdminKiroBalanceView>,
+    manual_usage_limit: Option<f64>,
+) -> Option<AdminKiroBalanceView> {
+    balance.map(|balance| balance.with_manual_usage_limit(manual_usage_limit))
+}
 
 impl PostgresControlRepository {
     pub(super) async fn list_kiro_accounts_rows(&self) -> anyhow::Result<Vec<KiroAccountRecord>> {
@@ -179,6 +192,13 @@ impl PostgresControlRepository {
                         THEN (
                             auth_json ->> 'minimum_remaining_credits_before_block'
                         )::double precision
+                        ELSE NULL
+                    END,
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'manualUsageLimit') = 'number'
+                        THEN (auth_json ->> 'manualUsageLimit')::double precision
+                        WHEN jsonb_typeof(auth_json -> 'manual_usage_limit') = 'number'
+                        THEN (auth_json ->> 'manual_usage_limit')::double precision
                         ELSE NULL
                     END,
                     NULLIF(
@@ -429,6 +449,13 @@ impl PostgresControlRepository {
                         )::double precision
                         ELSE NULL
                     END,
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'manualUsageLimit') = 'number'
+                        THEN (auth_json ->> 'manualUsageLimit')::double precision
+                        WHEN jsonb_typeof(auth_json -> 'manual_usage_limit') = 'number'
+                        THEN (auth_json ->> 'manual_usage_limit')::double precision
+                        ELSE NULL
+                    END,
                     NULLIF(
                         BTRIM(
                             COALESCE(
@@ -599,6 +626,13 @@ impl PostgresControlRepository {
                         THEN (
                             auth_json ->> 'minimum_remaining_credits_before_block'
                         )::double precision
+                        ELSE NULL
+                    END,
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'manualUsageLimit') = 'number'
+                        THEN (auth_json ->> 'manualUsageLimit')::double precision
+                        WHEN jsonb_typeof(auth_json -> 'manual_usage_limit') = 'number'
+                        THEN (auth_json ->> 'manual_usage_limit')::double precision
                         ELSE NULL
                     END,
                     NULLIF(
@@ -782,7 +816,11 @@ impl PostgresControlRepository {
             .disabled_reason
             .clone()
             .or_else(|| row.last_error.clone());
-        let balance = if disabled { None } else { balance };
+        let manual_usage_limit = row
+            .manual_usage_limit
+            .and_then(normalize_manual_usage_limit);
+        let balance =
+            if disabled { None } else { calibrate_kiro_balance(balance, manual_usage_limit) };
         let subscription_title = balance
             .as_ref()
             .and_then(|value| value.subscription_title.clone())
@@ -831,6 +869,7 @@ impl PostgresControlRepository {
                 .filter(|value| value.is_finite())
                 .unwrap_or(0.0)
                 .max(0.0),
+            manual_usage_limit,
             pool_strategy: row.pool_strategy.clone(),
             proxy_mode,
             proxy_config_id,
@@ -878,7 +917,9 @@ impl PostgresControlRepository {
         let disabled_reason =
             optional_json_string_any(&auth, &["disabledReason", "disabled_reason"])
                 .or_else(|| record.last_error.clone());
-        let balance = if disabled { None } else { balance };
+        let manual_usage_limit = kiro_manual_usage_limit_from_auth_json(&auth);
+        let balance =
+            if disabled { None } else { calibrate_kiro_balance(balance, manual_usage_limit) };
         let subscription_title = balance
             .as_ref()
             .and_then(|value| value.subscription_title.clone())
@@ -942,6 +983,7 @@ impl PostgresControlRepository {
             .filter(|value| value.is_finite())
             .unwrap_or(0.0)
             .max(0.0),
+            manual_usage_limit,
             pool_strategy,
             proxy_mode,
             proxy_config_id,
@@ -1010,6 +1052,34 @@ impl PostgresControlRepository {
             )
             .await
             .context("upsert postgres kiro account")?;
+        Ok(())
+    }
+
+    async fn recalibrate_kiro_status_cache_for_account(
+        &self,
+        account_name: &str,
+        manual_usage_limit: Option<f64>,
+    ) -> anyhow::Result<()> {
+        let Some((Some(balance), _cache)) =
+            self.get_kiro_cached_status_parts_row(account_name).await?
+        else {
+            return Ok(());
+        };
+        let balance = Some(balance.with_manual_usage_limit(manual_usage_limit));
+        self.ensure_connection_alive()?;
+        self.client
+            .execute(
+                "UPDATE llm_kiro_status_cache
+                 SET balance_json = $2::jsonb
+                 WHERE account_name = $1",
+                &[
+                    &account_name,
+                    &serde_json::to_string(&balance)
+                        .context("encode recalibrated postgres kiro balance cache")?,
+                ],
+            )
+            .await
+            .context("recalibrate postgres kiro status cache")?;
         Ok(())
     }
 }
@@ -1154,6 +1224,7 @@ impl AdminKiroAccountStore for PostgresControlRepository {
         let object = auth_value
             .as_object_mut()
             .context("kiro auth json must be an object")?;
+        let mut manual_usage_limit_update = None;
         if let Some(status) = patch.status.as_ref() {
             record.status = status.clone();
             set_json_optional_bool(
@@ -1179,6 +1250,20 @@ impl AdminKiroAccountStore for PostgresControlRepository {
                 Some(value.max(0.0)),
             )?;
         }
+        if let Some(manual_usage_limit) = patch.manual_usage_limit {
+            let normalized_manual_usage_limit = match manual_usage_limit {
+                Some(value) => {
+                    anyhow::ensure!(
+                        value.is_finite() && value >= 0.0,
+                        "manual usage limit must be a non-negative finite number"
+                    );
+                    Some(value.max(0.0))
+                },
+                None => None,
+            };
+            set_json_optional_f64(object, "manualUsageLimit", normalized_manual_usage_limit)?;
+            manual_usage_limit_update = Some(normalized_manual_usage_limit);
+        }
         if let Some(pool_strategy) = patch.pool_strategy.as_ref() {
             set_json_optional_string(object, "poolStrategy", Some(pool_strategy.clone()));
         }
@@ -1193,6 +1278,13 @@ impl AdminKiroAccountStore for PostgresControlRepository {
             serde_json::to_string(&auth_value).context("serialize postgres kiro auth json")?;
         record.updated_at_ms = patch.updated_at_ms;
         self.upsert_kiro_account(&record).await?;
+        if let Some(manual_usage_limit) = manual_usage_limit_update {
+            self.recalibrate_kiro_status_cache_for_account(
+                &record.account_name,
+                manual_usage_limit,
+            )
+            .await?;
+        }
         self.invalidate_account_cache(core_store::PROVIDER_KIRO, &record.account_name)
             .await;
         self.bump_dispatch_generation(core_store::PROVIDER_KIRO)
@@ -1227,7 +1319,12 @@ impl AdminKiroAccountStore for PostgresControlRepository {
         let Some((balance, _cache)) = self.get_kiro_cached_status_parts_row(name).await? else {
             return Ok(None);
         };
-        Ok(balance)
+        let manual_usage_limit = self
+            .get_kiro_account_row(name)
+            .await?
+            .and_then(|record| serde_json::from_str::<serde_json::Value>(&record.auth_json).ok())
+            .and_then(|auth| kiro_manual_usage_limit_from_auth_json(&auth));
+        Ok(calibrate_kiro_balance(balance, manual_usage_limit))
     }
 
     async fn resolve_admin_kiro_account_route(
@@ -1265,19 +1362,23 @@ impl AdminKiroAccountStore for PostgresControlRepository {
         let pool_strategy = core_store::canonical_kiro_pool_strategy(
             optional_json_string_any(&auth_json, &["poolStrategy", "pool_strategy"]).as_deref(),
         );
+        let manual_usage_limit = kiro_manual_usage_limit_from_auth_json(&auth_json);
         let cached_status = self
             .get_kiro_cached_status_parts_row(&record.account_name)
             .await?;
-        let cached_balance = cached_status
+        let cached_balance_view = cached_status
             .as_ref()
-            .and_then(|(balance, _)| balance.as_ref());
-        let cached_balance_view = cached_balance.cloned();
+            .and_then(|(balance, _)| balance.clone())
+            .map(|balance| balance.with_manual_usage_limit(manual_usage_limit));
         let cached_cache_view = cached_status.as_ref().map(|(_, cache)| cache.clone());
         let cached_status_label = cached_status
             .as_ref()
             .map(|(_, cache)| cache.status.clone());
-        let cached_remaining_credits = cached_balance.map(|balance| balance.remaining);
-        let routing_identity = cached_balance
+        let cached_remaining_credits = cached_balance_view
+            .as_ref()
+            .map(|balance| balance.remaining);
+        let routing_identity = cached_balance_view
+            .as_ref()
             .and_then(|balance| balance.user_id.clone())
             .or_else(|| record.user_id.clone())
             .unwrap_or_else(|| record.account_name.clone());
@@ -1356,13 +1457,20 @@ impl AdminKiroAccountStore for PostgresControlRepository {
                 .kiro_status_refresh_max_interval_seconds
                 .max(0) as u64,
             minimum_remaining_credits_before_block,
+            manual_usage_limit,
         }))
     }
 
     async fn save_admin_kiro_status_cache(
         &self,
-        update: AdminKiroStatusCacheUpdate,
+        mut update: AdminKiroStatusCacheUpdate,
     ) -> anyhow::Result<()> {
+        let manual_usage_limit = self
+            .get_kiro_account_row(&update.account_name)
+            .await?
+            .and_then(|record| serde_json::from_str::<serde_json::Value>(&record.auth_json).ok())
+            .and_then(|auth| kiro_manual_usage_limit_from_auth_json(&auth));
+        update.balance = calibrate_kiro_balance(update.balance, manual_usage_limit);
         self.ensure_connection_alive()?;
         self.client
             .execute(

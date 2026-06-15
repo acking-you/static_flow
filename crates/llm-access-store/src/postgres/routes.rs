@@ -22,8 +22,8 @@ use super::{
     },
     decode::decode_codex_account_settings,
     json::decode_optional_json,
-    CodexRouteCandidateRow, KiroCachedStatusParts, KiroRouteCandidateRow,
-    PostgresControlRepository,
+    normalize_manual_usage_limit, CodexRouteCandidateRow, KiroCachedStatusParts,
+    KiroRouteCandidateRow, PostgresControlRepository,
 };
 use crate::records::{KeyRouteConfig, RuntimeConfigRecord};
 
@@ -144,6 +144,13 @@ impl PostgresControlRepository {
                         END,
                         0.0
                     ),
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'manualUsageLimit') = 'number'
+                        THEN (auth_json ->> 'manualUsageLimit')::double precision
+                        WHEN jsonb_typeof(auth_json -> 'manual_usage_limit') = 'number'
+                        THEN (auth_json ->> 'manual_usage_limit')::double precision
+                        ELSE NULL
+                    END,
                     NULLIF(COALESCE(auth_json ->> 'profileArn', auth_json ->> 'profile_arn'), ''),
                     NULLIF(COALESCE(auth_json ->> 'apiRegion', auth_json ->> 'api_region', \
                  auth_json ->> 'region'), ''),
@@ -170,13 +177,16 @@ impl PostgresControlRepository {
                 proxy_config_id: row.get(6),
                 disabled: row.get(7),
                 minimum_remaining_credits_before_block: row.get::<_, f64>(8).max(0.0),
-                auth_profile_arn: row.get(9),
-                api_region: row.get(10),
+                manual_usage_limit: row
+                    .get::<_, Option<f64>>(9)
+                    .and_then(normalize_manual_usage_limit),
+                auth_profile_arn: row.get(10),
+                api_region: row.get(11),
                 pool_strategy: core_store::canonical_kiro_pool_strategy(
-                    row.get::<_, Option<String>>(11).as_deref(),
+                    row.get::<_, Option<String>>(12).as_deref(),
                 ),
-                proxy_mode: row.get(12),
-                auth_proxy_config_id: row.get(13),
+                proxy_mode: row.get(13),
+                auth_proxy_config_id: row.get(14),
             })
             .collect())
     }
@@ -220,6 +230,13 @@ impl PostgresControlRepository {
                         END,
                         0.0
                     ),
+                    CASE
+                        WHEN jsonb_typeof(auth_json -> 'manualUsageLimit') = 'number'
+                        THEN (auth_json ->> 'manualUsageLimit')::double precision
+                        WHEN jsonb_typeof(auth_json -> 'manual_usage_limit') = 'number'
+                        THEN (auth_json ->> 'manual_usage_limit')::double precision
+                        ELSE NULL
+                    END,
                     NULLIF(COALESCE(auth_json ->> 'profileArn', auth_json ->> 'profile_arn'), ''),
                     NULLIF(COALESCE(auth_json ->> 'apiRegion', auth_json ->> 'api_region', \
                  auth_json ->> 'region'), ''),
@@ -247,13 +264,16 @@ impl PostgresControlRepository {
                 proxy_config_id: row.get(6),
                 disabled: row.get(7),
                 minimum_remaining_credits_before_block: row.get::<_, f64>(8).max(0.0),
-                auth_profile_arn: row.get(9),
-                api_region: row.get(10),
+                manual_usage_limit: row
+                    .get::<_, Option<f64>>(9)
+                    .and_then(normalize_manual_usage_limit),
+                auth_profile_arn: row.get(10),
+                api_region: row.get(11),
                 pool_strategy: core_store::canonical_kiro_pool_strategy(
-                    row.get::<_, Option<String>>(11).as_deref(),
+                    row.get::<_, Option<String>>(12).as_deref(),
                 ),
-                proxy_mode: row.get(12),
-                auth_proxy_config_id: row.get(13),
+                proxy_mode: row.get(13),
+                auth_proxy_config_id: row.get(14),
             })
             .collect())
     }
@@ -660,6 +680,7 @@ impl ProviderRouteStore for PostgresControlRepository {
                 cached_cache: view.cached_cache,
                 status_refresh_interval_seconds: snapshot.status_refresh_interval_seconds,
                 minimum_remaining_credits_before_block: view.minimum_remaining_credits_before_block,
+                manual_usage_limit: view.manual_usage_limit,
             });
         }
         Ok(routes)
@@ -744,6 +765,7 @@ impl ProviderRouteStore for PostgresControlRepository {
                 .kiro_status_refresh_max_interval_seconds
                 .max(0) as u64,
             minimum_remaining_credits_before_block: view.minimum_remaining_credits_before_block,
+            manual_usage_limit: view.manual_usage_limit,
         }))
     }
 

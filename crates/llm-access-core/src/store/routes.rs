@@ -269,6 +269,8 @@ pub struct ProviderKiroRoute {
     pub status_refresh_interval_seconds: u64,
     /// Cached-credit floor used before locally blocking this account.
     pub minimum_remaining_credits_before_block: f64,
+    /// Admin-calibrated account credit limit used to compute remaining credits.
+    pub manual_usage_limit: Option<f64>,
 }
 
 /// Refreshed Kiro account credential fields persisted by the provider runtime.

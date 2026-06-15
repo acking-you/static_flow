@@ -99,6 +99,10 @@ pub struct KiroAuthRecord {
     /// or below.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minimum_remaining_credits_before_block: Option<f64>,
+    /// Admin-calibrated account credit limit. When set, trusted upstream
+    /// current usage is subtracted from this limit for routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_usage_limit: Option<f64>,
     /// Scheduler pool this account belongs to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pool_strategy: Option<String>,
@@ -164,6 +168,10 @@ impl KiroAuthRecord {
         }
         self.minimum_remaining_credits_before_block = self
             .minimum_remaining_credits_before_block
+            .filter(|value| value.is_finite())
+            .map(|value| value.max(0.0));
+        self.manual_usage_limit = self
+            .manual_usage_limit
             .filter(|value| value.is_finite())
             .map(|value| value.max(0.0));
         self.pool_strategy = Some(canonical_kiro_pool_strategy(self.pool_strategy.as_deref()));

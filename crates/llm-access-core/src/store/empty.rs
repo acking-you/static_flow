@@ -766,6 +766,7 @@ impl AdminKiroAccountStore for EmptyAdminKiroAccountStore {
             kiro_channel_max_concurrency: account.max_concurrency.unwrap_or(1),
             kiro_channel_min_start_interval_ms: account.min_start_interval_ms.unwrap_or(0),
             minimum_remaining_credits_before_block: 0.0,
+            manual_usage_limit: None,
             pool_strategy: default_kiro_pool_strategy(),
             proxy_mode: "inherit".to_string(),
             proxy_config_id: account.proxy_config_id,

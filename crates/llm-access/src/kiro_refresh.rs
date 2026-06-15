@@ -962,6 +962,7 @@ mod tests {
             cached_cache: None,
             status_refresh_interval_seconds: 300,
             minimum_remaining_credits_before_block: 0.0,
+            manual_usage_limit: None,
         }
     }
 

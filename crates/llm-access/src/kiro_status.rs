@@ -135,7 +135,8 @@ fn build_ready_status_update(
     now: i64,
     usage: &UsageLimitsResponse,
 ) -> AdminKiroStatusCacheUpdate {
-    let balance = admin_kiro_balance_from_usage(usage);
+    let balance =
+        admin_kiro_balance_from_usage(usage).with_manual_usage_limit(route.manual_usage_limit);
     let cache = AdminKiroCacheView {
         status: "ready".to_string(),
         refresh_interval_seconds: route.status_refresh_interval_seconds,
@@ -208,6 +209,8 @@ fn admin_kiro_balance_from_usage(usage: &UsageLimitsResponse) -> AdminKiroBalanc
         current_usage,
         usage_limit,
         remaining: (usage_limit - current_usage).max(0.0),
+        upstream_usage_limit: None,
+        manual_usage_limit: None,
         next_reset_at: usage
             .usage_breakdown_list
             .first()
@@ -308,6 +311,8 @@ mod tests {
                 current_usage: 58.0,
                 usage_limit: 100.0,
                 remaining: 42.0,
+                upstream_usage_limit: None,
+                manual_usage_limit: None,
                 next_reset_at: Some(999),
                 subscription_title: Some("Pro".to_string()),
                 user_id: Some("user-1".to_string()),
@@ -321,6 +326,7 @@ mod tests {
             }),
             status_refresh_interval_seconds: 180,
             minimum_remaining_credits_before_block: 0.0,
+            manual_usage_limit: None,
         }
     }
 
@@ -381,5 +387,32 @@ mod tests {
         assert_eq!(balance.next_reset_at, Some(800));
         assert_eq!(balance.subscription_title.as_deref(), Some("Pro"));
         assert_eq!(balance.user_id.as_deref(), Some("user-1"));
+    }
+
+    #[test]
+    fn ready_status_update_applies_manual_usage_limit() {
+        let usage = UsageLimitsResponse {
+            next_date_reset: None,
+            subscription_info: None,
+            usage_breakdown_list: vec![UsageBreakdown {
+                current_usage_with_precision: 80.0,
+                bonuses: vec![],
+                free_trial_info: None,
+                next_date_reset: None,
+                usage_limit_with_precision: 100.0,
+            }],
+            user_info: None,
+        };
+        let mut route = route_with_prior_status();
+        route.manual_usage_limit = Some(90.0);
+
+        let update = super::build_ready_status_update(&route, 2_000, &usage);
+
+        let balance = update.balance.expect("balance");
+        assert_eq!(balance.current_usage, 80.0);
+        assert_eq!(balance.usage_limit, 90.0);
+        assert_eq!(balance.remaining, 10.0);
+        assert_eq!(balance.upstream_usage_limit, Some(100.0));
+        assert_eq!(balance.manual_usage_limit, Some(90.0));
     }
 }

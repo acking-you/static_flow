@@ -104,6 +104,7 @@ pub fn build_cached_kiro_account_view(
         request_min_start_interval_ms: row.min_start_interval_ms.and_then(non_negative_i64_to_u64),
         disabled: row.disabled,
         minimum_remaining_credits_before_block: row.minimum_remaining_credits_before_block,
+        manual_usage_limit: row.manual_usage_limit,
         pool_strategy: row.pool_strategy.clone(),
         api_region: row
             .api_region
@@ -111,9 +112,11 @@ pub fn build_cached_kiro_account_view(
             .unwrap_or_else(|| "us-east-1".to_string()),
         proxy: cached_proxy_from_option(proxy),
         routing_identity,
-        cached_balance: cached_status
-            .as_ref()
-            .and_then(|(balance, _)| balance.clone()),
+        cached_balance: cached_status.as_ref().and_then(|(balance, _)| {
+            balance
+                .clone()
+                .map(|balance| balance.with_manual_usage_limit(row.manual_usage_limit))
+        }),
         cached_cache: cached_status.as_ref().map(|(_, cache)| cache.clone()),
     })
 }

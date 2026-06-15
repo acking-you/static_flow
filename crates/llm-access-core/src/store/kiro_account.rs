@@ -16,6 +16,12 @@ pub struct AdminKiroBalanceView {
     pub usage_limit: f64,
     /// Remaining upstream credits.
     pub remaining: f64,
+    /// Original upstream credit limit before any admin manual calibration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_usage_limit: Option<f64>,
+    /// Admin-calibrated credit limit used for routing and display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_usage_limit: Option<f64>,
     /// Next reset timestamp in Unix milliseconds.
     pub next_reset_at: Option<i64>,
     /// Upstream subscription title.
@@ -23,6 +29,31 @@ pub struct AdminKiroBalanceView {
     /// Upstream user id when the status API provides it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
+}
+
+impl AdminKiroBalanceView {
+    /// Apply an optional admin-calibrated limit while preserving trusted
+    /// upstream usage. Passing `None` restores a previously calibrated balance
+    /// when the original upstream limit is known.
+    pub fn with_manual_usage_limit(mut self, manual_usage_limit: Option<f64>) -> Self {
+        let Some(limit) = manual_usage_limit
+            .filter(|value| value.is_finite())
+            .map(|value| value.max(0.0))
+        else {
+            if let Some(upstream_limit) = self.upstream_usage_limit.take() {
+                self.usage_limit = upstream_limit;
+                self.remaining = (upstream_limit - self.current_usage).max(0.0);
+            }
+            self.manual_usage_limit = None;
+            return self;
+        };
+        let upstream_limit = self.upstream_usage_limit.unwrap_or(self.usage_limit);
+        self.upstream_usage_limit = Some(upstream_limit);
+        self.manual_usage_limit = Some(limit);
+        self.usage_limit = limit;
+        self.remaining = (limit - self.current_usage).max(0.0);
+        self
+    }
 }
 
 /// Admin-facing Kiro status-cache metadata.
@@ -102,6 +133,9 @@ pub struct AdminKiroAccount {
     pub kiro_channel_min_start_interval_ms: u64,
     /// Cached-credit floor used before blocking the account locally.
     pub minimum_remaining_credits_before_block: f64,
+    /// Optional admin-calibrated account credit limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_usage_limit: Option<f64>,
     /// Scheduler pool this account belongs to.
     #[serde(default = "super::default_kiro_pool_strategy")]
     pub pool_strategy: String,
@@ -178,6 +212,8 @@ pub struct AdminKiroAccountPatch {
     pub min_start_interval_ms: Option<u64>,
     /// New cached-credit floor.
     pub minimum_remaining_credits_before_block: Option<f64>,
+    /// New admin-calibrated account credit limit; `Some(None)` clears it.
+    pub manual_usage_limit: Option<Option<f64>>,
     /// New scheduler-pool strategy.
     pub pool_strategy: Option<String>,
     /// New account proxy mode.
@@ -214,4 +250,55 @@ pub struct KiroStatusRefreshTarget {
     pub disabled: bool,
     /// Cached status metadata used when preserving disabled state.
     pub cache: AdminKiroCacheView,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn balance(current_usage: f64, usage_limit: f64) -> AdminKiroBalanceView {
+        AdminKiroBalanceView {
+            current_usage,
+            usage_limit,
+            remaining: (usage_limit - current_usage).max(0.0),
+            next_reset_at: None,
+            subscription_title: Some("KIRO PRO".to_string()),
+            user_id: Some("user-1".to_string()),
+            upstream_usage_limit: None,
+            manual_usage_limit: None,
+        }
+    }
+
+    #[test]
+    fn manual_usage_limit_recomputes_remaining_from_trusted_current_usage() {
+        let calibrated = balance(120.0, 1_000.0).with_manual_usage_limit(Some(500.0));
+
+        assert_eq!(calibrated.current_usage, 120.0);
+        assert_eq!(calibrated.usage_limit, 500.0);
+        assert_eq!(calibrated.remaining, 380.0);
+        assert_eq!(calibrated.upstream_usage_limit, Some(1_000.0));
+        assert_eq!(calibrated.manual_usage_limit, Some(500.0));
+    }
+
+    #[test]
+    fn manual_usage_limit_clamps_remaining_when_current_usage_exceeds_limit() {
+        let calibrated = balance(700.0, 1_000.0).with_manual_usage_limit(Some(500.0));
+
+        assert_eq!(calibrated.current_usage, 700.0);
+        assert_eq!(calibrated.usage_limit, 500.0);
+        assert_eq!(calibrated.remaining, 0.0);
+        assert_eq!(calibrated.upstream_usage_limit, Some(1_000.0));
+        assert_eq!(calibrated.manual_usage_limit, Some(500.0));
+    }
+
+    #[test]
+    fn absent_manual_usage_limit_preserves_upstream_balance() {
+        let calibrated = balance(120.0, 1_000.0).with_manual_usage_limit(None);
+
+        assert_eq!(calibrated.current_usage, 120.0);
+        assert_eq!(calibrated.usage_limit, 1_000.0);
+        assert_eq!(calibrated.remaining, 880.0);
+        assert_eq!(calibrated.upstream_usage_limit, None);
+        assert_eq!(calibrated.manual_usage_limit, None);
+    }
 }

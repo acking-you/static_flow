@@ -137,6 +137,17 @@ fn format_float4(value: f64) -> String {
     format!("{value:.4}")
 }
 
+fn parse_manual_usage_limit_input(raw: &str) -> Result<Option<f64>, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    match trimmed.parse::<f64>() {
+        Ok(value) if value.is_finite() && value >= 0.0 => Ok(Some(value)),
+        _ => Err("Manual usage limit must be a non-negative number.".to_string()),
+    }
+}
+
 fn kiro_cache_token_percent(resident_tokens: u64, max_tokens: u64) -> f64 {
     if max_tokens == 0 {
         return 0.0;
@@ -1036,6 +1047,13 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
     let scheduler_min = use_state(|| props.account.kiro_channel_min_start_interval_ms.to_string());
     let minimum_remaining_credits_before_block =
         use_state(|| format_float4(props.account.minimum_remaining_credits_before_block));
+    let manual_usage_limit = use_state(|| {
+        props
+            .account
+            .manual_usage_limit
+            .map(format_float4)
+            .unwrap_or_default()
+    });
     let pool_strategy = use_state(|| props.account.pool_strategy.clone());
     let selected_proxy = use_state(|| kiro_account_proxy_select_value(&props.account));
     let feedback = use_state(|| None::<String>);
@@ -1046,6 +1064,7 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
         let scheduler_max = scheduler_max.clone();
         let scheduler_min = scheduler_min.clone();
         let minimum_remaining_credits_before_block = minimum_remaining_credits_before_block.clone();
+        let manual_usage_limit = manual_usage_limit.clone();
         let pool_strategy = pool_strategy.clone();
         let selected_proxy = selected_proxy.clone();
         use_effect_with(props.account.clone(), move |_| {
@@ -1053,6 +1072,12 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
             scheduler_min.set(account.kiro_channel_min_start_interval_ms.to_string());
             minimum_remaining_credits_before_block
                 .set(format_float4(account.minimum_remaining_credits_before_block));
+            manual_usage_limit.set(
+                account
+                    .manual_usage_limit
+                    .map(format_float4)
+                    .unwrap_or_default(),
+            );
             pool_strategy.set(account.pool_strategy.clone());
             selected_proxy.set(kiro_account_proxy_select_value(&account));
             || ()
@@ -1149,6 +1174,7 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
         let scheduler_max = scheduler_max.clone();
         let scheduler_min = scheduler_min.clone();
         let minimum_remaining_credits_before_block = minimum_remaining_credits_before_block.clone();
+        let manual_usage_limit = manual_usage_limit.clone();
         let pool_strategy = pool_strategy.clone();
         let selected_proxy = selected_proxy.clone();
         let flash = props.flash.clone();
@@ -1163,6 +1189,7 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
             let scheduler_min = scheduler_min.clone();
             let minimum_remaining_credits_before_block =
                 minimum_remaining_credits_before_block.clone();
+            let manual_usage_limit = manual_usage_limit.clone();
             let pool_strategy = pool_strategy.clone();
             let selected_proxy = selected_proxy.clone();
             let flash = flash.clone();
@@ -1205,6 +1232,15 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                             return;
                         },
                     };
+                let parsed_manual_usage_limit =
+                    match parse_manual_usage_limit_input((*manual_usage_limit).as_str()) {
+                        Ok(value) => value,
+                        Err(message) => {
+                            error.set(Some(message.clone()));
+                            notify.emit((message, true));
+                            return;
+                        },
+                    };
                 busy.set(true);
                 error.set(None);
                 let (proxy_mode, proxy_config_id) = if *selected_proxy == "direct" {
@@ -1221,6 +1257,7 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                     minimum_remaining_credits_before_block: Some(
                         parsed_minimum_remaining_credits_before_block,
                     ),
+                    manual_usage_limit: Some(parsed_manual_usage_limit),
                     pool_strategy: Some((*pool_strategy).clone()),
                     proxy_mode,
                     proxy_config_id,
@@ -1275,6 +1312,7 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                     kiro_channel_max_concurrency: None,
                     kiro_channel_min_start_interval_ms: None,
                     minimum_remaining_credits_before_block: None,
+                    manual_usage_limit: None,
                     pool_strategy: None,
                     proxy_mode: None,
                     proxy_config_id: None,
@@ -1342,6 +1380,10 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
         .unwrap_or_else(|| "-".to_string());
     let last_imported = format_timestamp_opt(account.last_imported_at);
     let disabled_reason = format_kiro_disabled_reason(account.disabled_reason.as_deref());
+    let manual_limit_label = account
+        .manual_usage_limit
+        .map(format_float4)
+        .unwrap_or_else(|| "upstream".to_string());
 
     html! {
         <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
@@ -1366,10 +1408,11 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                     </p>
                     <p class={classes!("mt-1", "mb-0", "text-xs", "font-mono", "text-[var(--muted)]")}>
                         { format!(
-                            "scheduler {} in-flight · {} ms spacing · credit floor {} · pool {}",
+                            "scheduler {} in-flight · {} ms spacing · credit floor {} · manual limit {} · pool {}",
                             account.kiro_channel_max_concurrency,
                             account.kiro_channel_min_start_interval_ms,
                             format_float4(account.minimum_remaining_credits_before_block),
+                            manual_limit_label,
                             kiro_pool_strategy_label(&account.pool_strategy)
                         ) }
                     </p>
@@ -1449,7 +1492,7 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                 </div>
                 <div class={classes!("mt-4", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-4")}>
                     <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Scheduler / Proxy" }</div>
-                    <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-5")}>
+                    <div class={classes!("mt-3", "grid", "gap-3", "md:grid-cols-6")}>
                         <label class={classes!("text-sm")}>
                             <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Max Concurrency" }</div>
                             <input
@@ -1489,6 +1532,21 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                                     Callback::from(move |event: InputEvent| {
                                         let input: HtmlInputElement = event.target_unchecked_into();
                                         minimum_remaining_credits_before_block.set(input.value());
+                                    })
+                                }}
+                            />
+                        </label>
+                        <label class={classes!("text-sm")}>
+                            <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Manual Usage Limit" }</div>
+                            <input
+                                class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-sm", "font-mono")}
+                                value={(*manual_usage_limit).clone()}
+                                placeholder={"upstream"}
+                                oninput={{
+                                    let manual_usage_limit = manual_usage_limit.clone();
+                                    Callback::from(move |event: InputEvent| {
+                                        let input: HtmlInputElement = event.target_unchecked_into();
+                                        manual_usage_limit.set(input.value());
                                     })
                                 }}
                             />
@@ -4115,6 +4173,7 @@ pub fn admin_kiro_gateway_page() -> Html {
                 minimum_remaining_credits_before_block: Some(
                     parsed_minimum_remaining_credits_before_block,
                 ),
+                manual_usage_limit: None,
                 pool_strategy: Some((*manual_pool_strategy).clone()),
                 disabled: *manual_disabled,
             };
@@ -5597,6 +5656,13 @@ fn quota_progress_bar(balance: &KiroBalanceView, account_sub_title: Option<Strin
         .unwrap_or_else(|| account_sub_title.unwrap_or_else(|| "-".to_string()));
     let ratio = kiro_credit_ratio(Some(balance.current_usage), Some(balance.usage_limit));
     let pct = (ratio * 100.0).round() as i32;
+    let upstream_limit_label = balance
+        .upstream_usage_limit
+        .filter(|value| (value - balance.usage_limit).abs() > f64::EPSILON)
+        .map(|value| format!("upstream {}", format_float2(value)));
+    let manual_limit_label = balance
+        .manual_usage_limit
+        .map(|value| format!("manual {}", format_float2(value)));
     html! { <>
         <div class={classes!("mt-3", "grid", "gap-3", "grid-cols-2")}>
             <div>
@@ -5623,6 +5689,12 @@ fn quota_progress_bar(balance: &KiroBalanceView, account_sub_title: Option<Strin
             </div>
             <div class={classes!("mt-2", "flex", "items-center", "gap-4", "font-mono", "text-[11px]", "text-[var(--muted)]")}>
                 <span>{ subscription_title }</span>
+                if let Some(label) = manual_limit_label {
+                    <span>{ label }</span>
+                }
+                if let Some(label) = upstream_limit_label {
+                    <span>{ label }</span>
+                }
                 <span class={classes!("ml-auto")}>{ format_reset_hint(balance.next_reset_at) }</span>
             </div>
         </div>
@@ -5640,15 +5712,19 @@ mod tests {
         format_kiro_cache_policy_summary, format_kiro_key_candidate_credit_summary,
         kiro_account_status_cta_text, kiro_account_status_route, kiro_cache_token_percent,
         kiro_key_route_summary, kiro_preferred_pool_candidate_note, kiro_preferred_pool_warning,
-        parse_kiro_cache_policy_form_json, sanitize_kiro_account_group_id,
-        should_load_kiro_account_inventory, should_load_kiro_group_inventory,
-        should_load_kiro_group_options, should_load_kiro_inventory, should_load_kiro_key_inventory,
+        parse_kiro_cache_policy_form_json, parse_manual_usage_limit_input,
+        sanitize_kiro_account_group_id, should_load_kiro_account_inventory,
+        should_load_kiro_group_inventory, should_load_kiro_group_options,
+        should_load_kiro_inventory, should_load_kiro_key_inventory,
         should_load_kiro_models_inventory, should_load_kiro_usage_preview,
         should_reset_kiro_cache_policy_editor, TAB_ACCOUNTS, TAB_GROUPS, TAB_KEYS, TAB_OVERVIEW,
         TAB_USAGE,
     };
     use crate::{
-        api::{AdminAccountGroupOptionView, AdminKiroKeyCandidateCreditSummaryView},
+        api::{
+            AdminAccountGroupOptionView, AdminKiroKeyCandidateCreditSummaryView,
+            PatchKiroAccountInput,
+        },
         router::Route,
     };
 
@@ -6318,6 +6394,38 @@ mod tests {
         assert_eq!(format_compact_bytes(512), "512 B");
         assert_eq!(format_compact_bytes(1536), "1.5 KiB");
         assert_eq!(format_compact_bytes(2 * 1024 * 1024), "2.0 MiB");
+    }
+
+    #[test]
+    fn parse_manual_usage_limit_input_distinguishes_clear_from_zero() {
+        assert_eq!(parse_manual_usage_limit_input("   ").expect("blank clears"), None);
+        assert_eq!(parse_manual_usage_limit_input("0").expect("zero is valid"), Some(0.0));
+        assert_eq!(
+            parse_manual_usage_limit_input("500.25").expect("positive value is valid"),
+            Some(500.25)
+        );
+        assert!(parse_manual_usage_limit_input("-1").is_err());
+        assert!(parse_manual_usage_limit_input("NaN").is_err());
+    }
+
+    #[test]
+    fn patch_kiro_account_input_serializes_manual_usage_limit_patch_semantics() {
+        let body = serde_json::to_value(PatchKiroAccountInput {
+            manual_usage_limit: None,
+            ..PatchKiroAccountInput::default()
+        })
+        .expect("patch body should serialize");
+        assert!(!body
+            .as_object()
+            .expect("patch body should be object")
+            .contains_key("manual_usage_limit"));
+
+        let body = serde_json::to_value(PatchKiroAccountInput {
+            manual_usage_limit: Some(None),
+            ..PatchKiroAccountInput::default()
+        })
+        .expect("patch body should serialize");
+        assert_eq!(body.get("manual_usage_limit"), Some(&serde_json::Value::Null));
     }
 
     fn test_group(id: &str, account_names: &[&str]) -> AdminAccountGroupOptionView {
