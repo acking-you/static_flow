@@ -6467,6 +6467,62 @@ pub struct AdminLlmGatewayUsageMetricsResponse {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(default)]
+pub struct AdminLlmGatewayProxyTrafficTotalsView {
+    pub event_count: u64,
+    pub request_bytes: u64,
+    pub response_bytes: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct AdminLlmGatewayProxyTrafficPointView {
+    pub bucket_start_ms: i64,
+    pub event_count: u64,
+    pub request_bytes: u64,
+    pub response_bytes: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct AdminLlmGatewayProxyTrafficProxySummaryView {
+    pub proxy_key: String,
+    pub proxy_config_id: Option<String>,
+    pub proxy_config_name: Option<String>,
+    pub proxy_url: Option<String>,
+    pub proxy_source: Option<String>,
+    pub totals: AdminLlmGatewayProxyTrafficTotalsView,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct AdminLlmGatewayProxyTrafficResponse {
+    pub generated_at_ms: i64,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub provider_type: Option<String>,
+    pub source: String,
+    pub proxy_config_id: Option<String>,
+    pub bucket_ms: i64,
+    pub totals: AdminLlmGatewayProxyTrafficTotalsView,
+    pub points: Vec<AdminLlmGatewayProxyTrafficPointView>,
+    pub proxies: Vec<AdminLlmGatewayProxyTrafficProxySummaryView>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct AdminLlmGatewayProxyTrafficQuery {
+    pub proxy_config_id: Option<String>,
+    pub provider_type: Option<String>,
+    pub source: Option<String>,
+    pub start_ms: Option<i64>,
+    pub end_ms: Option<i64>,
+    pub bucket_ms: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(default)]
 pub struct AdminUsageTotalsView {
     pub event_count: usize,
     pub input_uncached_tokens: u64,
@@ -9602,6 +9658,71 @@ pub async fn fetch_admin_llm_gateway_usage_metrics(
         }
         if let Some(top_limit) = query.top_limit {
             params.push(format!("top_limit={top_limit}"));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_llm_gateway_proxy_traffic(
+    query: &AdminLlmGatewayProxyTrafficQuery,
+) -> Result<AdminLlmGatewayProxyTrafficResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = query;
+        Ok(AdminLlmGatewayProxyTrafficResponse::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let mut url = format!("{}/admin/llm-gateway/usage/proxy-traffic", llm_access_admin_base());
+        let mut params = Vec::new();
+        if let Some(proxy_config_id) = query
+            .proxy_config_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("proxy_config_id={}", urlencoding::encode(proxy_config_id)));
+        }
+        if let Some(provider_type) = query
+            .provider_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("provider_type={}", urlencoding::encode(provider_type)));
+        }
+        if let Some(source) = query
+            .source
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            params.push(format!("source={}", urlencoding::encode(source)));
+        }
+        if let Some(start_ms) = query.start_ms {
+            params.push(format!("start_ms={start_ms}"));
+        }
+        if let Some(end_ms) = query.end_ms {
+            params.push(format!("end_ms={end_ms}"));
+        }
+        if let Some(bucket_ms) = query.bucket_ms {
+            params.push(format!("bucket_ms={bucket_ms}"));
         }
         if !params.is_empty() {
             url.push('?');

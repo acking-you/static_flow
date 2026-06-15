@@ -34,6 +34,8 @@ mod filter_options;
 #[cfg(feature = "duckdb-runtime")]
 mod metrics;
 #[cfg(feature = "duckdb-runtime")]
+mod proxy_traffic;
+#[cfg(feature = "duckdb-runtime")]
 mod query;
 #[cfg(feature = "duckdb-runtime")]
 mod repository;
@@ -382,6 +384,20 @@ const COMPACT_COPY_USAGE_ROLLUPS_DAILY_SQL: &str = "
         billable_tokens, credit_usage, credit_usage_missing_count,
         avg_latency_ms, max_latency_ms, p95_latency_ms
     FROM pending_segment.usage_rollups_daily;
+";
+
+#[cfg(feature = "duckdb-runtime")]
+const COMPACT_COPY_PROXY_TRAFFIC_ROLLUPS_HOURLY_SQL: &str = "
+    INSERT INTO proxy_traffic_rollups_hourly (
+        bucket_hour, provider_type, proxy_key, proxy_source, proxy_config_id,
+        proxy_config_name, proxy_url, request_count, request_bytes,
+        response_bytes, total_bytes
+    )
+    SELECT
+        bucket_hour, provider_type, proxy_key, proxy_source, proxy_config_id,
+        proxy_config_name, proxy_url, request_count, request_bytes,
+        response_bytes, total_bytes
+    FROM pending_segment.proxy_traffic_rollups_hourly;
 ";
 
 #[cfg(feature = "duckdb-runtime")]

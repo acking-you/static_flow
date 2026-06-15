@@ -48,9 +48,9 @@ use super::{
         PublicUsageStore, UsageAnalyticsStore, UsageEventSink, UsageRollupBatchSink,
     },
     usage::{
-        AdminLegacyKiroProxyMigration, UsageChartPoint, UsageEventPage, UsageEventQuery,
-        UsageEventTotals, UsageFilterOptions, UsageMetricsQuery, UsageMetricsSnapshot,
-        UsageRollupApplyReport, UsageRollupBatch,
+        AdminLegacyKiroProxyMigration, ProxyTrafficQuery, ProxyTrafficSnapshot, ProxyTrafficTotals,
+        UsageChartPoint, UsageEventPage, UsageEventQuery, UsageEventTotals, UsageFilterOptions,
+        UsageMetricsQuery, UsageMetricsSnapshot, UsageRollupApplyReport, UsageRollupBatch,
     },
     DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_STATUS_REFRESH_SECONDS, KEY_STATUS_ACTIVE,
 };
@@ -197,6 +197,24 @@ impl UsageAnalyticsStore for EmptyUsageAnalyticsStore {
             provider_type: query.provider_type,
             source: query.source,
             ..UsageMetricsSnapshot::default()
+        })
+    }
+
+    async fn proxy_traffic_snapshot(
+        &self,
+        query: ProxyTrafficQuery,
+    ) -> anyhow::Result<ProxyTrafficSnapshot> {
+        Ok(ProxyTrafficSnapshot {
+            generated_at_ms: 0,
+            start_ms: query.start_ms,
+            end_ms: query.end_ms,
+            provider_type: query.provider_type,
+            source: query.source,
+            proxy_config_id: query.proxy_config_id,
+            bucket_ms: query.bucket_ms,
+            totals: ProxyTrafficTotals::default(),
+            points: Vec::new(),
+            proxies: Vec::new(),
         })
     }
 }

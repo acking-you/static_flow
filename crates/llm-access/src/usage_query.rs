@@ -10,8 +10,8 @@ use axum::{
 };
 use llm_access_core::{
     store::{
-        KiroLatencyRankingQuery, UsageAnalyticsStore, UsageChartPoint, UsageEventPage,
-        UsageEventQuery, UsageEventSource, UsageEventStatusKind, UsageMetricsQuery,
+        KiroLatencyRankingQuery, ProxyTrafficQuery, UsageAnalyticsStore, UsageChartPoint,
+        UsageEventPage, UsageEventQuery, UsageEventSource, UsageEventStatusKind, UsageMetricsQuery,
         DEFAULT_USAGE_ANALYTICS_RETENTION_DAYS,
     },
     usage::UsageEvent,
@@ -26,6 +26,11 @@ const MAX_USAGE_CHART_BUCKETS: usize = 168;
 const DEFAULT_USAGE_METRICS_WINDOW: &str = "1h";
 const DEFAULT_USAGE_METRICS_TOP_LIMIT: usize = 10;
 const MAX_USAGE_METRICS_TOP_LIMIT: usize = 20;
+const DEFAULT_PROXY_TRAFFIC_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+const DEFAULT_PROXY_TRAFFIC_BUCKET_MS: i64 = 60 * 60 * 1000;
+const MIN_PROXY_TRAFFIC_BUCKET_MS: i64 = 5 * 60 * 1000;
+const MAX_PROXY_TRAFFIC_BUCKET_MS: i64 = 24 * 60 * 60 * 1000;
+const MAX_PROXY_TRAFFIC_BUCKETS: i64 = 1_000;
 
 /// Query options for usage list endpoints.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -74,6 +79,23 @@ pub(crate) struct KiroLatencyRankingRequest {
     source: Option<String>,
     #[serde(default)]
     window: Option<String>,
+}
+
+/// Query options for per-proxy traffic analytics.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct ProxyTrafficRequest {
+    #[serde(default)]
+    proxy_config_id: Option<String>,
+    #[serde(default)]
+    provider_type: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    start_ms: Option<i64>,
+    #[serde(default)]
+    end_ms: Option<i64>,
+    #[serde(default)]
+    bucket_ms: Option<i64>,
 }
 
 /// Aggregate totals over the full filtered result set.
@@ -340,6 +362,35 @@ pub(crate) async fn usage_metrics_snapshot(
     }
 }
 
+/// Return per-proxy traffic totals and chart buckets.
+pub(crate) async fn proxy_traffic_snapshot(
+    State(state): State<UsageQueryState>,
+    Query(request): Query<ProxyTrafficRequest>,
+) -> Response {
+    let query = match normalize_proxy_traffic_query(request, now_ms()) {
+        Ok(query) => query,
+        Err(message) => {
+            tracing::warn!(message, "invalid proxy traffic query");
+            return (StatusCode::BAD_REQUEST, message).into_response();
+        },
+    };
+    match state
+        .usage_analytics_store
+        .proxy_traffic_snapshot(query)
+        .await
+    {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(err) => {
+            tracing::error!(error = ?err, "failed to load proxy traffic snapshot");
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to load proxy traffic snapshot: {err:#}"),
+            )
+                .into_response()
+        },
+    }
+}
+
 /// Return the compact Kiro latency snapshot used by API-side route ordering.
 pub(crate) async fn kiro_latency_ranking_snapshot(
     State(state): State<UsageQueryState>,
@@ -556,6 +607,68 @@ fn normalize_usage_metrics_query(
     })
 }
 
+fn normalize_proxy_traffic_query(
+    request: ProxyTrafficRequest,
+    now_ms: i64,
+) -> Result<ProxyTrafficQuery, &'static str> {
+    let source = match request
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => UsageEventSource::from_query_value(value)
+            .ok_or("source must be one of hot, archive, or all")?,
+        None => UsageEventSource::All,
+    };
+    let default_end_ms = now_ms.max(0);
+    let (start_ms, end_ms) = match (request.start_ms, request.end_ms) {
+        (Some(start), Some(end)) => normalize_required_usage_time_range(start, end),
+        (Some(start), None) => normalize_required_usage_time_range(start, default_end_ms),
+        (None, Some(end)) => normalize_required_usage_time_range(
+            end.saturating_sub(DEFAULT_PROXY_TRAFFIC_WINDOW_MS),
+            end,
+        ),
+        (None, None) => {
+            (default_end_ms.saturating_sub(DEFAULT_PROXY_TRAFFIC_WINDOW_MS), default_end_ms)
+        },
+    };
+    if end_ms <= start_ms {
+        return Err("end_ms must be greater than start_ms");
+    }
+    let bucket_ms = request
+        .bucket_ms
+        .unwrap_or(DEFAULT_PROXY_TRAFFIC_BUCKET_MS)
+        .clamp(MIN_PROXY_TRAFFIC_BUCKET_MS, MAX_PROXY_TRAFFIC_BUCKET_MS);
+    let bucket_count = end_ms
+        .saturating_sub(start_ms)
+        .saturating_add(bucket_ms - 1)
+        .div_euclid(bucket_ms);
+    if bucket_count > MAX_PROXY_TRAFFIC_BUCKETS {
+        return Err("time range produces too many buckets");
+    }
+    Ok(ProxyTrafficQuery {
+        proxy_config_id: request
+            .proxy_config_id
+            .and_then(|value| normalize_optional_string(&value)),
+        provider_type: request
+            .provider_type
+            .and_then(|value| normalize_optional_string(&value)),
+        source,
+        start_ms,
+        end_ms,
+        bucket_ms,
+    })
+}
+
+fn normalize_required_usage_time_range(start_ms: i64, end_ms: i64) -> (i64, i64) {
+    if end_ms < start_ms {
+        (end_ms, start_ms)
+    } else {
+        (start_ms, end_ms)
+    }
+}
+
 fn normalize_kiro_latency_ranking_query(
     request: KiroLatencyRankingRequest,
 ) -> Result<KiroLatencyRankingQuery, &'static str> {
@@ -708,8 +821,8 @@ mod tests {
     use llm_access_core::store::{UsageEventPage, UsageEventSource, UsageEventStatusKind};
 
     use super::{
-        normalize_usage_metrics_query, normalize_usage_query, response_from_page,
-        ListUsageEventsRequest, UsageMetricsRequest,
+        normalize_proxy_traffic_query, normalize_usage_metrics_query, normalize_usage_query,
+        response_from_page, ListUsageEventsRequest, ProxyTrafficRequest, UsageMetricsRequest,
     };
 
     #[test]
@@ -758,6 +871,41 @@ mod tests {
 
         assert_eq!(query.limit, 200);
         assert_eq!(query.offset, 1_000);
+    }
+
+    #[test]
+    fn normalize_proxy_traffic_query_defaults_to_last_30_days_and_all_sources() {
+        let now_ms = 1_700_000_000_000;
+        let query = normalize_proxy_traffic_query(ProxyTrafficRequest::default(), now_ms)
+            .expect("default proxy traffic query should be valid");
+
+        assert_eq!(query.source, UsageEventSource::All);
+        assert_eq!(query.start_ms, now_ms - 30 * 24 * 60 * 60 * 1000);
+        assert_eq!(query.end_ms, now_ms);
+        assert_eq!(query.bucket_ms, 60 * 60 * 1000);
+        assert_eq!(query.proxy_config_id, None);
+    }
+
+    #[test]
+    fn normalize_proxy_traffic_query_swaps_inverted_bounds_and_clamps_bucket() {
+        let query = normalize_proxy_traffic_query(
+            ProxyTrafficRequest {
+                proxy_config_id: Some(" proxy-1 ".to_string()),
+                source: Some("hot".to_string()),
+                start_ms: Some(1_700_000_100_000),
+                end_ms: Some(1_700_000_000_000),
+                bucket_ms: Some(1_000),
+                ..ProxyTrafficRequest::default()
+            },
+            1_700_000_200_000,
+        )
+        .expect("proxy traffic query should be valid");
+
+        assert_eq!(query.proxy_config_id.as_deref(), Some("proxy-1"));
+        assert_eq!(query.source, UsageEventSource::Hot);
+        assert_eq!(query.start_ms, 1_700_000_000_000);
+        assert_eq!(query.end_ms, 1_700_000_100_000);
+        assert_eq!(query.bucket_ms, 5 * 60 * 1000);
     }
 
     #[test]

@@ -2,8 +2,9 @@
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType, RouteStrategy},
     store::{
-        KiroLatencyRankingQuery, UsageAnalyticsStore, UsageEventQuery, UsageEventSink,
-        UsageEventSource, UsageEventStatusKind, UsageFilterOptions, UsageMetricsQuery,
+        KiroLatencyRankingQuery, ProxyTrafficQuery, UsageAnalyticsStore, UsageEventQuery,
+        UsageEventSink, UsageEventSource, UsageEventStatusKind, UsageFilterOptions,
+        UsageMetricsQuery,
     },
     usage::{UsageEvent, UsageStreamDetails, UsageTiming},
 };
@@ -3021,6 +3022,139 @@ async fn usage_metrics_snapshot_tracks_proxy_and_error_hotspots() {
     );
 
     std::fs::remove_dir_all(&root).expect("cleanup metrics test directory");
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[tokio::test]
+async fn proxy_traffic_snapshot_groups_request_and_response_bytes_by_proxy() {
+    let root = std::env::temp_dir()
+        .join(format!("llm-access-duckdb-test-{}-proxy-traffic", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("create proxy traffic test directory");
+    let db_path = root.join("usage.duckdb");
+    let repo = super::DuckDbUsageRepository::open_path(&db_path).expect("open usage repo");
+
+    let mut first = test_usage_event();
+    first.event_id = "proxy-traffic-first".to_string();
+    first.created_at_ms = 1_700_000_000_000;
+    first.request_body_bytes = Some(1_024);
+    first.stream.bytes_streamed = Some(4_096);
+
+    let mut second = test_usage_event();
+    second.event_id = "proxy-traffic-second".to_string();
+    second.created_at_ms = 1_700_000_060_000;
+    second.request_body_bytes = Some(512);
+    second.stream.bytes_streamed = Some(2_048);
+
+    let mut other_proxy = test_usage_event();
+    other_proxy.event_id = "proxy-traffic-other".to_string();
+    other_proxy.created_at_ms = 1_700_000_090_000;
+    other_proxy.request_body_bytes = Some(10_000);
+    other_proxy.stream.bytes_streamed = Some(10_000);
+
+    let proxy = crate::postgres::UsageProxyAttribution {
+        provider_type: "kiro".to_string(),
+        account_name: "kiro-account".to_string(),
+        proxy_source: "fixed".to_string(),
+        proxy_config_id: Some("proxy-main".to_string()),
+        proxy_config_name: Some("Proxy Main".to_string()),
+        proxy_url: Some("http://127.0.0.1:18080".to_string()),
+    };
+    let other = crate::postgres::UsageProxyAttribution {
+        provider_type: "kiro".to_string(),
+        account_name: "kiro-account".to_string(),
+        proxy_source: "fixed".to_string(),
+        proxy_config_id: Some("proxy-other".to_string()),
+        proxy_config_name: Some("Proxy Other".to_string()),
+        proxy_url: Some("http://127.0.0.1:18081".to_string()),
+    };
+
+    repo.append_usage_event_rows_owned(vec![
+        super::UsageEventRow::from_usage_event(&first).with_proxy_attribution(Some(&proxy)),
+        super::UsageEventRow::from_usage_event(&second).with_proxy_attribution(Some(&proxy)),
+        super::UsageEventRow::from_usage_event(&other_proxy).with_proxy_attribution(Some(&other)),
+    ])
+    .await
+    .expect("append usage rows");
+
+    let snapshot = repo
+        .proxy_traffic_snapshot(ProxyTrafficQuery {
+            proxy_config_id: Some("proxy-main".to_string()),
+            provider_type: Some("kiro".to_string()),
+            source: UsageEventSource::Hot,
+            start_ms: 1_700_000_000_000,
+            end_ms: 1_700_000_120_000,
+            bucket_ms: 60_000,
+        })
+        .await
+        .expect("fetch proxy traffic snapshot");
+
+    assert_eq!(snapshot.totals.event_count, 2);
+    assert_eq!(snapshot.totals.request_bytes, 1_536);
+    assert_eq!(snapshot.totals.response_bytes, 6_144);
+    assert_eq!(snapshot.totals.total_bytes, 7_680);
+    assert_eq!(snapshot.points.len(), 2);
+    assert_eq!(snapshot.points[0].bucket_start_ms, 1_700_000_000_000);
+    assert_eq!(snapshot.points[0].total_bytes, 5_120);
+    assert_eq!(snapshot.points[1].bucket_start_ms, 1_700_000_060_000);
+    assert_eq!(snapshot.points[1].total_bytes, 2_560);
+    assert_eq!(snapshot.proxies.len(), 1);
+    assert_eq!(snapshot.proxies[0].proxy_config_id.as_deref(), Some("proxy-main"));
+    assert_eq!(snapshot.proxies[0].totals.total_bytes, 7_680);
+
+    std::fs::remove_dir_all(&root).expect("cleanup proxy traffic test directory");
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[tokio::test]
+async fn proxy_traffic_rollup_does_not_double_count_replayed_events() {
+    let root = std::env::temp_dir()
+        .join(format!("llm-access-duckdb-test-{}-proxy-traffic-dedupe", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("create proxy traffic dedupe test directory");
+    let db_path = root.join("usage.duckdb");
+    let repo = super::DuckDbUsageRepository::open_path(&db_path).expect("open usage repo");
+
+    let mut event = test_usage_event();
+    event.event_id = "proxy-traffic-replayed".to_string();
+    event.created_at_ms = 1_700_000_000_000;
+    event.request_body_bytes = Some(256);
+    event.stream.bytes_streamed = Some(768);
+    let proxy = crate::postgres::UsageProxyAttribution {
+        provider_type: "kiro".to_string(),
+        account_name: "kiro-account".to_string(),
+        proxy_source: "fixed".to_string(),
+        proxy_config_id: Some("proxy-dedupe".to_string()),
+        proxy_config_name: Some("Proxy Dedupe".to_string()),
+        proxy_url: Some("http://127.0.0.1:18082".to_string()),
+    };
+    let row = super::UsageEventRow::from_usage_event(&event).with_proxy_attribution(Some(&proxy));
+
+    repo.append_usage_event_rows_owned(vec![row.clone()])
+        .await
+        .expect("append usage row once");
+    repo.append_usage_event_rows_owned(vec![row])
+        .await
+        .expect("replay usage row");
+
+    let snapshot = repo
+        .proxy_traffic_snapshot(ProxyTrafficQuery {
+            proxy_config_id: Some("proxy-dedupe".to_string()),
+            provider_type: None,
+            source: UsageEventSource::Hot,
+            start_ms: 1_700_000_000_000,
+            end_ms: 1_700_000_060_000,
+            bucket_ms: 60_000,
+        })
+        .await
+        .expect("fetch proxy traffic snapshot");
+
+    assert_eq!(snapshot.totals.event_count, 1);
+    assert_eq!(snapshot.totals.request_bytes, 256);
+    assert_eq!(snapshot.totals.response_bytes, 768);
+    assert_eq!(snapshot.totals.total_bytes, 1_024);
+
+    std::fs::remove_dir_all(&root).expect("cleanup proxy traffic dedupe test directory");
 }
 
 #[cfg(feature = "duckdb-runtime")]

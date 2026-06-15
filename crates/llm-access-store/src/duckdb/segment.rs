@@ -22,7 +22,8 @@ use super::{
     util::{duckdb_string_literal, i64_to_usize, now_ms, utc_date_parts},
     ArchivedSegmentPaths, ArchivedUsageSegment, DuckDbUsageConnectionConfig, DuckDbUsageRepository,
     SegmentFieldRollup, SegmentKeyRollup, SegmentStats, SharedDuckDbUsageConnectionConfig,
-    TieredDuckDbUsageConfig, TieredUsageCatalogBackend, COMPACT_COPY_USAGE_ROLLUPS_DAILY_SQL,
+    TieredDuckDbUsageConfig, TieredUsageCatalogBackend,
+    COMPACT_COPY_PROXY_TRAFFIC_ROLLUPS_HOURLY_SQL, COMPACT_COPY_USAGE_ROLLUPS_DAILY_SQL,
     COMPACT_COPY_USAGE_ROLLUPS_HOURLY_SQL, TIERED_SEGMENT_SEALER_LOCK,
 };
 use crate::usage_catalog::{
@@ -750,6 +751,8 @@ fn compact_pending_segment_to_local_file(
         duckdb_relation_exists(&pending_source_conn, "usage_rollups_hourly");
     let pending_has_daily_rollups =
         duckdb_relation_exists(&pending_source_conn, "usage_rollups_daily");
+    let pending_has_proxy_traffic_rollups =
+        duckdb_relation_exists(&pending_source_conn, "proxy_traffic_rollups_hourly");
 
     fs::create_dir_all(tiered_compacting_dir(config)).with_context(|| {
         format!(
@@ -780,6 +783,9 @@ fn compact_pending_segment_to_local_file(
     }
     if pending_has_daily_rollups {
         compact_sql_parts.push(COMPACT_COPY_USAGE_ROLLUPS_DAILY_SQL);
+    }
+    if pending_has_proxy_traffic_rollups {
+        compact_sql_parts.push(COMPACT_COPY_PROXY_TRAFFIC_ROLLUPS_HOURLY_SQL);
     }
     compact_sql_parts.push("DETACH pending_segment;");
     compact_sql_parts.push("CHECKPOINT;");

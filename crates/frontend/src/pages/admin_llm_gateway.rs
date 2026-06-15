@@ -28,20 +28,22 @@ use crate::{
         fetch_admin_llm_gateway_accounts_page_with_query, fetch_admin_llm_gateway_config,
         fetch_admin_llm_gateway_keys, fetch_admin_llm_gateway_keys_page,
         fetch_admin_llm_gateway_keys_page_with_query, fetch_admin_llm_gateway_proxy_bindings,
-        fetch_admin_llm_gateway_proxy_configs, fetch_admin_llm_gateway_sponsor_requests,
-        fetch_admin_llm_gateway_token_requests, fetch_admin_llm_gateway_usage_event_detail,
-        fetch_admin_llm_gateway_usage_events, fetch_admin_llm_gateway_usage_filter_options,
-        fetch_admin_usage_journal_preview, fetch_admin_usage_journal_status,
-        import_admin_legacy_kiro_proxy_configs, import_admin_llm_gateway_account,
-        patch_admin_llm_gateway_account, patch_admin_llm_gateway_account_group,
-        patch_admin_llm_gateway_key, patch_admin_llm_gateway_proxy_config,
-        probe_admin_llm_gateway_account_models, refresh_admin_llm_gateway_account_auth,
-        refresh_admin_llm_gateway_account_usage, reset_admin_llm_gateway_proxy_config_override,
-        update_admin_llm_gateway_config, update_admin_llm_gateway_proxy_binding,
-        AccountSummaryView, AdminAccountGroupOptionView, AdminAccountGroupView,
-        AdminAccountsSummaryView, AdminLlmGatewayAccountContributionRequestView,
+        fetch_admin_llm_gateway_proxy_configs, fetch_admin_llm_gateway_proxy_traffic,
+        fetch_admin_llm_gateway_sponsor_requests, fetch_admin_llm_gateway_token_requests,
+        fetch_admin_llm_gateway_usage_event_detail, fetch_admin_llm_gateway_usage_events,
+        fetch_admin_llm_gateway_usage_filter_options, fetch_admin_usage_journal_preview,
+        fetch_admin_usage_journal_status, import_admin_legacy_kiro_proxy_configs,
+        import_admin_llm_gateway_account, patch_admin_llm_gateway_account,
+        patch_admin_llm_gateway_account_group, patch_admin_llm_gateway_key,
+        patch_admin_llm_gateway_proxy_config, probe_admin_llm_gateway_account_models,
+        refresh_admin_llm_gateway_account_auth, refresh_admin_llm_gateway_account_usage,
+        reset_admin_llm_gateway_proxy_config_override, update_admin_llm_gateway_config,
+        update_admin_llm_gateway_proxy_binding, AccountSummaryView, AdminAccountGroupOptionView,
+        AdminAccountGroupView, AdminAccountsSummaryView,
+        AdminLlmGatewayAccountContributionRequestView,
         AdminLlmGatewayAccountContributionRequestsQuery, AdminLlmGatewayAccountPageQuery,
         AdminLlmGatewayKeyPageQuery, AdminLlmGatewayKeyView, AdminLlmGatewayKeysSummaryView,
+        AdminLlmGatewayProxyTrafficQuery, AdminLlmGatewayProxyTrafficTotalsView,
         AdminLlmGatewaySponsorRequestView, AdminLlmGatewaySponsorRequestsQuery,
         AdminLlmGatewayTokenRequestView, AdminLlmGatewayTokenRequestsQuery,
         AdminLlmGatewayUsageEventDetailView, AdminLlmGatewayUsageEventView,
@@ -62,8 +64,9 @@ use crate::{
     },
     pages::llm_access_shared::{
         confirm_destructive, credit_usage_missing_label, first_token_latency_color,
-        format_latency_ms, format_ms, format_number_i64, format_number_u64, total_latency_color,
-        token_usage_missing_label, MaskedSecretCode,
+        format_latency_ms, format_ms, format_number_i64, format_number_u64,
+        format_optional_bytes_human, token_usage_missing_label, total_latency_color,
+        MaskedSecretCode,
     },
     router::Route,
 };
@@ -341,16 +344,7 @@ fn effective_routing_wait_ms(
 }
 
 fn format_optional_bytes(bytes: Option<u64>) -> String {
-    let Some(bytes) = bytes else {
-        return "-".to_string();
-    };
-    if bytes >= 1024 * 1024 {
-        format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
-    } else if bytes >= 1024 {
-        format!("{:.1} KiB", bytes as f64 / 1024.0)
-    } else {
-        format!("{bytes} B")
-    }
+    format_optional_bytes_human(bytes)
 }
 
 fn format_cgroup_memory_usage(memory: &ProcessMemoryRuntimeStats) -> String {
@@ -1872,6 +1866,7 @@ fn account_group_editor_card(props: &AccountGroupEditorCardProps) -> Html {
 #[derive(Properties, PartialEq)]
 struct ProxyConfigEditorCardProps {
     proxy_config: AdminUpstreamProxyConfigView,
+    traffic_30d: Option<AdminLlmGatewayProxyTrafficTotalsView>,
     on_changed: Callback<()>,
     on_copy: Callback<(String, String)>,
     on_flash: Callback<(String, bool)>,
@@ -1928,6 +1923,7 @@ impl Default for CreateKeyForm {
 #[function_component(ProxyConfigEditorCard)]
 fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
     let proxy_config = props.proxy_config.clone();
+    let traffic_30d = props.traffic_30d.unwrap_or_default();
     let can_edit_slot_metadata = proxy_config.can_edit_slot_metadata;
     let scope_node_label = proxy_config
         .scope_node_id
@@ -2144,9 +2140,12 @@ fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
                         <span class={classes!("inline-flex", "items-center", "rounded-full", "bg-[var(--surface-alt)]", "px-2.5", "py-1", "text-[11px]", "font-semibold", "text-[var(--muted)]")}>
                             { format!("scope: {}", scope_node_label) }
                         </span>
+                        <span class={classes!("inline-flex", "items-center", "rounded-full", "bg-teal-500/10", "px-2.5", "py-1", "text-[11px]", "font-semibold", "text-teal-700", "dark:text-teal-200")}>
+                            { format!("30d traffic {}", format_optional_bytes(Some(traffic_30d.total_bytes))) }
+                        </span>
                     </div>
                     <p class={classes!("mt-2", "mb-0", "text-xs", "font-mono", "text-[var(--muted)]")}>
-                        { format!("created {} · updated {}", format_ms(props.proxy_config.created_at), format_ms(props.proxy_config.updated_at)) }
+                        { format!("created {} · updated {} · traffic events {}", format_ms(props.proxy_config.created_at), format_ms(props.proxy_config.updated_at), traffic_30d.event_count) }
                     </p>
                     <div class={classes!("mt-3", "grid", "gap-2", "sm:grid-cols-2")}>
                         <div class={classes!("rounded-lg", "border", "px-3", "py-2", "text-xs", proxy_endpoint_check_tone(props.proxy_config.latest_codex_check.as_ref()))}>
@@ -2449,6 +2448,8 @@ pub fn admin_llm_gateway_page() -> Html {
     let kiro_cctest_proxy_base_url_input = use_state(String::new);
     let kiro_cctest_proxy_api_key_input = use_state(String::new);
     let proxy_configs = use_state(Vec::<AdminUpstreamProxyConfigView>::new);
+    let proxy_traffic_30d =
+        use_state(BTreeMap::<String, AdminLlmGatewayProxyTrafficTotalsView>::new);
     let proxy_config_scope = use_state(AdminUpstreamProxyConfigScopeView::default);
     let proxy_bindings = use_state(Vec::<AdminUpstreamProxyBindingView>::new);
     let create_proxy_name = use_state(|| "shared-upstream".to_string());
@@ -2817,6 +2818,7 @@ pub fn admin_llm_gateway_page() -> Html {
         let keys_page_limit = keys_page_limit.clone();
         let account_group_options = account_group_options.clone();
         let proxy_configs = proxy_configs.clone();
+        let proxy_traffic_30d = proxy_traffic_30d.clone();
         let proxy_config_scope = proxy_config_scope.clone();
         let proxy_bindings = proxy_bindings.clone();
         let account_groups_page_items = account_groups_page_items.clone();
@@ -2894,6 +2896,7 @@ pub fn admin_llm_gateway_page() -> Html {
             let keys_page_limit = keys_page_limit.clone();
             let account_group_options = account_group_options.clone();
             let proxy_configs = proxy_configs.clone();
+            let proxy_traffic_30d = proxy_traffic_30d.clone();
             let proxy_config_scope = proxy_config_scope.clone();
             let proxy_bindings = proxy_bindings.clone();
             let account_groups_page_items = account_groups_page_items.clone();
@@ -3001,6 +3004,19 @@ pub fn admin_llm_gateway_page() -> Html {
                         .to_string(),
                     ),
                 };
+                let now_ms = Date::new_0().get_time() as i64;
+                let end_ms = now_ms
+                    .saturating_add(60 * 60 * 1000 - 1)
+                    .div_euclid(60 * 60 * 1000)
+                    .saturating_mul(60 * 60 * 1000);
+                let proxy_traffic_query = AdminLlmGatewayProxyTrafficQuery {
+                    proxy_config_id: None,
+                    provider_type: None,
+                    source: Some(USAGE_SOURCE_ALL.to_string()),
+                    start_ms: Some(end_ms.saturating_sub(30 * 24 * 60 * 60 * 1000)),
+                    end_ms: Some(end_ms),
+                    bucket_ms: Some(24 * 60 * 60 * 1000),
+                };
                 let result = async {
                     let (
                         cfg_result,
@@ -3008,18 +3024,21 @@ pub fn admin_llm_gateway_page() -> Html {
                         account_summary_result,
                         proxy_configs_result,
                         proxy_bindings_result,
+                        proxy_traffic_result,
                     ) = futures::join!(
                         fetch_admin_llm_gateway_config(),
                         fetch_admin_llm_gateway_keys_page(1, 0),
                         fetch_admin_llm_gateway_accounts_page(1, 0),
                         fetch_admin_llm_gateway_proxy_configs(),
                         fetch_admin_llm_gateway_proxy_bindings(),
+                        fetch_admin_llm_gateway_proxy_traffic(&proxy_traffic_query),
                     );
                     let cfg = cfg_result?;
                     let key_summary_resp = key_summary_result?;
                     let account_summary_resp = account_summary_result?;
                     let proxy_configs_resp = proxy_configs_result?;
                     let proxy_bindings_resp = proxy_bindings_result?;
+                    let proxy_traffic_resp = proxy_traffic_result?;
                     let keys_resp = if should_load_llm_gateway_keys_inventory(&active_tab_value) {
                         if active_tab_value == TAB_KEYS {
                             let limit = KEY_PAGE_SIZE.max(1);
@@ -3094,6 +3113,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         proxy_configs_resp.proxy_config_scope,
                         proxy_configs_resp.proxy_configs,
                         proxy_bindings_resp.bindings,
+                        proxy_traffic_resp.proxies,
                         keys_resp,
                         account_group_options_resp,
                         account_groups_page_resp,
@@ -3112,6 +3132,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         proxy_config_scope_resp,
                         proxy_config_items,
                         proxy_binding_items,
+                        proxy_traffic_items,
                         keys_resp,
                         account_group_options_resp,
                         account_groups_page_resp,
@@ -3186,6 +3207,14 @@ pub fn admin_llm_gateway_page() -> Html {
                             .and_then(|item| item.bound_proxy_config_id.clone())
                             .unwrap_or_default();
                         proxy_configs.set(proxy_config_items);
+                        proxy_traffic_30d.set(
+                            proxy_traffic_items
+                                .into_iter()
+                                .filter_map(|item| {
+                                    item.proxy_config_id.map(|proxy_id| (proxy_id, item.totals))
+                                })
+                                .collect(),
+                        );
                         proxy_bindings.set(proxy_binding_items);
                         codex_proxy_binding_input.set(codex_bound);
                         kiro_proxy_binding_input.set(kiro_bound);
@@ -7639,6 +7668,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                     <ProxyConfigEditorCard
                                         key={proxy_config.id.clone()}
                                         proxy_config={(*proxy_config).clone()}
+                                        traffic_30d={proxy_traffic_30d.get(&proxy_config.id).copied()}
                                         on_changed={reload.clone()}
                                         on_copy={on_copy.clone()}
                                         on_flash={flash.clone()}

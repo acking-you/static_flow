@@ -1,11 +1,13 @@
 use gloo_timers::callback::Interval;
-use web_sys::HtmlSelectElement;
+use web_sys::{HtmlInputElement, HtmlSelectElement};
 use yew::prelude::*;
 use yew_router::prelude::Link;
 
 use crate::{
     api::{
-        fetch_admin_llm_gateway_usage_metrics, AdminLlmGatewayUsageMetricsDimensionView,
+        fetch_admin_llm_gateway_proxy_traffic, fetch_admin_llm_gateway_usage_metrics,
+        AdminLlmGatewayProxyTrafficPointView, AdminLlmGatewayProxyTrafficQuery,
+        AdminLlmGatewayProxyTrafficResponse, AdminLlmGatewayUsageMetricsDimensionView,
         AdminLlmGatewayUsageMetricsQuery, AdminLlmGatewayUsageMetricsResponse,
         AdminLlmGatewayUsageMetricsStatusCodeView,
     },
@@ -13,7 +15,7 @@ use crate::{
         empty_state::EmptyState,
         loading_spinner::{LoadingSpinner, SpinnerSize},
     },
-    pages::llm_access_shared::format_ms,
+    pages::llm_access_shared::{format_bytes_human, format_ms},
     router::Route,
 };
 
@@ -24,6 +26,9 @@ const WINDOW_24H: &str = "24h";
 const SOURCE_ALL: &str = "all";
 const SOURCE_HOT: &str = "hot";
 const SOURCE_ARCHIVE: &str = "archive";
+const TRAFFIC_BUCKET_5M: &str = "300000";
+const TRAFFIC_BUCKET_1H: &str = "3600000";
+const TRAFFIC_BUCKET_1D: &str = "86400000";
 
 fn format_metric_ms(value: Option<f64>) -> String {
     value
@@ -63,6 +68,15 @@ fn source_label(value: &str) -> String {
     }
 }
 
+fn parse_optional_i64_input(value: &str) -> Option<i64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        trimmed.parse::<i64>().ok()
+    }
+}
+
 #[derive(Properties, PartialEq)]
 struct SummaryCardProps {
     label: AttrValue,
@@ -91,6 +105,72 @@ fn summary_card(props: &SummaryCardProps) -> Html {
             <div class={classes!("mt-1", "text-sm", "text-[var(--muted)]")}>
                 { props.detail.clone() }
             </div>
+        </div>
+    }
+}
+
+#[derive(Properties, PartialEq)]
+struct TrafficTrendChartProps {
+    points: Vec<AdminLlmGatewayProxyTrafficPointView>,
+}
+
+#[function_component(TrafficTrendChart)]
+fn traffic_trend_chart(props: &TrafficTrendChartProps) -> Html {
+    if props.points.is_empty() {
+        return html! {
+            <EmptyState icon="fa-chart-line" title="当前范围没有流量数据。" hint="调整 proxy id、时间范围或数据源。" />
+        };
+    }
+    let max_bytes = props
+        .points
+        .iter()
+        .map(|point| point.total_bytes)
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    let width = 720.0;
+    let height = 220.0;
+    let padding_left = 52.0;
+    let padding_right = 20.0;
+    let padding_top = 18.0;
+    let padding_bottom = 36.0;
+    let plot_width = width - padding_left - padding_right;
+    let plot_height = height - padding_top - padding_bottom;
+    let last_index = props.points.len().saturating_sub(1).max(1) as f64;
+    let polyline = props
+        .points
+        .iter()
+        .enumerate()
+        .map(|(index, point)| {
+            let x = padding_left + (index as f64 / last_index) * plot_width;
+            let y = padding_top + (1.0 - point.total_bytes as f64 / max_bytes as f64) * plot_height;
+            format!("{x:.1},{y:.1}")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let top_label = format_bytes_human(max_bytes);
+    let mid_label = format_bytes_human(max_bytes / 2);
+    let latest = props
+        .points
+        .last()
+        .map(|point| format_bytes_human(point.total_bytes))
+        .unwrap_or_else(|| "0 B".to_string());
+
+    html! {
+        <div class={classes!("rounded-[var(--radius)]", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "p-3")}>
+            <div class={classes!("flex", "items-center", "justify-between", "gap-3", "text-xs", "text-[var(--muted)]")}>
+                <span>{ format!("max {top_label}") }</span>
+                <span>{ format!("latest {latest}") }</span>
+            </div>
+            <svg viewBox="0 0 720 220" class={classes!("mt-2", "block", "w-full", "h-auto")} role="img" aria-label="Proxy traffic trend">
+                <line x1={padding_left.to_string()} y1={padding_top.to_string()} x2={padding_left.to_string()} y2={(height - padding_bottom).to_string()} stroke="var(--border)" stroke-width="1" />
+                <line x1={padding_left.to_string()} y1={(height - padding_bottom).to_string()} x2={(width - padding_right).to_string()} y2={(height - padding_bottom).to_string()} stroke="var(--border)" stroke-width="1" />
+                <line x1={padding_left.to_string()} y1={(padding_top + plot_height / 2.0).to_string()} x2={(width - padding_right).to_string()} y2={(padding_top + plot_height / 2.0).to_string()} stroke="var(--border)" stroke-width="1" stroke-dasharray="4 6" />
+                <text x="6" y={(padding_top + 4.0).to_string()} fill="var(--muted)" font-size="11">{ top_label }</text>
+                <text x="6" y={(padding_top + plot_height / 2.0 + 4.0).to_string()} fill="var(--muted)" font-size="11">{ mid_label }</text>
+                <text x="6" y={(height - padding_bottom + 4.0).to_string()} fill="var(--muted)" font-size="11">{ "0 B" }</text>
+                <polyline points={polyline} fill="none" stroke="rgb(20 184 166)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
         </div>
     }
 }
@@ -236,6 +316,13 @@ pub fn admin_llm_gateway_monitor_page() -> Html {
     let error = use_state(|| None::<String>);
     let snapshot = use_state(AdminLlmGatewayUsageMetricsResponse::default);
     let refresh_tick = use_state(|| 0_u64);
+    let traffic_proxy_id = use_state(String::new);
+    let traffic_start_ms = use_state(String::new);
+    let traffic_end_ms = use_state(String::new);
+    let traffic_bucket_ms = use_state(|| TRAFFIC_BUCKET_1H.to_string());
+    let traffic_loading = use_state(|| false);
+    let traffic_error = use_state(|| None::<String>);
+    let traffic_snapshot = use_state(AdminLlmGatewayProxyTrafficResponse::default);
 
     {
         let refresh_tick = refresh_tick.clone();
@@ -287,6 +374,69 @@ pub fn admin_llm_gateway_monitor_page() -> Html {
         );
     }
 
+    {
+        let proxy_id_value = (*traffic_proxy_id).clone();
+        let start_ms_value = (*traffic_start_ms).clone();
+        let end_ms_value = (*traffic_end_ms).clone();
+        let bucket_ms_value = (*traffic_bucket_ms).clone();
+        let source_value = (*source).clone();
+        let provider_value = (*provider).clone();
+        let refresh_value = *refresh_tick;
+        let traffic_loading = traffic_loading.clone();
+        let traffic_error = traffic_error.clone();
+        let traffic_snapshot = traffic_snapshot.clone();
+        use_effect_with(
+            (
+                proxy_id_value,
+                start_ms_value,
+                end_ms_value,
+                bucket_ms_value,
+                source_value,
+                provider_value,
+                refresh_value,
+            ),
+            move |(
+                proxy_id_value,
+                start_ms_value,
+                end_ms_value,
+                bucket_ms_value,
+                source_value,
+                provider_value,
+                _,
+            )| {
+                traffic_loading.set(true);
+                traffic_error.set(None);
+                let traffic_loading = traffic_loading.clone();
+                let traffic_error = traffic_error.clone();
+                let traffic_snapshot = traffic_snapshot.clone();
+                let query = AdminLlmGatewayProxyTrafficQuery {
+                    proxy_config_id: {
+                        let value = proxy_id_value.trim();
+                        (!value.is_empty()).then(|| value.to_string())
+                    },
+                    provider_type: provider_query_value(provider_value),
+                    source: Some(source_value.clone()),
+                    start_ms: parse_optional_i64_input(start_ms_value),
+                    end_ms: parse_optional_i64_input(end_ms_value),
+                    bucket_ms: parse_optional_i64_input(bucket_ms_value),
+                };
+                wasm_bindgen_futures::spawn_local(async move {
+                    match fetch_admin_llm_gateway_proxy_traffic(&query).await {
+                        Ok(response) => {
+                            traffic_snapshot.set(response);
+                            traffic_loading.set(false);
+                        },
+                        Err(err_msg) => {
+                            traffic_error.set(Some(err_msg));
+                            traffic_loading.set(false);
+                        },
+                    }
+                });
+                || ()
+            },
+        );
+    }
+
     let on_window_change = {
         let window = window.clone();
         Callback::from(move |event: Event| {
@@ -312,8 +462,37 @@ pub fn admin_llm_gateway_monitor_page() -> Html {
         let refresh_tick = refresh_tick.clone();
         Callback::from(move |_| refresh_tick.set((*refresh_tick).saturating_add(1)))
     };
+    let on_traffic_proxy_input = {
+        let traffic_proxy_id = traffic_proxy_id.clone();
+        Callback::from(move |event: InputEvent| {
+            let input: HtmlInputElement = event.target_unchecked_into();
+            traffic_proxy_id.set(input.value());
+        })
+    };
+    let on_traffic_start_input = {
+        let traffic_start_ms = traffic_start_ms.clone();
+        Callback::from(move |event: InputEvent| {
+            let input: HtmlInputElement = event.target_unchecked_into();
+            traffic_start_ms.set(input.value());
+        })
+    };
+    let on_traffic_end_input = {
+        let traffic_end_ms = traffic_end_ms.clone();
+        Callback::from(move |event: InputEvent| {
+            let input: HtmlInputElement = event.target_unchecked_into();
+            traffic_end_ms.set(input.value());
+        })
+    };
+    let on_traffic_bucket_change = {
+        let traffic_bucket_ms = traffic_bucket_ms.clone();
+        Callback::from(move |event: Event| {
+            let input: HtmlSelectElement = event.target_unchecked_into();
+            traffic_bucket_ms.set(input.value());
+        })
+    };
 
     let snapshot_value = (*snapshot).clone();
+    let traffic_snapshot_value = (*traffic_snapshot).clone();
     let provider_badge = snapshot_value
         .provider_type
         .clone()
@@ -465,6 +644,97 @@ pub fn admin_llm_gateway_monitor_page() -> Html {
                         value={format!("{} / {}", snapshot_value.summary.distinct_accounts, snapshot_value.summary.distinct_proxies)}
                         detail="accounts / proxies"
                     />
+                </section>
+
+                <section class={classes!(
+                    "mt-5",
+                    "rounded-[var(--radius)]",
+                    "border",
+                    "border-[var(--border)]",
+                    "bg-[var(--surface)]",
+                    "shadow-[var(--shadow)]",
+                    "p-4"
+                )}>
+                    <div class={classes!("flex", "items-start", "justify-between", "gap-4", "flex-wrap")}>
+                        <div>
+                            <div class={classes!("text-sm", "font-semibold", "text-[var(--foreground)]")}>{ "Proxy Traffic" }</div>
+                            <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
+                                { format!("total {} · request {} · response {} · events {}",
+                                    format_bytes_human(traffic_snapshot_value.totals.total_bytes),
+                                    format_bytes_human(traffic_snapshot_value.totals.request_bytes),
+                                    format_bytes_human(traffic_snapshot_value.totals.response_bytes),
+                                    traffic_snapshot_value.totals.event_count,
+                                ) }
+                            </div>
+                        </div>
+                        <div class={classes!("grid", "gap-2", "sm:grid-cols-2", "xl:grid-cols-5")}>
+                            <label class={classes!("text-xs", "text-[var(--muted)]", "xl:col-span-2")}>
+                                { "Proxy ID" }
+                                <input
+                                    type="text"
+                                    class={classes!("mt-1", "w-full", "rounded-md", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                    value={(*traffic_proxy_id).clone()}
+                                    oninput={on_traffic_proxy_input}
+                                    placeholder="proxy_config_id"
+                                />
+                            </label>
+                            <label class={classes!("text-xs", "text-[var(--muted)]")}>
+                                { "Start ms" }
+                                <input
+                                    type="text"
+                                    class={classes!("mt-1", "w-full", "rounded-md", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                    value={(*traffic_start_ms).clone()}
+                                    oninput={on_traffic_start_input}
+                                    placeholder="default 30d"
+                                />
+                            </label>
+                            <label class={classes!("text-xs", "text-[var(--muted)]")}>
+                                { "End ms" }
+                                <input
+                                    type="text"
+                                    class={classes!("mt-1", "w-full", "rounded-md", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
+                                    value={(*traffic_end_ms).clone()}
+                                    oninput={on_traffic_end_input}
+                                    placeholder="now"
+                                />
+                            </label>
+                            <label class={classes!("text-xs", "text-[var(--muted)]")}>
+                                { "Bucket" }
+                                <select
+                                    class={classes!("mt-1", "w-full", "rounded-md", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm")}
+                                    value={(*traffic_bucket_ms).clone()}
+                                    onchange={on_traffic_bucket_change}
+                                >
+                                    <option value={TRAFFIC_BUCKET_5M}>{ "5m" }</option>
+                                    <option value={TRAFFIC_BUCKET_1H}>{ "1h" }</option>
+                                    <option value={TRAFFIC_BUCKET_1D}>{ "1d" }</option>
+                                </select>
+                            </label>
+                        </div>
+                    </div>
+                    if let Some(error_text) = (*traffic_error).clone() {
+                        <div class={classes!("mt-3", "rounded-[var(--radius)]", "border", "border-red-400/40", "bg-red-500/10", "px-3", "py-2", "text-sm", "text-red-700", "dark:text-red-200")}>
+                            { error_text }
+                        </div>
+                    }
+                    <div class={classes!("mt-4")}>
+                        if *traffic_loading && traffic_snapshot_value.generated_at_ms == 0 {
+                            <LoadingSpinner size={SpinnerSize::Medium} />
+                        } else {
+                            <TrafficTrendChart points={traffic_snapshot_value.points.clone()} />
+                        }
+                    </div>
+                    <div class={classes!("mt-3", "flex", "flex-wrap", "gap-2", "text-xs", "text-[var(--muted)]")}>
+                        <span class={classes!("rounded-full", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-1")}>
+                            { format!("range: {} → {}", format_ms(traffic_snapshot_value.start_ms), format_ms(traffic_snapshot_value.end_ms)) }
+                        </span>
+                        <span class={classes!("rounded-full", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-1")}>
+                            { format!("bucket: {} ms", traffic_snapshot_value.bucket_ms) }
+                        </span>
+                        <span class={classes!("rounded-full", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-1")}>
+                            { format!("proxies: {}", traffic_snapshot_value.proxies.len()) }
+                        </span>
+                    </div>
                 </section>
 
                 <section class={classes!(

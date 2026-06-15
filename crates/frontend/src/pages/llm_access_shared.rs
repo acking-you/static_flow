@@ -76,6 +76,26 @@ pub fn format_ms(ts_ms: i64) -> String {
     )
 }
 
+pub fn format_bytes_human(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64;
+    let mut unit_index = 0usize;
+    while value >= 1024.0 && unit_index + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit_index += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit_index])
+}
+
+pub fn format_optional_bytes_human(bytes: Option<u64>) -> String {
+    bytes
+        .map(format_bytes_human)
+        .unwrap_or_else(|| "-".to_string())
+}
+
 /// Ask the user for confirmation via the browser's native dialog.
 /// Returns false if the user cancels or the dialog can't open (SSR/no window).
 /// Used for destructive actions (delete / purge / revoke) to standardize UX
@@ -205,9 +225,9 @@ pub fn token_usage_missing_label() -> &'static str {
     "token usage unavailable"
 }
 
-/// Tailwind class tuple `(border, bg, text, dark:text)` for a latency badge — maps a
-/// latency value onto a green→red scale. Shared so the admin usage tables and the
-/// public usage lookup render latency identically.
+/// Tailwind class tuple `(border, bg, text, dark:text)` for a latency badge —
+/// maps a latency value onto a green→red scale. Shared so the admin usage
+/// tables and the public usage lookup render latency identically.
 pub type LatencyBadgeColor = (&'static str, &'static str, &'static str, &'static str);
 
 /// Render a latency in milliseconds as `"{n} ms"`, clamping negatives to 0.
@@ -215,9 +235,10 @@ pub fn format_latency_ms(latency_ms: i32) -> String {
     format!("{} ms", latency_ms.max(0))
 }
 
-/// Color scale for **first-token latency (首字延迟 / TTFT)**. This only covers the
-/// window up to the first streamed byte, which stays small even when the upstream is
-/// slow, so the thresholds are tight: `<3s` healthy · `<10s` warning · `>=10s` slow.
+/// Color scale for **first-token latency (首字延迟 / TTFT)**. This only covers
+/// the window up to the first streamed byte, which stays small even when the
+/// upstream is slow, so the thresholds are tight: `<3s` healthy · `<10s`
+/// warning · `>=10s` slow.
 pub fn first_token_latency_color(latency_ms: i32) -> LatencyBadgeColor {
     if latency_ms < 3_000 {
         ("border-emerald-500/20", "bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200")
@@ -229,11 +250,11 @@ pub fn first_token_latency_color(latency_ms: i32) -> LatencyBadgeColor {
 }
 
 /// Color scale for **total request latency (整体延迟)**. This spans the whole
-/// generation, so a streaming reasoning request can legitimately run well over a
-/// minute. The range is therefore much wider than first-token latency and uses five
-/// steps (keeping the original `1 : 3 : 6 : 12` spacing) so the common band still shows
-/// gradient detail: `<8s` emerald · `<24s` lime · `<48s` amber · `<96s` orange ·
-/// `>=96s` red.
+/// generation, so a streaming reasoning request can legitimately run well over
+/// a minute. The range is therefore much wider than first-token latency and
+/// uses five steps (keeping the original `1 : 3 : 6 : 12` spacing) so the
+/// common band still shows gradient detail: `<8s` emerald · `<24s` lime ·
+/// `<48s` amber · `<96s` orange · `>=96s` red.
 pub fn total_latency_color(latency_ms: i32) -> LatencyBadgeColor {
     if latency_ms < 8_000 {
         ("border-emerald-500/20", "bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200")
@@ -450,8 +471,9 @@ fn parse_gpt_model_rank(slug: &str) -> Option<(i32, i32, i32, i32)> {
 mod tests {
     use super::{
         codex_model_catalog_download_command, codex_provider_config, credit_usage_missing_label,
-        first_token_latency_color, format_kiro_disabled_reason, format_latency_ms,
-        preferred_model_slug_from_catalog_json, token_usage_missing_label, total_latency_color,
+        first_token_latency_color, format_bytes_human, format_kiro_disabled_reason,
+        format_latency_ms, preferred_model_slug_from_catalog_json, token_usage_missing_label,
+        total_latency_color,
     };
 
     #[test]
@@ -521,6 +543,14 @@ mod tests {
     fn usage_missing_badge_labels_are_specific() {
         assert_eq!(token_usage_missing_label(), "token usage unavailable");
         assert_eq!(credit_usage_missing_label(), "credit usage unavailable");
+    }
+
+    #[test]
+    fn format_bytes_human_uses_binary_units() {
+        assert_eq!(format_bytes_human(512), "512 B");
+        assert_eq!(format_bytes_human(1536), "1.5 KiB");
+        assert_eq!(format_bytes_human(5 * 1024 * 1024), "5.0 MiB");
+        assert_eq!(format_bytes_human(3 * 1024 * 1024 * 1024), "3.0 GiB");
     }
 
     #[test]

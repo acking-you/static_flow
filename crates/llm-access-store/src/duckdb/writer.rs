@@ -2,7 +2,7 @@
 //! writers and the insert executors.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs,
     io::{Read, Seek, SeekFrom},
     path::Path,
@@ -237,46 +237,63 @@ impl DuckDbUsageWriter {
     /// Insert one usage event row.
     pub fn insert_usage_event(&mut self, row: &UsageEventRow) -> anyhow::Result<()> {
         self.insert_usage_events(std::slice::from_ref(row))
+            .map(|_| ())
     }
 
-    fn insert_usage_event_summaries(&mut self, rows: &[UsageEventRow]) -> anyhow::Result<()> {
+    fn insert_usage_event_summaries(&mut self, rows: &[UsageEventRow]) -> anyhow::Result<usize> {
         if rows.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
         let tx = self.conn.transaction()?;
-        {
+        let inserted_rows = {
+            let mut inserted_rows = Vec::new();
             let mut summary_stmt = tx.prepare(insert_usage_event_sql())?;
             for row in rows {
-                execute_usage_event_insert(&mut summary_stmt, row)?;
+                if execute_usage_event_insert(&mut summary_stmt, row)? > 0 {
+                    inserted_rows.push(row);
+                }
             }
+            inserted_rows
+        };
+        let inserted_count = inserted_rows.len();
+        {
+            upsert_proxy_traffic_rollups(&tx, &inserted_rows)?;
         }
         tx.commit()?;
-        Ok(())
+        Ok(inserted_count)
     }
 
     /// Insert a batch of usage event rows in one transaction.
-    pub fn insert_usage_events(&mut self, rows: &[UsageEventRow]) -> anyhow::Result<()> {
+    pub fn insert_usage_events(&mut self, rows: &[UsageEventRow]) -> anyhow::Result<usize> {
         if rows.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
         let tx = self.conn.transaction()?;
-        {
+        let inserted_rows = {
+            let mut inserted_rows = Vec::new();
             let mut summary_stmt = tx.prepare(insert_usage_event_sql())?;
             let mut detail_stmt = tx.prepare(insert_usage_event_detail_sql())?;
             for row in rows {
-                execute_usage_event_insert(&mut summary_stmt, row)?;
+                if execute_usage_event_insert(&mut summary_stmt, row)? > 0 {
+                    inserted_rows.push(row);
+                }
                 execute_usage_event_detail_insert(&mut detail_stmt, row)?;
             }
+            inserted_rows
+        };
+        let inserted_count = inserted_rows.len();
+        {
+            upsert_proxy_traffic_rollups(&tx, &inserted_rows)?;
         }
         tx.commit()?;
-        Ok(())
+        Ok(inserted_count)
     }
 
     /// Insert only the summary projection for a batch of usage events.
     pub fn insert_usage_event_summaries_only(
         &mut self,
         rows: &[UsageEventRow],
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<usize> {
         self.insert_usage_event_summaries(rows)
     }
 }
@@ -301,18 +318,17 @@ impl HotUsageWriter {
     pub(super) async fn insert_usage_events(
         &mut self,
         rows: &[UsageEventRow],
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<usize> {
         if let Some(detail_store) = &self.detail_store {
             let mut rows = rows.to_vec();
             let pack = detail_store.prepare_pack(&mut rows)?;
-            self.summary.insert_usage_event_summaries(&rows)?;
+            let inserted_count = self.summary.insert_usage_event_summaries(&rows)?;
             if let Some(pack) = pack {
                 detail_store.put_pack(pack).await?;
             }
-            return Ok(());
+            return Ok(inserted_count);
         }
-        self.summary.insert_usage_event_summaries(rows)?;
-        Ok(())
+        self.summary.insert_usage_event_summaries(rows)
     }
 }
 #[cfg(feature = "duckdb-runtime")]
@@ -328,12 +344,153 @@ impl PersistentUsageWriter {
         })
     }
 }
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ProxyTrafficRollupKey {
+    bucket_hour_ms: i64,
+    provider_type: String,
+    proxy_key: String,
+    proxy_source: Option<String>,
+    proxy_config_id: Option<String>,
+    proxy_config_name: Option<String>,
+    proxy_url: Option<String>,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+#[derive(Debug, Clone, Copy, Default)]
+struct ProxyTrafficRollupDelta {
+    request_count: i64,
+    request_bytes: i64,
+    response_bytes: i64,
+    total_bytes: i64,
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn upsert_proxy_traffic_rollups(
+    tx: &duckdb::Transaction<'_>,
+    rows: &[&UsageEventRow],
+) -> anyhow::Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut rollups = HashMap::<ProxyTrafficRollupKey, ProxyTrafficRollupDelta>::new();
+    for row in rows {
+        let request_bytes = non_negative_i64(row.request_body_bytes);
+        let response_bytes = non_negative_i64(row.bytes_streamed);
+        let key = ProxyTrafficRollupKey {
+            bucket_hour_ms: bucket_hour_ms(row.created_at_ms),
+            provider_type: row.provider_type.clone(),
+            proxy_key: proxy_traffic_key(
+                row.proxy_config_id_at_event.as_deref(),
+                row.proxy_url_at_event.as_deref(),
+                row.proxy_source_at_event.as_deref(),
+            ),
+            proxy_source: normalize_optional_string(row.proxy_source_at_event.as_deref()),
+            proxy_config_id: normalize_optional_string(row.proxy_config_id_at_event.as_deref()),
+            proxy_config_name: normalize_optional_string(row.proxy_config_name_at_event.as_deref()),
+            proxy_url: normalize_optional_string(row.proxy_url_at_event.as_deref()),
+        };
+        let delta = rollups.entry(key).or_default();
+        delta.request_count = delta.request_count.saturating_add(1);
+        delta.request_bytes = delta.request_bytes.saturating_add(request_bytes);
+        delta.response_bytes = delta.response_bytes.saturating_add(response_bytes);
+        delta.total_bytes = delta
+            .total_bytes
+            .saturating_add(request_bytes.saturating_add(response_bytes));
+    }
+    let mut stmt = tx.prepare(
+        "INSERT INTO proxy_traffic_rollups_hourly (
+            bucket_hour,
+            provider_type,
+            proxy_key,
+            proxy_source,
+            proxy_config_id,
+            proxy_config_name,
+            proxy_url,
+            request_count,
+            request_bytes,
+            response_bytes,
+            total_bytes
+         ) VALUES (
+            date_trunc('hour', to_timestamp(?1 / 1000.0)),
+            ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+         )
+         ON CONFLICT (bucket_hour, provider_type, proxy_key) DO UPDATE SET
+            request_count = proxy_traffic_rollups_hourly.request_count + excluded.request_count,
+            request_bytes = proxy_traffic_rollups_hourly.request_bytes + excluded.request_bytes,
+            response_bytes = proxy_traffic_rollups_hourly.response_bytes + excluded.response_bytes,
+            total_bytes = proxy_traffic_rollups_hourly.total_bytes + excluded.total_bytes,
+            proxy_source = COALESCE(excluded.proxy_source, \
+         proxy_traffic_rollups_hourly.proxy_source),
+            proxy_config_id = COALESCE(excluded.proxy_config_id, \
+         proxy_traffic_rollups_hourly.proxy_config_id),
+            proxy_config_name = COALESCE(excluded.proxy_config_name, \
+         proxy_traffic_rollups_hourly.proxy_config_name),
+            proxy_url = COALESCE(excluded.proxy_url, proxy_traffic_rollups_hourly.proxy_url)",
+    )?;
+    for (key, delta) in rollups {
+        stmt.execute(duckdb::params![
+            key.bucket_hour_ms,
+            &key.provider_type,
+            &key.proxy_key,
+            key.proxy_source.as_deref(),
+            key.proxy_config_id.as_deref(),
+            key.proxy_config_name.as_deref(),
+            key.proxy_url.as_deref(),
+            delta.request_count,
+            delta.request_bytes,
+            delta.response_bytes,
+            delta.total_bytes,
+        ])?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn non_negative_i64(value: Option<i64>) -> i64 {
+    value.unwrap_or(0).max(0)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn bucket_hour_ms(created_at_ms: i64) -> i64 {
+    created_at_ms
+        .div_euclid(3_600_000)
+        .saturating_mul(3_600_000)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn normalize_optional_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn proxy_traffic_key(
+    proxy_config_id: Option<&str>,
+    proxy_url: Option<&str>,
+    proxy_source: Option<&str>,
+) -> String {
+    if let Some(value) = normalize_optional_string(proxy_config_id) {
+        return format!("proxy:id:{value}");
+    }
+    if let Some(value) = normalize_optional_string(proxy_url) {
+        return format!("proxy:url:{value}");
+    }
+    if let Some(value) = normalize_optional_string(proxy_source) {
+        return format!("proxy:source:{value}");
+    }
+    "proxy:unknown".to_string()
+}
+
 #[cfg(feature = "duckdb-runtime")]
 fn execute_usage_event_insert(
     stmt: &mut duckdb::Statement<'_>,
     row: &UsageEventRow,
-) -> anyhow::Result<()> {
-    stmt.execute(duckdb::params![
+) -> anyhow::Result<usize> {
+    let inserted = stmt.execute(duckdb::params![
         row.source_seq,
         &row.source_event_id,
         &row.event_id,
@@ -389,7 +546,7 @@ fn execute_usage_event_insert(
         row.proxy_config_name_at_event.as_deref(),
         row.proxy_url_at_event.as_deref(),
     ])?;
-    Ok(())
+    Ok(inserted)
 }
 #[cfg(feature = "duckdb-runtime")]
 fn execute_usage_event_detail_insert(

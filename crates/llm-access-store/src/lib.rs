@@ -105,6 +105,7 @@ mod tests {
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS usage_event_details"));
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS usage_rollups_hourly"));
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS usage_rollups_daily"));
+        assert!(schema.contains("CREATE TABLE IF NOT EXISTS proxy_traffic_rollups_hourly"));
         assert!(!schema.contains("cdc_"));
         assert!(!schema.contains("CREATE INDEX IF NOT EXISTS idx_usage_events"));
         assert!(!schema.contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_events"));

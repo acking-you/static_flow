@@ -25,6 +25,11 @@ const DUCKDB_MIGRATIONS: &[SqlMigration] = &[
         name: "drop_explicit_art_indexes",
         sql: include_str!("../migrations/duckdb/0002_drop_explicit_art_indexes.sql"),
     },
+    SqlMigration {
+        version: 3,
+        name: "proxy_traffic_rollups",
+        sql: include_str!("../migrations/duckdb/0003_proxy_traffic_rollups.sql"),
+    },
 ];
 
 const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
@@ -197,7 +202,7 @@ mod tests {
     fn duckdb_migrations_drop_legacy_explicit_art_indexes() {
         let migrations = super::duckdb_migrations();
 
-        assert_eq!(migrations.len(), 2);
+        assert_eq!(migrations.len(), 3);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(migrations[0].name, "init");
         assert!(!migrations[0]
@@ -211,6 +216,11 @@ mod tests {
         assert!(migrations[1]
             .sql
             .contains("DROP INDEX IF EXISTS idx_usage_events_source_event_id"));
+        assert_eq!(migrations[2].version, 3);
+        assert_eq!(migrations[2].name, "proxy_traffic_rollups");
+        assert!(migrations[2]
+            .sql
+            .contains("CREATE TABLE IF NOT EXISTS proxy_traffic_rollups_hourly"));
         assert!(!super::duckdb_schema_sql().contains("cdc_"));
     }
 

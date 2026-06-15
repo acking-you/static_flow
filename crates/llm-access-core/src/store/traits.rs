@@ -42,8 +42,9 @@ use super::{
     },
     usage::{
         AdminLegacyKiroProxyMigration, KiroLatencyRankingQuery, KiroLatencyRankingSnapshot,
-        UsageChartPoint, UsageEventPage, UsageEventQuery, UsageFilterOptions, UsageMetricsQuery,
-        UsageMetricsSnapshot, UsageRollupApplyReport, UsageRollupBatch,
+        ProxyTrafficQuery, ProxyTrafficSnapshot, UsageChartPoint, UsageEventPage, UsageEventQuery,
+        UsageFilterOptions, UsageMetricsQuery, UsageMetricsSnapshot, UsageRollupApplyReport,
+        UsageRollupBatch,
     },
 };
 use crate::usage::UsageEvent;
@@ -210,6 +211,12 @@ pub trait UsageAnalyticsStore: Send + Sync {
         &self,
         query: UsageMetricsQuery,
     ) -> anyhow::Result<UsageMetricsSnapshot>;
+
+    /// Return one proxy traffic snapshot.
+    async fn proxy_traffic_snapshot(
+        &self,
+        query: ProxyTrafficQuery,
+    ) -> anyhow::Result<ProxyTrafficSnapshot>;
 
     /// Return the compact Kiro latency snapshot used by API-side routing.
     async fn kiro_latency_ranking_snapshot(

@@ -80,11 +80,12 @@ pub use traits::{
 };
 pub use usage::{
     AdminLegacyKiroProxyMigration, KeyUsageRollupDelta, KeyUsageRollupLastUsedCount,
-    KiroLatencyRankingQuery, KiroLatencyRankingRow, KiroLatencyRankingSnapshot, UsageChartPoint,
-    UsageEventPage, UsageEventQuery, UsageEventSource, UsageEventStatusKind, UsageEventTotals,
-    UsageFilterOptions, UsageMetricsDimensionView, UsageMetricsQuery, UsageMetricsSnapshot,
-    UsageMetricsStatusCodeView, UsageMetricsSummary, UsageRollupApplyReport, UsageRollupBatch,
-    UsageRollupDigestMismatch,
+    KiroLatencyRankingQuery, KiroLatencyRankingRow, KiroLatencyRankingSnapshot, ProxyTrafficPoint,
+    ProxyTrafficProxySummary, ProxyTrafficQuery, ProxyTrafficSnapshot, ProxyTrafficTotals,
+    UsageChartPoint, UsageEventPage, UsageEventQuery, UsageEventSource, UsageEventStatusKind,
+    UsageEventTotals, UsageFilterOptions, UsageMetricsDimensionView, UsageMetricsQuery,
+    UsageMetricsSnapshot, UsageMetricsStatusCodeView, UsageMetricsSummary, UsageRollupApplyReport,
+    UsageRollupBatch, UsageRollupDigestMismatch,
 };
 
 /// Default public auth-cache TTL used when no runtime config row exists yet.

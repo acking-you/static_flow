@@ -12,8 +12,9 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use llm_access_core::{
     store::{
-        KiroLatencyRankingQuery, KiroLatencyRankingSnapshot, UsageAnalyticsStore, UsageChartPoint,
-        UsageEventPage, UsageEventQuery, UsageEventSink, UsageFilterOptions, UsageMetricsQuery,
+        KiroLatencyRankingQuery, KiroLatencyRankingSnapshot, ProxyTrafficQuery,
+        ProxyTrafficSnapshot, UsageAnalyticsStore, UsageChartPoint, UsageEventPage,
+        UsageEventQuery, UsageEventSink, UsageFilterOptions, UsageMetricsQuery,
         UsageMetricsSnapshot,
     },
     usage::UsageEvent,
@@ -34,6 +35,7 @@ use super::{
         kiro_latency_ranking_snapshot_from_path, kiro_latency_ranking_snapshot_from_tiered,
         usage_metrics_snapshot_from_path, usage_metrics_snapshot_from_tiered,
     },
+    proxy_traffic::{proxy_traffic_snapshot_from_path, proxy_traffic_snapshot_from_tiered},
     query::{
         get_usage_event_from_path, get_usage_event_from_tiered, list_usage_events_from_path,
         list_usage_events_from_tiered, list_usage_filter_options_from_path,
@@ -323,7 +325,11 @@ impl DuckDbUsageRepository {
                             &mut state,
                             connection_config_snapshot(connection_config),
                         )?;
-                        writer.writer.summary.insert_usage_events(&deduped)
+                        writer
+                            .writer
+                            .summary
+                            .insert_usage_events(&deduped)
+                            .map(|_| ())
                     },
                     _ => unreachable!("single branch expected"),
                 })
@@ -547,6 +553,33 @@ impl UsageAnalyticsStore for DuckDbUsageRepository {
         })
         .await
         .context("duckdb usage metrics task failed")?
+    }
+
+    async fn proxy_traffic_snapshot(
+        &self,
+        query: ProxyTrafficQuery,
+    ) -> anyhow::Result<ProxyTrafficSnapshot> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || match inner.as_ref() {
+            DuckDbUsageRepositoryInner::Single {
+                state, ..
+            } => {
+                let path = {
+                    let state = state
+                        .lock()
+                        .map_err(|_| anyhow!("single duckdb state lock poisoned"))?;
+                    state.path.clone()
+                };
+                proxy_traffic_snapshot_from_path(&path, &query)
+            },
+            DuckDbUsageRepositoryInner::Tiered {
+                state,
+                catalog_backend,
+                ..
+            } => proxy_traffic_snapshot_from_tiered(state, catalog_backend.as_ref(), &query),
+        })
+        .await
+        .context("duckdb proxy traffic task failed")?
     }
 
     async fn kiro_latency_ranking_snapshot(

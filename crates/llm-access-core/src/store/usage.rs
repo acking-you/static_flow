@@ -332,6 +332,113 @@ pub struct UsageChartPoint {
     pub tokens: u64,
 }
 
+/// Query for per-proxy traffic analytics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProxyTrafficQuery {
+    /// Optional exact proxy config id filter.
+    pub proxy_config_id: Option<String>,
+    /// Optional provider filter.
+    pub provider_type: Option<String>,
+    /// Physical usage-event source.
+    pub source: UsageEventSource,
+    /// Inclusive lower timestamp bound in Unix milliseconds.
+    pub start_ms: i64,
+    /// Exclusive upper timestamp bound in Unix milliseconds.
+    pub end_ms: i64,
+    /// Chart bucket width in milliseconds.
+    pub bucket_ms: i64,
+}
+
+/// Traffic totals using usage-event body-size fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ProxyTrafficTotals {
+    /// Number of usage events represented by this aggregate.
+    pub event_count: u64,
+    /// Sum of request body bytes.
+    pub request_bytes: u64,
+    /// Sum of streamed response body bytes.
+    pub response_bytes: u64,
+    /// Sum of request and response bytes.
+    pub total_bytes: u64,
+}
+
+impl ProxyTrafficTotals {
+    /// Add another traffic aggregate.
+    pub fn add_assign(&mut self, other: Self) {
+        self.event_count = self.event_count.saturating_add(other.event_count);
+        self.request_bytes = self.request_bytes.saturating_add(other.request_bytes);
+        self.response_bytes = self.response_bytes.saturating_add(other.response_bytes);
+        self.total_bytes = self.total_bytes.saturating_add(other.total_bytes);
+    }
+}
+
+/// One traffic chart bucket.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProxyTrafficPoint {
+    /// Bucket start timestamp in Unix milliseconds.
+    pub bucket_start_ms: i64,
+    /// Number of usage events represented by this bucket.
+    pub event_count: u64,
+    /// Sum of request body bytes.
+    pub request_bytes: u64,
+    /// Sum of streamed response body bytes.
+    pub response_bytes: u64,
+    /// Sum of request and response bytes.
+    pub total_bytes: u64,
+}
+
+impl ProxyTrafficPoint {
+    /// Add traffic totals into this point.
+    pub fn add_totals(&mut self, totals: ProxyTrafficTotals) {
+        self.event_count = self.event_count.saturating_add(totals.event_count);
+        self.request_bytes = self.request_bytes.saturating_add(totals.request_bytes);
+        self.response_bytes = self.response_bytes.saturating_add(totals.response_bytes);
+        self.total_bytes = self.total_bytes.saturating_add(totals.total_bytes);
+    }
+}
+
+/// Per-proxy traffic aggregate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProxyTrafficProxySummary {
+    /// Stable grouping key.
+    pub proxy_key: String,
+    /// Proxy config id when known.
+    pub proxy_config_id: Option<String>,
+    /// Proxy config name when known.
+    pub proxy_config_name: Option<String>,
+    /// Proxy URL when known.
+    pub proxy_url: Option<String>,
+    /// Proxy source (`fixed`, `binding`, `none`, ...).
+    pub proxy_source: Option<String>,
+    /// Traffic totals for this proxy.
+    pub totals: ProxyTrafficTotals,
+}
+
+/// Full per-proxy traffic snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProxyTrafficSnapshot {
+    /// Generation timestamp in Unix milliseconds.
+    pub generated_at_ms: i64,
+    /// Inclusive lower timestamp bound in Unix milliseconds.
+    pub start_ms: i64,
+    /// Exclusive upper timestamp bound in Unix milliseconds.
+    pub end_ms: i64,
+    /// Effective provider filter.
+    pub provider_type: Option<String>,
+    /// Effective usage source.
+    pub source: UsageEventSource,
+    /// Effective proxy config id filter.
+    pub proxy_config_id: Option<String>,
+    /// Effective bucket width in milliseconds.
+    pub bucket_ms: i64,
+    /// Window totals.
+    pub totals: ProxyTrafficTotals,
+    /// Time-series totals.
+    pub points: Vec<ProxyTrafficPoint>,
+    /// Per-proxy totals.
+    pub proxies: Vec<ProxyTrafficProxySummary>,
+}
+
 /// Result of migrating legacy embedded Kiro proxy fields into shared proxy
 /// configs.
 #[derive(Debug, Clone, PartialEq, Eq)]
