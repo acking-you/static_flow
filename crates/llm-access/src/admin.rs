@@ -45,7 +45,7 @@ use llm_usage_journal::{
 use lru::LruCache;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::{
     activity::RequestActivitySnapshot,
@@ -68,6 +68,8 @@ const MAX_RUNTIME_STATUS_ACCOUNT_JITTER_SECONDS: u64 = 60;
 const MAX_RUNTIME_CODEX_AFFINITY_MAX_ENTRIES: u64 = 1_000_000;
 const MAX_RUNTIME_CODEX_AFFINITY_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
 const MAX_RUNTIME_CODEX_FALLBACK_PREFIX_BYTES: u64 = 1024 * 1024;
+const ADMIN_USAGE_QUERY_GATE_WAIT: Duration = Duration::from_secs(10);
+const USAGE_WORKER_QUERY_TIMEOUT: Duration = Duration::from_secs(60);
 const MIN_RUNTIME_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 1;
 const MAX_RUNTIME_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 16_384;
 const MIN_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 1;
@@ -1462,7 +1464,7 @@ pub(crate) async fn list_llm_gateway_usage_events(
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    let _permit = match acquire_admin_usage_query_permit(&state) {
+    let _permit = match acquire_admin_usage_query_permit(&state).await {
         Ok(permit) => permit,
         Err(response) => return response.into_response(),
     };
@@ -1477,7 +1479,7 @@ pub(crate) async fn get_llm_gateway_usage_filter_options(
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    let _permit = match acquire_admin_usage_query_permit(&state) {
+    let _permit = match acquire_admin_usage_query_permit(&state).await {
         Ok(permit) => permit,
         Err(response) => return response.into_response(),
     };
@@ -1492,7 +1494,7 @@ pub(crate) async fn get_llm_gateway_usage_metrics(
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    let _permit = match acquire_admin_usage_query_permit(&state) {
+    let _permit = match acquire_admin_usage_query_permit(&state).await {
         Ok(permit) => permit,
         Err(response) => return response.into_response(),
     };
@@ -1507,7 +1509,7 @@ pub(crate) async fn get_llm_gateway_proxy_traffic(
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    let _permit = match acquire_admin_usage_query_permit(&state) {
+    let _permit = match acquire_admin_usage_query_permit(&state).await {
         Ok(permit) => permit,
         Err(response) => return response.into_response(),
     };
@@ -1524,7 +1526,7 @@ pub(crate) async fn get_llm_gateway_usage_event(
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    let _permit = match acquire_admin_usage_query_permit(&state) {
+    let _permit = match acquire_admin_usage_query_permit(&state).await {
         Ok(permit) => permit,
         Err(response) => return response.into_response(),
     };
@@ -1625,7 +1627,7 @@ pub(crate) async fn get_usage_journal_preview(
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    let _permit = match acquire_admin_usage_query_permit(&state) {
+    let _permit = match acquire_admin_usage_query_permit(&state).await {
         Ok(permit) => permit,
         Err(response) => return response.into_response(),
     };
@@ -2459,7 +2461,7 @@ pub(crate) async fn list_admin_kiro_usage_events(
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    let _permit = match acquire_admin_usage_query_permit(&state) {
+    let _permit = match acquire_admin_usage_query_permit(&state).await {
         Ok(permit) => permit,
         Err(response) => return response.into_response(),
     };
@@ -2476,7 +2478,7 @@ pub(crate) async fn get_admin_kiro_usage_event(
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    let _permit = match acquire_admin_usage_query_permit(&state) {
+    let _permit = match acquire_admin_usage_query_permit(&state).await {
         Ok(permit) => permit,
         Err(response) => return response.into_response(),
     };
@@ -4308,12 +4310,19 @@ fn normalize_review_queue_query(
     }
 }
 
-fn acquire_admin_usage_query_permit(
+async fn acquire_admin_usage_query_permit(
     state: &HttpState,
 ) -> Result<OwnedSemaphorePermit, AdminHttpError> {
-    std::sync::Arc::clone(&state.admin_usage_query_gate)
-        .try_acquire_owned()
-        .map_err(|_| too_many_requests("Another admin usage query is already running"))
+    acquire_admin_usage_query_permit_from_gate(&state.admin_usage_query_gate).await
+}
+
+async fn acquire_admin_usage_query_permit_from_gate(
+    gate: &std::sync::Arc<Semaphore>,
+) -> Result<OwnedSemaphorePermit, AdminHttpError> {
+    tokio::time::timeout(ADMIN_USAGE_QUERY_GATE_WAIT, std::sync::Arc::clone(gate).acquire_owned())
+        .await
+        .map_err(|_| too_many_requests("Another admin usage query is already running"))?
+        .map_err(|_| internal_error("Admin usage query gate is closed"))
 }
 
 fn producer_journal_status(state: &HttpState) -> anyhow::Result<JournalStatusSnapshot> {
@@ -4694,7 +4703,12 @@ async fn proxy_usage_query_with_activity(
         .map(|value| value.as_str())
         .unwrap_or(uri.path());
     let url = format!("{base}{path_and_query}");
-    let response = match reqwest::Client::new().get(&url).send().await {
+    let response = match reqwest::Client::new()
+        .get(&url)
+        .timeout(USAGE_WORKER_QUERY_TIMEOUT)
+        .send()
+        .await
+    {
         Ok(response) => response,
         Err(err) => {
             tracing::warn!(url = %url, "usage worker query proxy failed: {err:#}");
@@ -7511,6 +7525,25 @@ mod tests {
         assert_eq!(updated.usage_analytics_retention_days, 14);
         assert_eq!(updated.usage_query_bind_addr, "127.0.0.1:19091");
         assert_eq!(updated.usage_query_base_url, "http://127.0.0.1:19091");
+    }
+
+    #[tokio::test]
+    async fn admin_usage_query_permit_waits_for_short_overlap() {
+        let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let first = std::sync::Arc::clone(&gate)
+            .acquire_owned()
+            .await
+            .expect("first permit");
+
+        let waiter = {
+            let gate = std::sync::Arc::clone(&gate);
+            tokio::spawn(async move { acquire_admin_usage_query_permit_from_gate(&gate).await })
+        };
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        drop(first);
+
+        let second = waiter.await.expect("waiter task");
+        assert!(second.is_ok(), "second permit should wait instead of returning 429");
     }
 
     #[test]
