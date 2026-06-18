@@ -1470,12 +1470,16 @@ pub(crate) async fn refresh_llm_gateway_proxy_traffic(
     };
     let query =
         proxy_traffic_refresh_query(&proxy_id, config.usage_analytics_retention_days, now_ms());
-    let snapshot =
-        match fetch_usage_worker_proxy_traffic_snapshot(&config.usage_query_base_url, &query).await
-        {
-            Ok(snapshot) => snapshot,
-            Err(err) => return err.into_response(),
-        };
+    let snapshot = match fetch_usage_worker_proxy_traffic_snapshot(
+        &state.admin_usage_http_client,
+        &config.usage_query_base_url,
+        &query,
+    )
+    .await
+    {
+        Ok(snapshot) => snapshot,
+        Err(err) => return err.into_response(),
+    };
     let retention_days = proxy_traffic_refresh_window_days(config.usage_analytics_retention_days);
     let traffic_snapshot = core_store::AdminProxyTrafficSnapshot {
         refreshed_at_ms: snapshot.generated_at_ms,
@@ -4876,6 +4880,7 @@ fn align_up_ms(value: i64, step_ms: i64) -> i64 {
 }
 
 async fn fetch_usage_worker_proxy_traffic_snapshot(
+    client: &reqwest::Client,
     usage_query_base_url: &str,
     query: &core_store::ProxyTrafficQuery,
 ) -> Result<core_store::ProxyTrafficSnapshot, AdminHttpError> {
@@ -4892,7 +4897,7 @@ async fn fetch_usage_worker_proxy_traffic_snapshot(
         serializer.finish()
     };
     let url = format!("{base}/admin/llm-gateway/usage/proxy-traffic?{}", query_string);
-    let response = reqwest::Client::new()
+    let response = client
         .get(&url)
         .timeout(USAGE_WORKER_QUERY_TIMEOUT)
         .send()

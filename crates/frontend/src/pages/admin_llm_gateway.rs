@@ -364,7 +364,7 @@ fn proxy_traffic_snapshot_badge(snapshot: Option<&AdminProxyTrafficSnapshotView>
             proxy_traffic_window_label(snapshot.retention_days),
             format_optional_bytes(Some(snapshot.totals.total_bytes))
         ),
-        None => "流量未计算".to_string(),
+        None => "traffic not calculated".to_string(),
     }
 }
 
@@ -2186,12 +2186,12 @@ fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
                 match refresh_admin_llm_gateway_proxy_traffic(&proxy_id).await {
                     Ok(response) => {
                         traffic_snapshot.set(Some(response.traffic_snapshot));
-                        feedback.set(Some("流量已刷新".to_string()));
-                        on_flash.emit(("已刷新代理流量".to_string(), false));
+                        feedback.set(Some("Traffic refreshed".to_string()));
+                        on_flash.emit(("Refreshed proxy traffic".to_string(), false));
                     },
                     Err(err) => {
                         feedback.set(Some(err.clone()));
-                        on_flash.emit((format!("刷新代理流量失败\n{err}"), true));
+                        on_flash.emit((format!("Failed to refresh proxy traffic\n{err}"), true));
                     },
                 }
                 refreshing_traffic.set(false);
@@ -2364,7 +2364,7 @@ fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
                     onclick={on_refresh_traffic}
                     disabled={*refreshing_traffic}
                 >
-                    { if *refreshing_traffic { "计算中..." } else { "刷新流量" } }
+                    { if *refreshing_traffic { "Calculating..." } else { "Refresh Traffic" } }
                 </button>
                 <button
                     class={classes!("btn-terminal")}
@@ -9923,7 +9923,7 @@ mod tests {
 
     #[test]
     fn proxy_traffic_snapshot_helpers_show_uncalculated_and_persisted_badge_state() {
-        assert_eq!(proxy_traffic_snapshot_badge(None), "流量未计算");
+        assert_eq!(proxy_traffic_snapshot_badge(None), "traffic not calculated");
         assert_eq!(proxy_traffic_snapshot_meta(None), "traffic not calculated");
 
         let snapshot = AdminProxyTrafficSnapshotView {

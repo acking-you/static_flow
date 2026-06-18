@@ -89,6 +89,9 @@ impl PostgresControlRepository {
         &self,
         proxies: &mut [AdminProxyConfig],
     ) -> anyhow::Result<()> {
+        if proxies.is_empty() {
+            return Ok(());
+        }
         let snapshots = self.list_proxy_traffic_snapshots().await?;
         for proxy in proxies {
             proxy.traffic_snapshot = snapshots.get(&proxy.id).cloned();
