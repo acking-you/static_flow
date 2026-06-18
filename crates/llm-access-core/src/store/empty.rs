@@ -28,7 +28,7 @@ use super::{
     },
     proxy::{
         default_proxy_binding, default_proxy_bindings, AdminProxyBinding, AdminProxyConfig,
-        AdminProxyConfigPatch, NewAdminProxyConfig,
+        AdminProxyConfigPatch, AdminProxyTrafficSnapshot, NewAdminProxyConfig,
     },
     public::{
         AdminAccountContributionRequest, AdminAccountContributionRequestsPage,
@@ -479,7 +479,16 @@ impl AdminProxyStore for EmptyAdminProxyStore {
             can_edit_slot_metadata: true,
             latest_codex_check: None,
             latest_kiro_check: None,
+            traffic_snapshot: None,
         })
+    }
+
+    async fn record_admin_proxy_traffic_snapshot(
+        &self,
+        _proxy_id: &str,
+        _snapshot: AdminProxyTrafficSnapshot,
+    ) -> anyhow::Result<Option<AdminProxyConfig>> {
+        Ok(None)
     }
 
     async fn patch_admin_proxy_config(

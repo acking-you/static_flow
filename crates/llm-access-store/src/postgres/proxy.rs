@@ -8,11 +8,12 @@ use async_trait::async_trait;
 use llm_access_core::store::{
     self as core_store, default_proxy_bindings, AdminLegacyKiroProxyMigration, AdminProxyBinding,
     AdminProxyConfig, AdminProxyConfigPatch, AdminProxyEndpointCheckUpdate, AdminProxyStore,
-    NewAdminProxyConfig,
+    AdminProxyTrafficSnapshot, NewAdminProxyConfig, ProxyTrafficTotals,
 };
 
 use super::{
     decode::{decode_admin_proxy_config_row, decode_proxy_endpoint_check_row},
+    json::non_negative_i64_to_u64,
     now_ms,
     proxy_support::{
         apply_proxy_config_node_override, apply_proxy_endpoint_checks,
@@ -43,10 +44,67 @@ impl PostgresControlRepository {
             .collect())
     }
 
+    async fn list_proxy_traffic_snapshots(
+        &self,
+    ) -> anyhow::Result<BTreeMap<String, AdminProxyTrafficSnapshot>> {
+        self.ensure_connection_alive()?;
+        let rows = self
+            .client
+            .query(
+                "SELECT proxy_config_id, refreshed_at_ms, window_start_ms, window_end_ms,
+                    retention_days, event_count, request_bytes, response_bytes, total_bytes
+                 FROM llm_proxy_config_traffic_snapshots",
+                &[],
+            )
+            .await
+            .context("list proxy traffic snapshots")?;
+        let mut snapshots = BTreeMap::new();
+        for row in rows {
+            let proxy_config_id: String = row.get(0);
+            snapshots.insert(proxy_config_id, decode_proxy_traffic_snapshot_row(&row)?);
+        }
+        Ok(snapshots)
+    }
+
+    async fn get_proxy_traffic_snapshot(
+        &self,
+        proxy_id: &str,
+    ) -> anyhow::Result<Option<AdminProxyTrafficSnapshot>> {
+        self.ensure_connection_alive()?;
+        self.client
+            .query_opt(
+                "SELECT proxy_config_id, refreshed_at_ms, window_start_ms, window_end_ms,
+                    retention_days, event_count, request_bytes, response_bytes, total_bytes
+                 FROM llm_proxy_config_traffic_snapshots
+                 WHERE proxy_config_id = $1",
+                &[&proxy_id],
+            )
+            .await
+            .context("load proxy traffic snapshot")?
+            .map(|row| decode_proxy_traffic_snapshot_row(&row))
+            .transpose()
+    }
+
+    async fn apply_proxy_traffic_snapshots_to_configs(
+        &self,
+        proxies: &mut [AdminProxyConfig],
+    ) -> anyhow::Result<()> {
+        if proxies.is_empty() {
+            return Ok(());
+        }
+        let snapshots = self.list_proxy_traffic_snapshots().await?;
+        for proxy in proxies {
+            proxy.traffic_snapshot = snapshots.get(&proxy.id).cloned();
+        }
+        Ok(())
+    }
+
     pub(super) async fn list_admin_proxy_configs_rows(
         &self,
     ) -> anyhow::Result<Vec<AdminProxyConfig>> {
         let mut proxies = self.list_admin_proxy_config_base_rows().await?;
+        self.apply_proxy_traffic_snapshots_to_configs(&mut proxies)
+            .await?;
         if self.proxy_scope.can_edit_slot_metadata() {
             for proxy in &mut proxies {
                 self.apply_proxy_scope_metadata(proxy, "core", false);
@@ -97,6 +155,7 @@ impl PostgresControlRepository {
         };
         if self.proxy_scope.can_edit_slot_metadata() {
             self.apply_proxy_scope_metadata(&mut proxy, "core", false);
+            proxy.traffic_snapshot = self.get_proxy_traffic_snapshot(proxy_id).await?;
             self.apply_proxy_endpoint_checks_to_config(&mut proxy)
                 .await?;
             return Ok(Some(proxy));
@@ -108,6 +167,7 @@ impl PostgresControlRepository {
             },
             None => self.apply_proxy_scope_metadata(&mut proxy, "core", false),
         }
+        proxy.traffic_snapshot = self.get_proxy_traffic_snapshot(proxy_id).await?;
         self.apply_proxy_endpoint_checks_to_config(&mut proxy)
             .await?;
         Ok(Some(proxy))
@@ -574,6 +634,62 @@ impl AdminProxyStore for PostgresControlRepository {
             .await
     }
 
+    async fn record_admin_proxy_traffic_snapshot(
+        &self,
+        proxy_id: &str,
+        snapshot: AdminProxyTrafficSnapshot,
+    ) -> anyhow::Result<Option<AdminProxyConfig>> {
+        if self
+            .get_admin_proxy_config_base_row(proxy_id)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let retention_days = i64::try_from(snapshot.retention_days)
+            .context("proxy traffic snapshot retention_days overflows i64")?;
+        let event_count = i64::try_from(snapshot.totals.event_count)
+            .context("proxy traffic snapshot event_count overflows i64")?;
+        let request_bytes = i64::try_from(snapshot.totals.request_bytes)
+            .context("proxy traffic snapshot request_bytes overflows i64")?;
+        let response_bytes = i64::try_from(snapshot.totals.response_bytes)
+            .context("proxy traffic snapshot response_bytes overflows i64")?;
+        let total_bytes = i64::try_from(snapshot.totals.total_bytes)
+            .context("proxy traffic snapshot total_bytes overflows i64")?;
+        self.ensure_connection_alive()?;
+        self.client
+            .execute(
+                "INSERT INTO llm_proxy_config_traffic_snapshots (
+                    proxy_config_id, refreshed_at_ms, window_start_ms, window_end_ms,
+                    retention_days, event_count, request_bytes, response_bytes, total_bytes
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 ON CONFLICT (proxy_config_id) DO UPDATE SET
+                    refreshed_at_ms = EXCLUDED.refreshed_at_ms,
+                    window_start_ms = EXCLUDED.window_start_ms,
+                    window_end_ms = EXCLUDED.window_end_ms,
+                    retention_days = EXCLUDED.retention_days,
+                    event_count = EXCLUDED.event_count,
+                    request_bytes = EXCLUDED.request_bytes,
+                    response_bytes = EXCLUDED.response_bytes,
+                    total_bytes = EXCLUDED.total_bytes",
+                &[
+                    &proxy_id,
+                    &snapshot.refreshed_at_ms,
+                    &snapshot.window_start_ms,
+                    &snapshot.window_end_ms,
+                    &retention_days,
+                    &event_count,
+                    &request_bytes,
+                    &response_bytes,
+                    &total_bytes,
+                ],
+            )
+            .await
+            .context("record postgres proxy traffic snapshot")?;
+        self.invalidate_proxy_metadata_cache().await;
+        self.get_admin_proxy_config_row(proxy_id).await
+    }
+
     async fn delete_admin_proxy_config(
         &self,
         proxy_id: &str,
@@ -780,4 +896,26 @@ impl AdminProxyStore for PostgresControlRepository {
             migrated_account_names,
         })
     }
+}
+
+fn decode_proxy_traffic_snapshot_row(
+    row: &super::PgRow,
+) -> anyhow::Result<AdminProxyTrafficSnapshot> {
+    Ok(AdminProxyTrafficSnapshot {
+        refreshed_at_ms: row.get(1),
+        window_start_ms: row.get(2),
+        window_end_ms: row.get(3),
+        retention_days: non_negative_i64_to_u64(row.get(4))
+            .context("proxy traffic retention_days is negative")?,
+        totals: ProxyTrafficTotals {
+            event_count: non_negative_i64_to_u64(row.get(5))
+                .context("proxy traffic event_count is negative")?,
+            request_bytes: non_negative_i64_to_u64(row.get(6))
+                .context("proxy traffic request_bytes is negative")?,
+            response_bytes: non_negative_i64_to_u64(row.get(7))
+                .context("proxy traffic response_bytes is negative")?,
+            total_bytes: non_negative_i64_to_u64(row.get(8))
+                .context("proxy traffic total_bytes is negative")?,
+        },
+    })
 }

@@ -89,6 +89,7 @@ struct HttpState {
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     usage_journal_sink: Option<Arc<usage_journal::JournalUsageEventSink>>,
     admin_usage_query_gate: Arc<Semaphore>,
+    admin_usage_http_client: reqwest::Client,
     public_submission_store: Arc<dyn PublicSubmissionStore>,
     public_submit_guard: Arc<submission::PublicSubmitGuard>,
     public_status_store: Arc<dyn PublicStatusStore>,
@@ -213,6 +214,7 @@ pub fn router_with_simulator(
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         usage_journal_sink: runtime.usage_journal_sink(),
         admin_usage_query_gate: Arc::new(Semaphore::new(1)),
+        admin_usage_http_client: reqwest::Client::new(),
         public_submission_store: runtime.public_submission_store(),
         public_submit_guard: Arc::new(submission::PublicSubmitGuard::default()),
         public_status_store: runtime.public_status_store(),
@@ -260,6 +262,10 @@ pub fn router_with_simulator(
         .route(
             "/admin/llm-gateway/proxy-configs/:proxy_id/check/:provider_type",
             post(admin::check_llm_gateway_proxy_config),
+        )
+        .route(
+            "/admin/llm-gateway/proxy-configs/:proxy_id/traffic-refresh",
+            post(admin::refresh_llm_gateway_proxy_traffic),
         )
         .route(
             "/admin/llm-gateway/proxy-configs/:proxy_id/override",

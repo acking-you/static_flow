@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{PROVIDER_CODEX, PROVIDER_KIRO};
+use super::{usage::ProxyTrafficTotals, PROVIDER_CODEX, PROVIDER_KIRO};
 
 /// Admin-facing projection of one reusable upstream proxy config.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -42,6 +42,24 @@ pub struct AdminProxyConfig {
     /// Latest Kiro endpoint check observed from this node scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_kiro_check: Option<AdminProxyEndpointCheck>,
+    /// Last manually refreshed traffic snapshot for this proxy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traffic_snapshot: Option<AdminProxyTrafficSnapshot>,
+}
+
+/// Last manually persisted traffic aggregate for one proxy config.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminProxyTrafficSnapshot {
+    /// Refresh timestamp in Unix milliseconds.
+    pub refreshed_at_ms: i64,
+    /// Inclusive window lower bound in Unix milliseconds.
+    pub window_start_ms: i64,
+    /// Exclusive window upper bound in Unix milliseconds.
+    pub window_end_ms: i64,
+    /// Retention window represented by this snapshot.
+    pub retention_days: u64,
+    /// Traffic totals for the represented window.
+    pub totals: ProxyTrafficTotals,
 }
 
 /// Latest connectivity probe result for one proxy/provider endpoint.
@@ -158,5 +176,48 @@ pub fn default_proxy_binding(provider_type: &str) -> AdminProxyBinding {
         effective_proxy_password: None,
         binding_updated_at: None,
         error_message: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::ProxyTrafficTotals;
+
+    #[test]
+    fn admin_proxy_config_serializes_persisted_traffic_snapshot_when_present() {
+        let proxy = AdminProxyConfig {
+            id: "proxy-1".to_string(),
+            name: "Proxy 1".to_string(),
+            proxy_url: "http://proxy.local:8080".to_string(),
+            proxy_username: None,
+            proxy_password: None,
+            status: "active".to_string(),
+            created_at: 100,
+            updated_at: 200,
+            scope_node_id: None,
+            effective_source: "core".to_string(),
+            has_node_override: false,
+            can_edit_slot_metadata: true,
+            latest_codex_check: None,
+            latest_kiro_check: None,
+            traffic_snapshot: Some(AdminProxyTrafficSnapshot {
+                refreshed_at_ms: 1_700_000_000_000,
+                window_start_ms: 1_699_395_200_000,
+                window_end_ms: 1_700_000_000_000,
+                retention_days: 7,
+                totals: ProxyTrafficTotals {
+                    event_count: 2,
+                    request_bytes: 10,
+                    response_bytes: 30,
+                    total_bytes: 40,
+                },
+            }),
+        };
+
+        let value = serde_json::to_value(proxy).expect("serialize proxy config");
+
+        assert_eq!(value["traffic_snapshot"]["retention_days"], 7);
+        assert_eq!(value["traffic_snapshot"]["totals"]["total_bytes"], 40);
     }
 }

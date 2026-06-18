@@ -27,7 +27,7 @@ use super::{
     },
     proxy::{
         AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch, AdminProxyEndpointCheckUpdate,
-        NewAdminProxyConfig,
+        AdminProxyTrafficSnapshot, NewAdminProxyConfig,
     },
     public::{
         AdminAccountContributionRequest, AdminAccountContributionRequestsPage,
@@ -442,6 +442,16 @@ pub trait AdminProxyStore: Send + Sync {
         _update: AdminProxyEndpointCheckUpdate,
     ) -> anyhow::Result<Option<AdminProxyConfig>> {
         anyhow::bail!("proxy endpoint checks are not supported by this store")
+    }
+
+    /// Persist the latest manually refreshed traffic snapshot for one proxy
+    /// config.
+    async fn record_admin_proxy_traffic_snapshot(
+        &self,
+        _proxy_id: &str,
+        _snapshot: AdminProxyTrafficSnapshot,
+    ) -> anyhow::Result<Option<AdminProxyConfig>> {
+        anyhow::bail!("proxy traffic snapshots are not supported by this store")
     }
 
     /// Delete one proxy config by id and return the removed row.

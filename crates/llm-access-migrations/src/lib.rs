@@ -123,6 +123,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "kiro_pool_strategy",
         sql: include_str!("../migrations/postgres/0026_kiro_pool_strategy.sql"),
     },
+    SqlMigration {
+        version: 27,
+        name: "proxy_config_traffic_snapshots",
+        sql: include_str!("../migrations/postgres/0027_proxy_config_traffic_snapshots.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.
@@ -385,5 +390,23 @@ mod tests {
         assert!(migration
             .sql
             .contains("codex_fallback_affinity_prefix_bytes"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_proxy_config_traffic_snapshots() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "proxy_config_traffic_snapshots")
+            .expect("proxy traffic snapshot migration exists");
+
+        assert_eq!(migration.version, 27);
+        assert!(migration
+            .sql
+            .contains("CREATE TABLE IF NOT EXISTS llm_proxy_config_traffic_snapshots"));
+        assert!(migration
+            .sql
+            .contains("REFERENCES llm_proxy_configs(proxy_config_id) ON DELETE CASCADE"));
+        assert!(migration.sql.contains("total_bytes BIGINT NOT NULL"));
     }
 }

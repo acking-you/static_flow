@@ -70,6 +70,9 @@ const MAX_RUNTIME_CODEX_AFFINITY_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
 const MAX_RUNTIME_CODEX_FALLBACK_PREFIX_BYTES: u64 = 1024 * 1024;
 const ADMIN_USAGE_QUERY_GATE_WAIT: Duration = Duration::from_secs(10);
 const USAGE_WORKER_QUERY_TIMEOUT: Duration = Duration::from_secs(60);
+const PROXY_TRAFFIC_REFRESH_MAX_WINDOW_DAYS: u64 = 30;
+const PROXY_TRAFFIC_REFRESH_BUCKET_MS: i64 = 24 * 60 * 60 * 1000;
+const HOUR_MS: i64 = 60 * 60 * 1000;
 const MIN_RUNTIME_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 1;
 const MAX_RUNTIME_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 16_384;
 const MIN_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 1;
@@ -166,6 +169,13 @@ struct AdminAccountGroupOptionsResponse {
 struct AdminProxyConfigsResponse {
     proxy_config_scope: AdminProxyConfigScopeView,
     proxy_configs: Vec<core_store::AdminProxyConfig>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminProxyTrafficRefreshResponse {
+    proxy_config_id: String,
+    traffic_snapshot: core_store::AdminProxyTrafficSnapshot,
     generated_at: i64,
 }
 
@@ -1430,6 +1440,70 @@ pub(crate) async fn check_llm_gateway_proxy_config(
             Json(result).into_response()
         },
         Err(response) => response.into_response(),
+    }
+}
+
+pub(crate) async fn refresh_llm_gateway_proxy_traffic(
+    State(state): State<HttpState>,
+    Path(proxy_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state
+        .admin_proxy_store
+        .get_admin_proxy_config(&proxy_id)
+        .await
+    {
+        Ok(Some(_)) => {},
+        Ok(None) => return not_found("LLM gateway proxy config not found").into_response(),
+        Err(_) => return internal_error("Failed to load llm gateway proxy config").into_response(),
+    }
+    let _permit = match acquire_admin_usage_query_permit(&state).await {
+        Ok(permit) => permit,
+        Err(response) => return response.into_response(),
+    };
+    let config = match state.admin_config_store.get_admin_runtime_config().await {
+        Ok(config) => config,
+        Err(_) => return internal_error("Failed to load llm gateway config").into_response(),
+    };
+    let query =
+        proxy_traffic_refresh_query(&proxy_id, config.usage_analytics_retention_days, now_ms());
+    let snapshot = match fetch_usage_worker_proxy_traffic_snapshot(
+        &state.admin_usage_http_client,
+        &config.usage_query_base_url,
+        &query,
+    )
+    .await
+    {
+        Ok(snapshot) => snapshot,
+        Err(err) => return err.into_response(),
+    };
+    let retention_days = proxy_traffic_refresh_window_days(config.usage_analytics_retention_days);
+    let traffic_snapshot = core_store::AdminProxyTrafficSnapshot {
+        refreshed_at_ms: snapshot.generated_at_ms,
+        window_start_ms: snapshot.start_ms,
+        window_end_ms: snapshot.end_ms,
+        retention_days,
+        totals: snapshot.totals,
+    };
+    match state
+        .admin_proxy_store
+        .record_admin_proxy_traffic_snapshot(&proxy_id, traffic_snapshot.clone())
+        .await
+    {
+        Ok(Some(_)) => Json(AdminProxyTrafficRefreshResponse {
+            proxy_config_id: proxy_id,
+            traffic_snapshot,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Ok(None) => not_found("LLM gateway proxy config not found").into_response(),
+        Err(err) => {
+            tracing::warn!("failed to persist proxy traffic snapshot: {err:#}");
+            internal_error("Failed to save proxy traffic snapshot").into_response()
+        },
     }
 }
 
@@ -4773,6 +4847,82 @@ fn overlay_usage_activity_response_body(
     serde_json::to_vec(&value).ok()
 }
 
+fn proxy_traffic_refresh_window_days(retention_days: u64) -> u64 {
+    retention_days.clamp(1, PROXY_TRAFFIC_REFRESH_MAX_WINDOW_DAYS)
+}
+
+fn proxy_traffic_refresh_query(
+    proxy_id: &str,
+    retention_days: u64,
+    now_ms: i64,
+) -> core_store::ProxyTrafficQuery {
+    let window_days = proxy_traffic_refresh_window_days(retention_days);
+    let end_ms = align_up_ms(now_ms.max(0), HOUR_MS);
+    core_store::ProxyTrafficQuery {
+        proxy_config_id: Some(proxy_id.to_string()),
+        provider_type: None,
+        source: core_store::UsageEventSource::All,
+        start_ms: end_ms.saturating_sub(
+            i64::try_from(window_days)
+                .unwrap_or(PROXY_TRAFFIC_REFRESH_MAX_WINDOW_DAYS as i64)
+                .saturating_mul(PROXY_TRAFFIC_REFRESH_BUCKET_MS),
+        ),
+        end_ms,
+        bucket_ms: PROXY_TRAFFIC_REFRESH_BUCKET_MS,
+    }
+}
+
+fn align_up_ms(value: i64, step_ms: i64) -> i64 {
+    value
+        .saturating_add(step_ms.saturating_sub(1))
+        .div_euclid(step_ms)
+        .saturating_mul(step_ms)
+}
+
+async fn fetch_usage_worker_proxy_traffic_snapshot(
+    client: &reqwest::Client,
+    usage_query_base_url: &str,
+    query: &core_store::ProxyTrafficQuery,
+) -> Result<core_store::ProxyTrafficSnapshot, AdminHttpError> {
+    let base = usage_query_base_url.trim_end_matches('/');
+    let query_string = {
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        if let Some(proxy_config_id) = query.proxy_config_id.as_deref() {
+            serializer.append_pair("proxy_config_id", proxy_config_id);
+        }
+        serializer.append_pair("source", "all");
+        serializer.append_pair("start_ms", &query.start_ms.to_string());
+        serializer.append_pair("end_ms", &query.end_ms.to_string());
+        serializer.append_pair("bucket_ms", &query.bucket_ms.to_string());
+        serializer.finish()
+    };
+    let url = format!("{base}/admin/llm-gateway/usage/proxy-traffic?{}", query_string);
+    let response = client
+        .get(&url)
+        .timeout(USAGE_WORKER_QUERY_TIMEOUT)
+        .send()
+        .await
+        .map_err(|err| {
+            tracing::warn!(url = %url, "usage worker proxy traffic refresh failed: {err:#}");
+            AdminHttpError {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                message: "Usage worker is unavailable".to_string(),
+            }
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        let message = response.text().await.unwrap_or_default();
+        return Err(AdminHttpError {
+            status: StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
+            message: format!("Failed to refresh proxy traffic snapshot: {message}"),
+        });
+    }
+    response.json().await.map_err(|err| AdminHttpError {
+        status: StatusCode::BAD_GATEWAY,
+        message: format!("Failed to parse usage worker proxy traffic response: {err}"),
+    })
+}
+
 fn review_queue_action(request: ReviewQueueActionRequest) -> AdminReviewQueueAction {
     AdminReviewQueueAction {
         admin_note: normalize_optional_string_option(request.admin_note.as_deref()),
@@ -7802,6 +7952,24 @@ mod tests {
         assert!(err
             .message
             .contains("duckdb_usage_checkpoint_threshold_mib"));
+    }
+
+    #[test]
+    fn proxy_traffic_refresh_query_uses_retained_window_capped_at_30d() {
+        let now_ms = 1_700_000_000_123;
+        let aligned_end_ms = 1_700_002_800_000;
+
+        let retained = proxy_traffic_refresh_query("proxy-1", 7, now_ms);
+        assert_eq!(retained.proxy_config_id.as_deref(), Some("proxy-1"));
+        assert_eq!(retained.provider_type, None);
+        assert_eq!(retained.source, core_store::UsageEventSource::All);
+        assert_eq!(retained.end_ms, aligned_end_ms);
+        assert_eq!(retained.start_ms, aligned_end_ms - 7 * 24 * 60 * 60 * 1000);
+        assert_eq!(retained.bucket_ms, 24 * 60 * 60 * 1000);
+
+        let capped = proxy_traffic_refresh_query("proxy-1", 45, now_ms);
+        assert_eq!(capped.end_ms, aligned_end_ms);
+        assert_eq!(capped.start_ms, aligned_end_ms - 30 * 24 * 60 * 60 * 1000);
     }
 
     #[test]

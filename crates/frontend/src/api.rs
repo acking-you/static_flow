@@ -6476,6 +6476,16 @@ pub struct AdminLlmGatewayProxyTrafficTotalsView {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 #[serde(default)]
+pub struct AdminProxyTrafficSnapshotView {
+    pub refreshed_at_ms: i64,
+    pub window_start_ms: i64,
+    pub window_end_ms: i64,
+    pub retention_days: u64,
+    pub totals: AdminLlmGatewayProxyTrafficTotalsView,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+#[serde(default)]
 pub struct AdminLlmGatewayProxyTrafficPointView {
     pub bucket_start_ms: i64,
     pub event_count: u64,
@@ -7091,6 +7101,7 @@ pub struct AdminUpstreamProxyConfigView {
     pub can_edit_slot_metadata: bool,
     pub latest_codex_check: Option<AdminUpstreamProxyEndpointCheckView>,
     pub latest_kiro_check: Option<AdminUpstreamProxyEndpointCheckView>,
+    pub traffic_snapshot: Option<AdminProxyTrafficSnapshotView>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -7109,6 +7120,14 @@ pub struct AdminUpstreamProxyEndpointCheckView {
 pub struct AdminUpstreamProxyConfigsResponse {
     pub proxy_config_scope: AdminUpstreamProxyConfigScopeView,
     pub proxy_configs: Vec<AdminUpstreamProxyConfigView>,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminProxyTrafficRefreshResponse {
+    pub proxy_config_id: String,
+    pub traffic_snapshot: AdminProxyTrafficSnapshotView,
     pub generated_at: i64,
 }
 
@@ -8073,6 +8092,7 @@ pub async fn create_admin_llm_gateway_proxy_config(
             can_edit_slot_metadata: true,
             latest_codex_check: None,
             latest_kiro_check: None,
+            traffic_snapshot: None,
         })
     }
 
@@ -8121,6 +8141,7 @@ pub async fn patch_admin_llm_gateway_proxy_config(
             can_edit_slot_metadata: true,
             latest_codex_check: None,
             latest_kiro_check: None,
+            traffic_snapshot: None,
         })
     }
 
@@ -8171,6 +8192,49 @@ pub async fn delete_admin_llm_gateway_proxy_config(proxy_id: &str) -> Result<(),
             return Err(format!("Failed: {text}"));
         }
         Ok(())
+    }
+}
+
+pub async fn refresh_admin_llm_gateway_proxy_traffic(
+    proxy_id: &str,
+) -> Result<AdminProxyTrafficRefreshResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminProxyTrafficRefreshResponse {
+            proxy_config_id: proxy_id.to_string(),
+            traffic_snapshot: AdminProxyTrafficSnapshotView {
+                retention_days: 7,
+                totals: AdminLlmGatewayProxyTrafficTotalsView {
+                    event_count: 12,
+                    request_bytes: 1024 * 1024,
+                    response_bytes: 3 * 1024 * 1024,
+                    total_bytes: 4 * 1024 * 1024,
+                },
+                ..AdminProxyTrafficSnapshotView::default()
+            },
+            generated_at: 0,
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/proxy-configs/{}/traffic-refresh",
+            llm_access_admin_base(),
+            urlencoding::encode(proxy_id)
+        );
+        let response = api_post(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
     }
 }
 
