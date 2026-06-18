@@ -648,10 +648,10 @@ mod tests {
         store::{
             AdminCodexAccountPageQuery, AdminCodexAccountSortMode, AdminCodexAccountStore,
             AdminConfigStore, AdminKeyStore, AdminKiroAccountStore, AdminPageRequest,
-            AdminProxyConfigPatch, AdminProxyStore, AdminReviewQueueStore, ControlStore,
-            KeyUsageRollupDelta, NewAdminProxyConfig, NewPublicAccountContributionRequest,
-            PublicSubmissionStore, PublicUsageStore, UsageEventSink, UsageRollupBatch,
-            UsageRollupBatchSink,
+            AdminProxyConfigPatch, AdminProxyStore, AdminProxyTrafficSnapshot,
+            AdminReviewQueueStore, ControlStore, KeyUsageRollupDelta, NewAdminProxyConfig,
+            NewPublicAccountContributionRequest, ProxyTrafficTotals, PublicSubmissionStore,
+            PublicUsageStore, UsageEventSink, UsageRollupBatch, UsageRollupBatchSink,
         },
     };
     use serde::Serialize;
@@ -1455,6 +1455,79 @@ mod tests {
         );
         assert_eq!(edge_checked.effective_source, "core");
         assert!(!edge_checked.has_node_override);
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_persists_proxy_traffic_snapshots() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        let repo = super::PostgresControlRepository::connect_with_proxy_scope(
+            &database_url,
+            None,
+            super::ProxyConfigScope::core(),
+        )
+        .await
+        .expect("connect postgres repository");
+
+        repo.create_admin_proxy_config(NewAdminProxyConfig {
+            id: "proxy-slot-1".to_string(),
+            name: "slot 1".to_string(),
+            proxy_url: "http://core.proxy:1111".to_string(),
+            proxy_username: None,
+            proxy_password: None,
+            created_at_ms: 100,
+        })
+        .await
+        .expect("create proxy slot");
+
+        let snapshot = AdminProxyTrafficSnapshot {
+            refreshed_at_ms: 1_700_000_000_000,
+            window_start_ms: 1_699_395_200_000,
+            window_end_ms: 1_700_000_000_000,
+            retention_days: 7,
+            totals: ProxyTrafficTotals {
+                event_count: 3,
+                request_bytes: 11,
+                response_bytes: 29,
+                total_bytes: 40,
+            },
+        };
+        repo.record_admin_proxy_traffic_snapshot("proxy-slot-1", snapshot.clone())
+            .await
+            .expect("record traffic snapshot")
+            .expect("proxy exists");
+
+        let listed = repo
+            .list_admin_proxy_configs()
+            .await
+            .expect("list proxy configs");
+        assert_eq!(
+            listed[0].traffic_snapshot.as_ref().map(|item| item.totals),
+            Some(snapshot.totals)
+        );
+
+        repo.delete_admin_proxy_config("proxy-slot-1")
+            .await
+            .expect("delete proxy config")
+            .expect("deleted proxy exists");
+        let client = SqlxClient::connect(&database_url)
+            .await
+            .expect("connect postgres test database");
+        let row = client
+            .query_one(
+                "SELECT count(*)::BIGINT AS count FROM llm_proxy_config_traffic_snapshots",
+                &[],
+            )
+            .await
+            .expect("count traffic snapshots");
+        assert_eq!(row.get::<_, i64>("count"), 0);
+        client.close().await;
     }
 
     #[tokio::test]

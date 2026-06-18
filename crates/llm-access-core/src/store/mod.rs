@@ -56,7 +56,8 @@ pub use kiro_account::{
 };
 pub use proxy::{
     default_proxy_bindings, AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch,
-    AdminProxyEndpointCheck, AdminProxyEndpointCheckUpdate, NewAdminProxyConfig,
+    AdminProxyEndpointCheck, AdminProxyEndpointCheckUpdate, AdminProxyTrafficSnapshot,
+    NewAdminProxyConfig,
 };
 pub use public::{
     AdminAccountContributionRequest, AdminAccountContributionRequestsPage, AdminReviewQueueAction,

@@ -276,6 +276,7 @@ pub fn decode_admin_proxy_config_row(row: PgRow) -> AdminProxyConfig {
         can_edit_slot_metadata: true,
         latest_codex_check: None,
         latest_kiro_check: None,
+        traffic_snapshot: None,
     }
 }
 

@@ -262,6 +262,10 @@ pub fn router_with_simulator(
             post(admin::check_llm_gateway_proxy_config),
         )
         .route(
+            "/admin/llm-gateway/proxy-configs/:proxy_id/traffic-refresh",
+            post(admin::refresh_llm_gateway_proxy_traffic),
+        )
+        .route(
             "/admin/llm-gateway/proxy-configs/:proxy_id/override",
             delete(admin::reset_llm_gateway_proxy_config_override),
         )
