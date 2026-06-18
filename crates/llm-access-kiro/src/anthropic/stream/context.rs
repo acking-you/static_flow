@@ -746,7 +746,10 @@ impl StreamContext {
             self.visible_text_private_prompt_scan_buffer.push_str(text);
             self.visible_text_private_prompt_scan_buffer.clone()
         };
-        if let Some(reason) = visible_response_private_prompt_leak_match(&scan_text) {
+        let normalized = normalize_private_prompt_marker_text(&scan_text);
+        if let Some(reason) =
+            visible_response_private_prompt_leak_match_with_normalized(&scan_text, &normalized)
+        {
             let replacement = self.private_prompt_safe_text(&scan_text);
             self.visible_text_replaced_due_to_private_prompt_leak = true;
             self.visible_text_private_prompt_scan_buffer.clear();
@@ -760,7 +763,7 @@ impl StreamContext {
             );
             return self.create_text_delta_events(&replacement);
         }
-        if should_hold_visible_text_for_private_prompt_scan(&scan_text) {
+        if should_hold_visible_text_for_private_prompt_scan(&normalized) {
             self.visible_text_private_prompt_scan_buffer = scan_text;
             return Vec::new();
         }
@@ -1241,12 +1244,18 @@ fn visible_response_private_prompt_leak_match(text: &str) -> Option<&'static str
     }
 
     let normalized = normalize_private_prompt_marker_text(text);
-    let marker_reason = private_prompt_marker_leak_match(text, &normalized)?;
-    has_visible_private_prompt_leak_context(text, &normalized).then_some(marker_reason)
+    visible_response_private_prompt_leak_match_with_normalized(text, &normalized)
 }
 
-fn should_hold_visible_text_for_private_prompt_scan(text: &str) -> bool {
-    let normalized = normalize_private_prompt_marker_text(text);
+fn visible_response_private_prompt_leak_match_with_normalized(
+    text: &str,
+    normalized: &str,
+) -> Option<&'static str> {
+    let marker_reason = private_prompt_marker_leak_match(text, normalized)?;
+    has_visible_private_prompt_leak_context(text, normalized).then_some(marker_reason)
+}
+
+fn should_hold_visible_text_for_private_prompt_scan(normalized: &str) -> bool {
     const MARKER_PREFIXES: &[&str] = &[
         "<identity_override",
         "</identity_override>",
@@ -1277,7 +1286,7 @@ fn should_hold_visible_text_for_private_prompt_scan(text: &str) -> bool {
     ];
     MARKER_PREFIXES
         .iter()
-        .any(|marker| ends_with_private_prompt_marker_prefix(&normalized, marker))
+        .any(|marker| ends_with_private_prompt_marker_prefix(normalized, marker))
 }
 
 fn contains_cjk(text: &str) -> bool {
