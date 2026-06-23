@@ -818,6 +818,35 @@ fn normalize_optional_form_string(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+fn recommended_socks5h_proxy_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let prefix_len = "socks5://".len();
+    if trimmed
+        .get(..prefix_len)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("socks5://"))
+    {
+        Some(format!("socks5h://{}", &trimmed[prefix_len..]))
+    } else {
+        None
+    }
+}
+
+fn proxy_url_after_socks5h_confirmation(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let Some(recommended) = recommended_socks5h_proxy_url(trimmed) else {
+        return trimmed.to_string();
+    };
+    if confirm_destructive(
+        "检测到当前代理 URL 使用 socks5://。\n\n对 ChatGPT/Codex 这类依赖 CDN/DNS \
+         路由的上游，推荐使用 socks5h://，让代理服务器解析域名，避免本机 DNS 解析出的 IP \
+         在代理出口不可用。\n\n点击“确定”自动转换为 socks5h://；点击“取消”继续保留 socks5://。",
+    ) {
+        recommended
+    } else {
+        trimmed.to_string()
+    }
+}
+
 fn normalized_usage_status_kind(value: &str) -> Option<String> {
     match value.trim() {
         USAGE_STATUS_KIND_OK => Some(USAGE_STATUS_KIND_OK.to_string()),
@@ -1999,13 +2028,19 @@ fn proxy_config_editor_card(props: &ProxyConfigEditorCardProps) -> Html {
         Callback::from(move |_| {
             let proxy_id = proxy_id.clone();
             let current = (*form).clone();
+            let proxy_url = proxy_url_after_socks5h_confirmation(&current.proxy_url);
+            if proxy_url != current.proxy_url.trim() {
+                let mut next = current.clone();
+                next.proxy_url = proxy_url.clone();
+                form.set(next);
+            }
             let input = PatchAdminUpstreamProxyConfigInput {
                 name: if can_edit_slot_metadata {
                     Some(current.name.trim().to_string())
                 } else {
                     None
                 },
-                proxy_url: Some(current.proxy_url.trim().to_string()),
+                proxy_url: Some(proxy_url),
                 proxy_username: {
                     let value = current.proxy_username.trim().to_string();
                     if value.is_empty() {
@@ -3916,9 +3951,13 @@ pub fn admin_llm_gateway_page() -> Html {
                 flash.emit(("只有 core 节点可以创建代理槽位".to_string(), true));
                 return;
             }
+            let proxy_url = proxy_url_after_socks5h_confirmation((*create_proxy_url).as_str());
+            if proxy_url != (*create_proxy_url).trim() {
+                create_proxy_url.set(proxy_url.clone());
+            }
             let input = CreateAdminUpstreamProxyConfigInput {
                 name: (*create_proxy_name).trim().to_string(),
-                proxy_url: (*create_proxy_url).trim().to_string(),
+                proxy_url,
                 proxy_username: {
                     let value = (*create_proxy_username).trim().to_string();
                     if value.is_empty() {
@@ -9919,6 +9958,26 @@ mod tests {
         assert_eq!(proxy_traffic_window_label(14), "retained 14d traffic");
         assert_eq!(proxy_traffic_window_label(30), "30d traffic");
         assert_eq!(proxy_traffic_window_label(45), "30d traffic");
+    }
+
+    #[test]
+    fn socks5h_recommendation_converts_plain_socks5_scheme() {
+        assert_eq!(
+            recommended_socks5h_proxy_url("socks5://user:pass@proxy.example:443").as_deref(),
+            Some("socks5h://user:pass@proxy.example:443")
+        );
+        assert_eq!(
+            recommended_socks5h_proxy_url("  socks5://proxy.example:1080  ").as_deref(),
+            Some("socks5h://proxy.example:1080")
+        );
+    }
+
+    #[test]
+    fn socks5h_recommendation_ignores_other_schemes() {
+        assert_eq!(recommended_socks5h_proxy_url("socks5h://user:pass@proxy.example:443"), None);
+        assert_eq!(recommended_socks5h_proxy_url("http://user:pass@proxy.example:443"), None);
+        assert_eq!(recommended_socks5h_proxy_url("ééééé"), None);
+        assert_eq!(recommended_socks5h_proxy_url(""), None);
     }
 
     #[test]
