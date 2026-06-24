@@ -99,7 +99,7 @@ pub const DEFAULT_MAX_REQUEST_BODY_BYTES: u64 = 8 * 1024 * 1024;
 /// Default consecutive upstream failure threshold before an account is skipped.
 pub const DEFAULT_ACCOUNT_FAILURE_RETRY_LIMIT: u64 = 10;
 /// Default Codex client version sent to upstream requests.
-pub const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.124.0";
+pub const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.142.0";
 /// Default lower bound for randomized Codex status refresh.
 pub const DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS: u64 = 240;
 /// Default upper bound for randomized Codex status refresh.

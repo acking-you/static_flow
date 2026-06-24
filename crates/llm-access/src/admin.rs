@@ -211,6 +211,13 @@ struct AdminCodexModelsProbeResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct ConsumeCodexRateLimitResetCreditResponse {
+    code: String,
+    windows_reset: i64,
+    account: core_store::AdminCodexAccount,
+}
+
+#[derive(Debug, Serialize)]
 struct AdminCodexImportJobsResponse {
     jobs: Vec<core_store::AdminCodexImportJobSummary>,
     generated_at: i64,
@@ -1866,6 +1873,7 @@ fn apply_codex_public_status_to_admin_account(
         account.plan_type = None;
         account.primary_remaining_percent = None;
         account.secondary_remaining_percent = None;
+        account.rate_limit_reset_credits_available = None;
         account.last_usage_checked_at = None;
         account.last_usage_success_at = None;
         account.usage_error_message = None;
@@ -1874,6 +1882,7 @@ fn apply_codex_public_status_to_admin_account(
     account.plan_type = status_account.plan_type;
     account.primary_remaining_percent = status_account.primary_remaining_percent;
     account.secondary_remaining_percent = status_account.secondary_remaining_percent;
+    account.rate_limit_reset_credits_available = status_account.rate_limit_reset_credits_available;
     account.last_usage_checked_at = status_account.last_usage_checked_at;
     account.last_usage_success_at = status_account.last_usage_success_at;
     account.usage_error_message = status_account.usage_error_message;
@@ -2289,6 +2298,61 @@ pub(crate) async fn refresh_llm_gateway_account_usage(
         },
         Ok(None) => not_found("LLM gateway account not found").into_response(),
         Err(_) => internal_error("Failed to refresh llm gateway account usage").into_response(),
+    }
+}
+
+pub(crate) async fn consume_llm_gateway_account_rate_limit_reset_credit(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_account_name(&name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    let route_store = state.provider_state.route_store();
+    let result = match codex_status::consume_single_codex_account_rate_limit_reset_credit(
+        &state.admin_config_store,
+        &state.admin_codex_account_store,
+        &route_store,
+        &state.public_status_store,
+        &name,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    error: format!("Failed to consume llm gateway reset credit: {err}"),
+                    code: StatusCode::BAD_GATEWAY.as_u16(),
+                }),
+            )
+                .into_response();
+        },
+    };
+    match state
+        .admin_codex_account_store
+        .get_admin_codex_account(&name)
+        .await
+    {
+        Ok(Some(mut account)) => {
+            apply_codex_public_status_to_admin_account(&mut account, result.account, None);
+            Json(ConsumeCodexRateLimitResetCreditResponse {
+                code: result.code,
+                windows_reset: result.windows_reset,
+                account,
+            })
+            .into_response()
+        },
+        Ok(None) => not_found("LLM gateway account not found").into_response(),
+        Err(_) => {
+            internal_error("Failed to load llm gateway account after reset credit").into_response()
+        },
     }
 }
 
@@ -7982,6 +8046,7 @@ mod tests {
             route_weight_tier: "auto".to_string(),
             primary_remaining_percent: None,
             secondary_remaining_percent: None,
+            rate_limit_reset_credits_available: None,
             map_gpt53_codex_to_spark: false,
             auto_refresh_enabled: true,
             request_max_concurrency: Some(3),
@@ -8011,6 +8076,7 @@ mod tests {
                 plan_type: Some("Pro".to_string()),
                 primary_remaining_percent: Some(62.0),
                 secondary_remaining_percent: Some(39.0),
+                rate_limit_reset_credits_available: Some(4),
                 last_usage_checked_at: Some(1200),
                 last_usage_success_at: Some(1100),
                 usage_error_message: Some("upstream 503".to_string()),
@@ -8026,6 +8092,7 @@ mod tests {
         assert_eq!(accounts[0].last_refresh, Some(900));
         assert_eq!(accounts[0].last_usage_checked_at, Some(1200));
         assert_eq!(accounts[0].last_usage_success_at, Some(1100));
+        assert_eq!(accounts[0].rate_limit_reset_credits_available, Some(4));
         assert_eq!(accounts[0].usage_error_message.as_deref(), Some("upstream 503"));
     }
 
@@ -8039,6 +8106,7 @@ mod tests {
             route_weight_tier: "auto".to_string(),
             primary_remaining_percent: None,
             secondary_remaining_percent: None,
+            rate_limit_reset_credits_available: None,
             map_gpt53_codex_to_spark: false,
             auto_refresh_enabled: true,
             request_max_concurrency: Some(3),
@@ -8068,6 +8136,7 @@ mod tests {
                 plan_type: Some("Pro".to_string()),
                 primary_remaining_percent: Some(62.0),
                 secondary_remaining_percent: Some(39.0),
+                rate_limit_reset_credits_available: None,
                 last_usage_checked_at: Some(1200),
                 last_usage_success_at: Some(1100),
                 usage_error_message: None,
@@ -8093,6 +8162,7 @@ mod tests {
             route_weight_tier: "auto".to_string(),
             primary_remaining_percent: None,
             secondary_remaining_percent: None,
+            rate_limit_reset_credits_available: None,
             map_gpt53_codex_to_spark: false,
             auto_refresh_enabled: true,
             request_max_concurrency: Some(3),
@@ -8126,6 +8196,7 @@ mod tests {
                 plan_type: Some("Pro".to_string()),
                 primary_remaining_percent: Some(62.0),
                 secondary_remaining_percent: Some(39.0),
+                rate_limit_reset_credits_available: None,
                 last_usage_checked_at: Some(1200),
                 last_usage_success_at: Some(1200),
                 usage_error_message: None,

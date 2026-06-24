@@ -14,7 +14,7 @@ use wasm_bindgen::JsValue;
 #[cfg(feature = "mock")]
 use crate::models;
 
-pub const DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION: &str = "0.124.0";
+pub const DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION: &str = "0.142.0";
 
 fn default_codex_client_version() -> String {
     DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION.to_string()
@@ -9819,6 +9819,7 @@ pub struct AccountSummaryView {
     pub route_weight_tier: String,
     pub primary_remaining_percent: Option<f64>,
     pub secondary_remaining_percent: Option<f64>,
+    pub rate_limit_reset_credits_available: Option<i64>,
     pub map_gpt53_codex_to_spark: bool,
     pub auto_refresh_enabled: bool,
     pub request_max_concurrency: Option<u64>,
@@ -9846,6 +9847,7 @@ impl Default for AccountSummaryView {
             route_weight_tier: "auto".to_string(),
             primary_remaining_percent: None,
             secondary_remaining_percent: None,
+            rate_limit_reset_credits_available: None,
             map_gpt53_codex_to_spark: false,
             auto_refresh_enabled: true,
             request_max_concurrency: None,
@@ -10210,6 +10212,7 @@ pub async fn import_admin_llm_gateway_account(
             route_weight_tier: "auto".to_string(),
             primary_remaining_percent: Some(100.0),
             secondary_remaining_percent: Some(100.0),
+            rate_limit_reset_credits_available: Some(1),
             map_gpt53_codex_to_spark: false,
             auto_refresh_enabled: true,
             request_max_concurrency: None,
@@ -10334,6 +10337,7 @@ pub async fn patch_admin_llm_gateway_account(
                 .unwrap_or_else(|| "auto".to_string()),
             primary_remaining_percent: Some(100.0),
             secondary_remaining_percent: Some(100.0),
+            rate_limit_reset_credits_available: Some(1),
             map_gpt53_codex_to_spark: input.map_gpt53_codex_to_spark.unwrap_or(false),
             auto_refresh_enabled: input.auto_refresh_enabled.unwrap_or(true),
             request_max_concurrency: input.request_max_concurrency,
@@ -10390,6 +10394,7 @@ pub async fn refresh_admin_llm_gateway_account(name: &str) -> Result<AccountSumm
             route_weight_tier: "auto".to_string(),
             primary_remaining_percent: Some(100.0),
             secondary_remaining_percent: Some(100.0),
+            rate_limit_reset_credits_available: Some(1),
             map_gpt53_codex_to_spark: false,
             auto_refresh_enabled: true,
             request_max_concurrency: None,
@@ -10451,6 +10456,7 @@ pub async fn refresh_admin_llm_gateway_account_auth(
             route_weight_tier: "auto".to_string(),
             primary_remaining_percent: Some(100.0),
             secondary_remaining_percent: Some(100.0),
+            rate_limit_reset_credits_available: Some(1),
             map_gpt53_codex_to_spark: false,
             auto_refresh_enabled: true,
             request_max_concurrency: None,
@@ -10495,6 +10501,72 @@ pub async fn refresh_admin_llm_gateway_account_usage(
     name: &str,
 ) -> Result<AccountSummaryView, String> {
     refresh_admin_llm_gateway_account(name).await
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct ConsumeCodexRateLimitResetCreditResponse {
+    pub code: String,
+    pub windows_reset: i64,
+    pub account: AccountSummaryView,
+}
+
+pub async fn consume_admin_llm_gateway_account_rate_limit_reset_credit(
+    name: &str,
+) -> Result<ConsumeCodexRateLimitResetCreditResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(ConsumeCodexRateLimitResetCreditResponse {
+            code: "reset".to_string(),
+            windows_reset: 2,
+            account: AccountSummaryView {
+                name: name.to_string(),
+                status: "active".to_string(),
+                account_id: None,
+                plan_type: Some("Pro".to_string()),
+                route_weight_tier: "auto".to_string(),
+                primary_remaining_percent: Some(100.0),
+                secondary_remaining_percent: Some(100.0),
+                rate_limit_reset_credits_available: Some(0),
+                map_gpt53_codex_to_spark: false,
+                auto_refresh_enabled: true,
+                request_max_concurrency: None,
+                request_min_start_interval_ms: None,
+                proxy_mode: "inherit".to_string(),
+                proxy_config_id: None,
+                effective_proxy_source: "binding".to_string(),
+                effective_proxy_url: Some("http://127.0.0.1:11111".to_string()),
+                effective_proxy_config_name: None,
+                last_refresh: None,
+                access_token_expires_at: None,
+                auth_refresh_error_message: None,
+                last_usage_checked_at: None,
+                last_usage_success_at: Some(Date::now() as i64),
+                usage_error_message: None,
+            },
+        })
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/accounts/{}/rate-limit-reset-credits/consume",
+            llm_access_admin_base(),
+            urlencoding::encode(name)
+        );
+        let response = api_post(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
 }
 
 pub async fn probe_admin_llm_gateway_account_models(
@@ -11968,6 +12040,18 @@ mod tests {
         assert!(!merged.has_more);
         assert_eq!(merged.summary.active_count, 2);
         assert_eq!(merged.generated_at, 20);
+    }
+
+    #[test]
+    fn account_summary_view_deserializes_rate_limit_reset_credits() {
+        let account: AccountSummaryView = serde_json::from_value(serde_json::json!({
+            "name": "codex-pro",
+            "status": "active",
+            "rate_limit_reset_credits_available": 2
+        }))
+        .expect("account summary should parse");
+
+        assert_eq!(account.rate_limit_reset_credits_available, Some(2));
     }
 
     #[test]

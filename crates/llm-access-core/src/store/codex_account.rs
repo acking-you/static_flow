@@ -23,6 +23,8 @@ pub struct AdminCodexAccount {
     pub primary_remaining_percent: Option<f64>,
     /// Secondary rate-limit remaining percentage, when known.
     pub secondary_remaining_percent: Option<f64>,
+    /// Available rate-limit reset credits when known.
+    pub rate_limit_reset_credits_available: Option<i64>,
     /// Whether GPT-5.3 Codex is mapped to Spark for this account.
     pub map_gpt53_codex_to_spark: bool,
     /// Whether this account may participate in automatic auth refresh.
@@ -405,6 +407,7 @@ mod tests {
             route_weight_tier: "auto".to_string(),
             primary_remaining_percent,
             secondary_remaining_percent: None,
+            rate_limit_reset_credits_available: None,
             map_gpt53_codex_to_spark: false,
             auto_refresh_enabled: true,
             request_max_concurrency: None,

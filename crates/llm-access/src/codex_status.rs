@@ -27,6 +27,13 @@ struct UsageStatusPayload {
     additional_rate_limits: Option<Vec<UsageAdditionalRateLimit>>,
     #[serde(default)]
     credits: Option<UsageCreditsDetails>,
+    #[serde(default)]
+    rate_limit_reset_credits: Option<UsageResetCreditsSummary>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UsageResetCreditsSummary {
+    available_count: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,6 +81,40 @@ enum UsageBalanceValue {
     Integer(i64),
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ConsumeRateLimitResetCreditPayload {
+    code: ConsumeRateLimitResetCreditCode,
+    #[serde(default)]
+    windows_reset: i64,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ConsumeRateLimitResetCreditCode {
+    Reset,
+    NothingToReset,
+    NoCredit,
+    AlreadyRedeemed,
+}
+
+impl ConsumeRateLimitResetCreditCode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Reset => "reset",
+            Self::NothingToReset => "nothing_to_reset",
+            Self::NoCredit => "no_credit",
+            Self::AlreadyRedeemed => "already_redeemed",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CodexRateLimitResetConsumeResult {
+    pub code: String,
+    pub windows_reset: i64,
+    pub account: CodexPublicAccountStatus,
+}
+
 trait CodexStatusAccount {
     fn name(&self) -> &str;
     fn status(&self) -> &str;
@@ -84,6 +125,9 @@ trait CodexStatusAccount {
         None
     }
     fn secondary_remaining_percent(&self) -> Option<f64> {
+        None
+    }
+    fn rate_limit_reset_credits_available(&self) -> Option<i64> {
         None
     }
     fn last_usage_success_at(&self) -> Option<i64> {
@@ -113,6 +157,10 @@ impl CodexStatusAccount for AdminCodexAccount {
 
     fn secondary_remaining_percent(&self) -> Option<f64> {
         self.secondary_remaining_percent
+    }
+
+    fn rate_limit_reset_credits_available(&self) -> Option<i64> {
+        self.rate_limit_reset_credits_available
     }
 
     fn last_usage_success_at(&self) -> Option<i64> {
@@ -383,6 +431,81 @@ pub(crate) async fn refresh_single_codex_account_usage_only(
     }
 }
 
+pub(crate) async fn consume_single_codex_account_rate_limit_reset_credit(
+    config_store: &Arc<dyn AdminConfigStore>,
+    account_store: &Arc<dyn AdminCodexAccountStore>,
+    route_store: &Arc<dyn ProviderRouteStore>,
+    status_store: &Arc<dyn PublicStatusStore>,
+    account_name: &str,
+) -> anyhow::Result<CodexRateLimitResetConsumeResult> {
+    let config = config_store
+        .get_admin_runtime_config()
+        .await
+        .context("load Codex reset-credit config")?;
+    let refresh_targets = account_store
+        .list_codex_status_refresh_targets()
+        .await
+        .context("list Codex status refresh targets")?;
+    let account = account_store
+        .get_admin_codex_account(account_name)
+        .await
+        .context("load Codex account for reset-credit consume")?
+        .ok_or_else(|| anyhow::anyhow!("Codex account `{account_name}` not found"))?;
+    if account.status != KEY_STATUS_ACTIVE {
+        anyhow::bail!("Codex account `{account_name}` is not active");
+    }
+    let route = account_store
+        .resolve_admin_codex_account_route(account_name)
+        .await
+        .context("resolve Codex route for reset-credit consume")?
+        .ok_or_else(|| anyhow::anyhow!("active Codex route is not configured"))?;
+
+    let consume = consume_route_reset_credit(&route, route_store.as_ref(), &config).await?;
+    let source_url = compute_usage_url(&provider::codex_upstream_base_url());
+    let refreshed = refresh_account_status(
+        &account,
+        account_store.as_ref(),
+        route_store.as_ref(),
+        &config,
+        false,
+    )
+    .await;
+    let snapshot = merge_account_status_refresh(
+        &refresh_targets,
+        status_store.codex_rate_limit_status().await.ok(),
+        account_name,
+        refreshed.clone(),
+        &source_url,
+        config.codex_status_refresh_max_interval_seconds,
+    );
+    status_store
+        .save_codex_rate_limit_status(snapshot)
+        .await
+        .context("persist post-reset Codex public status refresh")?;
+    match refreshed {
+        AccountStatusRefresh::Ready {
+            account, ..
+        }
+        | AccountStatusRefresh::Skipped {
+            account,
+        } => Ok(CodexRateLimitResetConsumeResult {
+            code: consume.code.as_str().to_string(),
+            windows_reset: consume.windows_reset,
+            account,
+        }),
+        AccountStatusRefresh::Error {
+            account,
+        } => anyhow::bail!(
+            "{}",
+            account
+                .usage_error_message
+                .unwrap_or_else(
+                    || "Codex usage refresh failed after reset-credit consume".to_string()
+                )
+        ),
+    }
+}
+
 pub(crate) async fn prime_single_codex_account_status(
     config_store: &Arc<dyn AdminConfigStore>,
     account_store: &Arc<dyn AdminCodexAccountStore>,
@@ -599,6 +722,7 @@ fn initial_account_status<A: CodexStatusAccount>(account: &A) -> AccountStatusRe
                 plan_type: account.plan_type().map(str::to_string),
                 primary_remaining_percent: account.primary_remaining_percent(),
                 secondary_remaining_percent: account.secondary_remaining_percent(),
+                rate_limit_reset_credits_available: account.rate_limit_reset_credits_available(),
                 last_usage_checked_at: None,
                 last_usage_success_at: account.last_usage_success_at(),
                 usage_error_message: account.usage_error_message().map(str::to_string),
@@ -623,6 +747,7 @@ async fn refresh_account_status<A: CodexStatusAccount>(
                 plan_type: account.plan_type().map(str::to_string),
                 primary_remaining_percent: account.primary_remaining_percent(),
                 secondary_remaining_percent: account.secondary_remaining_percent(),
+                rate_limit_reset_credits_available: account.rate_limit_reset_credits_available(),
                 last_usage_checked_at: Some(now),
                 last_usage_success_at: account.last_usage_success_at(),
                 usage_error_message: account.usage_error_message().map(str::to_string),
@@ -640,9 +765,14 @@ async fn refresh_account_status<A: CodexStatusAccount>(
         };
     };
     match fetch_route_usage(&route, route_store, config, force_refresh).await {
-        Ok(buckets) => AccountStatusRefresh::Ready {
-            account: account_ready_status(account, now, &buckets),
-            buckets,
+        Ok(usage) => AccountStatusRefresh::Ready {
+            account: account_ready_status_with_reset(
+                account,
+                now,
+                &usage.buckets,
+                usage.reset_credits_available,
+            ),
+            buckets: usage.buckets,
         },
         Err(err) => AccountStatusRefresh::Error {
             account: account_error_status(account, now, &format!("{err:#}")),
@@ -665,6 +795,7 @@ async fn refresh_account_status_with_current_access_token_only<A: CodexStatusAcc
                 plan_type: account.plan_type().map(str::to_string),
                 primary_remaining_percent: account.primary_remaining_percent(),
                 secondary_remaining_percent: account.secondary_remaining_percent(),
+                rate_limit_reset_credits_available: account.rate_limit_reset_credits_available(),
                 last_usage_checked_at: Some(now),
                 last_usage_success_at: account.last_usage_success_at(),
                 usage_error_message: account.usage_error_message().map(str::to_string),
@@ -682,9 +813,14 @@ async fn refresh_account_status_with_current_access_token_only<A: CodexStatusAcc
         };
     };
     match fetch_route_usage_with_current_access_token_only(&route, route_store, config).await {
-        Ok(buckets) => AccountStatusRefresh::Ready {
-            account: account_ready_status(account, now, &buckets),
-            buckets,
+        Ok(usage) => AccountStatusRefresh::Ready {
+            account: account_ready_status_with_reset(
+                account,
+                now,
+                &usage.buckets,
+                usage.reset_credits_available,
+            ),
+            buckets: usage.buckets,
         },
         Err(err) => AccountStatusRefresh::Error {
             account: account_error_status(account, now, &format!("{err:#}")),
@@ -892,12 +1028,18 @@ fn account_status_refresh_name(refresh: &AccountStatusRefresh) -> &str {
     }
 }
 
+#[derive(Debug, Clone)]
+struct MappedUsageStatus {
+    buckets: Vec<CodexRateLimitBucket>,
+    reset_credits_available: Option<i64>,
+}
+
 async fn fetch_route_usage(
     route: &ProviderCodexRoute,
     route_store: &dyn ProviderRouteStore,
     config: &AdminRuntimeConfig,
     force_refresh: bool,
-) -> anyhow::Result<Vec<CodexRateLimitBucket>> {
+) -> anyhow::Result<MappedUsageStatus> {
     let mut force_refresh_attempt = force_refresh;
     loop {
         let context = match codex_refresh::ensure_context_for_route(
@@ -915,7 +1057,7 @@ async fn fetch_route_usage(
                             .await?
                     {
                         match fetch_route_usage_once(route, config, &context).await? {
-                            FetchRouteUsageOutcome::Ready(mut buckets) => {
+                            FetchRouteUsageOutcome::Ready(mut usage) => {
                                 if let Err(disable_err) =
                                     codex_refresh::disable_auto_refresh_for_route(
                                         route,
@@ -929,10 +1071,10 @@ async fn fetch_route_usage(
                                         "failed to disable Codex auto refresh after direct access-token usage fallback",
                                     );
                                 }
-                                for bucket in &mut buckets {
+                                for bucket in &mut usage.buckets {
                                     bucket.account_name = Some(route.account_name.clone());
                                 }
-                                return Ok(buckets);
+                                return Ok(usage);
                             },
                             FetchRouteUsageOutcome::Unauthorized {
                                 body,
@@ -950,11 +1092,11 @@ async fn fetch_route_usage(
             },
         };
         match fetch_route_usage_once(route, config, &context).await? {
-            FetchRouteUsageOutcome::Ready(mut buckets) => {
-                for bucket in &mut buckets {
+            FetchRouteUsageOutcome::Ready(mut usage) => {
+                for bucket in &mut usage.buckets {
                     bucket.account_name = Some(route.account_name.clone());
                 }
-                return Ok(buckets);
+                return Ok(usage);
             },
             FetchRouteUsageOutcome::Unauthorized {
                 body,
@@ -975,7 +1117,7 @@ async fn fetch_route_usage_with_current_access_token_only(
     route: &ProviderCodexRoute,
     route_store: &dyn ProviderRouteStore,
     config: &AdminRuntimeConfig,
-) -> anyhow::Result<Vec<CodexRateLimitBucket>> {
+) -> anyhow::Result<MappedUsageStatus> {
     let Some(context) = codex_refresh::current_unexpired_context_for_route(route, route_store)
         .await
         .context("load current Codex access token context")?
@@ -983,11 +1125,11 @@ async fn fetch_route_usage_with_current_access_token_only(
         anyhow::bail!("Codex current access token is missing or expired");
     };
     match fetch_route_usage_once(route, config, &context).await? {
-        FetchRouteUsageOutcome::Ready(mut buckets) => {
-            for bucket in &mut buckets {
+        FetchRouteUsageOutcome::Ready(mut usage) => {
+            for bucket in &mut usage.buckets {
                 bucket.account_name = Some(route.account_name.clone());
             }
-            Ok(buckets)
+            Ok(usage)
         },
         FetchRouteUsageOutcome::Unauthorized {
             body,
@@ -996,8 +1138,84 @@ async fn fetch_route_usage_with_current_access_token_only(
 }
 
 enum FetchRouteUsageOutcome {
-    Ready(Vec<CodexRateLimitBucket>),
+    Ready(MappedUsageStatus),
     Unauthorized { body: String },
+}
+
+enum ConsumeRouteResetCreditOutcome {
+    Ready(ConsumeRateLimitResetCreditPayload),
+    Unauthorized { body: String },
+}
+
+async fn consume_route_reset_credit(
+    route: &ProviderCodexRoute,
+    route_store: &dyn ProviderRouteStore,
+    config: &AdminRuntimeConfig,
+) -> anyhow::Result<ConsumeRateLimitResetCreditPayload> {
+    let mut force_refresh_attempt = false;
+    loop {
+        let context =
+            codex_refresh::ensure_context_for_route(route, route_store, force_refresh_attempt)
+                .await?;
+        match consume_route_reset_credit_once(route, config, &context).await? {
+            ConsumeRouteResetCreditOutcome::Ready(payload) => return Ok(payload),
+            ConsumeRouteResetCreditOutcome::Unauthorized {
+                body,
+            } if !force_refresh_attempt => {
+                let _ = body;
+                force_refresh_attempt = true;
+            },
+            ConsumeRouteResetCreditOutcome::Unauthorized {
+                body,
+            } => {
+                anyhow::bail!("Codex reset-credit consume returned 401 Unauthorized: {body}");
+            },
+        }
+    }
+}
+
+async fn consume_route_reset_credit_once(
+    route: &ProviderCodexRoute,
+    config: &AdminRuntimeConfig,
+    context: &codex_refresh::CodexCallContext,
+) -> anyhow::Result<ConsumeRouteResetCreditOutcome> {
+    let source_url = compute_reset_credit_consume_url(&provider::codex_upstream_base_url());
+    let client_version = provider::resolve_codex_client_version(Some(&config.codex_client_version));
+    let redeem_request_id = uuid::Uuid::new_v4().to_string();
+    let mut request = codex_refresh::provider_client(route.proxy.as_ref())?
+        .post(&source_url)
+        .header(reqwest::header::USER_AGENT, codex_user_agent(&client_version))
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", context.access_token))
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&serde_json::json!({
+            "redeem_request_id": redeem_request_id,
+        }))
+        .timeout(Duration::from_secs(20));
+    if let Some(account_id) = context.account_id.as_deref() {
+        request = request.header("ChatGPT-Account-Id", account_id);
+    }
+    if context.is_fedramp_account {
+        request = request.header("X-OpenAI-Fedramp", "true");
+    }
+
+    let response = request
+        .send()
+        .await
+        .context("request Codex reset-credit consume")?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Ok(ConsumeRouteResetCreditOutcome::Unauthorized {
+            body,
+        });
+    }
+    if !status.is_success() {
+        anyhow::bail!("Codex reset-credit consume returned {status}: {body}");
+    }
+    let payload = serde_json::from_str::<ConsumeRateLimitResetCreditPayload>(&body)
+        .context("parse Codex reset-credit consume response")?;
+    Ok(ConsumeRouteResetCreditOutcome::Ready(payload))
 }
 
 async fn fetch_route_usage_once(
@@ -1129,10 +1347,25 @@ fn build_status_snapshot(
     }
 }
 
+#[cfg(test)]
 fn account_ready_status<A: CodexStatusAccount>(
     account: &A,
     checked_at: i64,
     buckets: &[CodexRateLimitBucket],
+) -> CodexPublicAccountStatus {
+    account_ready_status_with_reset(
+        account,
+        checked_at,
+        buckets,
+        account.rate_limit_reset_credits_available(),
+    )
+}
+
+fn account_ready_status_with_reset<A: CodexStatusAccount>(
+    account: &A,
+    checked_at: i64,
+    buckets: &[CodexRateLimitBucket],
+    reset_credits_available: Option<i64>,
 ) -> CodexPublicAccountStatus {
     let primary = buckets.iter().find(|bucket| bucket.is_primary);
     CodexPublicAccountStatus {
@@ -1145,6 +1378,7 @@ fn account_ready_status<A: CodexStatusAccount>(
         secondary_remaining_percent: primary
             .and_then(|bucket| bucket.secondary.as_ref())
             .map(|window| window.remaining_percent),
+        rate_limit_reset_credits_available: reset_credits_available,
         last_usage_checked_at: Some(checked_at),
         last_usage_success_at: Some(checked_at),
         usage_error_message: None,
@@ -1162,13 +1396,14 @@ fn account_error_status<A: CodexStatusAccount>(
         plan_type: account.plan_type().map(str::to_string),
         primary_remaining_percent: account.primary_remaining_percent(),
         secondary_remaining_percent: account.secondary_remaining_percent(),
+        rate_limit_reset_credits_available: account.rate_limit_reset_credits_available(),
         last_usage_checked_at: Some(checked_at),
         last_usage_success_at: account.last_usage_success_at(),
         usage_error_message: Some(message.to_string()),
     }
 }
 
-fn map_rate_limit_status_payload(payload: UsageStatusPayload) -> Vec<CodexRateLimitBucket> {
+fn map_rate_limit_status_payload(payload: UsageStatusPayload) -> MappedUsageStatus {
     let plan_type = payload.plan_type.as_deref().map(normalize_plan_type_label);
     let mut buckets = vec![CodexRateLimitBucket {
         limit_id: "codex".to_string(),
@@ -1226,7 +1461,12 @@ fn map_rate_limit_status_payload(payload: UsageStatusPayload) -> Vec<CodexRateLi
                 }
             }),
     );
-    buckets
+    MappedUsageStatus {
+        buckets,
+        reset_credits_available: payload
+            .rate_limit_reset_credits
+            .map(|credits| credits.available_count),
+    }
 }
 
 fn map_rate_limit_window(window: &UsageRateLimitWindow) -> CodexRateLimitWindow {
@@ -1264,6 +1504,18 @@ fn compute_usage_url(upstream_base: &str) -> String {
         format!("{normalized}/wham/usage")
     } else {
         format!("{normalized}/api/codex/usage")
+    }
+}
+
+fn compute_reset_credit_consume_url(upstream_base: &str) -> String {
+    let normalized = upstream_base.trim_end_matches('/');
+    let lower = normalized.to_ascii_lowercase();
+    if lower.contains("/backend-api/codex") {
+        format!("{}/wham/rate-limit-reset-credits/consume", normalized.trim_end_matches("/codex"))
+    } else if lower.contains("/backend-api") {
+        format!("{normalized}/wham/rate-limit-reset-credits/consume")
+    } else {
+        format!("{normalized}/api/codex/rate-limit-reset-credits/consume")
     }
 }
 
@@ -1327,6 +1579,7 @@ mod tests {
             route_weight_tier: "auto".to_string(),
             primary_remaining_percent: None,
             secondary_remaining_percent: None,
+            rate_limit_reset_credits_available: None,
             map_gpt53_codex_to_spark: false,
             auto_refresh_enabled: true,
             request_max_concurrency: None,
@@ -1404,7 +1657,8 @@ mod tests {
         }))
         .expect("usage payload");
 
-        let buckets = map_rate_limit_status_payload(payload);
+        let usage = map_rate_limit_status_payload(payload);
+        let buckets = usage.buckets;
 
         assert_eq!(buckets.len(), 2);
         assert_eq!(buckets[0].plan_type.as_deref(), Some("Pro"));
@@ -1426,6 +1680,52 @@ mod tests {
     }
 
     #[test]
+    fn maps_codex_usage_payload_reset_credits_into_account_status() {
+        let payload: UsageStatusPayload = serde_json::from_value(serde_json::json!({
+            "plan_type": "pro",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 91.0
+                },
+                "secondary_window": {
+                    "used_percent": 87.0
+                }
+            },
+            "rate_limit_reset_credits": {
+                "available_count": 3
+            }
+        }))
+        .expect("usage payload");
+
+        let usage = map_rate_limit_status_payload(payload);
+        let account = account_ready_status_with_reset(
+            &sample_admin_account("alpha"),
+            1200,
+            &usage.buckets,
+            usage.reset_credits_available,
+        );
+
+        assert_eq!(usage.reset_credits_available, Some(3));
+        assert_eq!(account.rate_limit_reset_credits_available, Some(3));
+    }
+
+    #[test]
+    fn compute_reset_credit_consume_url_matches_codex_backend_client() {
+        assert_eq!(
+            compute_reset_credit_consume_url("https://chatgpt.com/backend-api/codex"),
+            "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
+        );
+        assert_eq!(
+            compute_reset_credit_consume_url("https://proxy.example/backend-api"),
+            "https://proxy.example/backend-api/wham/rate-limit-reset-credits/consume"
+        );
+        assert_eq!(
+            compute_reset_credit_consume_url("https://example.com"),
+            "https://example.com/api/codex/rate-limit-reset-credits/consume"
+        );
+    }
+
+    #[test]
     fn manual_account_refresh_merges_one_account_into_cached_snapshot() {
         let accounts = vec![sample_admin_account("alpha"), sample_admin_account("beta")];
         let alpha_bucket = sample_bucket("alpha", 70.0, 80.0);
@@ -1443,6 +1743,7 @@ mod tests {
                 plan_type: Some("Pro".to_string()),
                 primary_remaining_percent: Some(70.0),
                 secondary_remaining_percent: Some(80.0),
+                rate_limit_reset_credits_available: Some(2),
                 last_usage_checked_at: Some(900),
                 last_usage_success_at: Some(900),
                 usage_error_message: None,
@@ -1466,6 +1767,7 @@ mod tests {
         assert_eq!(snapshot.accounts.len(), 2);
         assert_eq!(snapshot.accounts[0].name, "alpha");
         assert_eq!(snapshot.accounts[0].secondary_remaining_percent, Some(80.0));
+        assert_eq!(snapshot.accounts[0].rate_limit_reset_credits_available, Some(2));
         assert_eq!(snapshot.accounts[1].name, "beta");
         assert_eq!(snapshot.accounts[1].primary_remaining_percent, Some(62.0));
         assert_eq!(snapshot.accounts[1].secondary_remaining_percent, Some(39.0));
@@ -1498,6 +1800,7 @@ mod tests {
                 plan_type: Some("Pro".to_string()),
                 primary_remaining_percent: Some(70.0),
                 secondary_remaining_percent: Some(80.0),
+                rate_limit_reset_credits_available: None,
                 last_usage_checked_at: Some(900),
                 last_usage_success_at: Some(900),
                 usage_error_message: None,
@@ -1547,6 +1850,7 @@ mod tests {
                     plan_type: Some("Pro".to_string()),
                     primary_remaining_percent: Some(70.0),
                     secondary_remaining_percent: Some(80.0),
+                    rate_limit_reset_credits_available: None,
                     last_usage_checked_at: Some(900),
                     last_usage_success_at: Some(900),
                     usage_error_message: None,
@@ -1557,6 +1861,7 @@ mod tests {
                     plan_type: Some("Pro".to_string()),
                     primary_remaining_percent: Some(62.0),
                     secondary_remaining_percent: Some(39.0),
+                    rate_limit_reset_credits_available: None,
                     last_usage_checked_at: Some(900),
                     last_usage_success_at: Some(900),
                     usage_error_message: None,
@@ -1614,6 +1919,7 @@ mod tests {
                     plan_type: Some("Pro".to_string()),
                     primary_remaining_percent: Some(70.0),
                     secondary_remaining_percent: Some(80.0),
+                    rate_limit_reset_credits_available: None,
                     last_usage_checked_at: Some(900),
                     last_usage_success_at: Some(900),
                     usage_error_message: None,
@@ -1624,6 +1930,7 @@ mod tests {
                     plan_type: Some("Plus".to_string()),
                     primary_remaining_percent: Some(99.0),
                     secondary_remaining_percent: Some(100.0),
+                    rate_limit_reset_credits_available: None,
                     last_usage_checked_at: Some(1200),
                     last_usage_success_at: Some(1200),
                     usage_error_message: None,
@@ -1695,6 +2002,7 @@ mod tests {
                     plan_type: Some("Pro".to_string()),
                     primary_remaining_percent: Some(55.0),
                     secondary_remaining_percent: Some(66.0),
+                    rate_limit_reset_credits_available: None,
                     last_usage_checked_at: Some(1200),
                     last_usage_success_at: Some(1200),
                     usage_error_message: None,
@@ -1705,6 +2013,7 @@ mod tests {
                     plan_type: Some("Plus".to_string()),
                     primary_remaining_percent: Some(99.0),
                     secondary_remaining_percent: Some(100.0),
+                    rate_limit_reset_credits_available: None,
                     last_usage_checked_at: Some(1200),
                     last_usage_success_at: Some(1200),
                     usage_error_message: None,
@@ -1715,6 +2024,7 @@ mod tests {
                     plan_type: Some("Plus".to_string()),
                     primary_remaining_percent: Some(88.0),
                     secondary_remaining_percent: Some(77.0),
+                    rate_limit_reset_credits_available: None,
                     last_usage_checked_at: Some(1200),
                     last_usage_success_at: Some(1200),
                     usage_error_message: None,
@@ -1873,6 +2183,7 @@ mod tests {
                     plan_type: Some("Plus".to_string()),
                     primary_remaining_percent: Some(90.0),
                     secondary_remaining_percent: Some(80.0),
+                    rate_limit_reset_credits_available: None,
                     last_usage_checked_at: Some(1400),
                     last_usage_success_at: Some(1400),
                     usage_error_message: None,
@@ -1883,6 +2194,7 @@ mod tests {
                     plan_type: Some("Plus".to_string()),
                     primary_remaining_percent: Some(30.0),
                     secondary_remaining_percent: Some(20.0),
+                    rate_limit_reset_credits_available: None,
                     last_usage_checked_at: Some(600),
                     last_usage_success_at: Some(600),
                     usage_error_message: None,
