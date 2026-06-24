@@ -483,7 +483,10 @@ mod tests {
             .is_some_and(|value| value.starts_with("codex-session-v1-")));
         assert_eq!(
             first_upstream["prompt_cache_key"],
-            json!(first_prepared.resolved_session_id.as_deref().unwrap())
+            json!(first_prepared
+                .resolved_session_id
+                .as_deref()
+                .expect("stable-prefix session id should be resolved"))
         );
         assert_eq!(first_upstream["prompt_cache_key"], second_upstream["prompt_cache_key"]);
         assert!(first_prepared.resolved_session_hash_preview.is_some());
