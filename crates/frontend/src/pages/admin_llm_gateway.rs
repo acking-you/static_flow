@@ -33,15 +33,15 @@ use crate::{
         fetch_admin_llm_gateway_token_requests, fetch_admin_llm_gateway_usage_event_detail,
         fetch_admin_llm_gateway_usage_events, fetch_admin_llm_gateway_usage_filter_options,
         fetch_admin_usage_journal_preview, fetch_admin_usage_journal_status,
-        import_admin_legacy_kiro_proxy_configs, import_admin_llm_gateway_account,
-        patch_admin_llm_gateway_account, patch_admin_llm_gateway_account_group,
-        patch_admin_llm_gateway_key, patch_admin_llm_gateway_proxy_config,
-        probe_admin_llm_gateway_account_models, refresh_admin_llm_gateway_account_auth,
-        refresh_admin_llm_gateway_account_usage, refresh_admin_llm_gateway_proxy_traffic,
-        reset_admin_llm_gateway_proxy_config_override, update_admin_llm_gateway_config,
-        update_admin_llm_gateway_proxy_binding, AccountSummaryView, AdminAccountGroupOptionView,
-        AdminAccountGroupView, AdminAccountsSummaryView,
-        AdminLlmGatewayAccountContributionRequestView,
+        fetch_llm_gateway_status, import_admin_legacy_kiro_proxy_configs,
+        import_admin_llm_gateway_account, patch_admin_llm_gateway_account,
+        patch_admin_llm_gateway_account_group, patch_admin_llm_gateway_key,
+        patch_admin_llm_gateway_proxy_config, probe_admin_llm_gateway_account_models,
+        refresh_admin_llm_gateway_account_auth, refresh_admin_llm_gateway_account_usage,
+        refresh_admin_llm_gateway_proxy_traffic, reset_admin_llm_gateway_proxy_config_override,
+        update_admin_llm_gateway_config, update_admin_llm_gateway_proxy_binding,
+        AccountSummaryView, AdminAccountGroupOptionView, AdminAccountGroupView,
+        AdminAccountsSummaryView, AdminLlmGatewayAccountContributionRequestView,
         AdminLlmGatewayAccountContributionRequestsQuery, AdminLlmGatewayAccountPageQuery,
         AdminLlmGatewayKeyPageQuery, AdminLlmGatewayKeyView, AdminLlmGatewayKeysSummaryView,
         AdminLlmGatewaySponsorRequestView, AdminLlmGatewaySponsorRequestsQuery,
@@ -54,10 +54,12 @@ use crate::{
         AdminUpstreamProxyEndpointCheckView, AdminUsageJournalFileView,
         AdminUsageJournalPreviewResponse, AdminUsageJournalStatusView, AdminUsageTotalsView,
         CodexAccountImportJobDetailView, CodexAccountImportJobSummaryView,
-        CreateAdminAccountGroupInput, CreateAdminUpstreamProxyConfigInput, LlmGatewayRuntimeConfig,
-        PatchAdminAccountGroupInput, PatchAdminLlmGatewayAccountInput,
-        PatchAdminLlmGatewayKeyRequest, PatchAdminUpstreamProxyConfigInput,
-        ProcessMemoryRuntimeStats, DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION,
+        CreateAdminAccountGroupInput, CreateAdminUpstreamProxyConfigInput,
+        LlmGatewayRateLimitBucketView, LlmGatewayRateLimitStatusResponse,
+        LlmGatewayRateLimitWindowView, LlmGatewayRuntimeConfig, PatchAdminAccountGroupInput,
+        PatchAdminLlmGatewayAccountInput, PatchAdminLlmGatewayKeyRequest,
+        PatchAdminUpstreamProxyConfigInput, ProcessMemoryRuntimeStats,
+        DEFAULT_LLM_GATEWAY_CODEX_CLIENT_VERSION,
     },
     components::{
         date_range_picker::DateRangePicker, empty_state::EmptyState, pagination::Pagination,
@@ -66,8 +68,8 @@ use crate::{
     pages::llm_access_shared::{
         confirm_destructive, credit_usage_missing_label, first_token_latency_color,
         format_latency_ms, format_ms, format_number_i64, format_number_u64,
-        format_optional_bytes_human, token_usage_missing_label, total_latency_color,
-        MaskedSecretCode,
+        format_optional_bytes_human, format_percent, format_reset_hint, token_usage_missing_label,
+        total_latency_color, MaskedSecretCode,
     },
     router::Route,
 };
@@ -453,6 +455,104 @@ fn format_access_token_expiry(now_ms: i64, expires_at_ms: Option<i64>) -> String
             format_optional_duration_ms(Some(remaining_ms.saturating_abs())),
             absolute
         )
+    }
+}
+
+fn account_rate_limit_bucket<'a>(
+    status: Option<&'a LlmGatewayRateLimitStatusResponse>,
+    account_name: &str,
+) -> Option<&'a LlmGatewayRateLimitBucketView> {
+    let status = status?;
+    status
+        .buckets
+        .iter()
+        .find(|bucket| {
+            bucket.account_name.as_deref() == Some(account_name)
+                && bucket.is_primary
+                && bucket.limit_id == "codex"
+        })
+        .or_else(|| {
+            status.buckets.iter().find(|bucket| {
+                bucket.account_name.as_deref() == Some(account_name) && bucket.is_primary
+            })
+        })
+        .or_else(|| {
+            status
+                .buckets
+                .iter()
+                .find(|bucket| bucket.account_name.as_deref() == Some(account_name))
+        })
+}
+
+fn account_limit_remaining_percent(
+    window: Option<&LlmGatewayRateLimitWindowView>,
+    fallback: Option<f64>,
+) -> Option<f64> {
+    window.map(|window| window.remaining_percent).or(fallback)
+}
+
+fn account_limit_width(
+    window: Option<&LlmGatewayRateLimitWindowView>,
+    fallback: Option<f64>,
+) -> f64 {
+    account_limit_remaining_percent(window, fallback)
+        .unwrap_or(100.0)
+        .clamp(0.0, 100.0)
+}
+
+fn account_limit_percent_label(
+    window: Option<&LlmGatewayRateLimitWindowView>,
+    fallback: Option<f64>,
+) -> String {
+    account_limit_remaining_percent(window, fallback)
+        .map(format_percent)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn account_limit_used_label(window: Option<&LlmGatewayRateLimitWindowView>) -> String {
+    window
+        .map(|window| format!("已用 {}", format_percent(window.used_percent)))
+        .unwrap_or_else(|| "已用 -".to_string())
+}
+
+fn account_limit_reset_label(window: Option<&LlmGatewayRateLimitWindowView>) -> String {
+    window
+        .map(|window| format_reset_hint(window.resets_at))
+        .unwrap_or_else(|| "重置时间未知".to_string())
+}
+
+fn render_account_limit_tile(
+    label: &str,
+    percent_label: &str,
+    used_label: &str,
+    reset_label: &str,
+    width: f64,
+    accent: &'static str,
+) -> Html {
+    html! {
+        <div class={classes!(
+            "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]",
+            "px-3", "py-2.5", "min-w-0",
+        )}>
+            <div class={classes!("flex", "items-start", "justify-between", "gap-2")}>
+                <span class={classes!("font-mono", "text-[11px]", "font-semibold", "text-[var(--muted)]", "uppercase", "tracking-wider")}>
+                    { label }
+                </span>
+                <span class={classes!("font-mono", "text-base", "font-black", "leading-none", "text-[var(--text)]")}>
+                    { percent_label }
+                </span>
+            </div>
+            <div class={classes!("mt-2", "h-2", "overflow-hidden", "rounded-full", "bg-[var(--surface)]")}>
+                <div
+                    class={classes!("h-full", "rounded-full", "transition-[width]", "duration-500", accent)}
+                    style={format!("width: {width:.1}%;")}
+                />
+            </div>
+            <div class={classes!("mt-2", "grid", "gap-1", "font-mono", "text-[10px]", "leading-tight", "text-[var(--muted)]")}>
+                <span>{ used_label }</span>
+                <span class={classes!("text-[var(--text)]")}>{ reset_label }</span>
+            </div>
+        </div>
     }
 }
 
@@ -2628,6 +2728,7 @@ pub fn admin_llm_gateway_page() -> Html {
     };
     let accounts = use_state(Vec::<AccountSummaryView>::new);
     let accounts_summary = use_state(AdminAccountsSummaryView::default);
+    let codex_rate_limit_status = use_state(|| None::<LlmGatewayRateLimitStatusResponse>);
     let import_name = use_state(String::new);
     let import_id_token = use_state(String::new);
     let import_access_token = use_state(String::new);
@@ -2983,6 +3084,7 @@ pub fn admin_llm_gateway_page() -> Html {
         let usage_key_filter = usage_key_filter.clone();
         let accounts = accounts.clone();
         let accounts_summary = accounts_summary.clone();
+        let codex_rate_limit_status = codex_rate_limit_status.clone();
         let accounts_total = accounts_total.clone();
         let account_page_limit = account_page_limit.clone();
         let active_tab = active_tab.clone();
@@ -3061,6 +3163,7 @@ pub fn admin_llm_gateway_page() -> Html {
             let usage_key_filter = usage_key_filter.clone();
             let accounts = accounts.clone();
             let accounts_summary = accounts_summary.clone();
+            let codex_rate_limit_status = codex_rate_limit_status.clone();
             let accounts_total = accounts_total.clone();
             let account_page_limit = account_page_limit.clone();
             let active_tab = active_tab.clone();
@@ -3180,6 +3283,11 @@ pub fn admin_llm_gateway_page() -> Html {
                     } else {
                         None
                     };
+                    let codex_status_resp = if active_tab_value == TAB_ACCOUNTS {
+                        Some(fetch_llm_gateway_status().await?)
+                    } else {
+                        None
+                    };
                     let import_jobs = if should_load_llm_gateway_import_jobs(&active_tab_value) {
                         Some(
                             fetch_admin_llm_gateway_account_import_jobs(Some(
@@ -3215,6 +3323,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         account_group_options_resp,
                         account_groups_page_resp,
                         accounts_resp,
+                        codex_status_resp,
                         import_jobs,
                         effective_key_filter,
                     ))
@@ -3233,6 +3342,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         account_group_options_resp,
                         account_groups_page_resp,
                         accounts_resp,
+                        codex_status_resp,
                         import_jobs,
                         effective_key_filter,
                     )) => {
@@ -3384,9 +3494,11 @@ pub fn admin_llm_gateway_page() -> Html {
                             account_route_weight_tier_inputs.set(next_route_weight_tier_inputs);
                             account_request_max_inputs.set(next_request_max_inputs);
                             account_request_min_inputs.set(next_request_min_inputs);
+                            codex_rate_limit_status.set(codex_status_resp);
                         } else if active_tab_value != TAB_GROUPS {
                             accounts_total.set(0);
                             accounts.set(Vec::new());
+                            codex_rate_limit_status.set(None);
                             account_proxy_inputs.set(BTreeMap::new());
                             account_route_weight_tier_inputs.set(BTreeMap::new());
                             account_request_max_inputs.set(BTreeMap::new());
@@ -5142,12 +5254,14 @@ pub fn admin_llm_gateway_page() -> Html {
         let account_action_inflight = account_action_inflight.clone();
         let account_proxy_inputs = account_proxy_inputs.clone();
         let accounts = accounts.clone();
+        let codex_rate_limit_status = codex_rate_limit_status.clone();
         let flash = flash.clone();
         let load_error = load_error.clone();
         Callback::from(move |account_name: String| {
             let account_action_inflight = account_action_inflight.clone();
             let account_proxy_inputs = account_proxy_inputs.clone();
             let accounts = accounts.clone();
+            let codex_rate_limit_status = codex_rate_limit_status.clone();
             let flash = flash.clone();
             let load_error = load_error.clone();
             wasm_bindgen_futures::spawn_local(async move {
@@ -5168,6 +5282,9 @@ pub fn admin_llm_gateway_page() -> Html {
                         next_inputs
                             .insert(updated.name.clone(), account_proxy_select_value(&updated));
                         account_proxy_inputs.set(next_inputs);
+                        if let Ok(status) = fetch_llm_gateway_status().await {
+                            codex_rate_limit_status.set(Some(status));
+                        }
                         load_error.set(None);
                         flash.emit((format!("已刷新账号 `{}` 的 usage", updated.name), false));
                     },
@@ -5191,12 +5308,14 @@ pub fn admin_llm_gateway_page() -> Html {
         let account_action_inflight = account_action_inflight.clone();
         let account_proxy_inputs = account_proxy_inputs.clone();
         let accounts = accounts.clone();
+        let codex_rate_limit_status = codex_rate_limit_status.clone();
         let flash = flash.clone();
         let load_error = load_error.clone();
         Callback::from(move |account_name: String| {
             let account_action_inflight = account_action_inflight.clone();
             let account_proxy_inputs = account_proxy_inputs.clone();
             let accounts = accounts.clone();
+            let codex_rate_limit_status = codex_rate_limit_status.clone();
             let flash = flash.clone();
             let load_error = load_error.clone();
             wasm_bindgen_futures::spawn_local(async move {
@@ -5219,6 +5338,9 @@ pub fn admin_llm_gateway_page() -> Html {
                         next_inputs
                             .insert(updated.name.clone(), account_proxy_select_value(&updated));
                         account_proxy_inputs.set(next_inputs);
+                        if let Ok(status) = fetch_llm_gateway_status().await {
+                            codex_rate_limit_status.set(Some(status));
+                        }
                         load_error.set(None);
                         let message = match result.code.as_str() {
                             "reset" => format!(
@@ -8827,12 +8949,37 @@ pub fn admin_llm_gateway_page() -> Html {
                                 let on_toggle_account_auto_refresh =
                                     on_toggle_account_auto_refresh.clone();
                                 let on_save_account_settings = on_save_account_settings.clone();
-                                let primary_pct = acc.primary_remaining_percent
-                                    .map(|v| format!("{:.0}%", v))
-                                    .unwrap_or_else(|| "-".to_string());
-                                let secondary_pct = acc.secondary_remaining_percent
-                                    .map(|v| format!("{:.0}%", v))
-                                    .unwrap_or_else(|| "-".to_string());
+                                let rate_limit_bucket = account_rate_limit_bucket(
+                                    (*codex_rate_limit_status).as_ref(),
+                                    &acc_name,
+                                );
+                                let primary_window =
+                                    rate_limit_bucket.and_then(|bucket| bucket.primary.as_ref());
+                                let secondary_window =
+                                    rate_limit_bucket.and_then(|bucket| bucket.secondary.as_ref());
+                                let primary_pct = account_limit_percent_label(
+                                    primary_window,
+                                    acc.primary_remaining_percent,
+                                );
+                                let secondary_pct = account_limit_percent_label(
+                                    secondary_window,
+                                    acc.secondary_remaining_percent,
+                                );
+                                let primary_width = account_limit_width(
+                                    primary_window,
+                                    acc.primary_remaining_percent,
+                                );
+                                let secondary_width = account_limit_width(
+                                    secondary_window,
+                                    acc.secondary_remaining_percent,
+                                );
+                                let primary_used_label = account_limit_used_label(primary_window);
+                                let secondary_used_label =
+                                    account_limit_used_label(secondary_window);
+                                let primary_reset_label =
+                                    account_limit_reset_label(primary_window);
+                                let secondary_reset_label =
+                                    account_limit_reset_label(secondary_window);
                                 let reset_credits_label = acc
                                     .rate_limit_reset_credits_available
                                     .map(|value| value.to_string())
@@ -8878,25 +9025,23 @@ pub fn admin_llm_gateway_page() -> Html {
                                                 }
                                             </div>
                                             if acc_status != "disabled" {
-                                                <div class={classes!("mt-3", "space-y-2.5")}>
-                                                    <div>
-                                                        <div class={classes!("flex", "items-center", "justify-between", "gap-2", "mb-1")}>
-                                                            <span class={classes!("font-mono", "text-[11px]", "font-semibold", "text-[var(--muted)]", "uppercase", "tracking-wider")}>{ "5H" }</span>
-                                                            <span class={classes!("font-mono", "text-sm", "font-black", "text-[var(--text)]")}>{ primary_pct.clone() }</span>
-                                                        </div>
-                                                        <div class={classes!("h-2", "overflow-hidden", "rounded-full", "bg-[var(--surface-alt)]")}>
-                                                            <div class={classes!("h-full", "rounded-full", "transition-[width]", "duration-500", "bg-[linear-gradient(90deg,#0f766e,#14b8a6)]")} style={format!("width: {:.1}%;", acc.primary_remaining_percent.unwrap_or(100.0).clamp(0.0, 100.0))} />
-                                                        </div>
-                                                    </div>
-                                                    <div>
-                                                        <div class={classes!("flex", "items-center", "justify-between", "gap-2", "mb-1")}>
-                                                            <span class={classes!("font-mono", "text-[11px]", "font-semibold", "text-[var(--muted)]", "uppercase", "tracking-wider")}>{ "WEEK" }</span>
-                                                            <span class={classes!("font-mono", "text-sm", "font-black", "text-[var(--text)]")}>{ secondary_pct.clone() }</span>
-                                                        </div>
-                                                        <div class={classes!("h-2", "overflow-hidden", "rounded-full", "bg-[var(--surface-alt)]")}>
-                                                            <div class={classes!("h-full", "rounded-full", "transition-[width]", "duration-500", "bg-[linear-gradient(90deg,#2563eb,#7c3aed)]")} style={format!("width: {:.1}%;", acc.secondary_remaining_percent.unwrap_or(100.0).clamp(0.0, 100.0))} />
-                                                        </div>
-                                                    </div>
+                                                <div class={classes!("mt-3", "grid", "gap-2.5", "sm:grid-cols-2")}>
+                                                    { render_account_limit_tile(
+                                                        "5H",
+                                                        &primary_pct,
+                                                        &primary_used_label,
+                                                        &primary_reset_label,
+                                                        primary_width,
+                                                        "bg-[linear-gradient(90deg,#0f766e,#14b8a6)]",
+                                                    ) }
+                                                    { render_account_limit_tile(
+                                                        "WEEK",
+                                                        &secondary_pct,
+                                                        &secondary_used_label,
+                                                        &secondary_reset_label,
+                                                        secondary_width,
+                                                        "bg-[linear-gradient(90deg,#2563eb,#7c3aed)]",
+                                                    ) }
                                                 </div>
                                             }
                                             // Info section
