@@ -2325,35 +2325,40 @@ pub(crate) async fn consume_llm_gateway_account_rate_limit_reset_credit(
     {
         Ok(result) => result,
         Err(err) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ErrorResponse {
-                    error: format!("Failed to consume llm gateway reset credit: {err}"),
-                    code: StatusCode::BAD_GATEWAY.as_u16(),
-                }),
-            )
-                .into_response();
+            return codex_reset_credit_consume_error_response(err);
         },
     };
-    match state
-        .admin_codex_account_store
-        .get_admin_codex_account(&name)
-        .await
-    {
-        Ok(Some(mut account)) => {
-            apply_codex_public_status_to_admin_account(&mut account, result.account, None);
-            Json(ConsumeCodexRateLimitResetCreditResponse {
-                code: result.code,
-                windows_reset: result.windows_reset,
-                account,
-            })
-            .into_response()
+    let mut account = result.admin_account;
+    apply_codex_public_status_to_admin_account(&mut account, result.account, None);
+    Json(ConsumeCodexRateLimitResetCreditResponse {
+        code: result.code,
+        windows_reset: result.windows_reset,
+        account,
+    })
+    .into_response()
+}
+
+fn codex_reset_credit_consume_error_response(err: anyhow::Error) -> Response {
+    let status = match err.downcast_ref::<codex_status::CodexResetCreditConsumeProblem>() {
+        Some(codex_status::CodexResetCreditConsumeProblem::AccountNotFound {
+            ..
+        }) => StatusCode::NOT_FOUND,
+        Some(codex_status::CodexResetCreditConsumeProblem::AccountNotActive {
+            ..
+        }) => StatusCode::CONFLICT,
+        Some(codex_status::CodexResetCreditConsumeProblem::RouteMissing) => {
+            StatusCode::UNPROCESSABLE_ENTITY
         },
-        Ok(None) => not_found("LLM gateway account not found").into_response(),
-        Err(_) => {
-            internal_error("Failed to load llm gateway account after reset credit").into_response()
-        },
-    }
+        None => StatusCode::BAD_GATEWAY,
+    };
+    (
+        status,
+        Json(ErrorResponse {
+            error: format!("Failed to consume llm gateway reset credit: {err}"),
+            code: status.as_u16(),
+        }),
+    )
+        .into_response()
 }
 
 pub(crate) async fn probe_llm_gateway_account_models(
