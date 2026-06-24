@@ -1,6 +1,9 @@
 //! Pure Codex model-list and model-catalog normalization helpers.
 
-use std::collections::{BTreeSet, HashMap};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::LazyLock,
+};
 
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -12,6 +15,10 @@ use crate::{
 
 const GATEWAY_MODELS_OWNER: &str = "static-flow";
 const BUNDLED_CODEX_MODELS_JSON: &str = include_str!("../codex_models.json");
+static DEFAULT_PUBLIC_MODEL_CATALOG: LazyLock<Result<Value, String>> = LazyLock::new(|| {
+    let catalog = serde_json::from_str(BUNDLED_CODEX_MODELS_JSON).map_err(|err| err.to_string())?;
+    normalize_public_model_catalog_value(catalog, false).map_err(|err| err.to_string())
+});
 
 /// Owner label used on the OpenAI-compatible `/v1/models` response.
 pub fn gateway_models_owner() -> &'static str {
@@ -145,7 +152,10 @@ pub fn normalize_public_model_catalog_value(
 
 /// Build the standalone service's default public model catalog.
 pub fn default_public_model_catalog_value() -> Result<Value> {
-    normalize_public_model_catalog_value(serde_json::from_str(BUNDLED_CODEX_MODELS_JSON)?, false)
+    match &*DEFAULT_PUBLIC_MODEL_CATALOG {
+        Ok(value) => Ok(value.clone()),
+        Err(err) => Err(anyhow!(err.clone())),
+    }
 }
 
 /// Encode the standalone service's default public model catalog as JSON.
