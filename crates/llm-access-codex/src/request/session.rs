@@ -3,7 +3,7 @@
 //! Explicit client-provided anchors win. Derived ids are only used when the
 //! request lacks a usable session/thread/conversation/prompt-cache anchor.
 
-use std::fmt::Write as _;
+use std::io::{self, Write as _};
 
 use axum::http::HeaderMap;
 use serde_json::{Map, Value};
@@ -19,6 +19,8 @@ const HASH_ID_HEX_LEN: usize = 32;
 const HASH_PREVIEW_HEX_LEN: usize = 12;
 const SESSION_METADATA_HEADER: &str = "x-codex-turn-metadata";
 const PROMPT_CACHE_KEY: &str = "prompt_cache_key";
+const STABLE_ROOT_KEYS: &[&str] =
+    &["instructions", "tools", "tool_choice", "parallel_tool_calls", "reasoning", "text"];
 
 const HASH_IGNORED_OBJECT_KEYS: &[&str] = &[
     "id",
@@ -75,16 +77,25 @@ pub fn resolve_codex_session(
         return Some(explicit);
     }
 
-    let (hash_source, source) = if let Some(projection) = stable_prefix_projection(root) {
-        (projection, CodexResolvedSessionSource::StablePrefix)
+    let (hash_source, source, salt) = if let Some(input) = stable_input_prefix(root.get("input")) {
+        (
+            SessionHashProjection::Stable {
+                root,
+                input,
+            },
+            CodexResolvedSessionSource::StablePrefix,
+            STABLE_PREFIX_HASH_SALT,
+        )
     } else {
-        (bootstrap_projection(root), CodexResolvedSessionSource::BootstrapRequest)
+        (
+            SessionHashProjection::Bootstrap {
+                root,
+            },
+            CodexResolvedSessionSource::BootstrapRequest,
+            BOOTSTRAP_HASH_SALT,
+        )
     };
-    let hash = hash_canonical_value(&hash_source, match source {
-        CodexResolvedSessionSource::StablePrefix => STABLE_PREFIX_HASH_SALT,
-        CodexResolvedSessionSource::BootstrapRequest => BOOTSTRAP_HASH_SALT,
-        _ => unreachable!("only derived sources reach hash generation"),
-    });
+    let hash = hash_session_projection(hash_source, salt);
     let session = ResolvedCodexSession::derived(hash, source);
     root.insert(PROMPT_CACHE_KEY.to_string(), Value::String(session.id.clone()));
     Some(session)
@@ -119,7 +130,7 @@ fn explicit_session(
             CodexResolvedSessionSource::MetadataThreadId,
         ));
     }
-    if let Some(value) = header_value(headers, "conversation_id") {
+    if let Some(value) = first_header_value(headers, &["conversation_id", "conversation-id"]) {
         return Some(ResolvedCodexSession::explicit(
             value,
             CodexResolvedSessionSource::ConversationId,
@@ -133,115 +144,147 @@ fn explicit_session(
     })
 }
 
-fn stable_prefix_projection(root: &Map<String, Value>) -> Option<Value> {
-    let stable_input = stable_input_prefix(root.get("input")?)?;
-    let mut projection = Map::new();
-    copy_if_present(root, &mut projection, "instructions");
-    copy_if_present(root, &mut projection, "tools");
-    copy_if_present(root, &mut projection, "tool_choice");
-    copy_if_present(root, &mut projection, "parallel_tool_calls");
-    copy_if_present(root, &mut projection, "reasoning");
-    copy_if_present(root, &mut projection, "text");
-    projection.insert("input".to_string(), Value::Array(stable_input));
-    Some(sanitize_for_hash(&Value::Object(projection)))
-}
-
-fn stable_input_prefix(input: &Value) -> Option<Vec<Value>> {
-    let Value::Array(items) = input else {
+fn stable_input_prefix(input: Option<&Value>) -> Option<&[Value]> {
+    let Value::Array(items) = input? else {
         return None;
     };
-    if items.len() <= 1 {
-        return None;
-    }
-    let prefix = items[..items.len() - 1].to_vec();
-    has_conversation_history(&prefix).then_some(prefix)
+    let end = items.iter().position(is_conversation_seed_item)?;
+    Some(&items[..=end])
 }
 
-fn has_conversation_history(items: &[Value]) -> bool {
-    items.iter().any(|item| {
-        let Some(obj) = item.as_object() else {
-            return false;
-        };
-        match obj.get("type").and_then(Value::as_str) {
-            Some("function_call" | "function_call_output" | "custom_tool_call") => true,
-            Some("message") | None => obj
-                .get("role")
-                .and_then(Value::as_str)
-                .is_some_and(|role| !matches!(role, "system" | "developer")),
-            _ => false,
-        }
-    })
-}
-
-fn bootstrap_projection(root: &Map<String, Value>) -> Value {
-    sanitize_for_hash(&Value::Object(root.clone()))
-}
-
-fn copy_if_present(source: &Map<String, Value>, target: &mut Map<String, Value>, key: &str) {
-    if let Some(value) = source.get(key) {
-        target.insert(key.to_string(), value.clone());
+fn is_conversation_seed_item(item: &Value) -> bool {
+    let Some(obj) = item.as_object() else {
+        return false;
+    };
+    match obj.get("type").and_then(Value::as_str) {
+        Some("function_call" | "function_call_output" | "custom_tool_call") => true,
+        Some("message") | None => obj
+            .get("role")
+            .and_then(Value::as_str)
+            .is_some_and(|role| !matches!(role, "system" | "developer")),
+        _ => false,
     }
 }
 
-fn sanitize_for_hash(value: &Value) -> Value {
-    match value {
-        Value::Array(items) => Value::Array(items.iter().map(sanitize_for_hash).collect()),
-        Value::Object(obj) => {
-            let mut sanitized = Map::new();
-            for (key, value) in obj {
-                if HASH_IGNORED_OBJECT_KEYS.contains(&key.as_str()) {
-                    continue;
-                }
-                sanitized.insert(key.clone(), sanitize_for_hash(value));
-            }
-            Value::Object(sanitized)
-        },
-        other => other.clone(),
+enum SessionHashProjection<'a> {
+    Stable { root: &'a Map<String, Value>, input: &'a [Value] },
+    Bootstrap { root: &'a Map<String, Value> },
+}
+
+enum CanonicalFragment<'a> {
+    Value(&'a Value),
+    Array(&'a [Value]),
+}
+
+struct HashWriter<'a>(&'a mut Sha256);
+
+impl io::Write for HashWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.update(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
-fn hash_canonical_value(value: &Value, salt: &[u8]) -> String {
-    let mut canonical = String::new();
-    write_canonical_value(value, &mut canonical);
+fn hash_session_projection(projection: SessionHashProjection<'_>, salt: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(salt);
-    hasher.update(canonical.as_bytes());
+    match projection {
+        SessionHashProjection::Stable {
+            root,
+            input,
+        } => {
+            write_stable_projection(root, input, &mut hasher);
+        },
+        SessionHashProjection::Bootstrap {
+            root,
+        } => {
+            write_canonical_map(root, &mut hasher);
+        },
+    }
     format!("{:x}", hasher.finalize())
 }
 
-fn write_canonical_value(value: &Value, out: &mut String) {
-    match value {
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
-            out.push_str(&serde_json::to_string(value).expect("primitive JSON serializes"));
-        },
-        Value::Array(items) => {
-            out.push('[');
-            for (index, item) in items.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                write_canonical_value(item, out);
-            }
-            out.push(']');
-        },
-        Value::Object(obj) => {
-            out.push('{');
-            let mut keys = obj.keys().collect::<Vec<_>>();
-            keys.sort_unstable();
-            for (index, key) in keys.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                let _ = write!(out, "{}", serde_json::to_string(key).expect("key serializes"));
-                out.push(':');
-                write_canonical_value(
-                    obj.get(*key).expect("sorted key came from this object"),
-                    out,
-                );
-            }
-            out.push('}');
-        },
+fn write_stable_projection(root: &Map<String, Value>, input: &[Value], hasher: &mut Sha256) {
+    let mut entries = STABLE_ROOT_KEYS
+        .iter()
+        .filter_map(|key| {
+            root.get(*key)
+                .map(|value| (*key, CanonicalFragment::Value(value)))
+        })
+        .collect::<Vec<_>>();
+    entries.push(("input", CanonicalFragment::Array(input)));
+    entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+
+    hasher.update(b"{");
+    for (index, (key, value)) in entries.iter().enumerate() {
+        if index > 0 {
+            hasher.update(b",");
+        }
+        write_json_string(key, hasher);
+        hasher.update(b":");
+        write_canonical_fragment(value, hasher);
     }
+    hasher.update(b"}");
+}
+
+fn write_canonical_fragment(value: &CanonicalFragment<'_>, hasher: &mut Sha256) {
+    match value {
+        CanonicalFragment::Value(value) => write_canonical_value(value, hasher),
+        CanonicalFragment::Array(items) => write_canonical_array(items, hasher),
+    }
+}
+
+fn write_canonical_value(value: &Value, hasher: &mut Sha256) {
+    match value {
+        Value::Null => hasher.update(b"null"),
+        Value::Bool(true) => hasher.update(b"true"),
+        Value::Bool(false) => hasher.update(b"false"),
+        Value::Number(number) => {
+            let mut writer = HashWriter(hasher);
+            write!(&mut writer, "{number}").expect("hash writer cannot fail");
+        },
+        Value::String(value) => write_json_string(value, hasher),
+        Value::Array(items) => write_canonical_array(items, hasher),
+        Value::Object(obj) => write_canonical_map(obj, hasher),
+    }
+}
+
+fn write_canonical_array(items: &[Value], hasher: &mut Sha256) {
+    hasher.update(b"[");
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            hasher.update(b",");
+        }
+        write_canonical_value(item, hasher);
+    }
+    hasher.update(b"]");
+}
+
+fn write_canonical_map(obj: &Map<String, Value>, hasher: &mut Sha256) {
+    let mut keys = obj
+        .keys()
+        .filter(|key| !HASH_IGNORED_OBJECT_KEYS.contains(&key.as_str()))
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+
+    hasher.update(b"{");
+    for (index, key) in keys.iter().enumerate() {
+        if index > 0 {
+            hasher.update(b",");
+        }
+        write_json_string(key, hasher);
+        hasher.update(b":");
+        write_canonical_value(obj.get(*key).expect("sorted key came from this object"), hasher);
+    }
+    hasher.update(b"}");
+}
+
+fn write_json_string(value: &str, hasher: &mut Sha256) {
+    serde_json::to_writer(HashWriter(hasher), value).expect("string serializes");
 }
 
 fn parse_codex_turn_metadata_header(headers: &HeaderMap) -> CodexTurnMetadataHeader {

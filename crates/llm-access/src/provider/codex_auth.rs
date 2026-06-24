@@ -181,16 +181,19 @@ fn resolve_codex_upstream_session_headers(
                 None
             }
         });
-    let conversation_id = header_value(request_headers, "conversation_id").or_else(|| {
-        if should_reconstruct {
-            thread_anchor
-                .map(ToString::to_string)
-                .or_else(|| metadata.thread_id.clone())
-                .or_else(|| resolved_session.map(ToString::to_string))
-        } else {
-            None
-        }
-    });
+    let conversation_id =
+        first_header_value(request_headers, &["conversation_id", "conversation-id"]).or_else(
+            || {
+                if should_reconstruct {
+                    thread_anchor
+                        .map(ToString::to_string)
+                        .or_else(|| metadata.thread_id.clone())
+                        .or_else(|| resolved_session.map(ToString::to_string))
+                } else {
+                    None
+                }
+            },
+        );
     let client_request_id = header_value(request_headers, "x-client-request-id").or_else(|| {
         if should_reconstruct {
             thread_id

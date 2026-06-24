@@ -386,6 +386,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prepare_gateway_request_reuses_hyphenated_conversation_id_header() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("conversation-id", HeaderValue::from_static("conversation-explicit"));
+        let body = Body::from(r#"{"model":"gpt-5.3-codex","input":"hello"}"#);
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("responses request should pass through");
+
+        assert_eq!(prepared.resolved_session_id.as_deref(), Some("conversation-explicit"));
+        assert_eq!(
+            prepared.resolved_session_source,
+            Some(CodexResolvedSessionSource::ConversationId)
+        );
+        assert_eq!(prepared.resolved_session_hash_preview, None);
+    }
+
+    #[tokio::test]
     async fn prepare_gateway_request_reuses_existing_prompt_cache_key_before_deriving_session() {
         let headers = axum::http::HeaderMap::new();
         let body = Body::from(
@@ -493,7 +518,83 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_gateway_request_derives_bootstrap_session_from_full_normalized_first_turn() {
+    async fn prepare_gateway_request_keeps_derived_session_stable_as_history_grows() {
+        let headers = axum::http::HeaderMap::new();
+        let first = Body::from(
+            r#"{
+                "model":"gpt-5.4",
+                "messages":[
+                    {"role":"system","content":"You are concise."},
+                    {"role":"user","content":"Summarize repo state."}
+                ]
+            }"#,
+        );
+        let second = Body::from(
+            r#"{
+                "model":"gpt-5.5",
+                "messages":[
+                    {"role":"system","content":"You are concise."},
+                    {"role":"user","content":"Summarize repo state."},
+                    {"role":"assistant","content":"The repo has a Rust gateway."},
+                    {"role":"user","content":"Now inspect cache hit rate."}
+                ]
+            }"#,
+        );
+        let third = Body::from(
+            r#"{
+                "model":"gpt-5.6",
+                "messages":[
+                    {"role":"system","content":"You are concise."},
+                    {"role":"user","content":"Summarize repo state."},
+                    {"role":"assistant","content":"The repo has a Rust gateway."},
+                    {"role":"user","content":"Now inspect cache hit rate."},
+                    {"role":"assistant","content":"The cache hit rate is low."},
+                    {"role":"user","content":"Suggest the fix."}
+                ]
+            }"#,
+        );
+
+        let first_prepared = prepare_gateway_request(
+            "/v1/chat/completions",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            first,
+            1024 * 1024,
+        )
+        .await
+        .expect("first chat request should normalize");
+        let second_prepared = prepare_gateway_request(
+            "/v1/chat/completions",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            second,
+            1024 * 1024,
+        )
+        .await
+        .expect("second chat request should normalize");
+        let third_prepared = prepare_gateway_request(
+            "/v1/chat/completions",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            third,
+            1024 * 1024,
+        )
+        .await
+        .expect("third chat request should normalize");
+
+        assert_eq!(
+            first_prepared.resolved_session_source,
+            Some(CodexResolvedSessionSource::StablePrefix)
+        );
+        assert_eq!(first_prepared.resolved_session_id, second_prepared.resolved_session_id);
+        assert_eq!(second_prepared.resolved_session_id, third_prepared.resolved_session_id);
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_derives_stable_session_from_normalized_first_turn() {
         let headers = axum::http::HeaderMap::new();
         let first = Body::from(r#"{"model":"gpt-5.4","input":"hello"}"#);
         let second = Body::from(r#"{"model":"gpt-5.5","input":"goodbye"}"#);
@@ -521,7 +622,7 @@ mod tests {
 
         assert_eq!(
             first_prepared.resolved_session_source,
-            Some(CodexResolvedSessionSource::BootstrapRequest)
+            Some(CodexResolvedSessionSource::StablePrefix)
         );
         assert_ne!(first_prepared.resolved_session_id, second_prepared.resolved_session_id);
     }
