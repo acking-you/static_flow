@@ -28,6 +28,21 @@ pub enum CodexResolvedSessionSource {
     BootstrapRequest,
 }
 
+/// Canonical, non-content-bearing Codex session anchor projection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexSessionProjection {
+    /// Hash of stable request context plus already-known history before the
+    /// current turn. Used to recover a prior synthetic session.
+    pub lookup_anchor_hash: String,
+    /// Hash used to mint a synthetic session when no prior anchor is recovered.
+    pub bootstrap_anchor_hash: String,
+    /// Hash of stable request context plus full current request history.
+    pub request_anchor_hash: String,
+    /// Per-item canonical segment hashes for stable context plus current
+    /// request history. These are hashed digests, not prompt text.
+    pub request_anchor_segments: Vec<String>,
+}
+
 impl CodexResolvedSessionSource {
     /// Stable diagnostic label for this source.
     pub fn as_str(self) -> &'static str {
@@ -115,6 +130,8 @@ pub struct PreparedGatewayRequest {
     pub resolved_session_source: Option<CodexResolvedSessionSource>,
     /// Short non-sensitive preview of derived-session hashes.
     pub resolved_session_hash_preview: Option<String>,
+    /// Canonical request projection used for synthetic-session recovery.
+    pub session_projection: Option<CodexSessionProjection>,
     /// Reverse map for restoring shortened OpenAI tool names.
     pub tool_name_restore_map: BTreeMap<String, String>,
     /// Request-level billable-token multiplier.

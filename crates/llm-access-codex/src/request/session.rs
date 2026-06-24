@@ -6,15 +6,21 @@
 use std::io::{self, Write as _};
 
 use axum::http::HeaderMap;
+use bytes::Bytes;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use super::extract_non_empty_string;
-use crate::types::CodexResolvedSessionSource;
+use crate::{
+    error::{internal_error, CodexGatewayResult},
+    types::{CodexResolvedSessionSource, CodexSessionProjection, PreparedGatewayRequest},
+};
 
 const SESSION_ID_PREFIX: &str = "codex-session-v1-";
-const STABLE_PREFIX_HASH_SALT: &[u8] = b"codex-stable-prefix-v1\0";
-const BOOTSTRAP_HASH_SALT: &[u8] = b"codex-bootstrap-request-v1\0";
+const LOOKUP_ANCHOR_HASH_SALT: &[u8] = b"codex-lookup-anchor-v1\0";
+const REQUEST_ANCHOR_HASH_SALT: &[u8] = b"codex-request-anchor-v1\0";
+const BOOTSTRAP_HASH_SALT: &[u8] = b"codex-bootstrap-anchor-v1\0";
+const SEGMENT_HASH_SALT: &[u8] = b"codex-session-segment-v1\0";
 const HASH_ID_HEX_LEN: usize = 32;
 const HASH_PREVIEW_HEX_LEN: usize = 12;
 const SESSION_METADATA_HEADER: &str = "x-codex-turn-metadata";
@@ -33,6 +39,7 @@ const HASH_IGNORED_OBJECT_KEYS: &[&str] = &[
     "previous_response_id",
     "service_tier",
     "prompt_cache_key",
+    "status",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,24 +47,35 @@ pub struct ResolvedCodexSession {
     pub id: String,
     pub source: CodexResolvedSessionSource,
     pub hash_preview: Option<String>,
+    pub projection: Option<CodexSessionProjection>,
 }
 
 impl ResolvedCodexSession {
-    fn explicit(id: String, source: CodexResolvedSessionSource) -> Self {
+    fn explicit(
+        id: String,
+        source: CodexResolvedSessionSource,
+        projection: Option<CodexSessionProjection>,
+    ) -> Self {
         Self {
             id,
             source,
             hash_preview: None,
+            projection,
         }
     }
 
-    fn derived(hash: String, source: CodexResolvedSessionSource) -> Self {
+    fn derived(
+        hash: String,
+        source: CodexResolvedSessionSource,
+        projection: CodexSessionProjection,
+    ) -> Self {
         let id_hex = hex_prefix(&hash, HASH_ID_HEX_LEN);
         let preview = hex_prefix(&hash, HASH_PREVIEW_HEX_LEN);
         Self {
             id: format!("{SESSION_ID_PREFIX}{id_hex}"),
             source,
             hash_preview: Some(preview),
+            projection: Some(projection),
         }
     }
 }
@@ -73,30 +91,18 @@ pub fn resolve_codex_session(
     body: &mut Value,
 ) -> Option<ResolvedCodexSession> {
     let root = body.as_object_mut()?;
-    if let Some(explicit) = explicit_session(headers, root) {
+    let projection = build_session_projection(root);
+    if let Some(explicit) = explicit_session(headers, root, projection.clone()) {
         return Some(explicit);
     }
 
-    let (hash_source, source, salt) = if let Some(input) = stable_input_prefix(root.get("input")) {
-        (
-            SessionHashProjection::Stable {
-                root,
-                input,
-            },
-            CodexResolvedSessionSource::StablePrefix,
-            STABLE_PREFIX_HASH_SALT,
-        )
+    let source = if has_input_history(root.get("input")) {
+        CodexResolvedSessionSource::StablePrefix
     } else {
-        (
-            SessionHashProjection::Bootstrap {
-                root,
-            },
-            CodexResolvedSessionSource::BootstrapRequest,
-            BOOTSTRAP_HASH_SALT,
-        )
+        CodexResolvedSessionSource::BootstrapRequest
     };
-    let hash = hash_session_projection(hash_source, salt);
-    let session = ResolvedCodexSession::derived(hash, source);
+    let session =
+        ResolvedCodexSession::derived(projection.bootstrap_anchor_hash.clone(), source, projection);
     root.insert(PROMPT_CACHE_KEY.to_string(), Value::String(session.id.clone()));
     Some(session)
 }
@@ -104,11 +110,13 @@ pub fn resolve_codex_session(
 fn explicit_session(
     headers: &HeaderMap,
     root: &Map<String, Value>,
+    projection: CodexSessionProjection,
 ) -> Option<ResolvedCodexSession> {
     if let Some(value) = first_header_value(headers, &["session_id", "session-id"]) {
         return Some(ResolvedCodexSession::explicit(
             value,
             CodexResolvedSessionSource::HeaderSessionId,
+            Some(projection),
         ));
     }
     let metadata = parse_codex_turn_metadata_header(headers);
@@ -116,64 +124,61 @@ fn explicit_session(
         return Some(ResolvedCodexSession::explicit(
             value,
             CodexResolvedSessionSource::MetadataSessionId,
+            Some(projection),
         ));
     }
     if let Some(value) = first_header_value(headers, &["thread_id", "thread-id"]) {
         return Some(ResolvedCodexSession::explicit(
             value,
             CodexResolvedSessionSource::HeaderThreadId,
+            Some(projection),
         ));
     }
     if let Some(value) = metadata.thread_id {
         return Some(ResolvedCodexSession::explicit(
             value,
             CodexResolvedSessionSource::MetadataThreadId,
+            Some(projection),
         ));
     }
     if let Some(value) = first_header_value(headers, &["conversation_id", "conversation-id"]) {
         return Some(ResolvedCodexSession::explicit(
             value,
             CodexResolvedSessionSource::ConversationId,
+            Some(projection),
         ));
     }
     extract_non_empty_string(root.get(PROMPT_CACHE_KEY)).map(|value| {
         ResolvedCodexSession::explicit(
             value.to_string(),
             CodexResolvedSessionSource::PromptCacheKey,
+            Some(projection),
         )
     })
 }
 
-fn stable_input_prefix(input: Option<&Value>) -> Option<&[Value]> {
-    let Value::Array(items) = input? else {
-        return None;
-    };
-    let end = items.iter().position(is_conversation_seed_item)?;
-    Some(&items[..=end])
+fn has_input_history(input: Option<&Value>) -> bool {
+    input
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
 }
 
-fn is_conversation_seed_item(item: &Value) -> bool {
+fn is_current_turn_start_item(item: &Value) -> bool {
     let Some(obj) = item.as_object() else {
         return false;
     };
     match obj.get("type").and_then(Value::as_str) {
-        Some("function_call" | "function_call_output" | "custom_tool_call") => true,
+        Some("function_call_output" | "custom_tool_call_output") => true,
         Some("message") | None => obj
             .get("role")
             .and_then(Value::as_str)
-            .is_some_and(|role| !matches!(role, "system" | "developer")),
+            .is_some_and(|role| role == "user"),
         _ => false,
     }
 }
 
-enum SessionHashProjection<'a> {
-    Stable { root: &'a Map<String, Value>, input: &'a [Value] },
-    Bootstrap { root: &'a Map<String, Value> },
-}
-
 enum CanonicalFragment<'a> {
     Value(&'a Value),
-    Array(&'a [Value]),
 }
 
 struct HashWriter<'a>(&'a mut Sha256);
@@ -189,26 +194,80 @@ impl io::Write for HashWriter<'_> {
     }
 }
 
-fn hash_session_projection(projection: SessionHashProjection<'_>, salt: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(salt);
-    match projection {
-        SessionHashProjection::Stable {
-            root,
-            input,
-        } => {
-            write_stable_projection(root, input, &mut hasher);
-        },
-        SessionHashProjection::Bootstrap {
-            root,
-        } => {
-            write_canonical_map(root, &mut hasher);
-        },
-    }
-    format!("{:x}", hasher.finalize())
+/// Build the anchor hash that a follow-up request should use as its lookup hash
+/// after this request succeeds with `completed_response`.
+pub fn build_codex_session_resume_anchor_hash(
+    projection: &CodexSessionProjection,
+    completed_response: &Value,
+) -> String {
+    let mut segments = projection.request_anchor_segments.clone();
+    segments.extend(canonical_response_output_segments(completed_response));
+    hash_segment_hashes(LOOKUP_ANCHOR_HASH_SALT, segments.iter().map(String::as_str))
 }
 
-fn write_stable_projection(root: &Map<String, Value>, input: &[Value], hasher: &mut Sha256) {
+/// Replace the prepared upstream request's locally resolved session id.
+///
+/// Used after provider-side recovery finds an older synthetic session for this
+/// request's lookup anchor.
+pub fn apply_codex_resolved_session(
+    prepared: &mut PreparedGatewayRequest,
+    session_id: String,
+    source: CodexResolvedSessionSource,
+    hash_preview: Option<String>,
+) -> CodexGatewayResult<()> {
+    let mut body = serde_json::from_slice::<Value>(&prepared.request_body)
+        .map_err(|err| internal_error("Failed to decode prepared Codex request body", err))?;
+    if let Some(root) = body.as_object_mut() {
+        root.insert(PROMPT_CACHE_KEY.to_string(), Value::String(session_id.clone()));
+    }
+    prepared.request_body = Bytes::from(
+        serde_json::to_vec(&body)
+            .map_err(|err| internal_error("Failed to encode prepared Codex request body", err))?,
+    );
+    prepared.resolved_session_id = Some(session_id);
+    prepared.resolved_session_source = Some(source);
+    prepared.resolved_session_hash_preview = hash_preview;
+    Ok(())
+}
+
+fn build_session_projection(root: &Map<String, Value>) -> CodexSessionProjection {
+    let mut stable_segments = stable_root_segments(root);
+    let input_segments = root
+        .get("input")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().map(canonical_segment_hash).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let current_start = root
+        .get("input")
+        .and_then(Value::as_array)
+        .map(|items| current_turn_start(items))
+        .unwrap_or(0);
+
+    let mut lookup_segments = stable_segments.clone();
+    lookup_segments.extend(input_segments.iter().take(current_start).cloned());
+
+    stable_segments.extend(input_segments);
+    let request_anchor_segments = stable_segments;
+    let lookup_anchor_hash =
+        hash_segment_hashes(LOOKUP_ANCHOR_HASH_SALT, lookup_segments.iter().map(String::as_str));
+    let request_anchor_hash = hash_segment_hashes(
+        REQUEST_ANCHOR_HASH_SALT,
+        request_anchor_segments.iter().map(String::as_str),
+    );
+    let bootstrap_anchor_hash = hash_segment_hashes(
+        BOOTSTRAP_HASH_SALT,
+        request_anchor_segments.iter().map(String::as_str),
+    );
+
+    CodexSessionProjection {
+        lookup_anchor_hash,
+        bootstrap_anchor_hash,
+        request_anchor_hash,
+        request_anchor_segments,
+    }
+}
+
+fn stable_root_segments(root: &Map<String, Value>) -> Vec<String> {
     let mut entries = STABLE_ROOT_KEYS
         .iter()
         .filter_map(|key| {
@@ -216,25 +275,81 @@ fn write_stable_projection(root: &Map<String, Value>, input: &[Value], hasher: &
                 .map(|value| (*key, CanonicalFragment::Value(value)))
         })
         .collect::<Vec<_>>();
-    entries.push(("input", CanonicalFragment::Array(input)));
     entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
 
+    entries
+        .into_iter()
+        .map(|(key, value)| named_fragment_hash(key, &value))
+        .collect()
+}
+
+fn current_turn_start(items: &[Value]) -> usize {
+    items
+        .iter()
+        .rposition(is_current_turn_start_item)
+        .unwrap_or(items.len())
+}
+
+fn canonical_response_output_segments(completed_response: &Value) -> Vec<String> {
+    completed_response
+        .get("output")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(canonical_assistant_output_segment_hash)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn canonical_assistant_output_segment_hash(value: &Value) -> String {
+    let Some(obj) = value.as_object() else {
+        return canonical_segment_hash(value);
+    };
+    if obj.get("type").and_then(Value::as_str) != Some("message") || obj.contains_key("role") {
+        return canonical_segment_hash(value);
+    }
+    let mut normalized = obj.clone();
+    normalized.insert("role".to_string(), Value::String("assistant".to_string()));
+    canonical_segment_hash(&Value::Object(normalized))
+}
+
+fn named_fragment_hash(key: &str, value: &CanonicalFragment<'_>) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(SEGMENT_HASH_SALT);
     hasher.update(b"{");
-    for (index, (key, value)) in entries.iter().enumerate() {
+    write_json_string(key, &mut hasher);
+    hasher.update(b":");
+    write_canonical_fragment(value, &mut hasher);
+    hasher.update(b"}");
+    format!("{:x}", hasher.finalize())
+}
+
+fn canonical_segment_hash(value: &Value) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(SEGMENT_HASH_SALT);
+    write_canonical_value(value, &mut hasher);
+    format!("{:x}", hasher.finalize())
+}
+
+fn hash_segment_hashes<'a>(salt: &[u8], segments: impl IntoIterator<Item = &'a str>) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(salt);
+    hasher.update(b"[");
+    for (index, segment) in segments.into_iter().enumerate() {
         if index > 0 {
             hasher.update(b",");
         }
-        write_json_string(key, hasher);
-        hasher.update(b":");
-        write_canonical_fragment(value, hasher);
+        hasher.update(segment.as_bytes());
     }
-    hasher.update(b"}");
+    hasher.update(b"]");
+    format!("{:x}", hasher.finalize())
 }
 
 fn write_canonical_fragment(value: &CanonicalFragment<'_>, hasher: &mut Sha256) {
     match value {
         CanonicalFragment::Value(value) => write_canonical_value(value, hasher),
-        CanonicalFragment::Array(items) => write_canonical_array(items, hasher),
     }
 }
 

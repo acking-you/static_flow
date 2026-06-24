@@ -4511,6 +4511,113 @@ async fn codex_dispatch_sends_derived_session_headers_when_client_has_no_session
 }
 
 #[tokio::test]
+async fn codex_dispatch_recovers_session_from_matching_history_without_merging_divergent_history() {
+    let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("codex upstream env lock");
+    let captured = Arc::new(CapturedCodexUpstream::default());
+    let app = Router::new()
+        .route("/v1/responses", post(fake_codex_responses))
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake upstream");
+    let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve fake upstream");
+    });
+    std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+    let route_store = Arc::new(StaticMultiCodexRouteStore {
+        codex_routes: vec![
+            codex_route_for_account("codex-a", "upstream-token-a"),
+            codex_route_for_account("codex-b", "upstream-token-b"),
+        ],
+        kiro_route: static_kiro_route(),
+    });
+    let state = super::ProviderState::new(Arc::new(TestStore), route_store);
+
+    let first = super::provider_entry(
+        state.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                    "model": "gpt-5.4",
+                    "messages": [{"role": "user", "content": "summarize"}],
+                    "stream": false
+                }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+    let matching_follow_up = super::provider_entry(
+        state.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                    "model": "gpt-5.4",
+                    "messages": [
+                        {"role": "user", "content": "summarize"},
+                        {"role": "assistant", "content": "hello back"},
+                        {"role": "user", "content": "continue"}
+                    ],
+                    "stream": false
+                }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+    let divergent_follow_up = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                    "model": "gpt-5.4",
+                    "messages": [
+                        {"role": "user", "content": "summarize"},
+                        {"role": "assistant", "content": "different answer"},
+                        {"role": "user", "content": "continue"}
+                    ],
+                    "stream": false
+                }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+
+    std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(matching_follow_up.status(), StatusCode::OK);
+    assert_eq!(divergent_follow_up.status(), StatusCode::OK);
+    let requests = captured.requests.lock().expect("captured requests");
+    assert_eq!(requests.len(), 3);
+    let first_session = requests[0]
+        .session_id
+        .as_deref()
+        .expect("first request should have a derived session");
+    assert_eq!(requests[1].session_id.as_deref(), Some(first_session));
+    assert_eq!(requests[0].authorization.as_deref(), Some("Bearer upstream-token-a"));
+    assert_eq!(requests[1].authorization.as_deref(), Some("Bearer upstream-token-a"));
+    assert_ne!(requests[2].session_id.as_deref(), Some(first_session));
+    assert_eq!(requests[2].authorization.as_deref(), Some("Bearer upstream-token-b"));
+}
+
+#[tokio::test]
 async fn codex_dispatch_retries_invalid_encrypted_content_without_cross_account_failover() {
     let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
         .lock()

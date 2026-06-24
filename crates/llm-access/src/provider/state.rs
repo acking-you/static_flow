@@ -20,6 +20,7 @@ use llm_access_kiro::{
 
 use super::{
     codex_session_affinity::CodexSessionAffinity,
+    codex_session_recovery::CodexSessionRecovery,
     entry::{is_active_key, is_quota_exhausted, key_matches_route, quota_exhausted_response},
     kiro_session_affinity::KiroSessionAffinity,
     CodexAccountCooldowns, DefaultProviderDispatcher, ForcedProxyRouteStore, ProviderDispatchDeps,
@@ -134,6 +135,7 @@ impl ProviderState {
             request_limiter: Arc::new(RequestLimiter::default()),
             codex_account_cooldowns: Arc::new(CodexAccountCooldowns::default()),
             codex_session_affinity: Arc::new(CodexSessionAffinity::default()),
+            codex_session_recovery: Arc::new(CodexSessionRecovery::default()),
             kiro_request_scheduler: KiroRequestScheduler::new(),
             kiro_session_affinity: Arc::new(KiroSessionAffinity::from_env()),
             kiro_latency_ranker,
@@ -203,6 +205,7 @@ impl ProviderState {
             request_limiter: Arc::clone(&self.request_limiter),
             codex_account_cooldowns: Arc::clone(&self.codex_account_cooldowns),
             codex_session_affinity: Arc::clone(&self.codex_session_affinity),
+            codex_session_recovery: Arc::clone(&self.codex_session_recovery),
             kiro_request_scheduler: Arc::clone(&self.kiro_request_scheduler),
             kiro_session_affinity: Arc::clone(&self.kiro_session_affinity),
             kiro_latency_ranker: Arc::clone(&self.kiro_latency_ranker),

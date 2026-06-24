@@ -234,6 +234,9 @@ pub fn prepare_gateway_request_from_bytes(
         resolved_session_hash_preview: resolved_session
             .as_ref()
             .and_then(|session| session.hash_preview.clone()),
+        session_projection: resolved_session
+            .as_ref()
+            .and_then(|session| session.projection.clone()),
         tool_name_restore_map,
         billable_multiplier,
         last_message_content,

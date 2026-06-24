@@ -37,6 +37,7 @@ pub use policy::{
     align_responses_store_with_upstream, apply_codex_fast_policy, apply_gpt53_codex_spark_mapping,
 };
 pub use prepare::prepare_gateway_request_from_bytes;
+pub use session::{apply_codex_resolved_session, build_codex_session_resume_anchor_hash};
 pub use tools::{normalize_tool_parameters_schema, restore_openai_tool_name};
 
 const DEFAULT_PUBLIC_GPT_MODEL_ID: &str = "gpt-5.5";
@@ -82,6 +83,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
+        build_codex_session_resume_anchor_hash,
         policy::{align_responses_store_with_upstream, apply_codex_fast_policy},
         prepare::prepare_gateway_request,
     };
@@ -110,6 +112,7 @@ mod tests {
             resolved_session_id: None,
             resolved_session_source: None,
             resolved_session_hash_preview: None,
+            session_projection: None,
             tool_name_restore_map: Default::default(),
             billable_multiplier: 1,
             last_message_content: None,
@@ -445,8 +448,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_gateway_request_derives_stable_prefix_session_from_history_not_latest_turn_or_model(
-    ) {
+    async fn prepare_gateway_request_projects_same_lookup_anchor_for_same_history_prefix() {
         let headers = axum::http::HeaderMap::new();
         let first = Body::from(
             r#"{
@@ -501,24 +503,29 @@ mod tests {
             first_prepared.resolved_session_source,
             Some(CodexResolvedSessionSource::StablePrefix)
         );
-        assert_eq!(first_prepared.resolved_session_id, second_prepared.resolved_session_id);
-        assert!(first_prepared
-            .resolved_session_id
-            .as_deref()
-            .is_some_and(|value| value.starts_with("codex-session-v1-")));
+        let first_projection = first_prepared
+            .session_projection
+            .as_ref()
+            .expect("first request should have a session projection");
+        let second_projection = second_prepared
+            .session_projection
+            .as_ref()
+            .expect("second request should have a session projection");
+        assert_eq!(first_projection.lookup_anchor_hash, second_projection.lookup_anchor_hash);
+        assert_ne!(first_prepared.resolved_session_id, second_prepared.resolved_session_id);
         assert_eq!(
             first_upstream["prompt_cache_key"],
             json!(first_prepared
                 .resolved_session_id
                 .as_deref()
-                .expect("stable-prefix session id should be resolved"))
+                .expect("bootstrap session id should be resolved"))
         );
-        assert_eq!(first_upstream["prompt_cache_key"], second_upstream["prompt_cache_key"]);
+        assert_ne!(first_upstream["prompt_cache_key"], second_upstream["prompt_cache_key"]);
         assert!(first_prepared.resolved_session_hash_preview.is_some());
     }
 
     #[tokio::test]
-    async fn prepare_gateway_request_keeps_derived_session_stable_as_history_grows() {
+    async fn prepare_gateway_request_resume_anchor_matches_next_turn_lookup_anchor() {
         let headers = axum::http::HeaderMap::new();
         let first = Body::from(
             r#"{
@@ -585,12 +592,41 @@ mod tests {
         .await
         .expect("third chat request should normalize");
 
+        let first_projection = first_prepared
+            .session_projection
+            .as_ref()
+            .expect("first request should have a session projection");
+        let second_projection = second_prepared
+            .session_projection
+            .as_ref()
+            .expect("second request should have a session projection");
+        let third_projection = third_prepared
+            .session_projection
+            .as_ref()
+            .expect("third request should have a session projection");
+        let first_completed = json!({
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "The repo has a Rust gateway."}]
+            }]
+        });
+        let second_completed = json!({
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "The cache hit rate is low."}]
+            }]
+        });
+
         assert_eq!(
-            first_prepared.resolved_session_source,
-            Some(CodexResolvedSessionSource::StablePrefix)
+            build_codex_session_resume_anchor_hash(first_projection, &first_completed),
+            second_projection.lookup_anchor_hash
         );
-        assert_eq!(first_prepared.resolved_session_id, second_prepared.resolved_session_id);
-        assert_eq!(second_prepared.resolved_session_id, third_prepared.resolved_session_id);
+        assert_eq!(
+            build_codex_session_resume_anchor_hash(second_projection, &second_completed),
+            third_projection.lookup_anchor_hash
+        );
     }
 
     #[tokio::test]
