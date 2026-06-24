@@ -847,6 +847,7 @@ mod tests {
             plan_type: Some("Pro".to_string()),
             primary_remaining_percent,
             secondary_remaining_percent,
+            rate_limit_reset_credits_available: None,
             last_usage_checked_at: Some(100),
             last_usage_success_at: Some(100),
             usage_error_message: usage_error_message.map(str::to_string),

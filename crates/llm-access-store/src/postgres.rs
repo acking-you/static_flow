@@ -998,7 +998,10 @@ mod tests {
             .get_admin_runtime_config()
             .await
             .expect("runtime config");
-        assert_eq!(config.codex_client_version.as_str(), "0.124.0");
+        assert_eq!(
+            config.codex_client_version.as_str(),
+            super::core_store::DEFAULT_CODEX_CLIENT_VERSION
+        );
 
         let key = repo
             .authenticate_bearer_secret("secret")

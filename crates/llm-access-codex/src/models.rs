@@ -1,6 +1,9 @@
 //! Pure Codex model-list and model-catalog normalization helpers.
 
-use std::collections::{BTreeSet, HashMap};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::LazyLock,
+};
 
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -11,6 +14,11 @@ use crate::{
 };
 
 const GATEWAY_MODELS_OWNER: &str = "static-flow";
+const BUNDLED_CODEX_MODELS_JSON: &str = include_str!("../codex_models.json");
+static DEFAULT_PUBLIC_MODEL_CATALOG: LazyLock<Result<Value, String>> = LazyLock::new(|| {
+    let catalog = serde_json::from_str(BUNDLED_CODEX_MODELS_JSON).map_err(|err| err.to_string())?;
+    normalize_public_model_catalog_value(catalog, false).map_err(|err| err.to_string())
+});
 
 /// Owner label used on the OpenAI-compatible `/v1/models` response.
 pub fn gateway_models_owner() -> &'static str {
@@ -25,6 +33,9 @@ pub fn extract_gateway_model_descriptors(
     let mut items = BTreeSet::<GatewayModelDescriptor>::new();
     if let Some(models) = value.get("models").and_then(Value::as_array) {
         for item in models {
+            if !catalog_model_is_api_visible(item) {
+                continue;
+            }
             let id = item
                 .get("slug")
                 .or_else(|| item.get("id"))
@@ -56,6 +67,19 @@ pub fn extract_gateway_model_descriptors(
         }
     }
     items.into_iter().collect()
+}
+
+fn catalog_model_is_api_visible(item: &Value) -> bool {
+    let supported_in_api = item
+        .get("supported_in_api")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let visible = item
+        .get("visibility")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_none_or(|value| !value.eq_ignore_ascii_case("hide"));
+    supported_in_api && visible
 }
 
 fn map_catalog_slug(slug: &str, map_gpt53_codex_to_spark: bool) -> (&str, bool) {
@@ -92,11 +116,17 @@ pub fn normalize_public_model_catalog_value(
         let (final_slug, was_alias) = map_catalog_slug(&raw_slug, map_gpt53_codex_to_spark);
         if let Some(object) = item.as_object_mut() {
             object.insert("slug".to_string(), Value::String(final_slug.to_string()));
-            object.insert(
-                "base_instructions".to_string(),
-                Value::String(codex_default_instructions().to_string()),
-            );
-            object.remove("model_messages");
+            let needs_fallback_instructions = object
+                .get("base_instructions")
+                .and_then(Value::as_str)
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true);
+            if needs_fallback_instructions {
+                object.insert(
+                    "base_instructions".to_string(),
+                    Value::String(codex_default_instructions().to_string()),
+                );
+            }
             if was_alias
                 && object.get("display_name").and_then(Value::as_str) == Some(raw_slug.as_str())
             {
@@ -122,43 +152,10 @@ pub fn normalize_public_model_catalog_value(
 
 /// Build the standalone service's default public model catalog.
 pub fn default_public_model_catalog_value() -> Result<Value> {
-    normalize_public_model_catalog_value(
-        json!({
-            "models": [
-                {
-                    "slug": "gpt-5.5",
-                    "display_name": "gpt-5.5",
-                    "visibility": "list",
-                    "supported_in_api": true
-                },
-                {
-                    "slug": "gpt-5.5-mini",
-                    "display_name": "gpt-5.5-mini",
-                    "visibility": "list",
-                    "supported_in_api": true
-                },
-                {
-                    "slug": "gpt-5.4",
-                    "display_name": "gpt-5.4",
-                    "visibility": "list",
-                    "supported_in_api": true
-                },
-                {
-                    "slug": "gpt-5.4-mini",
-                    "display_name": "gpt-5.4-mini",
-                    "visibility": "list",
-                    "supported_in_api": true
-                },
-                {
-                    "slug": "gpt-5.3-codex",
-                    "display_name": "gpt-5.3-codex",
-                    "visibility": "list",
-                    "supported_in_api": true
-                }
-            ]
-        }),
-        false,
-    )
+    match &*DEFAULT_PUBLIC_MODEL_CATALOG {
+        Ok(value) => Ok(value.clone()),
+        Err(err) => Err(anyhow!(err.clone())),
+    }
 }
 
 /// Encode the standalone service's default public model catalog as JSON.
@@ -300,8 +297,40 @@ mod tests {
         assert_eq!(models[0]["display_name"], "gpt-5.3-codex");
         assert_eq!(models[0]["supported_in_api"], true);
         assert_eq!(models[1]["slug"], "gpt-5.5");
-        assert_eq!(models[1]["base_instructions"], json!(codex_default_instructions()));
-        assert!(models[1].get("model_messages").is_none());
+        assert_eq!(models[1]["base_instructions"], "upstream instructions");
+        assert_eq!(models[1]["model_messages"]["instructions_template"], "upstream template");
+    }
+
+    #[test]
+    fn public_model_catalog_preserves_upstream_model_prompts() {
+        let body = serde_json::to_vec(&json!({
+            "models": [
+                {
+                    "slug": "gpt-5.5",
+                    "display_name": "GPT-5.5",
+                    "supported_in_api": true,
+                    "base_instructions": "upstream model instructions",
+                    "model_messages": {
+                        "instructions_template": "upstream template",
+                        "instructions_variables": {
+                            "personality_pragmatic": "pragmatic personality"
+                        }
+                    }
+                }
+            ]
+        }))
+        .expect("serialize sample models payload");
+
+        let value =
+            parse_public_model_catalog_json(&body, false).expect("catalog json should parse");
+        let model = &value["models"][0];
+
+        assert_eq!(model["base_instructions"], "upstream model instructions");
+        assert_eq!(model["model_messages"]["instructions_template"], "upstream template");
+        assert_eq!(
+            model["model_messages"]["instructions_variables"]["personality_pragmatic"],
+            "pragmatic personality"
+        );
     }
 
     #[test]
@@ -347,20 +376,62 @@ mod tests {
     }
 
     #[test]
-    fn default_public_model_catalog_injects_instructions() {
+    fn default_public_model_catalog_carries_model_specific_instructions() {
         let value = super::default_public_model_catalog_value()
             .expect("default model catalog should build");
         let models = value["models"]
             .as_array()
             .expect("models should be an array");
 
-        assert!(models
+        let gpt55 = models
             .iter()
-            .any(|item| item["slug"].as_str() == Some("gpt-5.5")));
+            .find(|item| item["slug"].as_str() == Some("gpt-5.5"))
+            .expect("gpt-5.5 should be in bundled catalog");
+        assert!(gpt55["base_instructions"]
+            .as_str()
+            .is_some_and(|instructions| instructions.starts_with("You are Codex")));
+        assert!(gpt55.get("model_messages").is_some());
         assert!(models.iter().all(|item| item
             .get("base_instructions")
             .and_then(serde_json::Value::as_str)
-            == Some(codex_default_instructions())));
+            .is_some_and(|instructions| !instructions.trim().is_empty())));
+    }
+
+    #[test]
+    fn default_public_model_catalog_tracks_bundled_codex_models() {
+        let value = super::default_public_model_catalog_value()
+            .expect("default model catalog should build");
+        let slugs = value["models"]
+            .as_array()
+            .expect("models should be an array")
+            .iter()
+            .filter_map(|item| item["slug"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(slugs.contains(&"gpt-5.5"));
+        assert!(slugs.contains(&"gpt-5.2"));
+        assert!(!slugs.contains(&"gpt-5.5-mini"));
+    }
+
+    #[test]
+    fn openai_models_response_filters_hidden_and_unsupported_catalog_models() {
+        let catalog = json!({
+            "models": [
+                { "slug": "gpt-visible", "supported_in_api": true },
+                { "slug": "gpt-hidden", "visibility": "hide", "supported_in_api": true },
+                { "slug": "gpt-unsupported", "supported_in_api": false }
+            ]
+        });
+
+        let value = super::openai_models_response_value_from_catalog(&catalog, false, 123);
+        let ids = value["data"]
+            .as_array()
+            .expect("data should be an array")
+            .iter()
+            .filter_map(|item| item["id"].as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["gpt-visible"]);
     }
 
     #[test]

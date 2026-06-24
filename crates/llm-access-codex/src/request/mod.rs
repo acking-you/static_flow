@@ -638,6 +638,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prepare_gateway_request_responses_preserves_remote_compaction_v2_trigger() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.5",
+                "input":[
+                    {"type":"message","role":"user","content":[{"type":"input_text","text":"history"}]},
+                    {"type":"compaction_trigger"}
+                ],
+                "tools":[{"type":"web_search"}],
+                "parallel_tool_calls":true
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("remote compaction v2 trigger should pass through native responses");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(upstream["input"][1]["type"], "compaction_trigger");
+        assert!(upstream["input"][1].get("role").is_none());
+        assert_eq!(upstream["tools"], json!([{ "type": "web_search" }]));
+        assert_eq!(upstream["parallel_tool_calls"], true);
+    }
+
+    #[tokio::test]
     async fn prepare_gateway_request_repairs_chat_tool_call_without_output() {
         let headers = axum::http::HeaderMap::new();
         let body = Body::from(

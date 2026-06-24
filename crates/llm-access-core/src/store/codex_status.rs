@@ -58,6 +58,9 @@ pub struct CodexPublicAccountStatus {
     /// Secondary bucket remaining percentage when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secondary_remaining_percent: Option<f64>,
+    /// Available rate-limit reset credits when upstream reports them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit_reset_credits_available: Option<i64>,
     /// Last usage refresh attempt timestamp.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_usage_checked_at: Option<i64>,

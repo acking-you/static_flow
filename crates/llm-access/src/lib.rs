@@ -311,6 +311,10 @@ pub fn router_with_simulator(
             post(admin::refresh_llm_gateway_account_usage),
         )
         .route(
+            "/admin/llm-gateway/accounts/:name/rate-limit-reset-credits/consume",
+            post(admin::consume_llm_gateway_account_rate_limit_reset_credit),
+        )
+        .route(
             "/admin/llm-gateway/accounts/:name/probe-models",
             post(admin::probe_llm_gateway_account_models),
         )
@@ -1234,7 +1238,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
         assert_eq!(value["auth_cache_ttl_seconds"], 60);
         assert_eq!(value["max_request_body_bytes"], 8 * 1024 * 1024);
-        assert_eq!(value["codex_client_version"], "0.124.0");
+        assert_eq!(value["codex_client_version"], "0.142.0");
         assert_eq!(value["kiro_prefix_cache_mode"], "prefix_tree");
         assert_eq!(value["kiro_context_usage_min_request_tokens"], 15_000);
     }

@@ -16,6 +16,7 @@ use crate::{
         admin_reject_llm_gateway_token_request,
         admin_validate_llm_gateway_account_contribution_request,
         check_admin_llm_gateway_proxy_config, check_admin_llm_gateway_proxy_config_full_chain,
+        consume_admin_llm_gateway_account_rate_limit_reset_credit,
         create_admin_llm_gateway_account_group, create_admin_llm_gateway_account_import_job,
         create_admin_llm_gateway_key, create_admin_llm_gateway_proxy_config,
         delete_admin_llm_gateway_account, delete_admin_llm_gateway_account_group,
@@ -5186,6 +5187,75 @@ pub fn admin_llm_gateway_page() -> Html {
         })
     };
 
+    let on_consume_account_reset_credit = {
+        let account_action_inflight = account_action_inflight.clone();
+        let account_proxy_inputs = account_proxy_inputs.clone();
+        let accounts = accounts.clone();
+        let flash = flash.clone();
+        let load_error = load_error.clone();
+        Callback::from(move |account_name: String| {
+            let account_action_inflight = account_action_inflight.clone();
+            let account_proxy_inputs = account_proxy_inputs.clone();
+            let accounts = accounts.clone();
+            let flash = flash.clone();
+            let load_error = load_error.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut inflight = (*account_action_inflight).clone();
+                inflight.insert(account_name.clone());
+                account_action_inflight.set(inflight);
+
+                match consume_admin_llm_gateway_account_rate_limit_reset_credit(&account_name).await
+                {
+                    Ok(result) => {
+                        let updated = result.account;
+                        let mut items = (*accounts).clone();
+                        if let Some(item) = items.iter_mut().find(|item| item.name == updated.name)
+                        {
+                            *item = updated.clone();
+                        }
+                        accounts.set(items);
+
+                        let mut next_inputs = (*account_proxy_inputs).clone();
+                        next_inputs
+                            .insert(updated.name.clone(), account_proxy_select_value(&updated));
+                        account_proxy_inputs.set(next_inputs);
+                        load_error.set(None);
+                        let message = match result.code.as_str() {
+                            "reset" => format!(
+                                "已使用账号 `{}` 的 reset credit，重置 {} 个窗口",
+                                updated.name, result.windows_reset
+                            ),
+                            "nothing_to_reset" => {
+                                format!("账号 `{}` 当前没有需要重置的限额窗口", updated.name)
+                            },
+                            "no_credit" => {
+                                format!("账号 `{}` 当前没有可用 reset credit", updated.name)
+                            },
+                            "already_redeemed" => {
+                                format!("账号 `{}` 的本次 reset 请求已处理过", updated.name)
+                            },
+                            other => {
+                                format!("账号 `{}` reset credit 返回 `{}`", updated.name, other)
+                            },
+                        };
+                        flash.emit((message, false));
+                    },
+                    Err(err) => {
+                        load_error.set(Some(err.clone()));
+                        flash.emit((
+                            format!("使用账号 `{}` 的 reset credit 失败\n{err}", account_name),
+                            true,
+                        ));
+                    },
+                }
+
+                let mut inflight = (*account_action_inflight).clone();
+                inflight.remove(&account_name);
+                account_action_inflight.set(inflight);
+            });
+        })
+    };
+
     let on_probe_account_models = {
         let account_action_inflight = account_action_inflight.clone();
         let flash = flash.clone();
@@ -8665,6 +8735,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                 let acc_name_for_delete = acc.name.clone();
                                 let acc_name_for_auth_refresh = acc.name.clone();
                                 let acc_name_for_usage_refresh = acc.name.clone();
+                                let acc_name_for_reset_credit_consume = acc.name.clone();
                                 let acc_name_for_models_probe = acc.name.clone();
                                 let acc_name_for_proxy_change = acc.name.clone();
                                 let acc_name_for_route_weight_tier_change = acc.name.clone();
@@ -8748,6 +8819,8 @@ pub fn admin_llm_gateway_page() -> Html {
                                 let on_probe_account_models = on_probe_account_models.clone();
                                 let on_refresh_account_auth = on_refresh_account_auth.clone();
                                 let on_refresh_account_usage = on_refresh_account_usage.clone();
+                                let on_consume_account_reset_credit =
+                                    on_consume_account_reset_credit.clone();
                                 let on_toggle_account_status = on_toggle_account_status.clone();
                                 let on_toggle_account_spark_mapping =
                                     on_toggle_account_spark_mapping.clone();
@@ -8760,6 +8833,12 @@ pub fn admin_llm_gateway_page() -> Html {
                                 let secondary_pct = acc.secondary_remaining_percent
                                     .map(|v| format!("{:.0}%", v))
                                     .unwrap_or_else(|| "-".to_string());
+                                let reset_credits_label = acc
+                                    .rate_limit_reset_credits_available
+                                    .map(|value| value.to_string())
+                                    .unwrap_or_else(|| "-".to_string());
+                                let reset_credit_available =
+                                    acc.rate_limit_reset_credits_available.unwrap_or(0) > 0;
                                 let is_pro = is_gpt_pro_account(acc_plan_type.as_deref());
                                 let show_spark_toggle = is_pro || spark_mapping_enabled;
                                 let account_busy =
@@ -8834,6 +8913,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                                 </div>
                                                 <div>{ scheduler_line.clone() }</div>
                                                 <div>{ format!("route weight tier: {}", acc.route_weight_tier) }</div>
+                                                <div>{ format!("reset credits available: {}", reset_credits_label) }</div>
                                                 <div class={classes!("flex", "gap-3", "flex-wrap")}>
                                                     <span>{ if auto_refresh_enabled { "auto refresh on" } else { "auto refresh off" } }</span>
                                                     <span>{ format!("token refresh {}", last_refresh_line) }</span>
@@ -8957,6 +9037,17 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     disabled={account_busy}
                                                 >
                                                     { if account_busy { "..." } else { "刷新 Usage" } }
+                                                </button>
+                                                <button
+                                                    class={classes!(
+                                                        "btn-terminal",
+                                                        if reset_credit_available { "btn-terminal-primary" } else { "" }
+                                                    )}
+                                                    onclick={Callback::from(move |_| on_consume_account_reset_credit.emit(acc_name_for_reset_credit_consume.clone()))}
+                                                    disabled={account_busy || account_disabled || !reset_credit_available}
+                                                    title="使用一个 Codex usage limit reset credit"
+                                                >
+                                                    { if account_busy { "..." } else if reset_credit_available { "重置限额" } else { "无 Reset" } }
                                                 </button>
                                                 <button
                                                     class={classes!("btn-terminal")}

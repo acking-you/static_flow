@@ -589,6 +589,7 @@ impl AdminCodexAccountStore for EmptyAdminCodexAccountStore {
                 .unwrap_or_else(|| "auto".to_string()),
             primary_remaining_percent: None,
             secondary_remaining_percent: None,
+            rate_limit_reset_credits_available: None,
             map_gpt53_codex_to_spark: account.map_gpt53_codex_to_spark,
             auto_refresh_enabled: account.auto_refresh_enabled,
             request_max_concurrency: None,
