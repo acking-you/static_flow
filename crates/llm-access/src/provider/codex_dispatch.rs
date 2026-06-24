@@ -31,7 +31,7 @@ use llm_access_codex::{
         encode_json_sse_chunk, encode_sse_event_with_model_alias, extract_usage_from_bytes,
         rewrite_json_response_model_alias, rewrite_json_value_model_alias, SseUsageCollector,
     },
-    types::{ChatStreamMetadata, GatewayResponseAdapter},
+    types::{ChatStreamMetadata, CodexResolvedSessionSource, GatewayResponseAdapter},
 };
 use llm_access_core::store::AuthenticatedKey;
 use rand::Rng;
@@ -216,15 +216,29 @@ pub async fn dispatch_codex_proxy(
     usage_meta.last_message_content = prepared.last_message_content.clone();
     let codex_affinity_id = build_codex_affinity_id(
         &key.key_id,
-        &gateway_path,
-        &request_headers,
-        prepared.thread_anchor.as_deref(),
-        &body,
-        &runtime_config.affinity,
+        prepared.resolved_session_id.as_deref(),
+        prepared.resolved_session_source,
     );
     let preferred_account_name = codex_affinity_id.as_ref().and_then(|affinity_id| {
         codex_session_affinity.lookup(affinity_id, &runtime_config.affinity)
     });
+    let session_counts =
+        (routes.len() > 1 && codex_affinity_id.is_some() && preferred_account_name.is_none())
+            .then(|| codex_session_affinity.account_session_counts(&runtime_config.affinity));
+    usage_meta.routing_diagnostics_json = Some(
+        json!({
+            "codex_session_source": prepared
+                .resolved_session_source
+                .map(|source| source.as_str()),
+            "codex_session_hash_preview": prepared.resolved_session_hash_preview.as_deref(),
+            "codex_session_bootstrap": prepared
+                .resolved_session_source
+                .is_some_and(|source| source == CodexResolvedSessionSource::BootstrapRequest),
+            "codex_affinity_hit": preferred_account_name.is_some(),
+            "codex_new_session_spread": session_counts.is_some(),
+        })
+        .to_string(),
+    );
     let method = match reqwest::Method::from_bytes(prepared.method.as_str().as_bytes()) {
         Ok(method) => method,
         Err(_) => return (StatusCode::METHOD_NOT_ALLOWED, "unsupported method").into_response(),
@@ -250,6 +264,7 @@ pub async fn dispatch_codex_proxy(
             &routes,
             &failed_accounts,
             preferred_account_name.as_deref(),
+            session_counts.as_ref(),
         )
         .await
         {

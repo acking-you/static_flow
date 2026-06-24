@@ -10,7 +10,8 @@
 //!     +-- [policy] spark/fast/billing   +-- [chat_completions] chat->responses
 //!     +-- [native_responses] repair     +-- [tools] schema + name maps
 //!     +-- [normalization] url/model     +-- [last_message] preview
-//!     +-- [headers] header/IP/origin    +-- [path] gateway path classify
+//!     +-- [headers] header/IP/origin    +-- [session] resolved session ids
+//!     +-- [path] gateway path classify
 //! ```
 
 use serde_json::Value;
@@ -23,6 +24,7 @@ mod normalization;
 mod path;
 mod policy;
 mod prepare;
+mod session;
 mod tools;
 
 pub use headers::{
@@ -85,7 +87,7 @@ mod tests {
     };
     use crate::{
         instructions::codex_default_instructions,
-        types::{GatewayResponseAdapter, PreparedGatewayRequest},
+        types::{CodexResolvedSessionSource, GatewayResponseAdapter, PreparedGatewayRequest},
     };
 
     fn prepared_responses_request(path: &str, body: serde_json::Value) -> PreparedGatewayRequest {
@@ -105,6 +107,9 @@ mod tests {
             content_type: "application/json".to_string(),
             response_adapter: GatewayResponseAdapter::Responses,
             thread_anchor: None,
+            resolved_session_id: None,
+            resolved_session_source: None,
+            resolved_session_hash_preview: None,
             tool_name_restore_map: Default::default(),
             billable_multiplier: 1,
             last_message_content: None,
@@ -349,6 +354,173 @@ mod tests {
         assert_eq!(upstream["input"][0]["content"][0]["type"], json!("input_text"));
         assert_eq!(upstream["input"][0]["content"][0]["text"], json!("hello"));
         assert_eq!(upstream["stream"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_reuses_explicit_session_id_without_prompt_cache_injection() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("session_id", HeaderValue::from_static("session-explicit"));
+        let body = Body::from(r#"{"model":"gpt-5.3-codex","input":"hello"}"#);
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("responses request should pass through");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(prepared.resolved_session_id.as_deref(), Some("session-explicit"));
+        assert_eq!(
+            prepared.resolved_session_source,
+            Some(CodexResolvedSessionSource::HeaderSessionId)
+        );
+        assert_eq!(prepared.resolved_session_hash_preview, None);
+        assert!(upstream.get("prompt_cache_key").is_none());
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_reuses_existing_prompt_cache_key_before_deriving_session() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "prompt_cache_key":"thread-anchor",
+                "input":"hello"
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("responses request should pass through");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(prepared.resolved_session_id.as_deref(), Some("thread-anchor"));
+        assert_eq!(
+            prepared.resolved_session_source,
+            Some(CodexResolvedSessionSource::PromptCacheKey)
+        );
+        assert_eq!(prepared.resolved_session_hash_preview, None);
+        assert_eq!(upstream["prompt_cache_key"], json!("thread-anchor"));
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_derives_stable_prefix_session_from_history_not_latest_turn_or_model(
+    ) {
+        let headers = axum::http::HeaderMap::new();
+        let first = Body::from(
+            r#"{
+                "model":"gpt-5.4",
+                "messages":[
+                    {"role":"system","content":"You are concise."},
+                    {"role":"user","content":"Summarize repo state."},
+                    {"role":"assistant","content":"The repo has a Rust gateway."},
+                    {"role":"user","content":"Now inspect cache hit rate."}
+                ]
+            }"#,
+        );
+        let second = Body::from(
+            r#"{
+                "model":"gpt-5.5",
+                "messages":[
+                    {"role":"system","content":"You are concise."},
+                    {"role":"user","content":"Summarize repo state."},
+                    {"role":"assistant","content":"The repo has a Rust gateway."},
+                    {"role":"user","content":"Now inspect deployment logs."}
+                ]
+            }"#,
+        );
+
+        let first_prepared = prepare_gateway_request(
+            "/v1/chat/completions",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            first,
+            1024 * 1024,
+        )
+        .await
+        .expect("first chat request should normalize");
+        let second_prepared = prepare_gateway_request(
+            "/v1/chat/completions",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            second,
+            1024 * 1024,
+        )
+        .await
+        .expect("second chat request should normalize");
+        let first_upstream: serde_json::Value =
+            serde_json::from_slice(&first_prepared.request_body).expect("first upstream body json");
+        let second_upstream: serde_json::Value =
+            serde_json::from_slice(&second_prepared.request_body)
+                .expect("second upstream body json");
+
+        assert_eq!(
+            first_prepared.resolved_session_source,
+            Some(CodexResolvedSessionSource::StablePrefix)
+        );
+        assert_eq!(first_prepared.resolved_session_id, second_prepared.resolved_session_id);
+        assert!(first_prepared
+            .resolved_session_id
+            .as_deref()
+            .is_some_and(|value| value.starts_with("codex-session-v1-")));
+        assert_eq!(
+            first_upstream["prompt_cache_key"],
+            json!(first_prepared.resolved_session_id.as_deref().unwrap())
+        );
+        assert_eq!(first_upstream["prompt_cache_key"], second_upstream["prompt_cache_key"]);
+        assert!(first_prepared.resolved_session_hash_preview.is_some());
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_derives_bootstrap_session_from_full_normalized_first_turn() {
+        let headers = axum::http::HeaderMap::new();
+        let first = Body::from(r#"{"model":"gpt-5.4","input":"hello"}"#);
+        let second = Body::from(r#"{"model":"gpt-5.5","input":"goodbye"}"#);
+
+        let first_prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            first,
+            1024 * 1024,
+        )
+        .await
+        .expect("first response request should normalize");
+        let second_prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            second,
+            1024 * 1024,
+        )
+        .await
+        .expect("second response request should normalize");
+
+        assert_eq!(
+            first_prepared.resolved_session_source,
+            Some(CodexResolvedSessionSource::BootstrapRequest)
+        );
+        assert_ne!(first_prepared.resolved_session_id, second_prepared.resolved_session_id);
     }
 
     #[tokio::test]

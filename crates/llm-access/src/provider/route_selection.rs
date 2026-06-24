@@ -36,6 +36,7 @@ pub async fn select_codex_route_with_account_permit(
     routes: &[ProviderCodexRoute],
     failed_accounts: &HashSet<String>,
     preferred_account_name: Option<&str>,
+    session_counts: Option<&HashMap<String, usize>>,
 ) -> Result<(ProviderCodexRoute, LimitPermit), Response> {
     if routes.is_empty() {
         return Err(
@@ -73,7 +74,23 @@ pub async fn select_codex_route_with_account_permit(
                 }
             }
         }
-        for route in routes {
+        let mut ordered_routes = routes.iter().enumerate().collect::<Vec<_>>();
+        if let Some(session_counts) = session_counts {
+            ordered_routes.sort_by(|(left_index, left), (right_index, right)| {
+                session_counts
+                    .get(&left.account_name)
+                    .copied()
+                    .unwrap_or_default()
+                    .cmp(
+                        &session_counts
+                            .get(&right.account_name)
+                            .copied()
+                            .unwrap_or_default(),
+                    )
+                    .then_with(|| left_index.cmp(right_index))
+            });
+        }
+        for (_, route) in ordered_routes {
             if failed_accounts.contains(&route.account_name) {
                 continue;
             }

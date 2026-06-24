@@ -6,6 +6,50 @@ use bytes::Bytes;
 use http::Method;
 use serde_json::{Map, Value};
 
+/// Source used to resolve the stable Codex session id for affinity and
+/// upstream session headers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexResolvedSessionSource {
+    /// `session_id` or `session-id` request header.
+    HeaderSessionId,
+    /// `session_id` from `x-codex-turn-metadata`.
+    MetadataSessionId,
+    /// `thread_id` or `thread-id` request header.
+    HeaderThreadId,
+    /// `thread_id` from `x-codex-turn-metadata`.
+    MetadataThreadId,
+    /// `conversation_id` request header.
+    ConversationId,
+    /// Request-body `prompt_cache_key`.
+    PromptCacheKey,
+    /// Deterministic hash of the normalized stable prompt prefix.
+    StablePrefix,
+    /// Deterministic hash of the normalized full first-turn request.
+    BootstrapRequest,
+}
+
+impl CodexResolvedSessionSource {
+    /// Stable diagnostic label for this source.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::HeaderSessionId => "header_session_id",
+            Self::MetadataSessionId => "metadata_session_id",
+            Self::HeaderThreadId => "header_thread_id",
+            Self::MetadataThreadId => "metadata_thread_id",
+            Self::ConversationId => "conversation_id",
+            Self::PromptCacheKey => "prompt_cache_key",
+            Self::StablePrefix => "stable_prefix",
+            Self::BootstrapRequest => "bootstrap_request",
+        }
+    }
+
+    /// Whether this source was generated locally instead of supplied by the
+    /// client.
+    pub fn is_derived(self) -> bool {
+        matches!(self, Self::StablePrefix | Self::BootstrapRequest)
+    }
+}
+
 /// Token usage accounting in the billing model used by the gateway.
 #[derive(Debug, Clone, Default)]
 pub struct UsageBreakdown {
@@ -64,6 +108,13 @@ pub struct PreparedGatewayRequest {
     pub response_adapter: GatewayResponseAdapter,
     /// Prompt cache anchor extracted from headers or request body.
     pub thread_anchor: Option<String>,
+    /// Stable session id resolved from explicit request metadata or derived
+    /// from a canonical normalized request projection.
+    pub resolved_session_id: Option<String>,
+    /// Origin of [`Self::resolved_session_id`].
+    pub resolved_session_source: Option<CodexResolvedSessionSource>,
+    /// Short non-sensitive preview of derived-session hashes.
+    pub resolved_session_hash_preview: Option<String>,
     /// Reverse map for restoring shortened OpenAI tool names.
     pub tool_name_restore_map: BTreeMap<String, String>,
     /// Request-level billable-token multiplier.

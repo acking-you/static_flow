@@ -150,6 +150,11 @@ fn resolve_codex_upstream_session_headers(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    let resolved_session = prepared
+        .resolved_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let should_reconstruct = is_standard_codex_responses_path(prepared);
     let session_id =
         first_header_value(request_headers, &["session_id", "session-id"]).or_else(|| {
@@ -158,6 +163,7 @@ fn resolve_codex_upstream_session_headers(
                     .session_id
                     .clone()
                     .or_else(|| thread_anchor.map(ToString::to_string))
+                    .or_else(|| resolved_session.map(ToString::to_string))
             } else {
                 None
             }
@@ -169,6 +175,7 @@ fn resolve_codex_upstream_session_headers(
                     .thread_id
                     .clone()
                     .or_else(|| thread_anchor.map(ToString::to_string))
+                    .or_else(|| resolved_session.map(ToString::to_string))
                     .or_else(|| session_id.clone())
             } else {
                 None
@@ -179,6 +186,7 @@ fn resolve_codex_upstream_session_headers(
             thread_anchor
                 .map(ToString::to_string)
                 .or_else(|| metadata.thread_id.clone())
+                .or_else(|| resolved_session.map(ToString::to_string))
         } else {
             None
         }
@@ -188,6 +196,7 @@ fn resolve_codex_upstream_session_headers(
             thread_id
                 .clone()
                 .or_else(|| thread_anchor.map(ToString::to_string))
+                .or_else(|| resolved_session.map(ToString::to_string))
         } else {
             None
         }

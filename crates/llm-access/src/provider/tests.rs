@@ -10,11 +10,12 @@ use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
     extract::State,
-    http::{header, HeaderMap, HeaderValue, Request, StatusCode},
+    http::{header, HeaderMap, Request, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
+use llm_access_codex::types::CodexResolvedSessionSource;
 use llm_access_core::{
     provider::RouteStrategy,
     store::{
@@ -4452,6 +4453,64 @@ async fn codex_dispatch_reconstructs_thread_headers_from_metadata_and_prompt_cac
 }
 
 #[tokio::test]
+async fn codex_dispatch_sends_derived_session_headers_when_client_has_no_session_anchor() {
+    let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("codex upstream env lock");
+    let captured = Arc::new(CapturedCodexUpstream::default());
+    let app = Router::new()
+        .route("/v1/responses", post(fake_codex_responses))
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake upstream");
+    let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve fake upstream");
+    });
+    std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+    let state = super::ProviderState::new(Arc::new(TestStore), static_codex_route_store());
+    let response = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                    "model": "gpt-5.4",
+                    "messages": [
+                        {"role": "user", "content": "summarize"},
+                        {"role": "assistant", "content": "summary"},
+                        {"role": "user", "content": "continue"}
+                    ],
+                    "stream": false
+                }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+
+    std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = captured.requests.lock().expect("captured requests");
+    assert_eq!(requests.len(), 1);
+    let session_id = requests[0]
+        .session_id
+        .as_deref()
+        .expect("derived session should be sent upstream");
+    assert!(session_id.starts_with("codex-session-v1-"));
+    assert_eq!(requests[0].conversation_id.as_deref(), Some(session_id));
+    assert_eq!(requests[0].x_client_request_id.as_deref(), Some(session_id));
+    assert_eq!(requests[0].body["prompt_cache_key"].as_str(), Some(session_id));
+}
+
+#[tokio::test]
 async fn codex_dispatch_retries_invalid_encrypted_content_without_cross_account_failover() {
     let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
         .lock()
@@ -6025,6 +6084,7 @@ async fn codex_route_selection_skips_terminal_auth_error_routes() {
         &[blocked, healthy],
         &HashSet::new(),
         None,
+        None,
     )
     .await
     .expect("healthy route should still be selected");
@@ -6045,6 +6105,7 @@ async fn codex_route_selection_prefers_affinity_account_when_usable() {
         &[first, preferred],
         &HashSet::new(),
         Some("codex-b"),
+        None,
     )
     .await
     .expect("preferred route should be selected");
@@ -6052,45 +6113,54 @@ async fn codex_route_selection_prefers_affinity_account_when_usable() {
     assert_eq!(route.account_name, "codex-b");
 }
 
-#[test]
-fn codex_affinity_id_uses_explicit_session_before_body_fallback() {
-    let mut headers = HeaderMap::new();
-    headers.insert("session_id", HeaderValue::from_static("session-a"));
-    let config = CodexAffinityRuntimeConfig::default();
+#[tokio::test]
+async fn codex_route_selection_spreads_new_sessions_to_least_bound_account() {
+    let limiter = Arc::new(RequestLimiter::default());
+    let cooldowns = Arc::new(CodexAccountCooldowns::default());
+    let alpha = codex_route_for_account("codex-a", "upstream-token-a");
+    let beta = codex_route_for_account("codex-b", "upstream-token-b");
+    let mut session_counts = HashMap::new();
+    session_counts.insert("codex-a".to_string(), 5usize);
+    session_counts.insert("codex-b".to_string(), 1usize);
 
+    let (route, _permit) = select_codex_route_with_account_permit(
+        &limiter,
+        &cooldowns,
+        &[alpha, beta],
+        &HashSet::new(),
+        None,
+        Some(&session_counts),
+    )
+    .await
+    .expect("least-bound route should be selected");
+
+    assert_eq!(route.account_name, "codex-b");
+}
+
+#[test]
+fn codex_affinity_id_uses_explicit_resolved_session() {
     let affinity = build_codex_affinity_id(
         "key-a",
-        "/v1/responses",
-        &headers,
-        Some("thread-anchor"),
-        br#"{"input":"body that should not affect explicit affinity"}"#,
-        &config,
+        Some("session-a"),
+        Some(CodexResolvedSessionSource::HeaderSessionId),
     )
     .expect("explicit affinity id");
 
     assert_eq!(affinity.source, CodexAffinitySource::Explicit);
-    assert_eq!(affinity.key.as_str(), "key-a:explicit:session-a");
+    assert_eq!(affinity.key.as_str(), "5:key-asession-a");
 }
 
 #[test]
-fn codex_affinity_id_hashes_body_prefix_when_explicit_session_is_missing() {
-    let headers = HeaderMap::new();
-    let config = CodexAffinityRuntimeConfig {
-        fallback_prefix_bytes: 16,
-        fallback_min_body_bytes: 8,
-        ..CodexAffinityRuntimeConfig::default()
-    };
-    let body_a = b"same-prefix-1234567890 trailing-a";
-    let body_b = b"same-prefix-1234567890 trailing-b";
+fn codex_affinity_id_uses_derived_source_for_generated_session() {
+    let affinity = build_codex_affinity_id(
+        "key-a",
+        Some("codex-session-v1-abcdef"),
+        Some(CodexResolvedSessionSource::StablePrefix),
+    )
+    .expect("derived affinity id");
 
-    let first = build_codex_affinity_id("key-a", "/v1/responses", &headers, None, body_a, &config)
-        .expect("fallback affinity id");
-    let second = build_codex_affinity_id("key-a", "/v1/responses", &headers, None, body_b, &config)
-        .expect("fallback affinity id");
-
-    assert_eq!(first.source, CodexAffinitySource::FallbackBodyPrefix);
-    assert_eq!(first.key, second.key);
-    assert!(first.key.starts_with("key-a:fallback-body-prefix:"));
+    assert_eq!(affinity.source, CodexAffinitySource::Derived);
+    assert_eq!(affinity.key.as_str(), "5:key-acodex-session-v1-abcdef");
 }
 
 #[test]
@@ -6133,6 +6203,24 @@ fn codex_session_affinity_preserves_entries_when_capacity_changes() {
     assert_eq!(affinity.lookup(&affinity_id, &expanded_config).as_deref(), Some("codex-a"));
 }
 
+#[test]
+fn codex_session_affinity_ignores_derived_sessions_when_fallback_affinity_is_disabled() {
+    let affinity = CodexSessionAffinity::default();
+    let config = CodexAffinityRuntimeConfig {
+        fallback_enabled: false,
+        ..CodexAffinityRuntimeConfig::default()
+    };
+    let affinity_id = CodexAffinityId {
+        key: "key-a:derived:session-a".to_string(),
+        source: CodexAffinitySource::Derived,
+    };
+
+    affinity.remember(&affinity_id, "codex-a", &config);
+
+    assert!(affinity.lookup(&affinity_id, &config).is_none());
+    assert!(affinity.account_session_counts(&config).is_empty());
+}
+
 #[tokio::test]
 async fn codex_route_selection_returns_bad_gateway_when_all_routes_have_terminal_auth_errors() {
     let limiter = Arc::new(RequestLimiter::default());
@@ -6155,6 +6243,7 @@ async fn codex_route_selection_returns_bad_gateway_when_all_routes_have_terminal
         &cooldowns,
         &[blocked_a, blocked_b],
         &HashSet::new(),
+        None,
         None,
     )
     .await
