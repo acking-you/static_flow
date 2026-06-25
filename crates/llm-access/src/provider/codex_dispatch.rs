@@ -73,9 +73,9 @@ use super::{
     CodexCompletedResponseContext, CodexPreflightFailureRecord, CodexSessionAffinity,
     CodexSessionRecovery, CodexSessionRecoveryLookup, CodexSessionRecoveryStoreResult,
     CodexStreamContext, CodexStreamRecordGuard, CodexUpstreamResponseContext,
-    CodexUpstreamResponseParts, ProviderDispatchDeps, ProviderUsageMetadata, StreamRecordState,
-    CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MAX, CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MIN,
-    MAX_PROVIDER_PROXY_BODY_BYTES,
+    CodexUpstreamResponseParts, LimitPermit, ProviderDispatchDeps, ProviderUsageMetadata,
+    StreamRecordState, CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MAX,
+    CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MIN, MAX_PROVIDER_PROXY_BODY_BYTES,
 };
 use crate::codex_refresh;
 
@@ -545,25 +545,28 @@ pub async fn dispatch_codex_proxy(
                 account_permit,
             ];
             capture_codex_dispatch_request_json(&mut usage_meta, &body, &prepared);
-            return adapt_codex_upstream_response_from_parts(
-                CodexUpstreamResponseParts {
-                    status,
-                    upstream_headers,
-                    content_type,
-                    bytes,
-                },
-                CodexCompletedResponseContext {
-                    prepared,
-                    key,
-                    route,
-                    control_store,
-                    codex_session_recovery: Arc::clone(&codex_session_recovery),
-                    codex_session_rejection: Arc::clone(&codex_session_rejection),
-                    affinity_config: runtime_config.affinity.clone(),
-                    codex_affinity_id: codex_affinity_id.clone(),
-                    permits,
-                    usage_meta,
-                },
+            return codex_outcome_response(
+                adapt_codex_upstream_response_from_parts(
+                    CodexUpstreamResponseParts {
+                        status,
+                        upstream_headers,
+                        content_type,
+                        bytes,
+                    },
+                    CodexCompletedResponseContext {
+                        prepared,
+                        key,
+                        route,
+                        control_store,
+                        codex_session_recovery: Arc::clone(&codex_session_recovery),
+                        codex_session_rejection: Arc::clone(&codex_session_rejection),
+                        affinity_config: runtime_config.affinity.clone(),
+                        codex_affinity_id: codex_affinity_id.clone(),
+                        permits,
+                        usage_meta,
+                    },
+                )
+                .await,
             )
             .await;
         }
@@ -580,19 +583,43 @@ pub async fn dispatch_codex_proxy(
                     .expect("codex key permit should be held until response is returned"),
                 account_permit,
             ];
-            return adapt_codex_upstream_response(response, CodexUpstreamResponseContext {
-                prepared,
-                key,
-                route,
-                control_store,
-                codex_session_recovery: Arc::clone(&codex_session_recovery),
-                codex_session_rejection: Arc::clone(&codex_session_rejection),
-                affinity_config: runtime_config.affinity.clone(),
-                codex_affinity_id: codex_affinity_id.clone(),
-                permits,
-                usage_meta,
-            })
-            .await;
+            match classify_codex_upstream_outcome(
+                adapt_codex_upstream_response(response, CodexUpstreamResponseContext {
+                    // Clone the loop-invariant state so it survives a failover
+                    // `continue` (the `Retry` arm re-enters the loop and reuses
+                    // these for the next account).
+                    prepared: prepared.clone(),
+                    key: key.clone(),
+                    route,
+                    control_store: Arc::clone(&control_store),
+                    codex_session_recovery: Arc::clone(&codex_session_recovery),
+                    codex_session_rejection: Arc::clone(&codex_session_rejection),
+                    affinity_config: runtime_config.affinity.clone(),
+                    codex_affinity_id: codex_affinity_id.clone(),
+                    permits,
+                    usage_meta,
+                })
+                .await,
+                &routes,
+                &mut failed_accounts,
+                account_attempt_limit,
+                attempt_count,
+                &codex_account_cooldowns,
+            ) {
+                CodexLoopStep::Respond(response) => return response,
+                CodexLoopStep::Surface {
+                    error,
+                    ctx,
+                } => return record_codex_stream_preflight_failure(error, *ctx).await,
+                CodexLoopStep::Retry {
+                    usage_meta: retry_usage_meta,
+                    key_permit: retry_key_permit,
+                } => {
+                    usage_meta = *retry_usage_meta;
+                    key_permit = Some(retry_key_permit);
+                    continue;
+                },
+            }
         }
         let mut response_prepared = prepared.clone();
         let mut status = response.status();
@@ -653,7 +680,7 @@ pub async fn dispatch_codex_proxy(
                             .expect("codex key permit should be held until response is returned"),
                         account_permit,
                     ];
-                    return adapt_codex_upstream_response(response, CodexUpstreamResponseContext {
+                    match adapt_codex_upstream_response(response, CodexUpstreamResponseContext {
                         prepared: retry_prepared,
                         key,
                         route,
@@ -665,7 +692,14 @@ pub async fn dispatch_codex_proxy(
                         permits,
                         usage_meta,
                     })
-                    .await;
+                    .await
+                    {
+                        CodexUpstreamOutcome::Responded(response) => return response,
+                        CodexUpstreamOutcome::Failover {
+                            error,
+                            ctx,
+                        } => return record_codex_stream_preflight_failure(error, *ctx).await,
+                    }
                 }
                 response_prepared = retry_prepared;
                 status = response.status();
@@ -744,7 +778,7 @@ pub async fn dispatch_codex_proxy(
                         .expect("codex key permit should be held until response is returned"),
                     account_permit,
                 ];
-                return adapt_codex_upstream_response(response, CodexUpstreamResponseContext {
+                match adapt_codex_upstream_response(response, CodexUpstreamResponseContext {
                     prepared: response_prepared,
                     key,
                     route,
@@ -756,7 +790,14 @@ pub async fn dispatch_codex_proxy(
                     permits,
                     usage_meta,
                 })
-                .await;
+                .await
+                {
+                    CodexUpstreamOutcome::Responded(response) => return response,
+                    CodexUpstreamOutcome::Failover {
+                        error,
+                        ctx,
+                    } => return record_codex_stream_preflight_failure(error, *ctx).await,
+                }
             }
             status = response.status();
             upstream_headers = response.headers().clone();
@@ -829,25 +870,28 @@ pub async fn dispatch_codex_proxy(
             account_permit,
         ];
         capture_codex_dispatch_request_json(&mut usage_meta, &body, &response_prepared);
-        return adapt_codex_upstream_response_from_parts(
-            CodexUpstreamResponseParts {
-                status,
-                upstream_headers,
-                content_type,
-                bytes,
-            },
-            CodexCompletedResponseContext {
-                prepared: response_prepared,
-                key,
-                route,
-                control_store,
-                codex_session_recovery: Arc::clone(&codex_session_recovery),
-                codex_session_rejection: Arc::clone(&codex_session_rejection),
-                affinity_config: runtime_config.affinity.clone(),
-                codex_affinity_id: codex_affinity_id.clone(),
-                permits,
-                usage_meta,
-            },
+        return codex_outcome_response(
+            adapt_codex_upstream_response_from_parts(
+                CodexUpstreamResponseParts {
+                    status,
+                    upstream_headers,
+                    content_type,
+                    bytes,
+                },
+                CodexCompletedResponseContext {
+                    prepared: response_prepared,
+                    key,
+                    route,
+                    control_store,
+                    codex_session_recovery: Arc::clone(&codex_session_recovery),
+                    codex_session_rejection: Arc::clone(&codex_session_rejection),
+                    affinity_config: runtime_config.affinity.clone(),
+                    codex_affinity_id: codex_affinity_id.clone(),
+                    permits,
+                    usage_meta,
+                },
+            )
+            .await,
         )
         .await;
     }
@@ -1214,6 +1258,112 @@ fn has_codex_failover_candidate(
     })
 }
 
+/// Result of adapting a 2xx upstream response. A success (or a non-recoverable
+/// error that belongs on the client) is `Responded`; a recoverable failure that
+/// was detected *before any byte reached the client* (an SSE preflight failure)
+/// is `Failover`, handing the context back so the dispatch loop can try another
+/// account exactly like the non-2xx error path does.
+enum CodexUpstreamOutcome {
+    Responded(Response),
+    Failover { error: CodexClassifiedUpstreamError, ctx: Box<CodexStreamContext> },
+}
+
+/// What the dispatch loop should do with an adapted upstream outcome.
+enum CodexLoopStep {
+    Respond(Response),
+    Surface { error: CodexClassifiedUpstreamError, ctx: Box<CodexStreamContext> },
+    Retry { usage_meta: Box<ProviderUsageMetadata>, key_permit: LimitPermit },
+}
+
+/// Applies the same disposition-driven cooldown + failover policy used by the
+/// non-2xx path to an in-stream failure surfaced via [`CodexUpstreamOutcome`].
+/// Returns `Retry` (caller restores `usage_meta`/`key_permit` and continues the
+/// loop) when another account can be tried, otherwise the response to return.
+fn classify_codex_upstream_outcome(
+    outcome: CodexUpstreamOutcome,
+    routes: &[ProviderCodexRoute],
+    failed_accounts: &mut HashSet<String>,
+    account_attempt_limit: usize,
+    attempt_count: usize,
+    codex_account_cooldowns: &Arc<CodexAccountCooldowns>,
+) -> CodexLoopStep {
+    let (error, ctx) = match outcome {
+        CodexUpstreamOutcome::Responded(response) => return CodexLoopStep::Respond(response),
+        CodexUpstreamOutcome::Failover {
+            error,
+            ctx,
+        } => (error, ctx),
+    };
+    let disposition = codex_error_disposition(&error);
+    let account_name = ctx.route.account_name.clone();
+    match disposition {
+        CodexErrorDisposition::ReturnToClient {
+            strict_session_block,
+        } => {
+            if strict_session_block {
+                maybe_remember_codex_session_rejection(
+                    ctx.codex_session_rejection.as_ref(),
+                    ctx.route.codex_strict_session_rejection_enabled,
+                    ctx.codex_affinity_id.as_ref(),
+                    &error,
+                    &account_name,
+                    &ctx.affinity_config,
+                );
+            }
+        },
+        CodexErrorDisposition::FailoverWithCooldown {
+            cooldown,
+        } => {
+            codex_account_cooldowns.mark_account_cooldown(&account_name, cooldown);
+        },
+        CodexErrorDisposition::Failover
+        | CodexErrorDisposition::RetrySameAccount {
+            ..
+        } => {
+            mark_codex_transient_request_failure_cooldown(codex_account_cooldowns, &account_name);
+        },
+    }
+    if !matches!(disposition, CodexErrorDisposition::ReturnToClient { .. })
+        && attempt_count < account_attempt_limit
+        && has_codex_failover_candidate(routes, failed_accounts, &account_name)
+    {
+        failed_accounts.insert(account_name);
+        let CodexStreamContext {
+            permits,
+            mut usage_meta,
+            ..
+        } = *ctx;
+        usage_meta.mark_failover();
+        let mut permits = permits.into_iter();
+        let key_permit = permits
+            .next()
+            .expect("codex key permit should be first in the stream context permits");
+        // The account permit (next item) is dropped here, releasing the slot
+        // before the loop selects another account.
+        return CodexLoopStep::Retry {
+            usage_meta: Box::new(usage_meta),
+            key_permit,
+        };
+    }
+    CodexLoopStep::Surface {
+        error,
+        ctx,
+    }
+}
+
+/// Collapses an outcome to a client `Response` for terminal paths that cannot
+/// fail over (the loop already exhausted accounts, or is surfacing a non-2xx
+/// error). A `Failover` here is treated as a surface.
+async fn codex_outcome_response(outcome: CodexUpstreamOutcome) -> Response {
+    match outcome {
+        CodexUpstreamOutcome::Responded(response) => response,
+        CodexUpstreamOutcome::Failover {
+            error,
+            ctx,
+        } => record_codex_stream_preflight_failure(error, *ctx).await,
+    }
+}
+
 fn log_codex_error_disposition(
     key: &AuthenticatedKey,
     account_name: &str,
@@ -1237,7 +1387,7 @@ fn log_codex_error_disposition(
 async fn adapt_codex_upstream_response(
     response: reqwest::Response,
     ctx: CodexUpstreamResponseContext,
-) -> Response {
+) -> CodexUpstreamOutcome {
     let CodexUpstreamResponseContext {
         prepared,
         key,
@@ -1269,8 +1419,10 @@ async fn adapt_codex_upstream_response(
         let bytes = match response.bytes().await {
             Ok(bytes) => bytes,
             Err(_) => {
-                return (StatusCode::BAD_GATEWAY, "codex upstream response read failed")
-                    .into_response()
+                return CodexUpstreamOutcome::Responded(
+                    (StatusCode::BAD_GATEWAY, "codex upstream response read failed")
+                        .into_response(),
+                )
             },
         };
         if !has_event_stream_content_type && serde_json::from_slice::<Value>(&bytes).is_ok() {
@@ -1353,18 +1505,20 @@ async fn adapt_codex_upstream_response(
                 )
                 .await
                 {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("failed to record codex usage: {record_err}"),
-                    )
-                        .into_response();
+                    return CodexUpstreamOutcome::Responded(
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("failed to record codex usage: {record_err}"),
+                        )
+                            .into_response(),
+                    );
                 }
-                return codex_surface_error_response_with_code(
+                return CodexUpstreamOutcome::Responded(codex_surface_error_response_with_code(
                     &prepared.original_path,
                     effective_status,
                     &classified_error.message,
                     codex_surface_code_for_error_class(classified_error.class),
-                );
+                ));
             },
         };
         let completed_response = rewrite_json_value_model_alias(
@@ -1388,8 +1542,10 @@ async fn adapt_codex_upstream_response(
         let body = match serde_json::to_vec(&adapted) {
             Ok(body) => body,
             Err(_) => {
-                return (StatusCode::BAD_GATEWAY, "codex upstream response adaptation failed")
-                    .into_response()
+                return CodexUpstreamOutcome::Responded(
+                    (StatusCode::BAD_GATEWAY, "codex upstream response adaptation failed")
+                        .into_response(),
+                )
             },
         };
         if let Err(err) = record_codex_usage(
@@ -1403,21 +1559,23 @@ async fn adapt_codex_upstream_response(
         )
         .await
         {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to record codex usage: {err}"),
-            )
-                .into_response();
+            return CodexUpstreamOutcome::Responded(
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to record codex usage: {err}"))
+                    .into_response(),
+            );
         }
         let builder = Response::builder()
             .status(status)
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::CACHE_CONTROL, "no-store");
-        return apply_upstream_response_headers(builder, &upstream_headers)
-            .body(Body::from(body))
-            .unwrap_or_else(|_| {
-                (StatusCode::BAD_GATEWAY, "codex upstream response build failed").into_response()
-            });
+        return CodexUpstreamOutcome::Responded(
+            apply_upstream_response_headers(builder, &upstream_headers)
+                .body(Body::from(body))
+                .unwrap_or_else(|_| {
+                    (StatusCode::BAD_GATEWAY, "codex upstream response build failed")
+                        .into_response()
+                }),
+        );
     }
 
     if expects_stream_response {
@@ -1446,7 +1604,9 @@ async fn adapt_codex_upstream_response(
     let bytes = match response.bytes().await {
         Ok(bytes) => bytes,
         Err(_) => {
-            return (StatusCode::BAD_GATEWAY, "codex upstream response read failed").into_response()
+            return CodexUpstreamOutcome::Responded(
+                (StatusCode::BAD_GATEWAY, "codex upstream response read failed").into_response(),
+            )
         },
     };
     adapt_codex_upstream_response_from_parts(
@@ -1474,7 +1634,7 @@ async fn adapt_codex_upstream_response(
 async fn adapt_codex_upstream_response_from_parts(
     parts: CodexUpstreamResponseParts,
     ctx: CodexCompletedResponseContext,
-) -> Response {
+) -> CodexUpstreamOutcome {
     let CodexUpstreamResponseParts {
         status,
         upstream_headers,
@@ -1543,16 +1703,18 @@ async fn adapt_codex_upstream_response_from_parts(
     )
     .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to record codex usage: {err}"))
-            .into_response();
+        return CodexUpstreamOutcome::Responded(
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to record codex usage: {err}"))
+                .into_response(),
+        );
     }
     if let Some(error) = success_error.as_ref() {
-        return codex_surface_error_response_with_code(
+        return CodexUpstreamOutcome::Responded(codex_surface_error_response_with_code(
             &prepared.original_path,
             effective_status,
             &error.message,
             codex_surface_code_for_error_class(error.class),
-        );
+        ));
     }
     if !status.is_success()
         && prepared.response_adapter == GatewayResponseAdapter::AnthropicMessages
@@ -1568,11 +1730,14 @@ async fn adapt_codex_upstream_response_from_parts(
             .status(status)
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::CACHE_CONTROL, "no-store");
-        return apply_upstream_response_headers(builder, &upstream_headers)
-            .body(Body::from(body.to_string()))
-            .unwrap_or_else(|_| {
-                (StatusCode::BAD_GATEWAY, "codex upstream response build failed").into_response()
-            });
+        return CodexUpstreamOutcome::Responded(
+            apply_upstream_response_headers(builder, &upstream_headers)
+                .body(Body::from(body.to_string()))
+                .unwrap_or_else(|_| {
+                    (StatusCode::BAD_GATEWAY, "codex upstream response build failed")
+                        .into_response()
+                }),
+        );
     }
     let response_content_type =
         if status.is_success() && prepared.response_adapter != GatewayResponseAdapter::Responses {
@@ -1601,7 +1766,11 @@ async fn adapt_codex_upstream_response_from_parts(
                     prepared.client_visible_model.as_deref(),
                 ) {
                     Ok(body) => Body::from(body),
-                    Err(err) => return (StatusCode::BAD_GATEWAY, err).into_response(),
+                    Err(err) => {
+                        return CodexUpstreamOutcome::Responded(
+                            (StatusCode::BAD_GATEWAY, err).into_response(),
+                        )
+                    },
                 }
             },
             GatewayResponseAdapter::AnthropicMessages => {
@@ -1612,7 +1781,11 @@ async fn adapt_codex_upstream_response_from_parts(
                     prepared.client_visible_model.as_deref(),
                 ) {
                     Ok(body) => Body::from(body),
-                    Err(err) => return (StatusCode::BAD_GATEWAY, err).into_response(),
+                    Err(err) => {
+                        return CodexUpstreamOutcome::Responded(
+                            (StatusCode::BAD_GATEWAY, err).into_response(),
+                        )
+                    },
                 }
             },
         }
@@ -1629,11 +1802,13 @@ async fn adapt_codex_upstream_response_from_parts(
         .status(status)
         .header(header::CONTENT_TYPE, response_content_type)
         .header(header::CACHE_CONTROL, "no-store");
-    apply_upstream_response_headers(builder, &upstream_headers)
-        .body(response_body)
-        .unwrap_or_else(|_| {
-            (StatusCode::BAD_GATEWAY, "codex upstream response build failed").into_response()
-        })
+    CodexUpstreamOutcome::Responded(
+        apply_upstream_response_headers(builder, &upstream_headers)
+            .body(response_body)
+            .unwrap_or_else(|_| {
+                (StatusCode::BAD_GATEWAY, "codex upstream response build failed").into_response()
+            }),
+    )
 }
 fn codex_message_indicates_usage_limit(message: &str) -> bool {
     let normalized = message.to_ascii_lowercase();
@@ -1707,7 +1882,7 @@ async fn stream_codex_upstream_response(
     upstream_headers: reqwest::header::HeaderMap,
     content_type: String,
     ctx: CodexStreamContext,
-) -> Response {
+) -> CodexUpstreamOutcome {
     let response_adapter = ctx.prepared.response_adapter;
     let mut events = response
         .bytes_stream()
@@ -1721,7 +1896,10 @@ async fn stream_codex_upstream_response(
                 Some(event.event.as_str()),
                 &event.data,
             ) {
-                return record_codex_stream_preflight_failure(error, ctx).await;
+                return CodexUpstreamOutcome::Failover {
+                    error,
+                    ctx: Box::new(ctx),
+                };
             }
             Some(event)
         },
@@ -1733,7 +1911,10 @@ async fn stream_codex_upstream_response(
                 body: Bytes::new(),
                 retry_after: None,
             };
-            return record_codex_stream_preflight_failure(error, ctx).await;
+            return CodexUpstreamOutcome::Failover {
+                error,
+                ctx: Box::new(ctx),
+            };
         },
         None => None,
     };
@@ -1878,11 +2059,14 @@ async fn stream_codex_upstream_response(
         .status(status)
         .header(header::CONTENT_TYPE, response_content_type)
         .header(header::CACHE_CONTROL, "no-store");
-    apply_upstream_response_headers(builder, &upstream_headers)
-        .body(Body::from_stream(body_stream))
-        .unwrap_or_else(|_| {
-            (StatusCode::BAD_GATEWAY, "codex upstream stream response build failed").into_response()
-        })
+    CodexUpstreamOutcome::Responded(
+        apply_upstream_response_headers(builder, &upstream_headers)
+            .body(Body::from_stream(body_stream))
+            .unwrap_or_else(|_| {
+                (StatusCode::BAD_GATEWAY, "codex upstream stream response build failed")
+                    .into_response()
+            }),
+    )
 }
 
 async fn record_codex_stream_preflight_failure(

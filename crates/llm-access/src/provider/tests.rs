@@ -3807,6 +3807,50 @@ async fn fake_codex_responses_failed_sse(
         .expect("failed sse upstream response")
 }
 
+/// Always answers HTTP 200 with a single `response.failed` SSE event carrying a
+/// recoverable `server_is_overloaded` error, recording every request so a test
+/// can assert which accounts were attempted.
+async fn fake_codex_responses_overload_sse(
+    State(captured): State<Arc<CapturedCodexUpstream>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Response {
+    let path = request.uri().path().to_string();
+    let query = request.uri().query().map(ToString::to_string);
+    let body = to_bytes(request.into_body(), usize::MAX)
+        .await
+        .expect("upstream request body");
+    let body = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json")
+    };
+    captured
+        .requests
+        .lock()
+        .expect("captured requests")
+        .push(captured_codex_request(&headers, path, query, body));
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .body(Body::from(format!(
+            "event: response.failed\ndata: {}\n\n",
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "status": "failed",
+                    "error": {
+                        "type": "server_error",
+                        "message": "Our servers are currently overloaded. Please try again later.",
+                        "code": "server_is_overloaded"
+                    }
+                }
+            })
+        )))
+        .expect("overload sse upstream response")
+}
+
 async fn fake_codex_responses_mid_stream_failed_sse(
     State(captured): State<Arc<CapturedCodexUpstream>>,
     headers: HeaderMap,
@@ -5621,6 +5665,70 @@ async fn codex_dispatch_retries_retryable_error_on_same_account_before_failover(
         "Bearer upstream-token-a".to_string(),
         "Bearer upstream-token-a".to_string(),
     ]);
+}
+
+#[tokio::test]
+async fn codex_dispatch_fails_over_recoverable_overload_in_sse_stream() {
+    let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("codex upstream env lock");
+    let captured = Arc::new(CapturedCodexUpstream::default());
+    let app = Router::new()
+        .route("/v1/responses", post(fake_codex_responses_overload_sse))
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake upstream");
+    let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve fake upstream");
+    });
+    std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+    let route_store = Arc::new(StaticMultiCodexRouteStore {
+        codex_routes: vec![
+            codex_route_for_account("codex-a", "upstream-token-a"),
+            codex_route_for_account("codex-b", "upstream-token-b"),
+        ],
+        kiro_route: static_kiro_route(),
+    });
+    let state = super::ProviderState::new(Arc::new(TestStore), route_store);
+    let response = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                        "model": "gpt-5.3-codex",
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": true
+                    }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+
+    std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+    let status = response.status();
+    let requests = captured.requests.lock().expect("captured requests");
+    let auths = requests
+        .iter()
+        .filter_map(|request| request.authorization.clone())
+        .collect::<Vec<_>>();
+    // A recoverable overload (server_is_overloaded) must be retried on the other
+    // account before the client ever sees it. If only account A is attempted, the
+    // in-stream/SSE path surfaced the error without failing over.
+    assert!(
+        auths.contains(&"Bearer upstream-token-b".to_string()),
+        "recoverable overload should fail over to the second account; client status={status}, \
+         attempted accounts={auths:?}"
+    );
 }
 
 #[tokio::test]
