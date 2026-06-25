@@ -80,19 +80,23 @@ pub fn codex_error_type_for_status(status: StatusCode) -> &'static str {
         "api_error"
     }
 }
-fn codex_json_error_body(status: StatusCode, message: &str) -> String {
+fn codex_json_error_body_with_code(
+    status: StatusCode,
+    message: &str,
+    code: Option<&str>,
+) -> String {
     json!({
         "error": {
             "message": message,
             "type": codex_error_type_for_status(status),
             "param": Value::Null,
-            "code": Value::Null,
+            "code": code.map_or(Value::Null, Value::from),
         }
     })
     .to_string()
 }
-fn codex_json_error(status: StatusCode, message: &str) -> Response {
-    let body = codex_json_error_body(status, message);
+fn codex_json_error_with_code(status: StatusCode, message: &str, code: Option<&str>) -> Response {
+    let body = codex_json_error_body_with_code(status, message, code);
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, "application/json")
@@ -105,17 +109,39 @@ fn codex_endpoint_prefers_anthropic_errors(endpoint: &str) -> bool {
     endpoint == "/v1/messages" || endpoint.starts_with("/v1/messages?")
 }
 pub fn codex_surface_error_body(endpoint: &str, status: StatusCode, message: &str) -> String {
+    codex_surface_error_body_with_code(endpoint, status, message, None)
+}
+/// Like [`codex_surface_error_body`] but injects an OpenAI-style `error.code`
+/// (e.g. `server_is_overloaded`) so the Codex client can classify the failure
+/// instead of seeing a raw, untagged message. Anthropic-style endpoints keep
+/// their type-based shape and ignore `code`.
+pub fn codex_surface_error_body_with_code(
+    endpoint: &str,
+    status: StatusCode,
+    message: &str,
+    code: Option<&str>,
+) -> String {
     if codex_endpoint_prefers_anthropic_errors(endpoint) {
         anthropic_json_error_body(codex_error_type_for_status(status), message)
     } else {
-        codex_json_error_body(status, message)
+        codex_json_error_body_with_code(status, message, code)
     }
 }
 pub fn codex_surface_error_response(endpoint: &str, status: StatusCode, message: &str) -> Response {
+    codex_surface_error_response_with_code(endpoint, status, message, None)
+}
+/// See [`codex_surface_error_body_with_code`]: surfaces a classified error with
+/// an explicit OpenAI-style `error.code`.
+pub fn codex_surface_error_response_with_code(
+    endpoint: &str,
+    status: StatusCode,
+    message: &str,
+    code: Option<&str>,
+) -> Response {
     if codex_endpoint_prefers_anthropic_errors(endpoint) {
         anthropic_json_error(status, codex_error_type_for_status(status), message)
     } else {
-        codex_json_error(status, message)
+        codex_json_error_with_code(status, message, code)
     }
 }
 pub fn extract_error_message_from_json_value(value: &Value) -> Option<String> {

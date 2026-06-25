@@ -57,7 +57,8 @@ use super::{
         classify_codex_upstream_failure, CodexClassifiedUpstreamError, CodexUpstreamErrorClass,
     },
     errors::{
-        codex_error_type_for_status, codex_surface_error_body, codex_surface_error_response,
+        codex_error_type_for_status, codex_surface_error_body, codex_surface_error_body_with_code,
+        codex_surface_error_response, codex_surface_error_response_with_code,
         extract_error_message_from_json_value, summarize_error_bytes,
     },
     limiter::{codex_key_limit_response, try_acquire_key_permit},
@@ -1159,6 +1160,20 @@ fn codex_status_for_error_class(
     }
 }
 
+/// OpenAI-style `error.code` to attach when surfacing a classified upstream
+/// failure to the client. Codex (and OpenAI-compatible clients) classify some
+/// errors by `code` rather than message text, so emitting the canonical code
+/// lets the client handle the failure cleanly (e.g. an overload becomes a tidy
+/// "high load" notice via `server_is_overloaded`) instead of showing the raw
+/// upstream message verbatim.
+fn codex_surface_code_for_error_class(class: CodexUpstreamErrorClass) -> Option<&'static str> {
+    match class {
+        CodexUpstreamErrorClass::ServerOverloaded => Some("server_is_overloaded"),
+        CodexUpstreamErrorClass::CyberPolicy => Some("cyber_policy"),
+        _ => None,
+    }
+}
+
 fn maybe_remember_codex_session_rejection(
     rejection: &super::codex_session_rejection::CodexSessionRejection,
     enabled: bool,
@@ -1344,10 +1359,11 @@ async fn adapt_codex_upstream_response(
                     )
                         .into_response();
                 }
-                return codex_surface_error_response(
+                return codex_surface_error_response_with_code(
                     &prepared.original_path,
                     effective_status,
                     &classified_error.message,
+                    codex_surface_code_for_error_class(classified_error.class),
                 );
             },
         };
@@ -1531,10 +1547,11 @@ async fn adapt_codex_upstream_response_from_parts(
             .into_response();
     }
     if let Some(error) = success_error.as_ref() {
-        return codex_surface_error_response(
+        return codex_surface_error_response_with_code(
             &prepared.original_path,
             effective_status,
             &error.message,
+            codex_surface_code_for_error_class(error.class),
         );
     }
     if !status.is_success()
@@ -1790,6 +1807,12 @@ async fn stream_codex_upstream_response(
                             error_class = %error.class.as_str(),
                             "codex stream upstream failure detected after downstream write started"
                         );
+                        // Intentionally stop the stream here without emitting `[DONE]`
+                        // and without forwarding the raw upstream failure event: the
+                        // partial content already reached the client and the failure is
+                        // recorded server-side via the guard above. A well-behaved
+                        // client detects the missing terminal sentinel. (See
+                        // codex_dispatch_streaming_mid_failure_stops_without_done_*.)
                         return;
                     }
                     guard.usage_collector.observe_event(&event);
@@ -1887,7 +1910,12 @@ async fn record_codex_stream_preflight_failure(
         capture_error_message(&mut usage_meta, &error.message);
         capture_error_body(
             &mut usage_meta,
-            &codex_surface_error_body(&prepared.original_path, effective_status, &error.message),
+            &codex_surface_error_body_with_code(
+                &prepared.original_path,
+                effective_status,
+                &error.message,
+                codex_surface_code_for_error_class(error.class),
+            ),
         );
     } else {
         capture_error_bytes(&mut usage_meta, &error.body);
@@ -1922,5 +1950,10 @@ async fn record_codex_stream_preflight_failure(
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to record codex usage: {err}"))
             .into_response();
     }
-    codex_surface_error_response(&prepared.original_path, effective_status, &error.message)
+    codex_surface_error_response_with_code(
+        &prepared.original_path,
+        effective_status,
+        &error.message,
+        codex_surface_code_for_error_class(error.class),
+    )
 }

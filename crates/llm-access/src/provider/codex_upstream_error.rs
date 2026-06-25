@@ -98,6 +98,14 @@ pub(crate) fn classify_codex_sse_event_failure(
     event_type: Option<&str>,
     data: &str,
 ) -> Option<CodexClassifiedUpstreamError> {
+    // Hot-path fast-out: `*.delta` events stream a single chunk of output text or
+    // reasoning and never carry an error envelope. They dominate event volume on
+    // a streaming turn (one per token), so skip the JSON parse for them entirely.
+    // Real failures arrive as `error` / `response.error` / `response.failed` (or
+    // an embedded `error` field) and still take the full path below.
+    if event_type.is_some_and(|name| name.ends_with(".delta")) {
+        return None;
+    }
     if data.trim() == "[DONE]" {
         return None;
     }
@@ -171,11 +179,15 @@ fn classify_status_and_message(status: StatusCode, message: &str) -> CodexUpstre
     if message_indicates_capacity(message) {
         return CodexUpstreamErrorClass::ServerOverloaded;
     }
+    // Request-shape failures are deterministic client errors. Return them to the
+    // caller instead of failing over, which would cool every healthy account for
+    // a client-side bug. Mirrors codex-rs request-shape message detection so a
+    // 400 carrying only a message (no machine `code`) is still recognized.
+    if message_indicates_request_shape(message) {
+        return CodexUpstreamErrorClass::InvalidRequest;
+    }
     if status == StatusCode::TOO_MANY_REQUESTS {
         return CodexUpstreamErrorClass::Retryable;
-    }
-    if status.is_server_error() || matches!(status, StatusCode::REQUEST_TIMEOUT) {
-        return CodexUpstreamErrorClass::UnexpectedStatus;
     }
     CodexUpstreamErrorClass::UnexpectedStatus
 }
@@ -322,12 +334,28 @@ fn message_indicates_quota(message: &str) -> bool {
 
 fn message_indicates_capacity(message: &str) -> bool {
     let normalized = message.to_ascii_lowercase();
-    normalized.contains("server_is_overloaded")
+    // `contains("overloaded")` also covers the structured `server_is_overloaded`
+    // code text and the user-facing "Our servers are currently overloaded. Please
+    // try again later." message the upstream backend returns under load.
+    normalized.contains("overloaded")
         || normalized.contains("slow_down")
-        || normalized.contains("server is overloaded")
         || normalized.contains("high capacity")
         || normalized.contains("at capacity")
         || normalized.contains("over capacity")
+}
+
+/// Detects deterministic request-shape failures that some upstreams report with
+/// only a human message (no machine `code`/`type`). Mirrors codex-rs'
+/// `codex_message_indicates_request_shape_failure` so such errors are returned
+/// to the caller as `InvalidRequest` rather than failing over — failing over
+/// would retry every account and cool them down for a client-side bug.
+fn message_indicates_request_shape(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    (normalized.contains("invalid value") && normalized.contains("supported values"))
+        || normalized.contains("invalid type")
+        || normalized.contains("missing required parameter")
+        || normalized.contains("unknown parameter")
+        || normalized.contains("unsupported parameter")
 }
 
 fn retry_after(headers: &HeaderMap) -> Option<Duration> {

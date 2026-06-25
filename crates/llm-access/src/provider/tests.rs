@@ -2368,6 +2368,27 @@ fn codex_upstream_error_classifier_matches_codex_api_error_codes() {
             r#"{"error":{"message":"We are currently experiencing high capacity."}}"#,
             CodexUpstreamErrorClass::ServerOverloaded,
         ),
+        // Upstream overload signalled only by the user-facing message (no
+        // `server_is_overloaded` code) must still classify as ServerOverloaded so
+        // it fails over / is surfaced as a clean overload instead of leaking raw.
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"error":{"message":"Our servers are currently overloaded. Please try again later."}}"#,
+            CodexUpstreamErrorClass::ServerOverloaded,
+        ),
+        // Request-shape failures signalled only by message (no machine code, no
+        // `invalid_request_error` type) must return to the client, not fail over
+        // across every account for a deterministic client-side bug.
+        (
+            StatusCode::BAD_REQUEST,
+            r#"{"error":{"message":"Invalid value: 'tool'. Supported values are: 'user', 'assistant'."}}"#,
+            CodexUpstreamErrorClass::InvalidRequest,
+        ),
+        (
+            StatusCode::BAD_REQUEST,
+            r#"{"error":{"message":"Missing required parameter: 'model'."}}"#,
+            CodexUpstreamErrorClass::InvalidRequest,
+        ),
     ];
 
     for (status, body, expected) in cases {
@@ -2410,6 +2431,40 @@ fn codex_upstream_error_classifier_matches_codex_api_error_codes() {
         r#"{"type":"response.incomplete","response":{"id":"resp_1","status":"incomplete","error":null}}"#,
     )
     .is_none());
+    // Overload delivered in-stream as a `response.failed` event carrying only a
+    // message (no `server_is_overloaded` code) still classifies as overload.
+    let stream_overload = classify_codex_sse_event_failure(
+        StatusCode::OK,
+        &HeaderMap::new(),
+        Some("response.failed"),
+        r#"{"type":"response.failed","response":{"error":{"message":"Our servers are currently overloaded. Please try again later."}}}"#,
+    )
+    .expect("overload response.failed must classify as a failure");
+    assert_eq!(stream_overload.class, CodexUpstreamErrorClass::ServerOverloaded);
+}
+
+#[test]
+fn codex_surface_error_body_injects_overload_code() {
+    use super::errors::codex_surface_error_body_with_code;
+
+    // OpenAI-style endpoint: the injected `code` lets the Codex client classify
+    // the failure as ServerOverloaded instead of showing the raw message.
+    let body = codex_surface_error_body_with_code(
+        "/v1/responses",
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Our servers are currently overloaded. Please try again later.",
+        Some("server_is_overloaded"),
+    );
+    let value: serde_json::Value =
+        serde_json::from_str(&body).expect("surface body must be valid json");
+    assert_eq!(value["error"]["code"], "server_is_overloaded");
+
+    // No code passed -> `code` stays null (unchanged legacy behavior).
+    let plain =
+        codex_surface_error_body_with_code("/v1/responses", StatusCode::BAD_GATEWAY, "boom", None);
+    let plain_value: serde_json::Value =
+        serde_json::from_str(&plain).expect("surface body must be valid json");
+    assert!(plain_value["error"]["code"].is_null());
 }
 
 #[test]
