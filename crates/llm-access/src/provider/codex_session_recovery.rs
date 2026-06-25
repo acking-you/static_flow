@@ -170,3 +170,132 @@ fn recovery_key(key_id: &str, anchor_hash: &str) -> Option<String> {
     }
     Some(format!("{}:{key_id}{anchor_hash}", key_id.len()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config() -> CodexAffinityRuntimeConfig {
+        CodexAffinityRuntimeConfig {
+            session_enabled: true,
+            max_entries: 16,
+            session_ttl: Duration::from_secs(60),
+            fallback_enabled: true,
+            fallback_ttl: Duration::from_secs(60),
+            fallback_prefix_bytes: 0,
+            fallback_min_body_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn remember_then_recover_returns_stored_session() {
+        let recovery = CodexSessionRecovery::new(16);
+        let config = config();
+
+        assert_eq!(
+            recovery.remember("key", "anchor", "session-a", &config),
+            CodexSessionRecoveryStoreResult::Stored
+        );
+        assert_eq!(
+            recovery.recover("key", "anchor", &config),
+            CodexSessionRecoveryLookup::Hit("session-a".to_string())
+        );
+        assert_eq!(recovery.recover("key", "missing", &config), CodexSessionRecoveryLookup::Miss);
+    }
+
+    #[test]
+    fn expired_recovery_entry_is_removed() {
+        let recovery = CodexSessionRecovery::new(16);
+        let mut config = config();
+        config.fallback_ttl = Duration::from_millis(1);
+
+        assert_eq!(
+            recovery.remember("key", "anchor", "session-a", &config),
+            CodexSessionRecoveryStoreResult::Stored
+        );
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(recovery.recover("key", "anchor", &config), CodexSessionRecoveryLookup::Expired);
+        assert_eq!(recovery.recover("key", "anchor", &config), CodexSessionRecoveryLookup::Miss);
+    }
+
+    #[test]
+    fn disabled_config_reports_specific_reason() {
+        let recovery = CodexSessionRecovery::new(16);
+        let mut cases = Vec::new();
+
+        let mut session_disabled = config();
+        session_disabled.session_enabled = false;
+        cases.push((session_disabled, CodexSessionRecoveryConfigState::SessionAffinityDisabled));
+
+        let mut fallback_disabled = config();
+        fallback_disabled.fallback_enabled = false;
+        cases.push((fallback_disabled, CodexSessionRecoveryConfigState::FallbackDisabled));
+
+        let mut empty_capacity = config();
+        empty_capacity.max_entries = 0;
+        cases.push((empty_capacity, CodexSessionRecoveryConfigState::EmptyCapacity));
+
+        let mut empty_ttl = config();
+        empty_ttl.fallback_ttl = Duration::ZERO;
+        cases.push((empty_ttl, CodexSessionRecoveryConfigState::EmptyTtl));
+
+        for (config, state) in cases {
+            assert_eq!(
+                recovery.recover("key", "anchor", &config),
+                CodexSessionRecoveryLookup::Disabled(state)
+            );
+            assert_eq!(
+                recovery.remember("key", "anchor", "session-a", &config),
+                CodexSessionRecoveryStoreResult::Disabled(state)
+            );
+        }
+    }
+
+    #[test]
+    fn remember_rejects_invalid_key_and_empty_session() {
+        let recovery = CodexSessionRecovery::new(16);
+        let config = config();
+
+        assert_eq!(
+            recovery.remember("", "anchor", "session-a", &config),
+            CodexSessionRecoveryStoreResult::InvalidKey
+        );
+        assert_eq!(
+            recovery.remember("key", "", "session-a", &config),
+            CodexSessionRecoveryStoreResult::InvalidKey
+        );
+        assert_eq!(
+            recovery.remember("key", "anchor", "   ", &config),
+            CodexSessionRecoveryStoreResult::EmptySession
+        );
+        assert_eq!(recovery.recover("", "anchor", &config), CodexSessionRecoveryLookup::InvalidKey);
+    }
+
+    #[test]
+    fn capacity_evicts_least_recently_used_entry() {
+        let recovery = CodexSessionRecovery::new(16);
+        let mut config = config();
+        config.max_entries = 1;
+
+        assert_eq!(
+            recovery.remember("key", "anchor-a", "session-a", &config),
+            CodexSessionRecoveryStoreResult::Stored
+        );
+        assert_eq!(
+            recovery.remember("key", "anchor-b", "session-b", &config),
+            CodexSessionRecoveryStoreResult::Stored
+        );
+
+        assert_eq!(recovery.recover("key", "anchor-a", &config), CodexSessionRecoveryLookup::Miss);
+        assert_eq!(
+            recovery.recover("key", "anchor-b", &config),
+            CodexSessionRecoveryLookup::Hit("session-b".to_string())
+        );
+    }
+
+    #[test]
+    fn recovery_key_length_prefix_disambiguates_parts() {
+        assert_ne!(recovery_key("a:1", "bc"), recovery_key("a", "1bc"));
+        assert_ne!(recovery_key("12", "3"), recovery_key("1", "23"));
+    }
+}

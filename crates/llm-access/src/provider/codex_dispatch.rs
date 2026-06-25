@@ -23,7 +23,7 @@ use llm_access_codex::{
         align_responses_store_with_upstream, apply_codex_fast_policy, apply_codex_resolved_session,
         apply_gpt53_codex_spark_mapping, build_codex_session_resume_anchor_hash,
         extract_last_message_content as extract_codex_last_message_content,
-        prepare_gateway_request_from_bytes,
+        inject_codex_resolved_session_into_request_body, prepare_gateway_request_from_bytes,
     },
     response::{
         adapt_completed_response_json, apply_upstream_response_headers,
@@ -344,6 +344,10 @@ pub async fn dispatch_codex_proxy(
             Err(err) => return (err.status, err.message).into_response(),
         };
         let prepared = match align_responses_store_with_upstream(&prepared, &upstream_base) {
+            Ok(prepared) => prepared,
+            Err(err) => return (err.status, err.message).into_response(),
+        };
+        let prepared = match inject_codex_resolved_session_into_request_body(&prepared) {
             Ok(prepared) => prepared,
             Err(err) => return (err.status, err.message).into_response(),
         };
@@ -856,11 +860,30 @@ pub(super) fn remember_codex_session_recovery(
         );
         return;
     };
+    let Some(source) = prepared.resolved_session_source else {
+        tracing::debug!(
+            key_id = %key.key_id,
+            account = %account_name,
+            request_anchor_hash = %hex_preview(&projection.request_anchor_hash),
+            "codex session recovery anchor not recorded because session source is missing"
+        );
+        return;
+    };
+    if !source.is_derived() {
+        tracing::debug!(
+            key_id = %key.key_id,
+            account = %account_name,
+            session_source = %source.as_str(),
+            request_anchor_hash = %hex_preview(&projection.request_anchor_hash),
+            "codex session recovery anchor not recorded for explicit session"
+        );
+        return;
+    }
     let Some(session_id) = prepared.resolved_session_id.as_deref() else {
         tracing::debug!(
             key_id = %key.key_id,
             account = %account_name,
-            session_source = ?prepared.resolved_session_source,
+            session_source = %source.as_str(),
             request_anchor_hash = %hex_preview(&projection.request_anchor_hash),
             "codex session recovery anchor not recorded because session id is missing"
         );
@@ -875,7 +898,7 @@ pub(super) fn remember_codex_session_recovery(
             tracing::debug!(
                 key_id = %key.key_id,
                 account = %account_name,
-                session_source = ?prepared.resolved_session_source,
+                session_source = %source.as_str(),
                 request_anchor_hash = %request_anchor_preview,
                 resume_anchor_hash = %resume_anchor_preview,
                 session = %session_preview(session_id),
@@ -886,7 +909,7 @@ pub(super) fn remember_codex_session_recovery(
             tracing::debug!(
                 key_id = %key.key_id,
                 account = %account_name,
-                session_source = ?prepared.resolved_session_source,
+                session_source = %source.as_str(),
                 request_anchor_hash = %request_anchor_preview,
                 resume_anchor_hash = %resume_anchor_preview,
                 session = %session_preview(session_id),
@@ -898,7 +921,7 @@ pub(super) fn remember_codex_session_recovery(
             tracing::warn!(
                 key_id = %key.key_id,
                 account = %account_name,
-                session_source = ?prepared.resolved_session_source,
+                session_source = %source.as_str(),
                 request_anchor_hash = %request_anchor_preview,
                 resume_anchor_hash = %resume_anchor_preview,
                 session = %session_preview(session_id),
@@ -909,7 +932,7 @@ pub(super) fn remember_codex_session_recovery(
             tracing::warn!(
                 key_id = %key.key_id,
                 account = %account_name,
-                session_source = ?prepared.resolved_session_source,
+                session_source = %source.as_str(),
                 request_anchor_hash = %request_anchor_preview,
                 resume_anchor_hash = %resume_anchor_preview,
                 "codex session recovery anchor not recorded because session id is empty"

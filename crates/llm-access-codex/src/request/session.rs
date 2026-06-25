@@ -30,10 +30,12 @@ const STABLE_ROOT_KEYS: &[&str] =
 
 const HASH_IGNORED_OBJECT_KEYS: &[&str] = &[
     "id",
+    "annotations",
     "model",
     "stream",
     "store",
     "include",
+    "logprobs",
     "metadata",
     "client_metadata",
     "previous_response_id",
@@ -103,7 +105,6 @@ pub fn resolve_codex_session(
     };
     let session =
         ResolvedCodexSession::derived(projection.bootstrap_anchor_hash.clone(), source, projection);
-    root.insert(PROMPT_CACHE_KEY.to_string(), Value::String(session.id.clone()));
     Some(session)
 }
 
@@ -148,13 +149,15 @@ fn explicit_session(
             Some(projection),
         ));
     }
-    extract_non_empty_string(root.get(PROMPT_CACHE_KEY)).map(|value| {
-        ResolvedCodexSession::explicit(
-            value.to_string(),
-            CodexResolvedSessionSource::PromptCacheKey,
-            Some(projection),
-        )
-    })
+    extract_non_empty_string(root.get(PROMPT_CACHE_KEY))
+        .filter(|value| !value.starts_with(SESSION_ID_PREFIX))
+        .map(|value| {
+            ResolvedCodexSession::explicit(
+                value.to_string(),
+                CodexResolvedSessionSource::PromptCacheKey,
+                Some(projection),
+            )
+        })
 }
 
 fn has_input_history(input: Option<&Value>) -> bool {
@@ -175,10 +178,6 @@ fn is_current_turn_start_item(item: &Value) -> bool {
             .is_some_and(|role| role == "user"),
         _ => false,
     }
-}
-
-enum CanonicalFragment<'a> {
-    Value(&'a Value),
 }
 
 struct HashWriter<'a>(&'a mut Sha256);
@@ -215,19 +214,51 @@ pub fn apply_codex_resolved_session(
     source: CodexResolvedSessionSource,
     hash_preview: Option<String>,
 ) -> CodexGatewayResult<()> {
-    let mut body = serde_json::from_slice::<Value>(&prepared.request_body)
-        .map_err(|err| internal_error("Failed to decode prepared Codex request body", err))?;
-    if let Some(root) = body.as_object_mut() {
-        root.insert(PROMPT_CACHE_KEY.to_string(), Value::String(session_id.clone()));
-    }
-    prepared.request_body = Bytes::from(
-        serde_json::to_vec(&body)
-            .map_err(|err| internal_error("Failed to encode prepared Codex request body", err))?,
+    debug_assert!(
+        prepared
+            .thread_anchor
+            .as_deref()
+            .is_none_or(|anchor| anchor == session_id),
+        "derived recovery should not overwrite an unrelated explicit thread anchor"
     );
+    prepared.thread_anchor = Some(session_id.clone());
     prepared.resolved_session_id = Some(session_id);
     prepared.resolved_session_source = Some(source);
     prepared.resolved_session_hash_preview = hash_preview;
     Ok(())
+}
+
+/// Insert the final resolved Codex session id into the upstream JSON body.
+pub fn inject_codex_resolved_session_into_request_body(
+    prepared: &PreparedGatewayRequest,
+) -> CodexGatewayResult<PreparedGatewayRequest> {
+    if prepared.upstream_path.starts_with("/v1/responses/compact") {
+        return Ok(prepared.clone());
+    }
+    let Some(session_id) = prepared.resolved_session_id.as_deref() else {
+        return Ok(prepared.clone());
+    };
+    if prepared.request_body.is_empty() {
+        return Ok(prepared.clone());
+    }
+    let mut body = serde_json::from_slice::<Value>(&prepared.request_body)
+        .map_err(|err| internal_error("Failed to decode prepared Codex request body", err))?;
+    if let Some(root) = body.as_object_mut() {
+        if let Some(existing) = extract_non_empty_string(root.get(PROMPT_CACHE_KEY)) {
+            if existing == session_id || !existing.starts_with(SESSION_ID_PREFIX) {
+                return Ok(prepared.clone());
+            }
+        }
+        root.insert(PROMPT_CACHE_KEY.to_string(), Value::String(session_id.to_string()));
+    } else {
+        return Ok(prepared.clone());
+    }
+    let mut injected = prepared.clone();
+    injected.request_body = Bytes::from(
+        serde_json::to_vec(&body)
+            .map_err(|err| internal_error("Failed to encode prepared Codex request body", err))?,
+    );
+    Ok(injected)
 }
 
 fn build_session_projection(root: &Map<String, Value>) -> CodexSessionProjection {
@@ -235,7 +266,12 @@ fn build_session_projection(root: &Map<String, Value>) -> CodexSessionProjection
     let input_segments = root
         .get("input")
         .and_then(Value::as_array)
-        .map(|items| items.iter().map(canonical_segment_hash).collect::<Vec<_>>())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(canonical_session_item_segment_hash)
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     let current_start = root
         .get("input")
@@ -270,16 +306,13 @@ fn build_session_projection(root: &Map<String, Value>) -> CodexSessionProjection
 fn stable_root_segments(root: &Map<String, Value>) -> Vec<String> {
     let mut entries = STABLE_ROOT_KEYS
         .iter()
-        .filter_map(|key| {
-            root.get(*key)
-                .map(|value| (*key, CanonicalFragment::Value(value)))
-        })
+        .filter_map(|key| root.get(*key).map(|value| (*key, value)))
         .collect::<Vec<_>>();
     entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
 
     entries
         .into_iter()
-        .map(|(key, value)| named_fragment_hash(key, &value))
+        .map(|(key, value)| named_fragment_hash(key, value))
         .collect()
 }
 
@@ -297,31 +330,105 @@ fn canonical_response_output_segments(completed_response: &Value) -> Vec<String>
         .map(|items| {
             items
                 .iter()
-                .map(canonical_assistant_output_segment_hash)
+                .filter_map(canonical_response_output_segment_hash)
                 .collect()
         })
         .unwrap_or_default()
 }
 
-fn canonical_assistant_output_segment_hash(value: &Value) -> String {
+fn canonical_response_output_segment_hash(value: &Value) -> Option<String> {
     let Some(obj) = value.as_object() else {
-        return canonical_segment_hash(value);
+        return Some(canonical_segment_hash(value));
     };
+    if obj.get("type").and_then(Value::as_str) == Some("reasoning") {
+        return None;
+    }
     if obj.get("type").and_then(Value::as_str) != Some("message") || obj.contains_key("role") {
-        return canonical_segment_hash(value);
+        return Some(canonical_segment_hash(value));
+    }
+    // Upstream response output messages often omit the assistant role while
+    // the next request history includes it.
+    let mut normalized = obj.clone();
+    normalized.insert("role".to_string(), Value::String("assistant".to_string()));
+    canonical_session_item_segment_hash(&Value::Object(normalized))
+}
+
+fn canonical_session_item_segment_hash(value: &Value) -> Option<String> {
+    let Some(obj) = value.as_object() else {
+        return Some(canonical_segment_hash(value));
+    };
+    if obj.get("type").and_then(Value::as_str) == Some("reasoning") {
+        return None;
+    }
+    let Some(normalized) = normalize_session_message_item(obj) else {
+        return Some(canonical_segment_hash(value));
+    };
+    Some(canonical_segment_hash(&normalized))
+}
+
+fn normalize_session_message_item(obj: &Map<String, Value>) -> Option<Value> {
+    if obj.get("type").and_then(Value::as_str) != Some("message") {
+        return None;
+    }
+    let role = obj
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("assistant");
+    if role != "assistant" {
+        return None;
     }
     let mut normalized = obj.clone();
     normalized.insert("role".to_string(), Value::String("assistant".to_string()));
-    canonical_segment_hash(&Value::Object(normalized))
+    if let Some(content) = normalized.get("content").cloned() {
+        normalized.insert("content".to_string(), normalize_assistant_content(&content));
+    }
+    Some(Value::Object(normalized))
 }
 
-fn named_fragment_hash(key: &str, value: &CanonicalFragment<'_>) -> String {
+fn normalize_assistant_content(content: &Value) -> Value {
+    let items = match content {
+        Value::Array(items) => items.as_slice(),
+        value => std::slice::from_ref(value),
+    };
+    let normalized = items
+        .iter()
+        .filter_map(normalize_assistant_content_item)
+        .collect::<Vec<_>>();
+    Value::Array(normalized)
+}
+
+fn normalize_assistant_content_item(item: &Value) -> Option<Value> {
+    if let Some(text) = item.as_str() {
+        return normalized_output_text(text);
+    }
+    let obj = item.as_object()?;
+    match obj.get("type").and_then(Value::as_str).unwrap_or_default() {
+        "text" | "input_text" | "output_text" => obj
+            .get("text")
+            .and_then(Value::as_str)
+            .and_then(normalized_output_text),
+        _ => Some(Value::Object(obj.clone())),
+    }
+}
+
+fn normalized_output_text(text: &str) -> Option<Value> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut normalized = Map::new();
+    normalized.insert("type".to_string(), Value::String("output_text".to_string()));
+    normalized.insert("text".to_string(), Value::String(trimmed.to_string()));
+    Some(Value::Object(normalized))
+}
+
+fn named_fragment_hash(key: &str, value: &Value) -> String {
     let mut hasher = Sha256::new();
     hasher.update(SEGMENT_HASH_SALT);
     hasher.update(b"{");
     write_json_string(key, &mut hasher);
     hasher.update(b":");
-    write_canonical_fragment(value, &mut hasher);
+    write_canonical_value(value, &mut hasher);
     hasher.update(b"}");
     format!("{:x}", hasher.finalize())
 }
@@ -345,12 +452,6 @@ fn hash_segment_hashes<'a>(salt: &[u8], segments: impl IntoIterator<Item = &'a s
     }
     hasher.update(b"]");
     format!("{:x}", hasher.finalize())
-}
-
-fn write_canonical_fragment(value: &CanonicalFragment<'_>, hasher: &mut Sha256) {
-    match value {
-        CanonicalFragment::Value(value) => write_canonical_value(value, hasher),
-    }
 }
 
 fn write_canonical_value(value: &Value, hasher: &mut Sha256) {

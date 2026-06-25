@@ -53,12 +53,12 @@ impl CodexStreamRecordGuard {
             .usage
             .clone()
             .unwrap_or_else(missing_codex_usage);
-        if let Some(completed_response) = self.usage_collector.completed_response.as_ref() {
+        if let Some(completed_response) = self.usage_collector.completed_response_for_recovery() {
             remember_codex_session_recovery(
                 self.codex_session_recovery.as_ref(),
                 &self.key,
                 &self.prepared,
-                completed_response,
+                &completed_response,
                 &self.affinity_config,
                 &self.route.account_name,
             );
@@ -67,7 +67,7 @@ impl CodexStreamRecordGuard {
                 key_id = %self.key.key_id,
                 account = %self.route.account_name,
                 session_source = ?self.prepared.resolved_session_source,
-                "codex stream completed without response.completed; recovery anchor not recorded"
+                "codex stream completed without recoverable output; recovery anchor not recorded"
             );
         }
         if let Err(err) = record_codex_usage(
