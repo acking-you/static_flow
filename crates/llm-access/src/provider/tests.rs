@@ -5732,6 +5732,67 @@ async fn codex_dispatch_fails_over_recoverable_overload_in_sse_stream() {
 }
 
 #[tokio::test]
+async fn codex_dispatch_fails_over_recoverable_overload_in_forced_sse_non_stream() {
+    let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("codex upstream env lock");
+    let captured = Arc::new(CapturedCodexUpstream::default());
+    let app = Router::new()
+        .route("/v1/responses", post(fake_codex_responses_overload_sse))
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake upstream");
+    let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve fake upstream");
+    });
+    std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+    let route_store = Arc::new(StaticMultiCodexRouteStore {
+        codex_routes: vec![
+            codex_route_for_account("codex-a", "upstream-token-a"),
+            codex_route_for_account("codex-b", "upstream-token-b"),
+        ],
+        kiro_route: static_kiro_route(),
+    });
+    let state = super::ProviderState::new(Arc::new(TestStore), route_store);
+    let response = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                        "model": "gpt-5.3-codex",
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": false
+                    }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+
+    std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+    let status = response.status();
+    let requests = captured.requests.lock().expect("captured requests");
+    let auths = requests
+        .iter()
+        .filter_map(|request| request.authorization.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        auths.contains(&"Bearer upstream-token-b".to_string()),
+        "recoverable forced-SSE overload should fail over to the second account; client \
+         status={status}, attempted accounts={auths:?}"
+    );
+}
+
+#[tokio::test]
 async fn codex_dispatch_strict_session_rejection_blocks_repeated_cyber_policy_session() {
     let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
         .lock()

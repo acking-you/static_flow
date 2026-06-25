@@ -680,25 +680,39 @@ pub async fn dispatch_codex_proxy(
                             .expect("codex key permit should be held until response is returned"),
                         account_permit,
                     ];
-                    match adapt_codex_upstream_response(response, CodexUpstreamResponseContext {
-                        prepared: retry_prepared,
-                        key,
-                        route,
-                        control_store,
-                        codex_session_recovery: Arc::clone(&codex_session_recovery),
-                        codex_session_rejection: Arc::clone(&codex_session_rejection),
-                        affinity_config: runtime_config.affinity.clone(),
-                        codex_affinity_id: codex_affinity_id.clone(),
-                        permits,
-                        usage_meta,
-                    })
-                    .await
-                    {
-                        CodexUpstreamOutcome::Responded(response) => return response,
-                        CodexUpstreamOutcome::Failover {
+                    match classify_codex_upstream_outcome(
+                        adapt_codex_upstream_response(response, CodexUpstreamResponseContext {
+                            prepared: retry_prepared.clone(),
+                            key: key.clone(),
+                            route,
+                            control_store: Arc::clone(&control_store),
+                            codex_session_recovery: Arc::clone(&codex_session_recovery),
+                            codex_session_rejection: Arc::clone(&codex_session_rejection),
+                            affinity_config: runtime_config.affinity.clone(),
+                            codex_affinity_id: codex_affinity_id.clone(),
+                            permits,
+                            usage_meta,
+                        })
+                        .await,
+                        &routes,
+                        &mut failed_accounts,
+                        account_attempt_limit,
+                        attempt_count,
+                        &codex_account_cooldowns,
+                    ) {
+                        CodexLoopStep::Respond(response) => return response,
+                        CodexLoopStep::Surface {
                             error,
                             ctx,
                         } => return record_codex_stream_preflight_failure(error, *ctx).await,
+                        CodexLoopStep::Retry {
+                            usage_meta: retry_usage_meta,
+                            key_permit: retry_key_permit,
+                        } => {
+                            usage_meta = *retry_usage_meta;
+                            key_permit = Some(retry_key_permit);
+                            continue;
+                        },
                     }
                 }
                 response_prepared = retry_prepared;
@@ -778,25 +792,39 @@ pub async fn dispatch_codex_proxy(
                         .expect("codex key permit should be held until response is returned"),
                     account_permit,
                 ];
-                match adapt_codex_upstream_response(response, CodexUpstreamResponseContext {
-                    prepared: response_prepared,
-                    key,
-                    route,
-                    control_store,
-                    codex_session_recovery: Arc::clone(&codex_session_recovery),
-                    codex_session_rejection: Arc::clone(&codex_session_rejection),
-                    affinity_config: runtime_config.affinity.clone(),
-                    codex_affinity_id: codex_affinity_id.clone(),
-                    permits,
-                    usage_meta,
-                })
-                .await
-                {
-                    CodexUpstreamOutcome::Responded(response) => return response,
-                    CodexUpstreamOutcome::Failover {
+                match classify_codex_upstream_outcome(
+                    adapt_codex_upstream_response(response, CodexUpstreamResponseContext {
+                        prepared: response_prepared.clone(),
+                        key: key.clone(),
+                        route,
+                        control_store: Arc::clone(&control_store),
+                        codex_session_recovery: Arc::clone(&codex_session_recovery),
+                        codex_session_rejection: Arc::clone(&codex_session_rejection),
+                        affinity_config: runtime_config.affinity.clone(),
+                        codex_affinity_id: codex_affinity_id.clone(),
+                        permits,
+                        usage_meta,
+                    })
+                    .await,
+                    &routes,
+                    &mut failed_accounts,
+                    account_attempt_limit,
+                    attempt_count,
+                    &codex_account_cooldowns,
+                ) {
+                    CodexLoopStep::Respond(response) => return response,
+                    CodexLoopStep::Surface {
                         error,
                         ctx,
                     } => return record_codex_stream_preflight_failure(error, *ctx).await,
+                    CodexLoopStep::Retry {
+                        usage_meta: retry_usage_meta,
+                        key_permit: retry_key_permit,
+                    } => {
+                        usage_meta = *retry_usage_meta;
+                        key_permit = Some(retry_key_permit);
+                        continue;
+                    },
                 }
             }
             status = response.status();
@@ -1448,8 +1476,6 @@ async fn adapt_codex_upstream_response(
             )
             .await;
         }
-        usage_meta.mark_post_headers_body();
-        usage_meta.mark_stream_finish();
         let completed = match completed_response_from_sse_bytes(&bytes) {
             Ok(value) => value,
             Err(err) => {
@@ -1470,57 +1496,32 @@ async fn adapt_codex_upstream_response(
                         body: Bytes::new(),
                         retry_after: None,
                     });
-                let effective_status =
-                    codex_status_for_error_class(err.status, classified_error.class);
-                maybe_remember_codex_session_rejection(
-                    codex_session_rejection.as_ref(),
-                    route.codex_strict_session_rejection_enabled,
-                    codex_affinity_id.as_ref(),
-                    &classified_error,
-                    &route.account_name,
-                    &affinity_config,
-                );
                 tracing::error!(
                     endpoint = %prepared.original_path,
-                    status = %effective_status,
+                    status = %codex_status_for_error_class(err.status, classified_error.class),
                     error_class = %classified_error.class.as_str(),
                     message = %classified_error.message,
                     "codex forced-SSE upstream request failed before response.completed"
                 );
-                capture_codex_prepared_request_json(&mut usage_meta, &prepared);
-                if classified_error.body.is_empty() {
-                    capture_error_message(&mut usage_meta, &classified_error.message);
-                } else {
-                    capture_error_bytes(&mut usage_meta, &classified_error.body);
-                    capture_error_message(&mut usage_meta, &classified_error.message);
-                }
-                if let Err(record_err) = record_codex_usage(
-                    control_store.as_ref(),
-                    &key,
-                    &prepared,
-                    effective_status,
-                    &route,
-                    missing_codex_usage(),
-                    &usage_meta,
-                )
-                .await
-                {
-                    return CodexUpstreamOutcome::Responded(
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("failed to record codex usage: {record_err}"),
-                        )
-                            .into_response(),
-                    );
-                }
-                return CodexUpstreamOutcome::Responded(codex_surface_error_response_with_code(
-                    &prepared.original_path,
-                    effective_status,
-                    &classified_error.message,
-                    codex_surface_code_for_error_class(classified_error.class),
-                ));
+                return CodexUpstreamOutcome::Failover {
+                    error: classified_error,
+                    ctx: Box::new(CodexStreamContext {
+                        prepared,
+                        key,
+                        route,
+                        control_store,
+                        codex_session_recovery,
+                        codex_session_rejection,
+                        affinity_config,
+                        codex_affinity_id,
+                        permits,
+                        usage_meta,
+                    }),
+                };
             },
         };
+        usage_meta.mark_post_headers_body();
+        usage_meta.mark_stream_finish();
         let completed_response = rewrite_json_value_model_alias(
             completed.response,
             prepared.model.as_deref(),
