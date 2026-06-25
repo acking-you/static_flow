@@ -33,7 +33,7 @@ use llm_access_codex::{
     },
     types::{ChatStreamMetadata, CodexResolvedSessionSource, GatewayResponseAdapter},
 };
-use llm_access_core::store::AuthenticatedKey;
+use llm_access_core::store::{AuthenticatedKey, ProviderCodexRoute};
 use rand::Rng;
 use serde_json::{json, Value};
 
@@ -42,14 +42,19 @@ use super::{
     client::provider_client,
     codex_auth::{
         add_codex_upstream_headers, codex_upstream_base_url, compute_codex_upstream_url,
-        is_codex_invalid_encrypted_content_response, is_codex_non_retryable_client_error_response,
-        load_codex_dispatch_runtime_config, normalized_codex_gateway_path,
-        retry_codex_without_encrypted_reasoning,
+        is_codex_invalid_encrypted_content_response, load_codex_dispatch_runtime_config,
+        normalized_codex_gateway_path, retry_codex_without_encrypted_reasoning,
     },
+    codex_error_disposition::{codex_error_disposition, CodexErrorDisposition},
     codex_models::codex_openai_models_response,
+    codex_session_rejection::CodexSessionRejectionEntry,
     codex_sse::{
         completed_response_from_sse_bytes, missing_codex_usage, record_codex_preflight_failure,
         record_codex_usage,
+    },
+    codex_upstream_error::{
+        classify_codex_sse_event_failure, classify_codex_success_error_body,
+        classify_codex_upstream_failure, CodexClassifiedUpstreamError, CodexUpstreamErrorClass,
     },
     errors::{
         codex_error_type_for_status, codex_surface_error_body, codex_surface_error_response,
@@ -68,8 +73,8 @@ use super::{
     CodexSessionRecovery, CodexSessionRecoveryLookup, CodexSessionRecoveryStoreResult,
     CodexStreamContext, CodexStreamRecordGuard, CodexUpstreamResponseContext,
     CodexUpstreamResponseParts, ProviderDispatchDeps, ProviderUsageMetadata, StreamRecordState,
-    CODEX_QUOTA_EXHAUSTION_COOLDOWN, CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MAX,
-    CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MIN, MAX_PROVIDER_PROXY_BODY_BYTES,
+    CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MAX, CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MIN,
+    MAX_PROVIDER_PROXY_BODY_BYTES,
 };
 use crate::codex_refresh;
 
@@ -87,6 +92,7 @@ pub async fn dispatch_codex_proxy(
         codex_account_cooldowns,
         codex_session_affinity,
         codex_session_recovery,
+        codex_session_rejection,
         ..
     } = deps;
     let mut usage_meta = ProviderUsageMetadata::from_request_parts(
@@ -117,6 +123,9 @@ pub async fn dispatch_codex_proxy(
         .query()
         .map(|query| format!("?{query}"))
         .unwrap_or_default();
+    let strict_session_rejection_enabled = routes
+        .iter()
+        .any(|route| route.codex_strict_session_rejection_enabled);
     let upstream_base = codex_upstream_base_url();
     let method = request.method().clone();
     let request_headers = request.headers().clone();
@@ -230,6 +239,41 @@ pub async fn dispatch_codex_proxy(
         prepared.resolved_session_id.as_deref(),
         prepared.resolved_session_source,
     );
+    if strict_session_rejection_enabled {
+        if let Some((affinity_id, rejection)) = codex_affinity_id.as_ref().and_then(|id| {
+            codex_session_rejection
+                .lookup(id, &runtime_config.affinity)
+                .map(|entry| (id, entry))
+        }) {
+            let message = strict_session_rejection_message(&rejection);
+            tracing::warn!(
+                key_id = %key.key_id,
+                account = %rejection.account_name,
+                error_class = %rejection.error_class.as_str(),
+                session = %session_preview(&affinity_id.key),
+                "codex strict session rejection returned before account selection"
+            );
+            capture_client_request_body_json(&mut usage_meta, &body);
+            capture_error_message(&mut usage_meta, &message);
+            capture_error_body(
+                &mut usage_meta,
+                &codex_surface_error_body(&gateway_path, StatusCode::BAD_REQUEST, &message),
+            );
+            record_codex_preflight_failure(CodexPreflightFailureRecord {
+                control_store: control_store.as_ref(),
+                key: &key,
+                endpoint: &gateway_path,
+                model: prepared
+                    .client_visible_model
+                    .clone()
+                    .or_else(|| prepared.model.clone()),
+                status: StatusCode::BAD_REQUEST,
+                meta: &mut usage_meta,
+            })
+            .await;
+            return codex_surface_error_response(&gateway_path, StatusCode::BAD_REQUEST, &message);
+        }
+    }
     let preferred_account_name = codex_affinity_id.as_ref().and_then(|affinity_id| {
         codex_session_affinity.lookup(affinity_id, &runtime_config.affinity)
     });
@@ -513,7 +557,9 @@ pub async fn dispatch_codex_proxy(
                     route,
                     control_store,
                     codex_session_recovery: Arc::clone(&codex_session_recovery),
+                    codex_session_rejection: Arc::clone(&codex_session_rejection),
                     affinity_config: runtime_config.affinity.clone(),
+                    codex_affinity_id: codex_affinity_id.clone(),
                     permits,
                     usage_meta,
                 },
@@ -539,7 +585,9 @@ pub async fn dispatch_codex_proxy(
                 route,
                 control_store,
                 codex_session_recovery: Arc::clone(&codex_session_recovery),
+                codex_session_rejection: Arc::clone(&codex_session_rejection),
                 affinity_config: runtime_config.affinity.clone(),
+                codex_affinity_id: codex_affinity_id.clone(),
                 permits,
                 usage_meta,
             })
@@ -610,7 +658,9 @@ pub async fn dispatch_codex_proxy(
                         route,
                         control_store,
                         codex_session_recovery: Arc::clone(&codex_session_recovery),
+                        codex_session_rejection: Arc::clone(&codex_session_rejection),
                         affinity_config: runtime_config.affinity.clone(),
+                        codex_affinity_id: codex_affinity_id.clone(),
                         permits,
                         usage_meta,
                     })
@@ -633,16 +683,139 @@ pub async fn dispatch_codex_proxy(
                 };
             }
         }
-        if let Some(cooldown) = codex_temporary_request_failure_cooldown(status, &bytes) {
-            codex_account_cooldowns.mark_account_cooldown(&route.account_name, cooldown);
+        let mut classified_error =
+            classify_codex_upstream_failure(status, &upstream_headers, bytes.clone());
+        let mut disposition = codex_error_disposition(&classified_error);
+        log_codex_error_disposition(
+            &key,
+            &route.account_name,
+            attempt_count,
+            status,
+            &classified_error,
+            disposition,
+        );
+        if let CodexErrorDisposition::RetrySameAccount {
+            retry_after,
+        } = disposition
+        {
+            if let Some(delay) = retry_after {
+                tokio::time::sleep(delay).await;
+            }
+            let retry = add_codex_upstream_headers(
+                client.request(method.clone(), upstream_url.clone()),
+                &request_headers,
+                &response_prepared,
+                &auth,
+                &runtime_config.client_version,
+            );
+            response = match retry.send().await {
+                Ok(response) => {
+                    usage_meta.mark_upstream_headers();
+                    response
+                },
+                Err(_) => {
+                    mark_codex_transient_request_failure_cooldown(
+                        &codex_account_cooldowns,
+                        &route.account_name,
+                    );
+                    usage_meta.mark_failover();
+                    failed_accounts.insert(route.account_name.clone());
+                    if attempt_count >= account_attempt_limit {
+                        return (
+                            StatusCode::BAD_GATEWAY,
+                            "all eligible codex accounts failed for this request",
+                        )
+                            .into_response();
+                    }
+                    continue;
+                },
+            };
+            if response.status().is_success() {
+                remember_codex_affinity(
+                    codex_session_affinity.as_ref(),
+                    codex_affinity_id.as_ref(),
+                    &route.account_name,
+                    &runtime_config.affinity,
+                );
+                let permits = vec![
+                    key_permit
+                        .take()
+                        .expect("codex key permit should be held until response is returned"),
+                    account_permit,
+                ];
+                return adapt_codex_upstream_response(response, CodexUpstreamResponseContext {
+                    prepared: response_prepared,
+                    key,
+                    route,
+                    control_store,
+                    codex_session_recovery: Arc::clone(&codex_session_recovery),
+                    codex_session_rejection: Arc::clone(&codex_session_rejection),
+                    affinity_config: runtime_config.affinity.clone(),
+                    codex_affinity_id: codex_affinity_id.clone(),
+                    permits,
+                    usage_meta,
+                })
+                .await;
+            }
+            status = response.status();
+            upstream_headers = response.headers().clone();
+            content_type = upstream_headers
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("application/json")
+                .to_string();
+            bytes = match response.bytes().await {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    return (StatusCode::BAD_GATEWAY, "codex upstream response read failed")
+                        .into_response()
+                },
+            };
+            classified_error =
+                classify_codex_upstream_failure(status, &upstream_headers, bytes.clone());
+            disposition = codex_error_disposition(&classified_error);
+            log_codex_error_disposition(
+                &key,
+                &route.account_name,
+                attempt_count,
+                status,
+                &classified_error,
+                disposition,
+            );
         }
-        if !is_codex_invalid_encrypted_content_response(status, &bytes)
-            && !is_codex_non_retryable_client_error_response(status, &bytes)
+        match disposition {
+            CodexErrorDisposition::ReturnToClient {
+                strict_session_block,
+            } => {
+                if strict_session_block {
+                    maybe_remember_codex_session_rejection(
+                        codex_session_rejection.as_ref(),
+                        route.codex_strict_session_rejection_enabled,
+                        codex_affinity_id.as_ref(),
+                        &classified_error,
+                        &route.account_name,
+                        &runtime_config.affinity,
+                    );
+                }
+            },
+            CodexErrorDisposition::FailoverWithCooldown {
+                cooldown,
+            } => {
+                codex_account_cooldowns.mark_account_cooldown(&route.account_name, cooldown);
+            },
+            CodexErrorDisposition::Failover
+            | CodexErrorDisposition::RetrySameAccount {
+                ..
+            } => {
+                mark_codex_transient_request_failure_cooldown(
+                    &codex_account_cooldowns,
+                    &route.account_name,
+                );
+            },
+        }
+        if !matches!(disposition, CodexErrorDisposition::ReturnToClient { .. })
             && attempt_count < account_attempt_limit
-            && routes.iter().any(|candidate| {
-                !failed_accounts.contains(&candidate.account_name)
-                    && candidate.account_name != route.account_name
-            })
+            && has_codex_failover_candidate(&routes, &failed_accounts, &route.account_name)
         {
             usage_meta.mark_failover();
             failed_accounts.insert(route.account_name.clone());
@@ -668,7 +841,9 @@ pub async fn dispatch_codex_proxy(
                 route,
                 control_store,
                 codex_session_recovery: Arc::clone(&codex_session_recovery),
+                codex_session_rejection: Arc::clone(&codex_session_rejection),
                 affinity_config: runtime_config.affinity.clone(),
+                codex_affinity_id: codex_affinity_id.clone(),
                 permits,
                 usage_meta,
             },
@@ -949,6 +1124,101 @@ fn session_preview(session_id: &str) -> String {
     session_id.chars().take(32).collect()
 }
 
+fn strict_session_rejection_message(rejection: &CodexSessionRejectionEntry) -> String {
+    let blocked_age_secs = rejection.blocked_at.elapsed().as_secs();
+    format!(
+        "This Codex session is blocked for this key after a previous {} error on account {} {}s \
+         ago. start a new session to continue. Upstream message: {}",
+        rejection.error_class.as_str(),
+        rejection.account_name,
+        blocked_age_secs,
+        rejection.message
+    )
+}
+
+fn codex_status_for_error_class(
+    default_status: StatusCode,
+    class: CodexUpstreamErrorClass,
+) -> StatusCode {
+    match class {
+        CodexUpstreamErrorClass::ContextWindowExceeded
+        | CodexUpstreamErrorClass::CyberPolicy
+        | CodexUpstreamErrorClass::InvalidRequest => StatusCode::BAD_REQUEST,
+        CodexUpstreamErrorClass::UsageNotIncluded => StatusCode::PAYMENT_REQUIRED,
+        CodexUpstreamErrorClass::QuotaExceeded | CodexUpstreamErrorClass::Retryable => {
+            StatusCode::TOO_MANY_REQUESTS
+        },
+        CodexUpstreamErrorClass::ServerOverloaded => StatusCode::SERVICE_UNAVAILABLE,
+        CodexUpstreamErrorClass::Stream | CodexUpstreamErrorClass::UnexpectedStatus => {
+            if default_status.is_success() {
+                StatusCode::BAD_GATEWAY
+            } else {
+                default_status
+            }
+        },
+    }
+}
+
+fn maybe_remember_codex_session_rejection(
+    rejection: &super::codex_session_rejection::CodexSessionRejection,
+    enabled: bool,
+    affinity_id: Option<&CodexAffinityId>,
+    error: &CodexClassifiedUpstreamError,
+    account_name: &str,
+    config: &CodexAffinityRuntimeConfig,
+) {
+    if !enabled {
+        return;
+    }
+    let CodexErrorDisposition::ReturnToClient {
+        strict_session_block: true,
+    } = codex_error_disposition(error)
+    else {
+        return;
+    };
+    let Some(affinity_id) = affinity_id else {
+        return;
+    };
+    tracing::warn!(
+        account = %account_name,
+        error_class = %error.class.as_str(),
+        session = %session_preview(&affinity_id.key),
+        "codex strict session rejection recorded"
+    );
+    rejection.remember(affinity_id, error.class, &error.message, account_name, config);
+}
+
+fn has_codex_failover_candidate(
+    routes: &[ProviderCodexRoute],
+    failed_accounts: &HashSet<String>,
+    current_account: &str,
+) -> bool {
+    routes.iter().any(|candidate| {
+        candidate.account_name != current_account
+            && !failed_accounts.contains(&candidate.account_name)
+    })
+}
+
+fn log_codex_error_disposition(
+    key: &AuthenticatedKey,
+    account_name: &str,
+    attempt: usize,
+    status: StatusCode,
+    error: &CodexClassifiedUpstreamError,
+    disposition: CodexErrorDisposition,
+) {
+    tracing::warn!(
+        key_id = %key.key_id,
+        account = %account_name,
+        attempt,
+        status = %status.as_u16(),
+        error_class = %error.class.as_str(),
+        disposition = %disposition.as_str(),
+        error_message = %error.message,
+        "codex upstream error classified"
+    );
+}
+
 async fn adapt_codex_upstream_response(
     response: reqwest::Response,
     ctx: CodexUpstreamResponseContext,
@@ -959,7 +1229,9 @@ async fn adapt_codex_upstream_response(
         route,
         control_store,
         codex_session_recovery,
+        codex_session_rejection,
         affinity_config,
+        codex_affinity_id,
         permits,
         mut usage_meta,
     } = ctx;
@@ -1000,7 +1272,9 @@ async fn adapt_codex_upstream_response(
                     route,
                     control_store,
                     codex_session_recovery,
+                    codex_session_rejection,
                     affinity_config,
+                    codex_affinity_id,
                     permits,
                     usage_meta,
                 },
@@ -1012,22 +1286,52 @@ async fn adapt_codex_upstream_response(
         let completed = match completed_response_from_sse_bytes(&bytes) {
             Ok(value) => value,
             Err(err) => {
+                let classified_error = err
+                    .body
+                    .as_deref()
+                    .map(|body| {
+                        classify_codex_upstream_failure(
+                            err.status,
+                            &upstream_headers,
+                            Bytes::copy_from_slice(body.as_bytes()),
+                        )
+                    })
+                    .unwrap_or_else(|| CodexClassifiedUpstreamError {
+                        class: CodexUpstreamErrorClass::Stream,
+                        status: err.status,
+                        message: err.message.clone(),
+                        body: Bytes::new(),
+                        retry_after: None,
+                    });
+                let effective_status =
+                    codex_status_for_error_class(err.status, classified_error.class);
+                maybe_remember_codex_session_rejection(
+                    codex_session_rejection.as_ref(),
+                    route.codex_strict_session_rejection_enabled,
+                    codex_affinity_id.as_ref(),
+                    &classified_error,
+                    &route.account_name,
+                    &affinity_config,
+                );
                 tracing::error!(
                     endpoint = %prepared.original_path,
-                    status = %err.status,
-                    message = %err.message,
+                    status = %effective_status,
+                    error_class = %classified_error.class.as_str(),
+                    message = %classified_error.message,
                     "codex forced-SSE upstream request failed before response.completed"
                 );
                 capture_codex_prepared_request_json(&mut usage_meta, &prepared);
-                capture_error_message(&mut usage_meta, &err.message);
-                if let Some(body) = err.body.as_deref() {
-                    capture_error_body(&mut usage_meta, body);
+                if classified_error.body.is_empty() {
+                    capture_error_message(&mut usage_meta, &classified_error.message);
+                } else {
+                    capture_error_bytes(&mut usage_meta, &classified_error.body);
+                    capture_error_message(&mut usage_meta, &classified_error.message);
                 }
                 if let Err(record_err) = record_codex_usage(
                     control_store.as_ref(),
                     &key,
                     &prepared,
-                    err.status,
+                    effective_status,
                     &route,
                     missing_codex_usage(),
                     &usage_meta,
@@ -1042,8 +1346,8 @@ async fn adapt_codex_upstream_response(
                 }
                 return codex_surface_error_response(
                     &prepared.original_path,
-                    err.status,
-                    &err.message,
+                    effective_status,
+                    &classified_error.message,
                 );
             },
         };
@@ -1113,11 +1417,14 @@ async fn adapt_codex_upstream_response(
                 route,
                 control_store,
                 codex_session_recovery,
+                codex_session_rejection,
                 affinity_config,
+                codex_affinity_id,
                 permits,
                 usage_meta,
             },
-        );
+        )
+        .await;
     }
 
     let bytes = match response.bytes().await {
@@ -1139,7 +1446,9 @@ async fn adapt_codex_upstream_response(
             route,
             control_store,
             codex_session_recovery,
+            codex_session_rejection,
             affinity_config,
+            codex_affinity_id,
             permits,
             usage_meta,
         },
@@ -1162,20 +1471,40 @@ async fn adapt_codex_upstream_response_from_parts(
         route,
         control_store,
         codex_session_recovery,
+        codex_session_rejection,
         affinity_config,
+        codex_affinity_id,
         permits: _permits,
         mut usage_meta,
     } = ctx;
     usage_meta.mark_post_headers_body();
     usage_meta.mark_stream_finish();
     let effective_success_bytes = &bytes;
-    let usage = if status.is_success() {
+    let success_error = status
+        .is_success()
+        .then(|| classify_codex_success_error_body(status, &upstream_headers, &bytes))
+        .flatten();
+    let effective_status = success_error
+        .as_ref()
+        .map(|error| codex_status_for_error_class(error.status, error.class))
+        .unwrap_or(status);
+    let usage = if status.is_success() && success_error.is_none() {
         extract_usage_from_bytes(effective_success_bytes).unwrap_or_else(missing_codex_usage)
     } else {
         capture_error_bytes(&mut usage_meta, &bytes);
         missing_codex_usage()
     };
-    if status.is_success() {
+    if let Some(error) = success_error.as_ref() {
+        maybe_remember_codex_session_rejection(
+            codex_session_rejection.as_ref(),
+            route.codex_strict_session_rejection_enabled,
+            codex_affinity_id.as_ref(),
+            error,
+            &route.account_name,
+            &affinity_config,
+        );
+        capture_error_message(&mut usage_meta, &error.message);
+    } else if status.is_success() {
         if let Ok(completed_response) = serde_json::from_slice::<Value>(effective_success_bytes) {
             remember_codex_session_recovery(
                 codex_session_recovery.as_ref(),
@@ -1191,7 +1520,7 @@ async fn adapt_codex_upstream_response_from_parts(
         control_store.as_ref(),
         &key,
         &prepared,
-        status,
+        effective_status,
         &route,
         usage,
         &usage_meta,
@@ -1200,6 +1529,13 @@ async fn adapt_codex_upstream_response_from_parts(
     {
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to record codex usage: {err}"))
             .into_response();
+    }
+    if let Some(error) = success_error.as_ref() {
+        return codex_surface_error_response(
+            &prepared.original_path,
+            effective_status,
+            &error.message,
+        );
     }
     if !status.is_success()
         && prepared.response_adapter == GatewayResponseAdapter::AnthropicMessages
@@ -1282,37 +1618,6 @@ async fn adapt_codex_upstream_response_from_parts(
             (StatusCode::BAD_GATEWAY, "codex upstream response build failed").into_response()
         })
 }
-fn codex_quota_exhaustion_cooldown(status: StatusCode, bytes: &Bytes) -> Option<Duration> {
-    if !matches!(
-        status,
-        StatusCode::TOO_MANY_REQUESTS | StatusCode::PAYMENT_REQUIRED | StatusCode::FORBIDDEN
-    ) {
-        return None;
-    }
-    let body = String::from_utf8_lossy(bytes.as_ref());
-    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes.as_ref()) {
-        for pointer in ["/error/code", "/code", "/response/error/code"] {
-            if value.pointer(pointer).and_then(serde_json::Value::as_str)
-                == Some("insufficient_quota")
-            {
-                return Some(CODEX_QUOTA_EXHAUSTION_COOLDOWN);
-            }
-        }
-        for pointer in ["/error/message", "/message", "/response/error/message"] {
-            if value
-                .pointer(pointer)
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(codex_message_indicates_usage_limit)
-            {
-                return Some(CODEX_QUOTA_EXHAUSTION_COOLDOWN);
-            }
-        }
-    }
-    if codex_message_indicates_usage_limit(&body) {
-        return Some(CODEX_QUOTA_EXHAUSTION_COOLDOWN);
-    }
-    None
-}
 fn codex_message_indicates_usage_limit(message: &str) -> bool {
     let normalized = message.to_ascii_lowercase();
     normalized.contains("usage limit")
@@ -1328,40 +1633,6 @@ fn randomized_codex_transient_account_failure_cooldown<R: Rng + ?Sized>(rng: &mu
         .as_millis()
         .min(u128::from(u64::MAX)) as u64;
     Duration::from_millis(rng.gen_range(min_ms..=max_ms))
-}
-fn codex_temporary_request_failure_cooldown(status: StatusCode, bytes: &Bytes) -> Option<Duration> {
-    // Request-shape failures must stay on the existing same-account retry path.
-    // Cooling the account for those errors would poison healthy accounts for a
-    // client-side bug that is independent of the selected route.
-    if is_codex_invalid_encrypted_content_response(status, bytes) {
-        return None;
-    }
-
-    // Explicit upstream quota signals still deserve the stronger existing
-    // cooldown window because they are not a transient transport blip.
-    if let Some(cooldown) = codex_quota_exhaustion_cooldown(status, bytes) {
-        return Some(cooldown);
-    }
-
-    // Everything else here is a request-path account failure signal: a
-    // transport/proxy/upstream problem happened after we already selected an
-    // account. We do not write this into persisted account status. We only
-    // keep the account out of the selection pool for a short randomized window
-    // so subsequent requests stop paying the same failover tax immediately.
-    if status.is_server_error()
-        || matches!(
-            status,
-            StatusCode::UNAUTHORIZED
-                | StatusCode::FORBIDDEN
-                | StatusCode::PAYMENT_REQUIRED
-                | StatusCode::TOO_MANY_REQUESTS
-                | StatusCode::REQUEST_TIMEOUT
-        )
-    {
-        return Some(randomized_codex_transient_account_failure_cooldown(&mut rand::thread_rng()));
-    }
-
-    None
 }
 fn mark_codex_transient_request_failure_cooldown(
     codex_account_cooldowns: &Arc<CodexAccountCooldowns>,
@@ -1413,7 +1684,7 @@ pub fn codex_status_from_error_json_value(value: &Value) -> Option<StatusCode> {
 
     None
 }
-fn stream_codex_upstream_response(
+async fn stream_codex_upstream_response(
     response: reqwest::Response,
     status: StatusCode,
     upstream_headers: reqwest::header::HeaderMap,
@@ -1421,6 +1692,34 @@ fn stream_codex_upstream_response(
     ctx: CodexStreamContext,
 ) -> Response {
     let response_adapter = ctx.prepared.response_adapter;
+    let mut events = response
+        .bytes_stream()
+        .map_err(std::io::Error::other)
+        .eventsource();
+    let first_event = match events.next().await {
+        Some(Ok(event)) => {
+            if let Some(error) = classify_codex_sse_event_failure(
+                status,
+                &upstream_headers,
+                Some(event.event.as_str()),
+                &event.data,
+            ) {
+                return record_codex_stream_preflight_failure(error, ctx).await;
+            }
+            Some(event)
+        },
+        Some(Err(err)) => {
+            let error = CodexClassifiedUpstreamError {
+                class: CodexUpstreamErrorClass::Stream,
+                status: StatusCode::BAD_GATEWAY,
+                message: format!("failed to parse codex upstream SSE event: {err}"),
+                body: Bytes::new(),
+                retry_after: None,
+            };
+            return record_codex_stream_preflight_failure(error, ctx).await;
+        },
+        None => None,
+    };
     let body_stream = stream! {
         let CodexStreamContext {
             prepared,
@@ -1428,15 +1727,14 @@ fn stream_codex_upstream_response(
             route,
             control_store,
             codex_session_recovery,
+            codex_session_rejection: _codex_session_rejection,
             affinity_config,
+            codex_affinity_id: _codex_affinity_id,
             permits,
             usage_meta,
         } = ctx;
         let _permits = permits;
-        let mut events = response
-            .bytes_stream()
-            .map_err(std::io::Error::other)
-            .eventsource();
+        let mut first_event = first_event;
         let mut chat_metadata = ChatStreamMetadata::default();
         let mut anthropic_metadata = AnthropicStreamMetadata::default();
         let mut guard = CodexStreamRecordGuard {
@@ -1452,7 +1750,15 @@ fn stream_codex_upstream_response(
             state: StreamRecordState::Pending,
             record_committed: false,
         };
-        while let Some(event) = events.next().await {
+        loop {
+            let event = if let Some(event) = first_event.take() {
+                Some(Ok(event))
+            } else {
+                events.next().await
+            };
+            let Some(event) = event else {
+                break;
+            };
             match event {
                 Ok(event) => {
                     guard.usage_collector.observe_event(&event);
@@ -1523,4 +1829,67 @@ fn stream_codex_upstream_response(
         .unwrap_or_else(|_| {
             (StatusCode::BAD_GATEWAY, "codex upstream stream response build failed").into_response()
         })
+}
+
+async fn record_codex_stream_preflight_failure(
+    error: CodexClassifiedUpstreamError,
+    ctx: CodexStreamContext,
+) -> Response {
+    let CodexStreamContext {
+        prepared,
+        key,
+        route,
+        control_store,
+        codex_session_recovery: _codex_session_recovery,
+        codex_session_rejection,
+        affinity_config,
+        codex_affinity_id,
+        permits,
+        mut usage_meta,
+    } = ctx;
+    let _permits = permits;
+    let effective_status = codex_status_for_error_class(error.status, error.class);
+    usage_meta.mark_post_headers_body();
+    usage_meta.mark_stream_finish();
+    capture_codex_prepared_request_json(&mut usage_meta, &prepared);
+    if error.body.is_empty() {
+        capture_error_message(&mut usage_meta, &error.message);
+        capture_error_body(
+            &mut usage_meta,
+            &codex_surface_error_body(&prepared.original_path, effective_status, &error.message),
+        );
+    } else {
+        capture_error_bytes(&mut usage_meta, &error.body);
+        capture_error_message(&mut usage_meta, &error.message);
+    }
+    maybe_remember_codex_session_rejection(
+        codex_session_rejection.as_ref(),
+        route.codex_strict_session_rejection_enabled,
+        codex_affinity_id.as_ref(),
+        &error,
+        &route.account_name,
+        &affinity_config,
+    );
+    tracing::warn!(
+        key_id = %key.key_id,
+        account = %route.account_name,
+        status = %effective_status.as_u16(),
+        error_class = %error.class.as_str(),
+        "codex stream preflight failure returned before downstream write"
+    );
+    if let Err(err) = record_codex_usage(
+        control_store.as_ref(),
+        &key,
+        &prepared,
+        effective_status,
+        &route,
+        missing_codex_usage(),
+        &usage_meta,
+    )
+    .await
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to record codex usage: {err}"))
+            .into_response();
+    }
+    codex_surface_error_response(&prepared.original_path, effective_status, &error.message)
 }

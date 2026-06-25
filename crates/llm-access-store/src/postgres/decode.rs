@@ -89,7 +89,7 @@ pub fn decode_runtime_config_row(row: PgRow) -> anyhow::Result<RuntimeConfigReco
 
 fn decode_key_bundle(row: &PgRow) -> anyhow::Result<KeyBundle> {
     let key_id: String = row.get(0);
-    let credit_total_raw: String = row.get(30);
+    let credit_total_raw: String = row.get(31);
     let credit_total = credit_total_raw
         .parse::<f64>()
         .with_context(|| format!("parse key rollup credit_total `{credit_total_raw}`"))?;
@@ -120,11 +120,12 @@ fn decode_key_bundle(row: &PgRow) -> anyhow::Result<KeyBundle> {
             request_max_concurrency: row.get(16),
             request_min_start_interval_ms: row.get(17),
             codex_fast_enabled: row.get::<_, Option<bool>>(18).unwrap_or(true),
-            kiro_request_validation_enabled: row.get::<_, Option<bool>>(19).unwrap_or(false),
-            kiro_cache_estimation_enabled: row.get::<_, Option<bool>>(20).unwrap_or(false),
-            kiro_zero_cache_debug_enabled: row.get::<_, Option<bool>>(21).unwrap_or(false),
-            kiro_full_request_logging_enabled: row.get::<_, Option<bool>>(22).unwrap_or(false),
-            kiro_remote_media_resolution_enabled: row.get::<_, Option<bool>>(23).unwrap_or(false),
+            codex_strict_session_rejection_enabled: row.get::<_, Option<bool>>(19).unwrap_or(false),
+            kiro_request_validation_enabled: row.get::<_, Option<bool>>(20).unwrap_or(false),
+            kiro_cache_estimation_enabled: row.get::<_, Option<bool>>(21).unwrap_or(false),
+            kiro_zero_cache_debug_enabled: row.get::<_, Option<bool>>(22).unwrap_or(false),
+            kiro_full_request_logging_enabled: row.get::<_, Option<bool>>(23).unwrap_or(false),
+            kiro_remote_media_resolution_enabled: row.get::<_, Option<bool>>(24).unwrap_or(false),
             kiro_latency_routing_enabled: row
                 .get_optional_bool("kiro_latency_routing_enabled")
                 .unwrap_or(true),
@@ -134,19 +135,19 @@ fn decode_key_bundle(row: &PgRow) -> anyhow::Result<KeyBundle> {
             kiro_cctest_text_handling_enabled: row
                 .get_optional_bool("kiro_cctest_text_handling_enabled")
                 .unwrap_or(false),
-            kiro_cache_policy_override_json: row.get(24),
-            kiro_billable_model_multipliers_override_json: row.get(25),
+            kiro_cache_policy_override_json: row.get(25),
+            kiro_billable_model_multipliers_override_json: row.get(26),
         },
         rollup: KeyUsageRollup {
             key_id,
-            input_uncached_tokens: row.get(26),
-            input_cached_tokens: row.get(27),
-            output_tokens: row.get(28),
-            billable_tokens: row.get(29),
+            input_uncached_tokens: row.get(27),
+            input_cached_tokens: row.get(28),
+            output_tokens: row.get(29),
+            billable_tokens: row.get(30),
             credit_total,
-            credit_missing_events: row.get(31),
-            last_used_at_ms: row.get(32),
-            updated_at_ms: row.get(33),
+            credit_missing_events: row.get(32),
+            last_used_at_ms: row.get(33),
+            updated_at_ms: row.get(34),
         },
     })
 }
@@ -191,6 +192,7 @@ pub fn admin_key_from_bundle(bundle: &KeyBundle) -> AdminKey {
             .request_min_start_interval_ms
             .and_then(non_negative_i64_to_u64),
         codex_fast_enabled: bundle.route.codex_fast_enabled,
+        codex_strict_session_rejection_enabled: bundle.route.codex_strict_session_rejection_enabled,
         kiro_request_validation_enabled: bundle.route.kiro_request_validation_enabled,
         kiro_cache_estimation_enabled: bundle.route.kiro_cache_estimation_enabled,
         kiro_zero_cache_debug_enabled: bundle.route.kiro_zero_cache_debug_enabled,
@@ -242,7 +244,7 @@ fn decode_kiro_candidate_credit_summary_row(
 pub fn decode_kiro_admin_key_row(row: PgRow) -> anyhow::Result<AdminKey> {
     let bundle = decode_key_bundle(&row)?;
     let mut key = admin_key_from_bundle(&bundle);
-    key.kiro_candidate_credit_summary = Some(decode_kiro_candidate_credit_summary_row(&row, 34));
+    key.kiro_candidate_credit_summary = Some(decode_kiro_candidate_credit_summary_row(&row, 35));
     Ok(key)
 }
 

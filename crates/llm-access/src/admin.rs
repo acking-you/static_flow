@@ -566,6 +566,8 @@ pub(crate) struct PatchLlmGatewayKeyRequest {
     #[serde(default)]
     codex_fast_enabled: Option<bool>,
     #[serde(default)]
+    codex_strict_session_rejection_enabled: Option<bool>,
+    #[serde(default)]
     kiro_request_validation_enabled: Option<bool>,
     #[serde(default)]
     kiro_cache_estimation_enabled: Option<bool>,
@@ -5363,6 +5365,7 @@ fn codex_validation_route(
         map_gpt53_codex_to_spark: false,
         auth_refresh_enabled: true,
         codex_fast_enabled: true,
+        codex_strict_session_rejection_enabled: false,
         request_max_concurrency: None,
         request_min_start_interval_ms: None,
         account_request_max_concurrency: None,
@@ -6210,6 +6213,7 @@ fn normalize_key_patch(
         request_max_concurrency,
         request_min_start_interval_ms,
         codex_fast_enabled: request.codex_fast_enabled,
+        codex_strict_session_rejection_enabled: request.codex_strict_session_rejection_enabled,
         kiro_request_validation_enabled: request.kiro_request_validation_enabled,
         kiro_cache_estimation_enabled: request.kiro_cache_estimation_enabled,
         kiro_zero_cache_debug_enabled: request.kiro_zero_cache_debug_enabled,
@@ -6234,6 +6238,7 @@ fn normalize_kiro_key_patch(
     request.request_max_concurrency_unlimited = false;
     request.request_min_start_interval_ms_unlimited = false;
     request.codex_fast_enabled = None;
+    request.codex_strict_session_rejection_enabled = None;
     normalize_key_patch(request)
 }
 
@@ -7312,6 +7317,7 @@ mod tests {
             request_max_concurrency_unlimited: false,
             request_min_start_interval_ms_unlimited: false,
             codex_fast_enabled: None,
+            codex_strict_session_rejection_enabled: None,
             kiro_request_validation_enabled: None,
             kiro_cache_estimation_enabled: None,
             kiro_zero_cache_debug_enabled: None,
@@ -7353,6 +7359,7 @@ mod tests {
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             codex_fast_enabled: true,
+            codex_strict_session_rejection_enabled: false,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,

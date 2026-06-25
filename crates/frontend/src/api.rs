@@ -6101,6 +6101,8 @@ pub struct AdminLlmGatewayKeyView {
     pub request_min_start_interval_ms: Option<u64>,
     #[serde(default = "default_true")]
     pub codex_fast_enabled: bool,
+    #[serde(default)]
+    pub codex_strict_session_rejection_enabled: bool,
     #[serde(default = "default_true")]
     pub kiro_request_validation_enabled: bool,
     #[serde(default = "default_true")]
@@ -8962,6 +8964,7 @@ pub async fn create_admin_llm_gateway_key(
                 default_kiro_billable_model_multipliers_json(),
             uses_global_kiro_billable_model_multipliers: true,
             codex_fast_enabled: true,
+            codex_strict_session_rejection_enabled: false,
             kiro_candidate_credit_summary: None,
         })
     }
@@ -9008,6 +9011,7 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
     pub codex_fast_enabled: Option<bool>,
+    pub codex_strict_session_rejection_enabled: Option<bool>,
     pub kiro_request_validation_enabled: Option<bool>,
     pub kiro_cache_estimation_enabled: Option<bool>,
     pub kiro_zero_cache_debug_enabled: Option<bool>,
@@ -9043,6 +9047,7 @@ pub async fn patch_admin_llm_gateway_key(
             request.request_max_concurrency,
             request.request_min_start_interval_ms,
             request.codex_fast_enabled,
+            request.codex_strict_session_rejection_enabled,
             request.kiro_request_validation_enabled,
             request.kiro_cache_estimation_enabled,
             request.kiro_zero_cache_debug_enabled,
@@ -9146,6 +9151,12 @@ pub async fn patch_admin_llm_gateway_key(
             body.insert(
                 "codex_fast_enabled".to_string(),
                 serde_json::Value::Bool(codex_fast_enabled),
+            );
+        }
+        if let Some(enabled) = request.codex_strict_session_rejection_enabled {
+            body.insert(
+                "codex_strict_session_rejection_enabled".to_string(),
+                serde_json::Value::Bool(enabled),
             );
         }
         if let Some(kiro_request_validation_enabled) = request.kiro_request_validation_enabled {
@@ -11193,6 +11204,7 @@ pub async fn create_admin_kiro_key(
                 default_kiro_billable_model_multipliers_json(),
             uses_global_kiro_billable_model_multipliers: true,
             codex_fast_enabled: true,
+            codex_strict_session_rejection_enabled: false,
             kiro_candidate_credit_summary: None,
         })
     }

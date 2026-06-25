@@ -64,6 +64,8 @@ pub struct KeyRouteConfig {
     pub request_min_start_interval_ms: Option<i64>,
     /// Whether Codex fast/priority requests are enabled for this key.
     pub codex_fast_enabled: bool,
+    /// Whether repeated fatal Codex session errors are rejected early.
+    pub codex_strict_session_rejection_enabled: bool,
     /// Whether Kiro public request validation is enabled.
     pub kiro_request_validation_enabled: bool,
     /// Whether Kiro cache estimation is enabled.

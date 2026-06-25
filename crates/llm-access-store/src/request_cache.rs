@@ -125,6 +125,8 @@ pub(crate) struct CachedCodexRequestSnapshot {
     pub request_min_start_interval_ms: Option<u64>,
     #[serde(default = "default_true")]
     pub codex_fast_enabled: bool,
+    #[serde(default)]
+    pub codex_strict_session_rejection_enabled: bool,
     pub codex_weight_free: i64,
     pub codex_weight_plus: i64,
     pub codex_weight_pro5x: i64,

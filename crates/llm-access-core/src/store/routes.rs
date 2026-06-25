@@ -54,6 +54,9 @@ pub struct ProviderCodexRoute {
     pub auth_refresh_enabled: bool,
     /// Whether Codex fast/priority requests are allowed for this key.
     pub codex_fast_enabled: bool,
+    /// Whether fatal Codex session errors reject repeated requests for the same
+    /// key/session before selecting another account.
+    pub codex_strict_session_rejection_enabled: bool,
     /// Request concurrency cap configured on this key route.
     pub request_max_concurrency: Option<u64>,
     /// Minimum interval between request starts configured on this key route.

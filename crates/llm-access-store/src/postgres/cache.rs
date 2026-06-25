@@ -443,6 +443,9 @@ impl PostgresControlRepository {
                 .request_min_start_interval_ms
                 .and_then(non_negative_i64_to_u64),
             codex_fast_enabled: bundle.route.codex_fast_enabled,
+            codex_strict_session_rejection_enabled: bundle
+                .route
+                .codex_strict_session_rejection_enabled,
             codex_weight_free: runtime_config.codex_weight_free,
             codex_weight_plus: runtime_config.codex_weight_plus,
             codex_weight_pro5x: runtime_config.codex_weight_pro5x,
