@@ -63,12 +63,12 @@ impl CompletedCodexSseAccumulator {
                     self.done_text = Some(text.to_string());
                 }
             },
-            Some("response.completed") => {
+            Some("response.completed" | "response.incomplete") if self.failure.is_none() => {
                 self.response = Some(
                     value
                         .get("response")
                         .cloned()
-                        .ok_or("codex upstream response.completed event is missing response")?,
+                        .ok_or("codex upstream terminal response event is missing response")?,
                 );
             },
             _ => {},
@@ -85,11 +85,10 @@ impl CompletedCodexSseAccumulator {
             .get("type")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let looks_like_failure = matches!(
-            event_type,
-            "error" | "response.error" | "response.failed" | "response.incomplete"
-        ) || value.pointer("/response/error").is_some()
-            || value.get("error").is_some();
+        let looks_like_failure =
+            matches!(event_type, "error" | "response.error" | "response.failed")
+                || has_non_null_pointer(value, "/response/error")
+                || has_non_null_field(value, "error");
         if looks_like_failure
             && extract_error_message_from_json_value(value)
                 .map(|message| !message.trim().is_empty())
@@ -164,6 +163,15 @@ impl CompletedCodexSseAccumulator {
         }
     }
 }
+
+fn has_non_null_field(value: &Value, field: &str) -> bool {
+    value.get(field).is_some_and(|value| !value.is_null())
+}
+
+fn has_non_null_pointer(value: &Value, pointer: &str) -> bool {
+    value.pointer(pointer).is_some_and(|value| !value.is_null())
+}
+
 fn completed_codex_sse_error_from_value(value: &Value) -> CompletedCodexSseError {
     let message = extract_error_message_from_json_value(value)
         .map(|message| message.trim().to_string())

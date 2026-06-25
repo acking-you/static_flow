@@ -41,12 +41,12 @@ pub(crate) fn codex_error_disposition(
     error: &CodexClassifiedUpstreamError,
 ) -> CodexErrorDisposition {
     match error.class {
-        CodexUpstreamErrorClass::ContextWindowExceeded
-        | CodexUpstreamErrorClass::CyberPolicy
-        | CodexUpstreamErrorClass::InvalidRequest => CodexErrorDisposition::ReturnToClient {
+        CodexUpstreamErrorClass::CyberPolicy => CodexErrorDisposition::ReturnToClient {
             strict_session_block: true,
         },
-        CodexUpstreamErrorClass::UsageNotIncluded => CodexErrorDisposition::ReturnToClient {
+        CodexUpstreamErrorClass::ContextWindowExceeded
+        | CodexUpstreamErrorClass::InvalidRequest
+        | CodexUpstreamErrorClass::UsageNotIncluded => CodexErrorDisposition::ReturnToClient {
             strict_session_block: false,
         },
         CodexUpstreamErrorClass::QuotaExceeded => CodexErrorDisposition::FailoverWithCooldown {

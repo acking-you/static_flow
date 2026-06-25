@@ -1327,6 +1327,15 @@ impl ControlStore for RecordingControlStore {
     }
 }
 
+async fn wait_for_usage_event_count(store: &RecordingControlStore, expected: usize) {
+    for _ in 0..20 {
+        if store.usage_events.lock().expect("usage events").len() >= expected {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 #[async_trait]
 impl ProviderDispatcher for CapturingDispatcher {
     async fn dispatch(
@@ -2310,7 +2319,7 @@ fn kiro_upstream_error_classifiers_match_legacy_cooldowns() {
 fn codex_upstream_error_classifier_matches_codex_api_error_codes() {
     use super::codex_upstream_error::{
         classify_codex_sse_event_failure, classify_codex_success_error_body,
-        classify_codex_upstream_failure, CodexUpstreamErrorClass,
+        classify_codex_upstream_failure, CodexUpstreamErrorClass, CODEX_RETRY_AFTER_MAX,
     };
 
     let cases = [
@@ -2370,6 +2379,23 @@ fn codex_upstream_error_classifier_matches_codex_api_error_codes() {
     let success_body = captured_json_bytes(r#"{"id":"resp_1","error":null}"#);
     assert!(classify_codex_success_error_body(StatusCode::OK, &HeaderMap::new(), &success_body)
         .is_none());
+    let bare_client_error =
+        classify_codex_upstream_failure(StatusCode::NOT_FOUND, &HeaderMap::new(), success_body);
+    assert_eq!(bare_client_error.class, CodexUpstreamErrorClass::UnexpectedStatus);
+    let capacity_text = classify_codex_upstream_failure(
+        StatusCode::BAD_GATEWAY,
+        &HeaderMap::new(),
+        captured_json_bytes(r#"{"error":{"message":"Capacity planning is disabled."}}"#),
+    );
+    assert_eq!(capacity_text.class, CodexUpstreamErrorClass::UnexpectedStatus);
+    let mut retry_headers = HeaderMap::new();
+    retry_headers.insert(header::RETRY_AFTER, "86400".parse().expect("retry-after"));
+    let retryable = classify_codex_upstream_failure(
+        StatusCode::TOO_MANY_REQUESTS,
+        &retry_headers,
+        captured_json_bytes(r#"{"error":{"code":"rate_limit_exceeded","message":"slow down"}}"#),
+    );
+    assert_eq!(retryable.retry_after, Some(CODEX_RETRY_AFTER_MAX));
     assert!(classify_codex_sse_event_failure(
         StatusCode::OK,
         &HeaderMap::new(),
@@ -2377,6 +2403,47 @@ fn codex_upstream_error_classifier_matches_codex_api_error_codes() {
         r#"{"type":"response.completed","response":{"id":"resp_1","error":null}}"#,
     )
     .is_none());
+    assert!(classify_codex_sse_event_failure(
+        StatusCode::OK,
+        &HeaderMap::new(),
+        Some("response.incomplete"),
+        r#"{"type":"response.incomplete","response":{"id":"resp_1","status":"incomplete","error":null}}"#,
+    )
+    .is_none());
+}
+
+#[test]
+fn completed_codex_sse_accepts_response_incomplete_terminal_event() {
+    let stream = format!(
+        "event: response.output_text.done\ndata: {}\n\nevent: response.incomplete\ndata: {}\n\n",
+        json!({
+            "type": "response.output_text.done",
+            "item_id": "msg_1",
+            "text": "partial answer"
+        }),
+        json!({
+            "type": "response.incomplete",
+            "response": {
+                "id": "resp_1",
+                "status": "incomplete",
+                "output": [],
+                "usage": {
+                    "input_tokens": 4,
+                    "input_tokens_details": {
+                        "cached_tokens": 1
+                    },
+                    "output_tokens": 2
+                }
+            }
+        })
+    );
+
+    let completed = match super::codex_sse::completed_response_from_sse_bytes(stream.as_bytes()) {
+        Ok(completed) => completed,
+        Err(err) => panic!("response.incomplete should be a terminal response: {}", err.message),
+    };
+    assert_eq!(completed.response["id"], "resp_1");
+    assert_eq!(completed.response["output"][0]["content"][0]["text"], "partial answer");
 }
 
 #[tokio::test]
@@ -3281,6 +3348,36 @@ async fn fake_codex_responses_context_window_exceeded(
         .expect("context window upstream response")
 }
 
+async fn fake_codex_responses_cyber_policy(
+    State(captured): State<Arc<CapturedCodexUpstream>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Response {
+    let path = request.uri().path().to_string();
+    let query = request.uri().query().map(ToString::to_string);
+    let body = to_bytes(request.into_body(), usize::MAX)
+        .await
+        .expect("upstream request body");
+    let body = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json")
+    };
+    captured
+        .requests
+        .lock()
+        .expect("captured requests")
+        .push(captured_codex_request(&headers, path, query, body));
+
+    Response::builder()
+        .status(StatusCode::BAD_REQUEST)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            r#"{"error":{"code":"cyber_policy","type":"invalid_request_error","message":"Request blocked by policy."}}"#,
+        ))
+        .expect("cyber policy upstream response")
+}
+
 fn codex_request_has_encrypted_reasoning_input(body: &serde_json::Value) -> bool {
     fn item_has_encrypted_reasoning(item: &serde_json::Value) -> bool {
         item.get("type").and_then(serde_json::Value::as_str) == Some("reasoning")
@@ -3653,6 +3750,86 @@ async fn fake_codex_responses_failed_sse(
             })
         )))
         .expect("failed sse upstream response")
+}
+
+async fn fake_codex_responses_mid_stream_failed_sse(
+    State(captured): State<Arc<CapturedCodexUpstream>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Response {
+    let path = request.uri().path().to_string();
+    let query = request.uri().query().map(ToString::to_string);
+    let body = to_bytes(request.into_body(), usize::MAX)
+        .await
+        .expect("upstream request body");
+    let body = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json")
+    };
+    captured
+        .requests
+        .lock()
+        .expect("captured requests")
+        .push(CapturedCodexRequest {
+            path,
+            query,
+            authorization: headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+            accept: headers
+                .get(header::ACCEPT)
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+            user_agent: headers
+                .get(header::USER_AGENT)
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+            conversation_id: headers
+                .get("conversation_id")
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+            x_client_request_id: headers
+                .get("x-client-request-id")
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+            session_id: headers
+                .get("session_id")
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+            x_codex_turn_state: headers
+                .get("x-codex-turn-state")
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+            body,
+        });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .body(Body::from(format!(
+            "event: response.output_text.delta\ndata: {}\n\nevent: response.failed\ndata: {}\n\n",
+            json!({
+                "type": "response.output_text.delta",
+                "response_id": "resp_1",
+                "created": 123,
+                "model": "gpt-5.3-codex-spark",
+                "delta": "hello "
+            }),
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "status": "failed",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "tool_choice references a missing tool",
+                        "code": "invalid_tool_choice"
+                    }
+                }
+            })
+        )))
+        .expect("mid-stream failed sse upstream response")
 }
 
 async fn fake_codex_models(
@@ -5392,7 +5569,70 @@ async fn codex_dispatch_retries_retryable_error_on_same_account_before_failover(
 }
 
 #[tokio::test]
-async fn codex_dispatch_strict_session_rejection_blocks_repeated_fatal_session() {
+async fn codex_dispatch_strict_session_rejection_blocks_repeated_cyber_policy_session() {
+    let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("codex upstream env lock");
+    let captured = Arc::new(CapturedCodexUpstream::default());
+    let app = Router::new()
+        .route("/v1/responses", post(fake_codex_responses_cyber_policy))
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake upstream");
+    let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve fake upstream");
+    });
+    std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+    let mut route = codex_route_for_account("codex-a", "upstream-token-a");
+    route.codex_strict_session_rejection_enabled = true;
+    let state = super::ProviderState::new(
+        Arc::new(TestStore),
+        Arc::new(StaticRouteStore {
+            codex_route: route,
+            kiro_route: static_kiro_route(),
+        }),
+    );
+    let request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                        "model": "gpt-5.3-codex",
+                        "prompt_cache_key": "strict-session-a",
+                        "input": "hello",
+                        "stream": false
+                    }"#,
+            ))
+            .expect("request")
+    };
+
+    let first = super::provider_entry(state.clone(), request()).await;
+    let second = super::provider_entry(state, request()).await;
+
+    std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+    assert_eq!(first.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let second_body = to_bytes(second.into_body(), usize::MAX)
+        .await
+        .expect("second response body");
+    let second_body = String::from_utf8(second_body.to_vec()).expect("utf8 response");
+    assert!(second_body.contains("start a new session"), "body: {second_body}");
+
+    let requests = captured.requests.lock().expect("captured requests");
+    assert_eq!(requests.len(), 1);
+}
+
+#[tokio::test]
+async fn codex_dispatch_context_window_does_not_strict_block_session() {
     let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
         .lock()
         .expect("codex upstream env lock");
@@ -5448,10 +5688,72 @@ async fn codex_dispatch_strict_session_rejection_blocks_repeated_fatal_session()
         .await
         .expect("second response body");
     let second_body = String::from_utf8(second_body.to_vec()).expect("utf8 response");
-    assert!(second_body.contains("start a new session"), "body: {second_body}");
+    assert!(!second_body.contains("start a new session"), "body: {second_body}");
 
     let requests = captured.requests.lock().expect("captured requests");
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
+}
+
+#[tokio::test]
+async fn codex_dispatch_strict_session_rejection_ignores_derived_sessions() {
+    let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("codex upstream env lock");
+    let captured = Arc::new(CapturedCodexUpstream::default());
+    let app = Router::new()
+        .route("/v1/responses", post(fake_codex_responses_cyber_policy))
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake upstream");
+    let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve fake upstream");
+    });
+    std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+    let mut route = codex_route_for_account("codex-a", "upstream-token-a");
+    route.codex_strict_session_rejection_enabled = true;
+    let state = super::ProviderState::new(
+        Arc::new(TestStore),
+        Arc::new(StaticRouteStore {
+            codex_route: route,
+            kiro_route: static_kiro_route(),
+        }),
+    );
+    let request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                        "model": "gpt-5.3-codex",
+                        "input": "hello",
+                        "stream": false
+                    }"#,
+            ))
+            .expect("request")
+    };
+
+    let first = super::provider_entry(state.clone(), request()).await;
+    let second = super::provider_entry(state, request()).await;
+
+    std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+    assert_eq!(first.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let second_body = to_bytes(second.into_body(), usize::MAX)
+        .await
+        .expect("second response body");
+    let second_body = String::from_utf8(second_body.to_vec()).expect("utf8 response");
+    assert!(!second_body.contains("start a new session"), "body: {second_body}");
+
+    let requests = captured.requests.lock().expect("captured requests");
+    assert_eq!(requests.len(), 2);
 }
 
 #[tokio::test]
@@ -6182,6 +6484,65 @@ async fn codex_dispatch_streaming_first_failure_returns_error_without_sse_body()
     let events = store.usage_events.lock().expect("usage events");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].status_code, 400);
+}
+
+#[tokio::test]
+async fn codex_dispatch_streaming_mid_failure_stops_without_done_and_records_failure() {
+    let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("codex upstream env lock");
+    let captured = Arc::new(CapturedCodexUpstream::default());
+    let app = Router::new()
+        .route("/v1/responses", post(fake_codex_responses_mid_stream_failed_sse))
+        .with_state(captured);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake upstream");
+    let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve fake upstream");
+    });
+    std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+    let store = Arc::new(RecordingControlStore::default());
+    let state = super::ProviderState::new(store.clone(), static_codex_route_store());
+    let response = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                        "model": "gpt-5.3-codex",
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": true
+                    }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+
+    std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let body = String::from_utf8(body.to_vec()).expect("utf8 response");
+    assert!(body.contains("hello "), "body: {body}");
+    assert!(!body.contains("response.failed"), "body: {body}");
+    assert!(!body.contains("[DONE]"), "body: {body}");
+
+    wait_for_usage_event_count(store.as_ref(), 1).await;
+    let events = store.usage_events.lock().expect("usage events");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].status_code, 400);
+    assert_eq!(events[0].error_message.as_deref(), Some("tool_choice references a missing tool"));
+    assert!(events[0].usage_missing);
 }
 
 #[tokio::test]

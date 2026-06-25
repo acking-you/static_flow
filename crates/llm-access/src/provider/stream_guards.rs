@@ -30,7 +30,7 @@ use super::{
     kiro_usage::{
         anthropic_usage_json_from_summary_with_policy, build_kiro_usage_summary, record_kiro_usage,
     },
-    usage_meta::{capture_error_body, capture_error_message},
+    usage_meta::{capture_error_body, capture_error_bytes, capture_error_message},
     CodexStreamRecordGuard, KiroPeekedStream, KiroResponseContext, KiroStreamRecordGuard,
     KiroUsageInputs, KiroUsageRecord, KiroUsageSummary, StreamRecordState,
 };
@@ -43,6 +43,22 @@ impl CodexStreamRecordGuard {
 
     pub(super) fn mark_internal_failure(&mut self) {
         self.state = StreamRecordState::InternalFailure;
+    }
+
+    pub(super) fn mark_upstream_failure(
+        &mut self,
+        status: StatusCode,
+        message: &str,
+        body: &Bytes,
+    ) {
+        self.status = status;
+        self.state = StreamRecordState::InternalFailure;
+        if body.is_empty() {
+            capture_error_message(&mut self.usage_meta, message);
+        } else {
+            capture_error_bytes(&mut self.usage_meta, body);
+            capture_error_message(&mut self.usage_meta, message);
+        }
     }
 
     pub(super) async fn finish_success(mut self) {

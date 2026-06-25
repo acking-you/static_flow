@@ -1720,6 +1720,7 @@ async fn stream_codex_upstream_response(
         },
         None => None,
     };
+    let failure_headers = upstream_headers.clone();
     let body_stream = stream! {
         let CodexStreamContext {
             prepared,
@@ -1727,9 +1728,9 @@ async fn stream_codex_upstream_response(
             route,
             control_store,
             codex_session_recovery,
-            codex_session_rejection: _codex_session_rejection,
+            codex_session_rejection,
             affinity_config,
-            codex_affinity_id: _codex_affinity_id,
+            codex_affinity_id,
             permits,
             usage_meta,
         } = ctx;
@@ -1761,6 +1762,36 @@ async fn stream_codex_upstream_response(
             };
             match event {
                 Ok(event) => {
+                    if let Some(error) = classify_codex_sse_event_failure(
+                        status,
+                        &failure_headers,
+                        Some(event.event.as_str()),
+                        &event.data,
+                    ) {
+                        let effective_status =
+                            codex_status_for_error_class(error.status, error.class);
+                        guard.mark_upstream_failure(
+                            effective_status,
+                            &error.message,
+                            &error.body,
+                        );
+                        maybe_remember_codex_session_rejection(
+                            codex_session_rejection.as_ref(),
+                            guard.route.codex_strict_session_rejection_enabled,
+                            codex_affinity_id.as_ref(),
+                            &error,
+                            &guard.route.account_name,
+                            &guard.affinity_config,
+                        );
+                        tracing::warn!(
+                            key_id = %guard.key.key_id,
+                            account = %guard.route.account_name,
+                            status = %effective_status.as_u16(),
+                            error_class = %error.class.as_str(),
+                            "codex stream upstream failure detected after downstream write started"
+                        );
+                        return;
+                    }
                     guard.usage_collector.observe_event(&event);
                     match response_adapter {
                         GatewayResponseAdapter::Responses => {

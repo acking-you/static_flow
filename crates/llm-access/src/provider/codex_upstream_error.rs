@@ -10,6 +10,8 @@ use serde_json::Value;
 
 use super::errors::extract_error_message_from_json_value;
 
+pub(crate) const CODEX_RETRY_AFTER_MAX: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CodexUpstreamErrorClass {
     ContextWindowExceeded,
@@ -86,9 +88,8 @@ pub(crate) fn classify_codex_success_error_body(
     bytes: &Bytes,
 ) -> Option<CodexClassifiedUpstreamError> {
     let value = serde_json::from_slice::<Value>(bytes).ok()?;
-    json_value_contains_error(&value).then(|| {
-        classify_codex_upstream_failure(status, headers, Bytes::copy_from_slice(bytes.as_ref()))
-    })
+    json_value_contains_error(&value)
+        .then(|| classify_codex_upstream_failure(status, headers, bytes.clone()))
 }
 
 pub(crate) fn classify_codex_sse_event_failure(
@@ -110,10 +111,8 @@ pub(crate) fn classify_codex_sse_event_failure(
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let is_failure_event = matches!(
-        event_type,
-        "error" | "response.error" | "response.failed" | "response.incomplete"
-    ) || has_non_null_pointer(&value, "/response/error")
+    let is_failure_event = matches!(event_type, "error" | "response.error" | "response.failed")
+        || has_non_null_pointer(&value, "/response/error")
         || has_non_null_field(&value, "error");
     if !is_failure_event {
         return None;
@@ -178,9 +177,6 @@ fn classify_status_and_message(status: StatusCode, message: &str) -> CodexUpstre
     if status.is_server_error() || matches!(status, StatusCode::REQUEST_TIMEOUT) {
         return CodexUpstreamErrorClass::UnexpectedStatus;
     }
-    if status.is_client_error() {
-        return CodexUpstreamErrorClass::InvalidRequest;
-    }
     CodexUpstreamErrorClass::UnexpectedStatus
 }
 
@@ -189,7 +185,7 @@ fn json_value_contains_error(value: &Value) -> bool {
         || has_non_null_pointer(value, "/response/error")
         || matches!(
             value.get("type").and_then(Value::as_str),
-            Some("error" | "response.error" | "response.failed" | "response.incomplete")
+            Some("error" | "response.error" | "response.failed")
         )
 }
 
@@ -330,7 +326,8 @@ fn message_indicates_capacity(message: &str) -> bool {
         || normalized.contains("slow_down")
         || normalized.contains("server is overloaded")
         || normalized.contains("high capacity")
-        || normalized.contains("capacity")
+        || normalized.contains("at capacity")
+        || normalized.contains("over capacity")
 }
 
 fn retry_after(headers: &HeaderMap) -> Option<Duration> {
@@ -339,4 +336,5 @@ fn retry_after(headers: &HeaderMap) -> Option<Duration> {
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.trim().parse::<u64>().ok())
         .map(Duration::from_secs)
+        .map(|duration| duration.min(CODEX_RETRY_AFTER_MAX))
 }
