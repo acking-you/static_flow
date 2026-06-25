@@ -408,6 +408,8 @@ struct CodexAdminAccountListRow {
     proxy_config_id: Option<String>,
     request_max_concurrency: Option<i64>,
     request_min_start_interval_ms: Option<i64>,
+    codex_image_generation_enabled: bool,
+    codex_image_generation_max_concurrency: i64,
     last_refresh_at_ms: Option<i64>,
     last_error: Option<String>,
     access_token: Option<String>,
@@ -465,6 +467,8 @@ struct CodexAccountSettings {
     proxy_config_id: Option<String>,
     request_max_concurrency: Option<u64>,
     request_min_start_interval_ms: Option<u64>,
+    codex_image_generation_enabled: bool,
+    codex_image_generation_max_concurrency: u64,
 }
 
 impl Default for CodexAccountSettings {
@@ -477,6 +481,9 @@ impl Default for CodexAccountSettings {
             proxy_config_id: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            codex_image_generation_enabled: false,
+            codex_image_generation_max_concurrency:
+                llm_access_core::store::DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY,
         }
     }
 }
@@ -500,6 +507,23 @@ impl PostgresControlRepository {
     ) -> anyhow::Result<Self> {
         let client = SqlxClient::connect(database_url).await?;
         llm_access_migrations::run_postgres_migrations(&client.pool).await?;
+        Self::from_sqlx_client(client, request_cache_config, proxy_scope)
+    }
+
+    /// Connect to the Postgres control plane without running migrations.
+    pub async fn connect_read_only(
+        database_url: &str,
+        request_cache_config: Option<RequestCacheConfig>,
+    ) -> anyhow::Result<Self> {
+        let client = SqlxClient::connect(database_url).await?;
+        Self::from_sqlx_client(client, request_cache_config, ProxyConfigScope::core())
+    }
+
+    fn from_sqlx_client(
+        client: SqlxClient,
+        request_cache_config: Option<RequestCacheConfig>,
+        proxy_scope: ProxyConfigScope,
+    ) -> anyhow::Result<Self> {
         let request_cache = request_cache_config.map(RequestCache::new).transpose()?;
         Ok(Self {
             client,

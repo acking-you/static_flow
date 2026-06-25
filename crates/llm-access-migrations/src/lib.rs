@@ -143,6 +143,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "codex_strict_session_rejection",
         sql: include_str!("../migrations/postgres/0029_codex_strict_session_rejection.sql"),
     },
+    SqlMigration {
+        version: 30,
+        name: "codex_image_generation_toggle",
+        sql: include_str!("../migrations/postgres/0030_codex_image_generation_toggle.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.

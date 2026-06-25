@@ -128,6 +128,8 @@ pub const DEFAULT_CODEX_FALLBACK_AFFINITY_TTL_SECONDS: u64 = 30 * 60;
 pub const DEFAULT_CODEX_FALLBACK_AFFINITY_PREFIX_BYTES: u64 = 4_096;
 /// Default minimum request body size before fallback affinity is used.
 pub const DEFAULT_CODEX_FALLBACK_AFFINITY_MIN_BODY_BYTES: u64 = 128;
+/// Default per-account concurrency for Codex image generation/edit requests.
+pub const DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY: u64 = 3;
 /// Default lower bound for randomized Kiro status refresh.
 pub const DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS: u64 = 240;
 /// Default upper bound for randomized Kiro status refresh.

@@ -52,7 +52,8 @@ use super::{
         UsageChartPoint, UsageEventPage, UsageEventQuery, UsageEventTotals, UsageFilterOptions,
         UsageMetricsQuery, UsageMetricsSnapshot, UsageRollupApplyReport, UsageRollupBatch,
     },
-    DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_STATUS_REFRESH_SECONDS, KEY_STATUS_ACTIVE,
+    DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY,
+    DEFAULT_CODEX_STATUS_REFRESH_SECONDS, KEY_STATUS_ACTIVE,
 };
 use crate::usage::UsageEvent;
 
@@ -371,6 +372,7 @@ impl AdminKeyStore for EmptyAdminKeyStore {
             request_min_start_interval_ms: key.request_min_start_interval_ms,
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
+            codex_image_generation_enabled: false,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,
@@ -595,6 +597,8 @@ impl AdminCodexAccountStore for EmptyAdminCodexAccountStore {
             auto_refresh_enabled: account.auto_refresh_enabled,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            codex_image_generation_enabled: false,
+            codex_image_generation_max_concurrency: DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY,
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
             effective_proxy_source: "none".to_string(),

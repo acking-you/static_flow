@@ -5746,6 +5746,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "llm-access-codex-image"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bytes",
+ "clap",
+ "llm-access-codex",
+ "llm-access-core",
+ "llm-access-store",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tower 0.5.2",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "llm-access-core"
 version = "0.1.0"
 dependencies = [

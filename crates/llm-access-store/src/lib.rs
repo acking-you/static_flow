@@ -14,6 +14,7 @@ pub(crate) mod records;
 /// Valkey-backed request-path cache primitives.
 pub mod request_cache;
 /// Postgres-backed archived usage catalog metadata.
+#[cfg(feature = "duckdb-runtime")]
 pub(crate) mod usage_catalog;
 
 /// Aggregated usage counters for one API key from analytics usage events.

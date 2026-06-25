@@ -67,6 +67,9 @@ pub struct AdminKey {
     /// early for this key.
     #[serde(default)]
     pub codex_strict_session_rejection_enabled: bool,
+    /// Whether Codex image generation/edit requests are enabled for this key.
+    #[serde(default)]
+    pub codex_image_generation_enabled: bool,
     /// Whether Kiro request validation is enabled.
     pub kiro_request_validation_enabled: bool,
     /// Whether Kiro cache estimation is enabled.
@@ -352,6 +355,8 @@ pub struct AdminKeyPatch {
     pub codex_fast_enabled: Option<bool>,
     /// New Codex strict session-rejection toggle.
     pub codex_strict_session_rejection_enabled: Option<bool>,
+    /// New Codex image generation/edit toggle.
+    pub codex_image_generation_enabled: Option<bool>,
     /// New Kiro request-validation toggle.
     pub kiro_request_validation_enabled: Option<bool>,
     /// New Kiro cache-estimation toggle.

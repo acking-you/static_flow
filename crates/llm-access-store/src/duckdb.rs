@@ -701,6 +701,7 @@ const DUCKDB_COMPACT_MAX_TEMP_DIRECTORY_SIZE: &str = "8GB";
 #[cfg(feature = "duckdb-runtime")]
 const DUCKDB_USAGE_CONNECTION_MAX_TEMP_DIRECTORY_SIZE: &str = "2GB";
 
+#[cfg(feature = "duckdb-runtime")]
 fn tiered_pending_dir(config: &TieredDuckDbUsageConfig) -> PathBuf {
     config.active_dir.join("pending")
 }

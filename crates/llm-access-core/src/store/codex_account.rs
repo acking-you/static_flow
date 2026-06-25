@@ -33,6 +33,12 @@ pub struct AdminCodexAccount {
     pub request_max_concurrency: Option<u64>,
     /// Per-account request pacing interval.
     pub request_min_start_interval_ms: Option<u64>,
+    /// Whether this account may serve Codex image generation/edit requests.
+    #[serde(default)]
+    pub codex_image_generation_enabled: bool,
+    /// Per-account Codex image generation/edit concurrency cap.
+    #[serde(default = "default_codex_image_generation_max_concurrency")]
+    pub codex_image_generation_max_concurrency: u64,
     /// Proxy selection mode.
     pub proxy_mode: String,
     /// Fixed proxy config id when proxy mode is fixed.
@@ -262,8 +268,16 @@ pub struct AdminCodexAccountPatch {
     pub request_max_concurrency: Option<Option<u64>>,
     /// New per-account request pacing interval.
     pub request_min_start_interval_ms: Option<Option<u64>>,
+    /// New Codex image generation/edit account toggle.
+    pub codex_image_generation_enabled: Option<bool>,
+    /// New per-account Codex image generation/edit concurrency cap.
+    pub codex_image_generation_max_concurrency: Option<u64>,
     /// Update timestamp.
     pub updated_at_ms: i64,
+}
+
+const fn default_codex_image_generation_max_concurrency() -> u64 {
+    super::DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY
 }
 
 /// Admin-facing summary for one Codex batch import job.
@@ -412,6 +426,9 @@ mod tests {
             auto_refresh_enabled: true,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            codex_image_generation_enabled: false,
+            codex_image_generation_max_concurrency:
+                super::default_codex_image_generation_max_concurrency(),
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
             effective_proxy_source: "binding".to_string(),

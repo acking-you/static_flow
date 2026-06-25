@@ -505,10 +505,14 @@ impl ProviderRouteStore for PostgresControlRepository {
                 codex_fast_enabled: snapshot.codex_fast_enabled,
                 codex_strict_session_rejection_enabled: snapshot
                     .codex_strict_session_rejection_enabled,
+                codex_image_generation_enabled: snapshot.codex_image_generation_enabled,
                 request_max_concurrency: snapshot.request_max_concurrency,
                 request_min_start_interval_ms: snapshot.request_min_start_interval_ms,
                 account_request_max_concurrency: view.request_max_concurrency,
                 account_request_min_start_interval_ms: view.request_min_start_interval_ms,
+                account_codex_image_generation_enabled: view.codex_image_generation_enabled,
+                account_codex_image_generation_max_concurrency: view
+                    .codex_image_generation_max_concurrency,
                 cached_error_message,
                 proxy: proxy_from_cached_option(view.proxy),
             });
@@ -578,10 +582,14 @@ impl ProviderRouteStore for PostgresControlRepository {
             auth_refresh_enabled: view.auth_refresh_enabled,
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
+            codex_image_generation_enabled: true,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             account_request_max_concurrency: view.request_max_concurrency,
             account_request_min_start_interval_ms: view.request_min_start_interval_ms,
+            account_codex_image_generation_enabled: view.codex_image_generation_enabled,
+            account_codex_image_generation_max_concurrency: view
+                .codex_image_generation_max_concurrency,
             cached_error_message,
             proxy: proxy_from_cached_option(view.proxy),
         }))
