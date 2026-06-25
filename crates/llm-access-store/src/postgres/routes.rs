@@ -503,6 +503,8 @@ impl ProviderRouteStore for PostgresControlRepository {
                 map_gpt53_codex_to_spark: view.map_gpt53_codex_to_spark,
                 auth_refresh_enabled: view.auth_refresh_enabled,
                 codex_fast_enabled: snapshot.codex_fast_enabled,
+                codex_strict_session_rejection_enabled: snapshot
+                    .codex_strict_session_rejection_enabled,
                 request_max_concurrency: snapshot.request_max_concurrency,
                 request_min_start_interval_ms: snapshot.request_min_start_interval_ms,
                 account_request_max_concurrency: view.request_max_concurrency,
@@ -575,6 +577,7 @@ impl ProviderRouteStore for PostgresControlRepository {
             map_gpt53_codex_to_spark: view.map_gpt53_codex_to_spark,
             auth_refresh_enabled: view.auth_refresh_enabled,
             codex_fast_enabled: true,
+            codex_strict_session_rejection_enabled: false,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             account_request_max_concurrency: view.request_max_concurrency,

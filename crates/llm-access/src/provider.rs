@@ -4,10 +4,13 @@ mod cctest;
 mod client;
 mod codex_auth;
 mod codex_dispatch;
+mod codex_error_disposition;
 mod codex_models;
 mod codex_session_affinity;
 mod codex_session_recovery;
+mod codex_session_rejection;
 mod codex_sse;
+mod codex_upstream_error;
 mod entry;
 mod errors;
 mod kiro_dispatch;
@@ -59,6 +62,7 @@ pub(crate) use codex_session_affinity::{
 pub(crate) use codex_session_recovery::{
     CodexSessionRecovery, CodexSessionRecoveryLookup, CodexSessionRecoveryStoreResult,
 };
+use codex_session_rejection::CodexSessionRejection;
 pub use entry::{provider_entry, provider_entry_handler};
 use errors::{anthropic_json_error, summarize_error_bytes};
 #[cfg(test)]
@@ -186,6 +190,7 @@ pub struct ProviderState {
     codex_account_cooldowns: Arc<CodexAccountCooldowns>,
     codex_session_affinity: Arc<CodexSessionAffinity>,
     codex_session_recovery: Arc<CodexSessionRecovery>,
+    codex_session_rejection: Arc<CodexSessionRejection>,
     kiro_request_scheduler: Arc<KiroRequestScheduler>,
     kiro_session_affinity: Arc<KiroSessionAffinity>,
     kiro_latency_ranker: Arc<KiroLatencyRanker>,
@@ -206,6 +211,7 @@ pub struct ProviderDispatchDeps {
     codex_account_cooldowns: Arc<CodexAccountCooldowns>,
     codex_session_affinity: Arc<CodexSessionAffinity>,
     codex_session_recovery: Arc<CodexSessionRecovery>,
+    codex_session_rejection: Arc<CodexSessionRejection>,
     kiro_request_scheduler: Arc<KiroRequestScheduler>,
     kiro_session_affinity: Arc<KiroSessionAffinity>,
     kiro_latency_ranker: Arc<KiroLatencyRanker>,
@@ -274,7 +280,9 @@ struct CodexUpstreamResponseContext {
     route: ProviderCodexRoute,
     control_store: Arc<dyn ControlStore>,
     codex_session_recovery: Arc<CodexSessionRecovery>,
+    codex_session_rejection: Arc<CodexSessionRejection>,
     affinity_config: CodexAffinityRuntimeConfig,
+    codex_affinity_id: Option<CodexAffinityId>,
     permits: Vec<LimitPermit>,
     usage_meta: ProviderUsageMetadata,
 }
@@ -292,7 +300,9 @@ struct CodexCompletedResponseContext {
     route: ProviderCodexRoute,
     control_store: Arc<dyn ControlStore>,
     codex_session_recovery: Arc<CodexSessionRecovery>,
+    codex_session_rejection: Arc<CodexSessionRejection>,
     affinity_config: CodexAffinityRuntimeConfig,
+    codex_affinity_id: Option<CodexAffinityId>,
     permits: Vec<LimitPermit>,
     usage_meta: ProviderUsageMetadata,
 }
@@ -303,7 +313,9 @@ struct CodexStreamContext {
     route: ProviderCodexRoute,
     control_store: Arc<dyn ControlStore>,
     codex_session_recovery: Arc<CodexSessionRecovery>,
+    codex_session_rejection: Arc<CodexSessionRejection>,
     affinity_config: CodexAffinityRuntimeConfig,
+    codex_affinity_id: Option<CodexAffinityId>,
     permits: Vec<LimitPermit>,
     usage_meta: ProviderUsageMetadata,
 }

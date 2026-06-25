@@ -949,6 +949,7 @@ impl AdminCodexAccountStore for PostgresControlRepository {
             map_gpt53_codex_to_spark: settings.map_gpt53_codex_to_spark,
             auth_refresh_enabled: settings.auth_refresh_enabled,
             codex_fast_enabled: true,
+            codex_strict_session_rejection_enabled: false,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             account_request_max_concurrency: settings.request_max_concurrency,

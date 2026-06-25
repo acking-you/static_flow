@@ -125,6 +125,8 @@ pub(crate) struct CachedCodexRequestSnapshot {
     pub request_min_start_interval_ms: Option<u64>,
     #[serde(default = "default_true")]
     pub codex_fast_enabled: bool,
+    #[serde(default)]
+    pub codex_strict_session_rejection_enabled: bool,
     pub codex_weight_free: i64,
     pub codex_weight_plus: i64,
     pub codex_weight_pro5x: i64,
@@ -668,6 +670,18 @@ fn duration_to_redis_secs(ttl: Duration) -> u64 {
 mod tests {
     use std::time::Duration;
 
+    fn cached_key() -> super::CachedAuthenticatedKey {
+        super::CachedAuthenticatedKey {
+            key_id: "key-1".to_string(),
+            key_name: "codex key".to_string(),
+            provider_type: "codex".to_string(),
+            protocol_family: "openai".to_string(),
+            status: "active".to_string(),
+            quota_billable_limit: 1000,
+            billable_tokens_used: 10,
+        }
+    }
+
     #[test]
     fn deterministic_jitter_is_stable_for_same_key() {
         let a = super::deterministic_jitter_ttl(
@@ -700,6 +714,56 @@ mod tests {
             1.2,
         );
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn cached_codex_request_snapshot_round_trips_strict_session_rejection_flag() {
+        let snapshot = super::CachedCodexRequestSnapshot {
+            key: cached_key(),
+            generation: 7,
+            route_strategy: "single".to_string(),
+            account_group_id_at_event: Some("group-a".to_string()),
+            selected_account_names: vec!["codex-a".to_string()],
+            use_all_active_accounts: false,
+            request_max_concurrency: Some(2),
+            request_min_start_interval_ms: Some(50),
+            codex_fast_enabled: false,
+            codex_strict_session_rejection_enabled: true,
+            codex_weight_free: 1,
+            codex_weight_plus: 2,
+            codex_weight_pro5x: 3,
+            codex_weight_pro20x: 4,
+        };
+
+        let encoded = serde_json::to_string(&snapshot).expect("encode snapshot");
+        let decoded: super::CachedCodexRequestSnapshot =
+            serde_json::from_str(&encoded).expect("decode snapshot");
+
+        assert_eq!(decoded, snapshot);
+    }
+
+    #[test]
+    fn cached_codex_request_snapshot_defaults_legacy_fields() {
+        let legacy = serde_json::json!({
+            "key": cached_key(),
+            "generation": 7,
+            "route_strategy": "single",
+            "account_group_id_at_event": null,
+            "selected_account_names": ["codex-a"],
+            "use_all_active_accounts": false,
+            "request_max_concurrency": null,
+            "request_min_start_interval_ms": null,
+            "codex_weight_free": 1,
+            "codex_weight_plus": 2,
+            "codex_weight_pro5x": 3,
+            "codex_weight_pro20x": 4
+        });
+
+        let decoded: super::CachedCodexRequestSnapshot =
+            serde_json::from_value(legacy).expect("decode legacy snapshot");
+
+        assert!(decoded.codex_fast_enabled);
+        assert!(!decoded.codex_strict_session_rejection_enabled);
     }
 
     #[test]

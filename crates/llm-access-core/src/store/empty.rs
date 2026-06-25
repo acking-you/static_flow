@@ -370,6 +370,7 @@ impl AdminKeyStore for EmptyAdminKeyStore {
             request_max_concurrency: key.request_max_concurrency,
             request_min_start_interval_ms: key.request_min_start_interval_ms,
             codex_fast_enabled: true,
+            codex_strict_session_rejection_enabled: false,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,

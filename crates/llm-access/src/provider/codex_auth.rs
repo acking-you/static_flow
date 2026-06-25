@@ -12,9 +12,9 @@ use llm_access_core::{provider::ProtocolFamily, store::AdminConfigStore};
 use serde_json::Value;
 
 use super::{
-    errors::extract_error_message_from_json_value, CodexAffinityRuntimeConfig, CodexAuthSnapshot,
-    CodexDispatchRuntimeConfig, CodexTurnMetadataHeader, CodexUpstreamSessionHeaders,
-    DEFAULT_WIRE_ORIGINATOR, MAX_CODEX_CLIENT_VERSION_LEN,
+    CodexAffinityRuntimeConfig, CodexAuthSnapshot, CodexDispatchRuntimeConfig,
+    CodexTurnMetadataHeader, CodexUpstreamSessionHeaders, DEFAULT_WIRE_ORIGINATOR,
+    MAX_CODEX_CLIENT_VERSION_LEN,
 };
 
 pub fn normalized_codex_gateway_path(path: &str) -> Option<&str> {
@@ -222,47 +222,6 @@ pub fn is_codex_invalid_encrypted_content_response(status: StatusCode, bytes: &B
     std::str::from_utf8(bytes.as_ref())
         .map(|body| body.contains("invalid_encrypted_content"))
         .unwrap_or(false)
-}
-pub fn is_codex_non_retryable_client_error_response(status: StatusCode, bytes: &Bytes) -> bool {
-    if status != StatusCode::BAD_REQUEST
-        || is_codex_invalid_encrypted_content_response(status, bytes)
-    {
-        return false;
-    }
-
-    let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
-        return false;
-    };
-    let error = value.get("error").unwrap_or(&value);
-    if json_string_field(error, "code")
-        .as_deref()
-        .is_some_and(codex_error_code_is_request_shape_failure)
-    {
-        return true;
-    }
-
-    extract_error_message_from_json_value(&value)
-        .as_deref()
-        .is_some_and(codex_message_indicates_request_shape_failure)
-}
-fn codex_error_code_is_request_shape_failure(code: &str) -> bool {
-    matches!(
-        code,
-        "invalid_value"
-            | "unsupported_value"
-            | "invalid_type"
-            | "missing_required_parameter"
-            | "unknown_parameter"
-            | "unsupported_parameter"
-    )
-}
-fn codex_message_indicates_request_shape_failure(message: &str) -> bool {
-    let normalized = message.to_ascii_lowercase();
-    (normalized.contains("invalid value") && normalized.contains("supported values"))
-        || normalized.contains("invalid type")
-        || normalized.contains("missing required parameter")
-        || normalized.contains("unknown parameter")
-        || normalized.contains("unsupported parameter")
 }
 fn codex_error_code_from_bytes(bytes: &Bytes) -> Option<String> {
     serde_json::from_slice::<Value>(bytes)

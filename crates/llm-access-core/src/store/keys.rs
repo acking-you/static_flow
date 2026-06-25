@@ -63,6 +63,10 @@ pub struct AdminKey {
     pub request_min_start_interval_ms: Option<u64>,
     /// Whether Codex fast/priority requests are allowed for this key.
     pub codex_fast_enabled: bool,
+    /// Whether repeated fatal Codex errors for the same session are rejected
+    /// early for this key.
+    #[serde(default)]
+    pub codex_strict_session_rejection_enabled: bool,
     /// Whether Kiro request validation is enabled.
     pub kiro_request_validation_enabled: bool,
     /// Whether Kiro cache estimation is enabled.
@@ -346,6 +350,8 @@ pub struct AdminKeyPatch {
     pub request_min_start_interval_ms: Option<Option<u64>>,
     /// New Codex fast toggle.
     pub codex_fast_enabled: Option<bool>,
+    /// New Codex strict session-rejection toggle.
+    pub codex_strict_session_rejection_enabled: Option<bool>,
     /// New Kiro request-validation toggle.
     pub kiro_request_validation_enabled: Option<bool>,
     /// New Kiro cache-estimation toggle.
