@@ -263,24 +263,24 @@ pub fn inject_codex_resolved_session_into_request_body(
 
 fn build_session_projection(root: &Map<String, Value>) -> CodexSessionProjection {
     let mut stable_segments = stable_root_segments(root);
-    let input_segments = root
+    let (input_segments, lookup_input_segments, bootstrap_input_segments) = root
         .get("input")
         .and_then(Value::as_array)
         .map(|items| {
-            items
-                .iter()
-                .filter_map(canonical_session_item_segment_hash)
-                .collect::<Vec<_>>()
+            let current_start = current_turn_start(items);
+            (
+                canonical_session_item_segments(items),
+                canonical_session_item_segments(&items[..current_start]),
+                canonical_session_item_segments(&items[..bootstrap_prefix_end(items)]),
+            )
         })
         .unwrap_or_default();
-    let current_start = root
-        .get("input")
-        .and_then(Value::as_array)
-        .map(|items| current_turn_start(items))
-        .unwrap_or(0);
 
     let mut lookup_segments = stable_segments.clone();
-    lookup_segments.extend(input_segments.iter().take(current_start).cloned());
+    lookup_segments.extend(lookup_input_segments);
+
+    let mut bootstrap_segments = stable_segments.clone();
+    bootstrap_segments.extend(bootstrap_input_segments);
 
     stable_segments.extend(input_segments);
     let request_anchor_segments = stable_segments;
@@ -290,10 +290,8 @@ fn build_session_projection(root: &Map<String, Value>) -> CodexSessionProjection
         REQUEST_ANCHOR_HASH_SALT,
         request_anchor_segments.iter().map(String::as_str),
     );
-    let bootstrap_anchor_hash = hash_segment_hashes(
-        BOOTSTRAP_HASH_SALT,
-        request_anchor_segments.iter().map(String::as_str),
-    );
+    let bootstrap_anchor_hash =
+        hash_segment_hashes(BOOTSTRAP_HASH_SALT, bootstrap_segments.iter().map(String::as_str));
 
     CodexSessionProjection {
         lookup_anchor_hash,
@@ -321,6 +319,33 @@ fn current_turn_start(items: &[Value]) -> usize {
         .iter()
         .rposition(is_current_turn_start_item)
         .unwrap_or(items.len())
+}
+
+fn bootstrap_prefix_end(items: &[Value]) -> usize {
+    for (index, item) in items.iter().enumerate() {
+        if !is_leading_context_item(item) {
+            return index + 1;
+        }
+    }
+    items.len()
+}
+
+fn is_leading_context_item(item: &Value) -> bool {
+    item.as_object()
+        .is_some_and(|obj| match obj.get("role").and_then(Value::as_str) {
+            Some("system" | "developer") => obj
+                .get("type")
+                .and_then(Value::as_str)
+                .is_none_or(|value| value == "message"),
+            _ => false,
+        })
+}
+
+fn canonical_session_item_segments(items: &[Value]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(canonical_session_item_segment_hash)
+        .collect()
 }
 
 fn canonical_response_output_segments(completed_response: &Value) -> Vec<String> {

@@ -4629,7 +4629,7 @@ async fn codex_dispatch_sends_derived_session_headers_when_client_has_no_session
 }
 
 #[tokio::test]
-async fn codex_dispatch_recovers_session_from_matching_history_without_merging_divergent_history() {
+async fn codex_dispatch_keeps_stable_prefix_affinity_for_divergent_history() {
     let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
         .lock()
         .expect("codex upstream env lock");
@@ -4731,8 +4731,8 @@ async fn codex_dispatch_recovers_session_from_matching_history_without_merging_d
     assert_eq!(requests[1].session_id.as_deref(), Some(first_session));
     assert_eq!(requests[0].authorization.as_deref(), Some("Bearer upstream-token-a"));
     assert_eq!(requests[1].authorization.as_deref(), Some("Bearer upstream-token-a"));
-    assert_ne!(requests[2].session_id.as_deref(), Some(first_session));
-    assert_eq!(requests[2].authorization.as_deref(), Some("Bearer upstream-token-b"));
+    assert_eq!(requests[2].session_id.as_deref(), Some(first_session));
+    assert_eq!(requests[2].authorization.as_deref(), Some("Bearer upstream-token-a"));
 }
 
 #[tokio::test]

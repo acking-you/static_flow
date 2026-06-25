@@ -572,7 +572,7 @@ mod tests {
             .as_ref()
             .expect("second request should have a session projection");
         assert_eq!(first_projection.lookup_anchor_hash, second_projection.lookup_anchor_hash);
-        assert_ne!(first_prepared.resolved_session_id, second_prepared.resolved_session_id);
+        assert_eq!(first_prepared.resolved_session_id, second_prepared.resolved_session_id);
         assert!(first_upstream.get("prompt_cache_key").is_none());
         assert!(second_upstream.get("prompt_cache_key").is_none());
         let finalized_first = inject_codex_resolved_session_into_request_body(&first_prepared)
@@ -670,6 +670,8 @@ mod tests {
             .session_projection
             .as_ref()
             .expect("third request should have a session projection");
+        assert_eq!(first_prepared.resolved_session_id, second_prepared.resolved_session_id);
+        assert_eq!(second_prepared.resolved_session_id, third_prepared.resolved_session_id);
         let first_completed = json!({
             "output": [{
                 "type": "message",
@@ -761,6 +763,72 @@ mod tests {
                         "annotations": [{"type": "url_citation", "url": "https://example.com"}],
                         "logprobs": []
                     }]
+                }
+            ]
+        });
+
+        assert_eq!(
+            build_codex_session_resume_anchor_hash(first_projection, &completed),
+            second_projection.lookup_anchor_hash
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_lookup_anchor_ignores_reasoning_before_current_turn() {
+        let headers = axum::http::HeaderMap::new();
+        let first = Body::from(
+            r#"{
+                "model":"gpt-5.4",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Summarize repo state."}]}]
+            }"#,
+        );
+        let second = Body::from(
+            r#"{
+                "model":"gpt-5.5",
+                "input":[
+                    {"type":"message","role":"user","content":[{"type":"input_text","text":"Summarize repo state."}]},
+                    {"type":"reasoning","encrypted_content":"ignored-for-routing","summary":[]},
+                    {"type":"message","role":"assistant","content":[{"type":"output_text","text":"The repo has a Rust gateway."}]},
+                    {"type":"message","role":"user","content":[{"type":"input_text","text":"Now inspect cache hit rate."}]}
+                ]
+            }"#,
+        );
+
+        let first_prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            first,
+            1024 * 1024,
+        )
+        .await
+        .expect("first responses request should normalize");
+        let second_prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            second,
+            1024 * 1024,
+        )
+        .await
+        .expect("second responses request should normalize");
+        let first_projection = first_prepared
+            .session_projection
+            .as_ref()
+            .expect("first request should have a session projection");
+        let second_projection = second_prepared
+            .session_projection
+            .as_ref()
+            .expect("second request should have a session projection");
+        let completed = json!({
+            "output": [
+                {"type":"reasoning","encrypted_content":"ignored-for-routing","summary":[]},
+                {
+                    "type":"message",
+                    "role":"assistant",
+                    "content":[{"type":"output_text","text":"The repo has a Rust gateway."}]
                 }
             ]
         });
