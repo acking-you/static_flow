@@ -128,6 +128,16 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "proxy_config_traffic_snapshots",
         sql: include_str!("../migrations/postgres/0027_proxy_config_traffic_snapshots.sql"),
     },
+    SqlMigration {
+        version: 28,
+        name: "codex_client_version_0142",
+        sql: include_str!("../migrations/postgres/0028_codex_client_version_0142.sql"),
+    },
+    SqlMigration {
+        version: 29,
+        name: "codex_strict_session_rejection",
+        sql: include_str!("../migrations/postgres/0029_codex_strict_session_rejection.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.
@@ -241,6 +251,36 @@ mod tests {
         assert!(migrations
             .iter()
             .any(|migration| migration.sql.contains("llm_runtime_config")));
+    }
+
+    #[test]
+    fn postgres_migrations_register_every_postgres_file() {
+        let migrations = super::postgres_migrations();
+        let registered_versions = migrations
+            .iter()
+            .map(|migration| migration.version)
+            .collect::<std::collections::BTreeSet<_>>();
+        let migration_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("migrations")
+            .join("postgres");
+        let file_versions = std::fs::read_dir(&migration_dir)
+            .expect("read postgres migrations")
+            .map(|entry| {
+                let path = entry.expect("migration entry").path();
+                let file_name = path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .expect("utf8 migration file name");
+                file_name
+                    .split_once('_')
+                    .expect("versioned migration file name")
+                    .0
+                    .parse::<i64>()
+                    .expect("numeric migration version")
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(registered_versions, file_versions);
     }
 
     #[test]
@@ -408,5 +448,32 @@ mod tests {
             .sql
             .contains("REFERENCES llm_proxy_configs(proxy_config_id) ON DELETE CASCADE"));
         assert!(migration.sql.contains("total_bytes BIGINT NOT NULL"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_codex_client_version_0142() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "codex_client_version_0142")
+            .expect("codex client version migration exists");
+
+        assert_eq!(migration.version, 28);
+        assert!(migration.sql.contains("codex_client_version = '0.142.0'"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_codex_strict_session_rejection() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "codex_strict_session_rejection")
+            .expect("codex strict session rejection migration exists");
+
+        assert_eq!(migration.version, 29);
+        assert!(migration
+            .sql
+            .contains("codex_strict_session_rejection_enabled"));
+        assert!(migration.sql.contains("DEFAULT FALSE"));
     }
 }
