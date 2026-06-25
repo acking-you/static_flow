@@ -10,11 +10,12 @@ use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
     extract::State,
-    http::{header, HeaderMap, HeaderValue, Request, StatusCode},
+    http::{header, HeaderMap, Request, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
+use llm_access_codex::types::CodexResolvedSessionSource;
 use llm_access_core::{
     provider::RouteStrategy,
     store::{
@@ -1251,6 +1252,7 @@ impl ProviderRouteStore for CapturingKiroStatusRouteStore {
 #[derive(Debug, Default)]
 struct CapturedCodexUpstream {
     requests: Mutex<Vec<CapturedCodexRequest>>,
+    completed_outputs: Mutex<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug)]
@@ -2356,6 +2358,116 @@ async fn fake_codex_responses_json_content_type(
     fake_codex_responses_with_content_type(captured, headers, request, "application/json").await
 }
 
+async fn fake_codex_responses_stream_without_completed(
+    State(captured): State<Arc<CapturedCodexUpstream>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Response {
+    let path = request.uri().path().to_string();
+    let query = request.uri().query().map(ToString::to_string);
+    let body = to_bytes(request.into_body(), usize::MAX)
+        .await
+        .expect("upstream request body");
+    let body = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json")
+    };
+    let call_index = {
+        let mut requests = captured.requests.lock().expect("captured requests");
+        requests.push(CapturedCodexRequest {
+            path,
+            query,
+            authorization: headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+            accept: headers
+                .get(header::ACCEPT)
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+            user_agent: headers
+                .get(header::USER_AGENT)
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+            conversation_id: headers
+                .get("conversation_id")
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+            x_client_request_id: headers
+                .get("x-client-request-id")
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+            session_id: headers
+                .get("session_id")
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+            x_codex_turn_state: headers
+                .get("x-codex-turn-state")
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+            body,
+        });
+        requests.len() - 1
+    };
+
+    let completed_output = json!([{
+        "type": "message",
+        "role": "assistant",
+        "content": [{
+            "type": "output_text",
+            "text": "stream back"
+        }]
+    }]);
+    captured
+        .completed_outputs
+        .lock()
+        .expect("captured completed outputs")
+        .push(completed_output.clone());
+
+    if call_index > 0 {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .body(Body::from(format!(
+                "event: response.completed\ndata: {}\n\n",
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_1",
+                        "created_at": 123,
+                        "model": "gpt-5.3-codex-spark",
+                        "output": completed_output,
+                        "usage": {
+                            "input_tokens": 12,
+                            "input_tokens_details": {
+                                "cached_tokens": 2
+                            },
+                            "output_tokens": 3
+                        }
+                    }
+                })
+            )))
+            .expect("completed upstream response");
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .body(Body::from(format!(
+            "event: response.output_item.done\ndata: {}\n\ndata: [DONE]\n\n",
+            json!({
+                "type": "response.output_item.done",
+                "response_id": "resp_1",
+                "created": 123,
+                "model": "gpt-5.3-codex-spark",
+                "output_index": 0,
+                "item": completed_output[0]
+            })
+        )))
+        .expect("stream-without-completed upstream response")
+}
+
 async fn fake_codex_responses_with_content_type(
     captured: Arc<CapturedCodexUpstream>,
     headers: HeaderMap,
@@ -2410,6 +2522,19 @@ async fn fake_codex_responses_with_content_type(
             body,
         });
 
+    let completed_output = json!([{
+        "type": "message",
+        "content": [{
+            "type": "output_text",
+            "text": "hello back"
+        }]
+    }]);
+    captured
+        .completed_outputs
+        .lock()
+        .expect("captured completed outputs")
+        .push(completed_output.clone());
+
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
@@ -2436,13 +2561,7 @@ async fn fake_codex_responses_with_content_type(
                     "id": "resp_1",
                     "created_at": 123,
                     "model": "gpt-5.3-codex-spark",
-                    "output": [{
-                        "type": "message",
-                        "content": [{
-                            "type": "output_text",
-                            "text": "hello back"
-                        }]
-                    }],
+                    "output": completed_output,
                     "usage": {
                         "input_tokens": 12,
                         "input_tokens_details": {
@@ -4452,6 +4571,411 @@ async fn codex_dispatch_reconstructs_thread_headers_from_metadata_and_prompt_cac
 }
 
 #[tokio::test]
+async fn codex_dispatch_sends_derived_session_headers_when_client_has_no_session_anchor() {
+    let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("codex upstream env lock");
+    let captured = Arc::new(CapturedCodexUpstream::default());
+    let app = Router::new()
+        .route("/v1/responses", post(fake_codex_responses))
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake upstream");
+    let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve fake upstream");
+    });
+    std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+    let state = super::ProviderState::new(Arc::new(TestStore), static_codex_route_store());
+    let response = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                    "model": "gpt-5.4",
+                    "messages": [
+                        {"role": "user", "content": "summarize"},
+                        {"role": "assistant", "content": "summary"},
+                        {"role": "user", "content": "continue"}
+                    ],
+                    "stream": false
+                }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+
+    std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = captured.requests.lock().expect("captured requests");
+    assert_eq!(requests.len(), 1);
+    let session_id = requests[0]
+        .session_id
+        .as_deref()
+        .expect("derived session should be sent upstream");
+    assert!(session_id.starts_with("codex-session-v1-"));
+    assert_eq!(requests[0].conversation_id.as_deref(), Some(session_id));
+    assert_eq!(requests[0].x_client_request_id.as_deref(), Some(session_id));
+    assert_eq!(requests[0].body["prompt_cache_key"].as_str(), Some(session_id));
+}
+
+#[tokio::test]
+async fn codex_dispatch_keeps_stable_prefix_affinity_for_divergent_history() {
+    let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("codex upstream env lock");
+    let captured = Arc::new(CapturedCodexUpstream::default());
+    let app = Router::new()
+        .route("/v1/responses", post(fake_codex_responses))
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake upstream");
+    let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve fake upstream");
+    });
+    std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+    let route_store = Arc::new(StaticMultiCodexRouteStore {
+        codex_routes: vec![
+            codex_route_for_account("codex-a", "upstream-token-a"),
+            codex_route_for_account("codex-b", "upstream-token-b"),
+        ],
+        kiro_route: static_kiro_route(),
+    });
+    let state = super::ProviderState::new(Arc::new(TestStore), route_store);
+
+    let first = super::provider_entry(
+        state.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                    "model": "gpt-5.4",
+                    "messages": [{"role": "user", "content": "summarize"}],
+                    "stream": false
+                }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+    let matching_follow_up = super::provider_entry(
+        state.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                    "model": "gpt-5.4",
+                    "messages": [
+                        {"role": "user", "content": "summarize"},
+                        {"role": "assistant", "content": "hello back"},
+                        {"role": "user", "content": "continue"}
+                    ],
+                    "stream": false
+                }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+    let divergent_follow_up = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                    "model": "gpt-5.4",
+                    "messages": [
+                        {"role": "user", "content": "summarize"},
+                        {"role": "assistant", "content": "different answer"},
+                        {"role": "user", "content": "continue"}
+                    ],
+                    "stream": false
+                }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+
+    std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(matching_follow_up.status(), StatusCode::OK);
+    assert_eq!(divergent_follow_up.status(), StatusCode::OK);
+    let requests = captured.requests.lock().expect("captured requests");
+    assert_eq!(requests.len(), 3);
+    let first_session = requests[0]
+        .session_id
+        .as_deref()
+        .expect("first request should have a derived session");
+    assert_eq!(requests[1].session_id.as_deref(), Some(first_session));
+    assert_eq!(requests[0].authorization.as_deref(), Some("Bearer upstream-token-a"));
+    assert_eq!(requests[1].authorization.as_deref(), Some("Bearer upstream-token-a"));
+    assert_eq!(requests[2].session_id.as_deref(), Some(first_session));
+    assert_eq!(requests[2].authorization.as_deref(), Some("Bearer upstream-token-a"));
+}
+
+#[tokio::test]
+async fn codex_dispatch_recovers_session_across_three_response_output_round_trips() {
+    let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("codex upstream env lock");
+    let captured = Arc::new(CapturedCodexUpstream::default());
+    let app = Router::new()
+        .route("/v1/responses", post(fake_codex_responses))
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake upstream");
+    let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve fake upstream");
+    });
+    std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+    let route_store = Arc::new(StaticMultiCodexRouteStore {
+        codex_routes: vec![
+            codex_route_for_account("codex-a", "upstream-token-a"),
+            codex_route_for_account("codex-b", "upstream-token-b"),
+        ],
+        kiro_route: static_kiro_route(),
+    });
+    let state = super::ProviderState::new(Arc::new(TestStore), route_store);
+
+    let mut history = vec![json!({
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "summarize"}]
+    })];
+    let first = super::provider_entry(
+        state.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "model": "gpt-5.4",
+                    "input": history.clone(),
+                    "stream": false
+                }))
+                .expect("first body"),
+            ))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let first_output = {
+        let outputs = captured
+            .completed_outputs
+            .lock()
+            .expect("captured completed outputs");
+        outputs[0][0].clone()
+    };
+    history.push(first_output);
+    history.push(json!({
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "continue"}]
+    }));
+    let second = super::provider_entry(
+        state.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "model": "gpt-5.4",
+                    "input": history.clone(),
+                    "stream": false
+                }))
+                .expect("second body"),
+            ))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(second.status(), StatusCode::OK);
+
+    let second_output = {
+        let outputs = captured
+            .completed_outputs
+            .lock()
+            .expect("captured completed outputs");
+        outputs[1][0].clone()
+    };
+    history.push(second_output);
+    history.push(json!({
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "next"}]
+    }));
+    let third = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "model": "gpt-5.4",
+                    "input": history.clone(),
+                    "stream": false
+                }))
+                .expect("third body"),
+            ))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(third.status(), StatusCode::OK);
+
+    std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+    let requests = captured.requests.lock().expect("captured requests");
+    assert_eq!(requests.len(), 3);
+    let first_session = requests[0]
+        .session_id
+        .as_deref()
+        .expect("first request should have a derived session");
+    assert_eq!(requests[1].session_id.as_deref(), Some(first_session));
+    assert_eq!(requests[2].session_id.as_deref(), Some(first_session));
+    assert_eq!(requests[0].authorization.as_deref(), Some("Bearer upstream-token-a"));
+    assert_eq!(requests[1].authorization.as_deref(), Some("Bearer upstream-token-a"));
+    assert_eq!(requests[2].authorization.as_deref(), Some("Bearer upstream-token-a"));
+}
+
+#[tokio::test]
+async fn codex_dispatch_stream_without_completed_uses_output_item_for_recovery() {
+    let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("codex upstream env lock");
+    let captured = Arc::new(CapturedCodexUpstream::default());
+    let app = Router::new()
+        .route("/v1/responses", post(fake_codex_responses_stream_without_completed))
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake upstream");
+    let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve fake upstream");
+    });
+    std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+    let route_store = Arc::new(StaticMultiCodexRouteStore {
+        codex_routes: vec![
+            codex_route_for_account("codex-a", "upstream-token-a"),
+            codex_route_for_account("codex-b", "upstream-token-b"),
+        ],
+        kiro_route: static_kiro_route(),
+    });
+    let state = super::ProviderState::new(Arc::new(TestStore), route_store);
+    let first_input = json!({
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "stream once"}]
+    });
+
+    let first = super::provider_entry(
+        state.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "model": "gpt-5.4",
+                    "input": [first_input.clone()],
+                    "stream": true
+                }))
+                .expect("first body"),
+            ))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let _ = to_bytes(first.into_body(), usize::MAX)
+        .await
+        .expect("consume first stream");
+
+    let first_output = {
+        let outputs = captured
+            .completed_outputs
+            .lock()
+            .expect("captured completed outputs");
+        outputs[0][0].clone()
+    };
+    let second = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "model": "gpt-5.4",
+                    "input": [
+                        first_input,
+                        first_output,
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "continue"}]
+                        }
+                    ],
+                    "stream": false
+                }))
+                .expect("second body"),
+            ))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(second.status(), StatusCode::OK);
+
+    std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+    let requests = captured.requests.lock().expect("captured requests");
+    assert_eq!(requests.len(), 2);
+    let first_session = requests[0]
+        .session_id
+        .as_deref()
+        .expect("first request should have a derived session");
+    assert_eq!(requests[1].session_id.as_deref(), Some(first_session));
+    assert_eq!(requests[0].authorization.as_deref(), Some("Bearer upstream-token-a"));
+    assert_eq!(requests[1].authorization.as_deref(), Some("Bearer upstream-token-a"));
+}
+
+#[tokio::test]
 async fn codex_dispatch_retries_invalid_encrypted_content_without_cross_account_failover() {
     let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
         .lock()
@@ -6025,6 +6549,7 @@ async fn codex_route_selection_skips_terminal_auth_error_routes() {
         &[blocked, healthy],
         &HashSet::new(),
         None,
+        None,
     )
     .await
     .expect("healthy route should still be selected");
@@ -6045,6 +6570,7 @@ async fn codex_route_selection_prefers_affinity_account_when_usable() {
         &[first, preferred],
         &HashSet::new(),
         Some("codex-b"),
+        None,
     )
     .await
     .expect("preferred route should be selected");
@@ -6052,45 +6578,54 @@ async fn codex_route_selection_prefers_affinity_account_when_usable() {
     assert_eq!(route.account_name, "codex-b");
 }
 
-#[test]
-fn codex_affinity_id_uses_explicit_session_before_body_fallback() {
-    let mut headers = HeaderMap::new();
-    headers.insert("session_id", HeaderValue::from_static("session-a"));
-    let config = CodexAffinityRuntimeConfig::default();
+#[tokio::test]
+async fn codex_route_selection_spreads_new_sessions_to_least_bound_account() {
+    let limiter = Arc::new(RequestLimiter::default());
+    let cooldowns = Arc::new(CodexAccountCooldowns::default());
+    let alpha = codex_route_for_account("codex-a", "upstream-token-a");
+    let beta = codex_route_for_account("codex-b", "upstream-token-b");
+    let mut session_counts = HashMap::new();
+    session_counts.insert("codex-a".to_string(), 5usize);
+    session_counts.insert("codex-b".to_string(), 1usize);
 
+    let (route, _permit) = select_codex_route_with_account_permit(
+        &limiter,
+        &cooldowns,
+        &[alpha, beta],
+        &HashSet::new(),
+        None,
+        Some(&session_counts),
+    )
+    .await
+    .expect("least-bound route should be selected");
+
+    assert_eq!(route.account_name, "codex-b");
+}
+
+#[test]
+fn codex_affinity_id_uses_explicit_resolved_session() {
     let affinity = build_codex_affinity_id(
         "key-a",
-        "/v1/responses",
-        &headers,
-        Some("thread-anchor"),
-        br#"{"input":"body that should not affect explicit affinity"}"#,
-        &config,
+        Some("session-a"),
+        Some(CodexResolvedSessionSource::HeaderSessionId),
     )
     .expect("explicit affinity id");
 
     assert_eq!(affinity.source, CodexAffinitySource::Explicit);
-    assert_eq!(affinity.key.as_str(), "key-a:explicit:session-a");
+    assert_eq!(affinity.key.as_str(), "5:key-asession-a");
 }
 
 #[test]
-fn codex_affinity_id_hashes_body_prefix_when_explicit_session_is_missing() {
-    let headers = HeaderMap::new();
-    let config = CodexAffinityRuntimeConfig {
-        fallback_prefix_bytes: 16,
-        fallback_min_body_bytes: 8,
-        ..CodexAffinityRuntimeConfig::default()
-    };
-    let body_a = b"same-prefix-1234567890 trailing-a";
-    let body_b = b"same-prefix-1234567890 trailing-b";
+fn codex_affinity_id_uses_derived_source_for_generated_session() {
+    let affinity = build_codex_affinity_id(
+        "key-a",
+        Some("codex-session-v1-abcdef"),
+        Some(CodexResolvedSessionSource::StablePrefix),
+    )
+    .expect("derived affinity id");
 
-    let first = build_codex_affinity_id("key-a", "/v1/responses", &headers, None, body_a, &config)
-        .expect("fallback affinity id");
-    let second = build_codex_affinity_id("key-a", "/v1/responses", &headers, None, body_b, &config)
-        .expect("fallback affinity id");
-
-    assert_eq!(first.source, CodexAffinitySource::FallbackBodyPrefix);
-    assert_eq!(first.key, second.key);
-    assert!(first.key.starts_with("key-a:fallback-body-prefix:"));
+    assert_eq!(affinity.source, CodexAffinitySource::Derived);
+    assert_eq!(affinity.key.as_str(), "5:key-acodex-session-v1-abcdef");
 }
 
 #[test]
@@ -6133,6 +6668,24 @@ fn codex_session_affinity_preserves_entries_when_capacity_changes() {
     assert_eq!(affinity.lookup(&affinity_id, &expanded_config).as_deref(), Some("codex-a"));
 }
 
+#[test]
+fn codex_session_affinity_ignores_derived_sessions_when_fallback_affinity_is_disabled() {
+    let affinity = CodexSessionAffinity::default();
+    let config = CodexAffinityRuntimeConfig {
+        fallback_enabled: false,
+        ..CodexAffinityRuntimeConfig::default()
+    };
+    let affinity_id = CodexAffinityId {
+        key: "key-a:derived:session-a".to_string(),
+        source: CodexAffinitySource::Derived,
+    };
+
+    affinity.remember(&affinity_id, "codex-a", &config);
+
+    assert!(affinity.lookup(&affinity_id, &config).is_none());
+    assert!(affinity.account_session_counts(&config).is_empty());
+}
+
 #[tokio::test]
 async fn codex_route_selection_returns_bad_gateway_when_all_routes_have_terminal_auth_errors() {
     let limiter = Arc::new(RequestLimiter::default());
@@ -6155,6 +6708,7 @@ async fn codex_route_selection_returns_bad_gateway_when_all_routes_have_terminal
         &cooldowns,
         &[blocked_a, blocked_b],
         &HashSet::new(),
+        None,
         None,
     )
     .await

@@ -1306,6 +1306,10 @@ pub struct SseUsageCollector {
     pub usage: Option<UsageBreakdown>,
     /// Terminal completed response observed in the stream.
     pub completed_response: Option<Value>,
+    output_items: BTreeMap<u64, Value>,
+    delta_text: String,
+    done_text: Option<String>,
+    fallback_item_id: Option<String>,
 }
 
 impl SseUsageCollector {
@@ -1325,6 +1329,67 @@ impl SseUsageCollector {
                     self.completed_response = Some(response.clone());
                 }
             }
+            match value.get("type").and_then(Value::as_str) {
+                Some("response.output_item.done") => {
+                    if let Some(item) = value.get("item") {
+                        let output_index = value
+                            .get("output_index")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(self.output_items.len() as u64);
+                        self.output_items.insert(output_index, item.clone());
+                    }
+                },
+                Some("response.output_text.delta") => {
+                    self.capture_fallback_item_id(&value);
+                    if let Some(delta) = value.get("delta").and_then(Value::as_str) {
+                        self.delta_text.push_str(delta);
+                    }
+                },
+                Some("response.output_text.done") => {
+                    self.capture_fallback_item_id(&value);
+                    if let Some(text) = value.get("text").and_then(Value::as_str) {
+                        self.done_text = Some(text.to_string());
+                    }
+                },
+                _ => {},
+            }
+        }
+    }
+
+    /// Completed response to use for session recovery after a clean stream end.
+    pub fn completed_response_for_recovery(&self) -> Option<Value> {
+        if let Some(response) = self.completed_response.as_ref() {
+            return Some(response.clone());
+        }
+        let output = if self.output_items.is_empty() {
+            let text = self
+                .done_text
+                .as_deref()
+                .filter(|text| !text.is_empty())
+                .or_else(|| (!self.delta_text.is_empty()).then_some(self.delta_text.as_str()))?;
+            let item_id = self.fallback_item_id.as_deref().unwrap_or("msg_0");
+            json!([{
+                "id": item_id,
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{
+                    "type": "output_text",
+                    "text": text
+                }]
+            }])
+        } else {
+            Value::Array(self.output_items.values().cloned().collect())
+        };
+        Some(json!({ "output": output }))
+    }
+
+    fn capture_fallback_item_id(&mut self, value: &Value) {
+        if self.fallback_item_id.is_none() {
+            self.fallback_item_id = value
+                .get("item_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
         }
     }
 }

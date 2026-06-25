@@ -6,6 +6,7 @@ mod codex_auth;
 mod codex_dispatch;
 mod codex_models;
 mod codex_session_affinity;
+mod codex_session_recovery;
 mod codex_sse;
 mod entry;
 mod errors;
@@ -54,6 +55,9 @@ pub(crate) use codex_models::{
 pub(crate) use codex_session_affinity::CodexAffinitySource;
 pub(crate) use codex_session_affinity::{
     build_codex_affinity_id, CodexAffinityId, CodexAffinityRuntimeConfig, CodexSessionAffinity,
+};
+pub(crate) use codex_session_recovery::{
+    CodexSessionRecovery, CodexSessionRecoveryLookup, CodexSessionRecoveryStoreResult,
 };
 pub use entry::{provider_entry, provider_entry_handler};
 use errors::{anthropic_json_error, summarize_error_bytes};
@@ -181,6 +185,7 @@ pub struct ProviderState {
     request_limiter: Arc<RequestLimiter>,
     codex_account_cooldowns: Arc<CodexAccountCooldowns>,
     codex_session_affinity: Arc<CodexSessionAffinity>,
+    codex_session_recovery: Arc<CodexSessionRecovery>,
     kiro_request_scheduler: Arc<KiroRequestScheduler>,
     kiro_session_affinity: Arc<KiroSessionAffinity>,
     kiro_latency_ranker: Arc<KiroLatencyRanker>,
@@ -200,6 +205,7 @@ pub struct ProviderDispatchDeps {
     request_limiter: Arc<RequestLimiter>,
     codex_account_cooldowns: Arc<CodexAccountCooldowns>,
     codex_session_affinity: Arc<CodexSessionAffinity>,
+    codex_session_recovery: Arc<CodexSessionRecovery>,
     kiro_request_scheduler: Arc<KiroRequestScheduler>,
     kiro_session_affinity: Arc<KiroSessionAffinity>,
     kiro_latency_ranker: Arc<KiroLatencyRanker>,
@@ -267,6 +273,8 @@ struct CodexUpstreamResponseContext {
     key: AuthenticatedKey,
     route: ProviderCodexRoute,
     control_store: Arc<dyn ControlStore>,
+    codex_session_recovery: Arc<CodexSessionRecovery>,
+    affinity_config: CodexAffinityRuntimeConfig,
     permits: Vec<LimitPermit>,
     usage_meta: ProviderUsageMetadata,
 }
@@ -283,6 +291,8 @@ struct CodexCompletedResponseContext {
     key: AuthenticatedKey,
     route: ProviderCodexRoute,
     control_store: Arc<dyn ControlStore>,
+    codex_session_recovery: Arc<CodexSessionRecovery>,
+    affinity_config: CodexAffinityRuntimeConfig,
     permits: Vec<LimitPermit>,
     usage_meta: ProviderUsageMetadata,
 }
@@ -292,6 +302,8 @@ struct CodexStreamContext {
     key: AuthenticatedKey,
     route: ProviderCodexRoute,
     control_store: Arc<dyn ControlStore>,
+    codex_session_recovery: Arc<CodexSessionRecovery>,
+    affinity_config: CodexAffinityRuntimeConfig,
     permits: Vec<LimitPermit>,
     usage_meta: ProviderUsageMetadata,
 }
@@ -441,6 +453,8 @@ struct CodexStreamRecordGuard {
     key: AuthenticatedKey,
     route: ProviderCodexRoute,
     control_store: Arc<dyn ControlStore>,
+    codex_session_recovery: Arc<CodexSessionRecovery>,
+    affinity_config: CodexAffinityRuntimeConfig,
     status: StatusCode,
     usage_meta: ProviderUsageMetadata,
     usage_collector: SseUsageCollector,

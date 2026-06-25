@@ -30,6 +30,7 @@ use super::{
     },
     path::{is_models_path, is_supported_codex_post_path},
     policy::resolve_billable_multiplier,
+    session::resolve_codex_session,
 };
 use crate::{
     anthropic_messages::adapt_anthropic_messages_request,
@@ -178,7 +179,7 @@ pub fn prepare_gateway_request_from_bytes(
             force_upstream_stream = true;
         }
         json_value = Some(Value::Object(adapted));
-    } else if gateway_path.starts_with("/v1/responses") {
+    } else if is_responses_prompt_path(gateway_path) {
         response_adapter = GatewayResponseAdapter::Responses;
         if let Some(Value::Object(root)) = json_value.as_mut() {
             if let Some(prompt_cache_key) = extract_non_empty_string(root.get("prompt_cache_key")) {
@@ -194,6 +195,16 @@ pub fn prepare_gateway_request_from_bytes(
             }
         }
     }
+
+    let resolves_codex_session = matches!(gateway_path, "/v1/chat/completions" | "/v1/messages")
+        || is_responses_prompt_path(gateway_path);
+    let resolved_session = resolves_codex_session
+        .then(|| {
+            json_value
+                .as_mut()
+                .and_then(|value| resolve_codex_session(headers, value))
+        })
+        .flatten();
 
     let request_body = match json_value {
         Some(value) => Bytes::from(
@@ -218,11 +229,24 @@ pub fn prepare_gateway_request_from_bytes(
         content_type,
         response_adapter,
         thread_anchor,
+        resolved_session_id: resolved_session.as_ref().map(|session| session.id.clone()),
+        resolved_session_source: resolved_session.as_ref().map(|session| session.source),
+        resolved_session_hash_preview: resolved_session
+            .as_ref()
+            .and_then(|session| session.hash_preview.clone()),
+        session_projection: resolved_session
+            .as_ref()
+            .and_then(|session| session.projection.clone()),
         tool_name_restore_map,
         billable_multiplier,
         last_message_content,
     })
 }
+
+fn is_responses_prompt_path(gateway_path: &str) -> bool {
+    matches!(gateway_path, "/v1/responses" | "/v1/responses/compact")
+}
+
 fn decode_gateway_request_body(
     headers: &HeaderMap,
     body: Bytes,

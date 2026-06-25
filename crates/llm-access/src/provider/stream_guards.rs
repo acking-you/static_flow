@@ -19,6 +19,7 @@ use llm_access_kiro::{
 };
 
 use super::{
+    codex_dispatch::remember_codex_session_recovery,
     codex_sse::{missing_codex_usage, record_codex_usage},
     errors::{
         anthropic_json_error, anthropic_json_error_body,
@@ -52,6 +53,23 @@ impl CodexStreamRecordGuard {
             .usage
             .clone()
             .unwrap_or_else(missing_codex_usage);
+        if let Some(completed_response) = self.usage_collector.completed_response_for_recovery() {
+            remember_codex_session_recovery(
+                self.codex_session_recovery.as_ref(),
+                &self.key,
+                &self.prepared,
+                &completed_response,
+                &self.affinity_config,
+                &self.route.account_name,
+            );
+        } else if self.prepared.session_projection.is_some() {
+            tracing::debug!(
+                key_id = %self.key.key_id,
+                account = %self.route.account_name,
+                session_source = ?self.prepared.resolved_session_source,
+                "codex stream completed without recoverable output; recovery anchor not recorded"
+            );
+        }
         if let Err(err) = record_codex_usage(
             self.control_store.as_ref(),
             &self.key,

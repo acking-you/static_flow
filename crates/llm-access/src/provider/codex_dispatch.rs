@@ -20,10 +20,10 @@ use llm_access_codex::{
         AnthropicStreamMetadata,
     },
     request::{
-        align_responses_store_with_upstream, apply_codex_fast_policy,
-        apply_gpt53_codex_spark_mapping,
+        align_responses_store_with_upstream, apply_codex_fast_policy, apply_codex_resolved_session,
+        apply_gpt53_codex_spark_mapping, build_codex_session_resume_anchor_hash,
         extract_last_message_content as extract_codex_last_message_content,
-        prepare_gateway_request_from_bytes,
+        inject_codex_resolved_session_into_request_body, prepare_gateway_request_from_bytes,
     },
     response::{
         adapt_completed_response_json, apply_upstream_response_headers,
@@ -31,7 +31,7 @@ use llm_access_codex::{
         encode_json_sse_chunk, encode_sse_event_with_model_alias, extract_usage_from_bytes,
         rewrite_json_response_model_alias, rewrite_json_value_model_alias, SseUsageCollector,
     },
-    types::{ChatStreamMetadata, GatewayResponseAdapter},
+    types::{ChatStreamMetadata, CodexResolvedSessionSource, GatewayResponseAdapter},
 };
 use llm_access_core::store::AuthenticatedKey;
 use rand::Rng;
@@ -65,6 +65,7 @@ use super::{
     util::clamp_duration_ms,
     CodexAccountCooldowns, CodexAffinityId, CodexAffinityRuntimeConfig, CodexAuthSnapshot,
     CodexCompletedResponseContext, CodexPreflightFailureRecord, CodexSessionAffinity,
+    CodexSessionRecovery, CodexSessionRecoveryLookup, CodexSessionRecoveryStoreResult,
     CodexStreamContext, CodexStreamRecordGuard, CodexUpstreamResponseContext,
     CodexUpstreamResponseParts, ProviderDispatchDeps, ProviderUsageMetadata, StreamRecordState,
     CODEX_QUOTA_EXHAUSTION_COOLDOWN, CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MAX,
@@ -85,6 +86,7 @@ pub async fn dispatch_codex_proxy(
         request_limiter,
         codex_account_cooldowns,
         codex_session_affinity,
+        codex_session_recovery,
         ..
     } = deps;
     let mut usage_meta = ProviderUsageMetadata::from_request_parts(
@@ -173,7 +175,7 @@ pub async fn dispatch_codex_proxy(
     usage_meta =
         usage_meta.with_request_body(&body, clamp_duration_ms(body_read_started.elapsed()));
     let parse_started = Instant::now();
-    let prepared = match prepare_gateway_request_from_bytes(
+    let mut prepared = match prepare_gateway_request_from_bytes(
         &gateway_path,
         &query,
         method,
@@ -213,18 +215,42 @@ pub async fn dispatch_codex_proxy(
         },
     };
     usage_meta.mark_pre_handler_done(clamp_duration_ms(parse_started.elapsed()));
+    let recovery_outcome = match recover_codex_session_from_projection(
+        codex_session_recovery.as_ref(),
+        &key,
+        &runtime_config.affinity,
+        &mut prepared,
+    ) {
+        Ok(outcome) => outcome,
+        Err(response) => return *response,
+    };
     usage_meta.last_message_content = prepared.last_message_content.clone();
     let codex_affinity_id = build_codex_affinity_id(
         &key.key_id,
-        &gateway_path,
-        &request_headers,
-        prepared.thread_anchor.as_deref(),
-        &body,
-        &runtime_config.affinity,
+        prepared.resolved_session_id.as_deref(),
+        prepared.resolved_session_source,
     );
     let preferred_account_name = codex_affinity_id.as_ref().and_then(|affinity_id| {
         codex_session_affinity.lookup(affinity_id, &runtime_config.affinity)
     });
+    let session_counts =
+        (routes.len() > 1 && codex_affinity_id.is_some() && preferred_account_name.is_none())
+            .then(|| codex_session_affinity.account_session_counts(&runtime_config.affinity));
+    usage_meta.routing_diagnostics_json = Some(
+        json!({
+            "codex_session_source": prepared
+                .resolved_session_source
+                .map(|source| source.as_str()),
+            "codex_session_hash_preview": prepared.resolved_session_hash_preview.as_deref(),
+            "codex_session_recovery": recovery_outcome.as_str(),
+            "codex_session_bootstrap": prepared
+                .resolved_session_source
+                .is_some_and(|source| source == CodexResolvedSessionSource::BootstrapRequest),
+            "codex_affinity_hit": preferred_account_name.is_some(),
+            "codex_new_session_spread": session_counts.is_some(),
+        })
+        .to_string(),
+    );
     let method = match reqwest::Method::from_bytes(prepared.method.as_str().as_bytes()) {
         Ok(method) => method,
         Err(_) => return (StatusCode::METHOD_NOT_ALLOWED, "unsupported method").into_response(),
@@ -250,6 +276,7 @@ pub async fn dispatch_codex_proxy(
             &routes,
             &failed_accounts,
             preferred_account_name.as_deref(),
+            session_counts.as_ref(),
         )
         .await
         {
@@ -317,6 +344,10 @@ pub async fn dispatch_codex_proxy(
             Err(err) => return (err.status, err.message).into_response(),
         };
         let prepared = match align_responses_store_with_upstream(&prepared, &upstream_base) {
+            Ok(prepared) => prepared,
+            Err(err) => return (err.status, err.message).into_response(),
+        };
+        let prepared = match inject_codex_resolved_session_into_request_body(&prepared) {
             Ok(prepared) => prepared,
             Err(err) => return (err.status, err.message).into_response(),
         };
@@ -481,6 +512,8 @@ pub async fn dispatch_codex_proxy(
                     key,
                     route,
                     control_store,
+                    codex_session_recovery: Arc::clone(&codex_session_recovery),
+                    affinity_config: runtime_config.affinity.clone(),
                     permits,
                     usage_meta,
                 },
@@ -505,6 +538,8 @@ pub async fn dispatch_codex_proxy(
                 key,
                 route,
                 control_store,
+                codex_session_recovery: Arc::clone(&codex_session_recovery),
+                affinity_config: runtime_config.affinity.clone(),
                 permits,
                 usage_meta,
             })
@@ -574,6 +609,8 @@ pub async fn dispatch_codex_proxy(
                         key,
                         route,
                         control_store,
+                        codex_session_recovery: Arc::clone(&codex_session_recovery),
+                        affinity_config: runtime_config.affinity.clone(),
                         permits,
                         usage_meta,
                     })
@@ -630,6 +667,8 @@ pub async fn dispatch_codex_proxy(
                 key,
                 route,
                 control_store,
+                codex_session_recovery: Arc::clone(&codex_session_recovery),
+                affinity_config: runtime_config.affinity.clone(),
                 permits,
                 usage_meta,
             },
@@ -645,9 +684,271 @@ fn remember_codex_affinity(
     config: &CodexAffinityRuntimeConfig,
 ) {
     if let Some(affinity_id) = affinity_id {
+        tracing::debug!(
+            account = %account_name,
+            affinity_source = ?affinity_id.source,
+            affinity_key = %session_preview(&affinity_id.key),
+            "codex session affinity recorded"
+        );
         affinity.remember(affinity_id, account_name, config);
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexSessionRecoveryOutcome {
+    NotNeeded,
+    MissingProjection,
+    Disabled,
+    InvalidKey,
+    Expired,
+    Miss,
+    Hit,
+}
+
+impl CodexSessionRecoveryOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::NotNeeded => "not_needed",
+            Self::MissingProjection => "missing_projection",
+            Self::Disabled => "disabled",
+            Self::InvalidKey => "invalid_key",
+            Self::Expired => "expired",
+            Self::Miss => "miss",
+            Self::Hit => "hit",
+        }
+    }
+}
+
+fn recover_codex_session_from_projection(
+    recovery: &CodexSessionRecovery,
+    key: &AuthenticatedKey,
+    config: &CodexAffinityRuntimeConfig,
+    prepared: &mut llm_access_codex::types::PreparedGatewayRequest,
+) -> Result<CodexSessionRecoveryOutcome, Box<Response>> {
+    let Some(source) = prepared.resolved_session_source else {
+        return Ok(CodexSessionRecoveryOutcome::NotNeeded);
+    };
+    if !source.is_derived() {
+        return Ok(CodexSessionRecoveryOutcome::NotNeeded);
+    }
+    let Some(projection) = prepared.session_projection.as_ref() else {
+        tracing::warn!(
+            key_id = %key.key_id,
+            session_source = %source.as_str(),
+            "codex derived session has no projection for recovery"
+        );
+        return Ok(CodexSessionRecoveryOutcome::MissingProjection);
+    };
+    let lookup_anchor_preview = hex_preview(&projection.lookup_anchor_hash);
+    let bootstrap_anchor_preview = hex_preview(&projection.bootstrap_anchor_hash);
+    let request_anchor_preview = hex_preview(&projection.request_anchor_hash);
+    let current_session_preview = prepared
+        .resolved_session_id
+        .as_deref()
+        .map(session_preview)
+        .unwrap_or_else(|| "none".to_string());
+    let recovered_session_id =
+        match recovery.recover(&key.key_id, &projection.lookup_anchor_hash, config) {
+            CodexSessionRecoveryLookup::Disabled(reason) => {
+                tracing::debug!(
+                    key_id = %key.key_id,
+                    session_source = %source.as_str(),
+                    lookup_anchor_hash = %lookup_anchor_preview,
+                    request_anchor_hash = %request_anchor_preview,
+                    bootstrap_anchor_hash = %bootstrap_anchor_preview,
+                    current_session = %current_session_preview,
+                    recovery_config = %reason.as_str(),
+                    "codex session recovery skipped by config"
+                );
+                return Ok(CodexSessionRecoveryOutcome::Disabled);
+            },
+            CodexSessionRecoveryLookup::InvalidKey => {
+                tracing::warn!(
+                    key_id = %key.key_id,
+                    session_source = %source.as_str(),
+                    lookup_anchor_hash = %lookup_anchor_preview,
+                    request_anchor_hash = %request_anchor_preview,
+                    bootstrap_anchor_hash = %bootstrap_anchor_preview,
+                    current_session = %current_session_preview,
+                    "codex session recovery skipped because lookup key is invalid"
+                );
+                return Ok(CodexSessionRecoveryOutcome::InvalidKey);
+            },
+            CodexSessionRecoveryLookup::Expired => {
+                tracing::debug!(
+                    key_id = %key.key_id,
+                    session_source = %source.as_str(),
+                    lookup_anchor_hash = %lookup_anchor_preview,
+                    request_anchor_hash = %request_anchor_preview,
+                    bootstrap_anchor_hash = %bootstrap_anchor_preview,
+                    current_session = %current_session_preview,
+                    "codex session recovery entry expired"
+                );
+                return Ok(CodexSessionRecoveryOutcome::Expired);
+            },
+            CodexSessionRecoveryLookup::Miss => {
+                tracing::debug!(
+                    key_id = %key.key_id,
+                    session_source = %source.as_str(),
+                    lookup_anchor_hash = %lookup_anchor_preview,
+                    request_anchor_hash = %request_anchor_preview,
+                    bootstrap_anchor_hash = %bootstrap_anchor_preview,
+                    current_session = %current_session_preview,
+                    "codex session recovery missed"
+                );
+                return Ok(CodexSessionRecoveryOutcome::Miss);
+            },
+            CodexSessionRecoveryLookup::Hit(session_id) => session_id,
+        };
+    if prepared.resolved_session_id.as_deref() == Some(recovered_session_id.as_str()) {
+        tracing::debug!(
+            key_id = %key.key_id,
+            session_source = %source.as_str(),
+            lookup_anchor_hash = %lookup_anchor_preview,
+            request_anchor_hash = %request_anchor_preview,
+            bootstrap_anchor_hash = %bootstrap_anchor_preview,
+            current_session = %current_session_preview,
+            "codex session recovery hit current session"
+        );
+        return Ok(CodexSessionRecoveryOutcome::Hit);
+    }
+    let recovered_session_preview = session_preview(&recovered_session_id);
+    apply_codex_resolved_session(
+        prepared,
+        recovered_session_id,
+        CodexResolvedSessionSource::StablePrefix,
+        Some(hex_preview(&projection.lookup_anchor_hash)),
+    )
+    .map_err(|err| {
+        tracing::error!(
+            key_id = %key.key_id,
+            error = %err,
+            "failed to apply recovered codex session"
+        );
+        Box::new(
+            (StatusCode::INTERNAL_SERVER_ERROR, "failed to apply recovered codex session")
+                .into_response(),
+        )
+    })?;
+    tracing::info!(
+        key_id = %key.key_id,
+        session_source = %source.as_str(),
+        lookup_anchor_hash = %lookup_anchor_preview,
+        request_anchor_hash = %request_anchor_preview,
+        bootstrap_anchor_hash = %bootstrap_anchor_preview,
+        previous_session = %current_session_preview,
+        recovered_session = %recovered_session_preview,
+        "codex session recovered from prompt anchor"
+    );
+    Ok(CodexSessionRecoveryOutcome::Hit)
+}
+
+pub(super) fn remember_codex_session_recovery(
+    recovery: &CodexSessionRecovery,
+    key: &AuthenticatedKey,
+    prepared: &llm_access_codex::types::PreparedGatewayRequest,
+    completed_response: &Value,
+    config: &CodexAffinityRuntimeConfig,
+    account_name: &str,
+) {
+    let Some(projection) = prepared.session_projection.as_ref() else {
+        tracing::debug!(
+            key_id = %key.key_id,
+            account = %account_name,
+            session_source = ?prepared.resolved_session_source,
+            "codex session recovery anchor not recorded because projection is missing"
+        );
+        return;
+    };
+    let Some(source) = prepared.resolved_session_source else {
+        tracing::debug!(
+            key_id = %key.key_id,
+            account = %account_name,
+            request_anchor_hash = %hex_preview(&projection.request_anchor_hash),
+            "codex session recovery anchor not recorded because session source is missing"
+        );
+        return;
+    };
+    if !source.is_derived() {
+        tracing::debug!(
+            key_id = %key.key_id,
+            account = %account_name,
+            session_source = %source.as_str(),
+            request_anchor_hash = %hex_preview(&projection.request_anchor_hash),
+            "codex session recovery anchor not recorded for explicit session"
+        );
+        return;
+    }
+    let Some(session_id) = prepared.resolved_session_id.as_deref() else {
+        tracing::debug!(
+            key_id = %key.key_id,
+            account = %account_name,
+            session_source = %source.as_str(),
+            request_anchor_hash = %hex_preview(&projection.request_anchor_hash),
+            "codex session recovery anchor not recorded because session id is missing"
+        );
+        return;
+    };
+    let resume_anchor_hash = build_codex_session_resume_anchor_hash(projection, completed_response);
+    let resume_anchor_preview = hex_preview(&resume_anchor_hash);
+    let request_anchor_preview = hex_preview(&projection.request_anchor_hash);
+    let store_result = recovery.remember(&key.key_id, &resume_anchor_hash, session_id, config);
+    match store_result {
+        CodexSessionRecoveryStoreResult::Stored => {
+            tracing::debug!(
+                key_id = %key.key_id,
+                account = %account_name,
+                session_source = %source.as_str(),
+                request_anchor_hash = %request_anchor_preview,
+                resume_anchor_hash = %resume_anchor_preview,
+                session = %session_preview(session_id),
+                "codex session recovery anchor recorded"
+            );
+        },
+        CodexSessionRecoveryStoreResult::Disabled(reason) => {
+            tracing::debug!(
+                key_id = %key.key_id,
+                account = %account_name,
+                session_source = %source.as_str(),
+                request_anchor_hash = %request_anchor_preview,
+                resume_anchor_hash = %resume_anchor_preview,
+                session = %session_preview(session_id),
+                recovery_config = %reason.as_str(),
+                "codex session recovery anchor not recorded because recovery is disabled"
+            );
+        },
+        CodexSessionRecoveryStoreResult::InvalidKey => {
+            tracing::warn!(
+                key_id = %key.key_id,
+                account = %account_name,
+                session_source = %source.as_str(),
+                request_anchor_hash = %request_anchor_preview,
+                resume_anchor_hash = %resume_anchor_preview,
+                session = %session_preview(session_id),
+                "codex session recovery anchor not recorded because store key is invalid"
+            );
+        },
+        CodexSessionRecoveryStoreResult::EmptySession => {
+            tracing::warn!(
+                key_id = %key.key_id,
+                account = %account_name,
+                session_source = %source.as_str(),
+                request_anchor_hash = %request_anchor_preview,
+                resume_anchor_hash = %resume_anchor_preview,
+                "codex session recovery anchor not recorded because session id is empty"
+            );
+        },
+    }
+}
+
+fn hex_preview(hex: &str) -> String {
+    hex.chars().take(12).collect()
+}
+
+fn session_preview(session_id: &str) -> String {
+    session_id.chars().take(32).collect()
+}
+
 async fn adapt_codex_upstream_response(
     response: reqwest::Response,
     ctx: CodexUpstreamResponseContext,
@@ -657,6 +958,8 @@ async fn adapt_codex_upstream_response(
         key,
         route,
         control_store,
+        codex_session_recovery,
+        affinity_config,
         permits,
         mut usage_meta,
     } = ctx;
@@ -696,6 +999,8 @@ async fn adapt_codex_upstream_response(
                     key,
                     route,
                     control_store,
+                    codex_session_recovery,
+                    affinity_config,
                     permits,
                     usage_meta,
                 },
@@ -746,6 +1051,14 @@ async fn adapt_codex_upstream_response(
             completed.response,
             prepared.model.as_deref(),
             prepared.client_visible_model.as_deref(),
+        );
+        remember_codex_session_recovery(
+            codex_session_recovery.as_ref(),
+            &key,
+            &prepared,
+            &completed_response,
+            &affinity_config,
+            &route.account_name,
         );
         let adapted = adapt_completed_response_json(
             completed_response,
@@ -799,6 +1112,8 @@ async fn adapt_codex_upstream_response(
                 key,
                 route,
                 control_store,
+                codex_session_recovery,
+                affinity_config,
                 permits,
                 usage_meta,
             },
@@ -823,6 +1138,8 @@ async fn adapt_codex_upstream_response(
             key,
             route,
             control_store,
+            codex_session_recovery,
+            affinity_config,
             permits,
             usage_meta,
         },
@@ -844,6 +1161,8 @@ async fn adapt_codex_upstream_response_from_parts(
         key,
         route,
         control_store,
+        codex_session_recovery,
+        affinity_config,
         permits: _permits,
         mut usage_meta,
     } = ctx;
@@ -856,6 +1175,18 @@ async fn adapt_codex_upstream_response_from_parts(
         capture_error_bytes(&mut usage_meta, &bytes);
         missing_codex_usage()
     };
+    if status.is_success() {
+        if let Ok(completed_response) = serde_json::from_slice::<Value>(effective_success_bytes) {
+            remember_codex_session_recovery(
+                codex_session_recovery.as_ref(),
+                &key,
+                &prepared,
+                &completed_response,
+                &affinity_config,
+                &route.account_name,
+            );
+        }
+    }
     if let Err(err) = record_codex_usage(
         control_store.as_ref(),
         &key,
@@ -1096,6 +1427,8 @@ fn stream_codex_upstream_response(
             key,
             route,
             control_store,
+            codex_session_recovery,
+            affinity_config,
             permits,
             usage_meta,
         } = ctx;
@@ -1111,6 +1444,8 @@ fn stream_codex_upstream_response(
             key,
             route,
             control_store,
+            codex_session_recovery,
+            affinity_config,
             status,
             usage_meta,
             usage_collector: SseUsageCollector::default(),
