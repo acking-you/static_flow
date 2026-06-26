@@ -107,6 +107,9 @@ pub fn compact_copy_usage_events_sql(columns: &HashSet<String>) -> String {
         compact_source_column_expr(columns, "proxy_config_id_at_event", "CAST(NULL AS VARCHAR)"),
         compact_source_column_expr(columns, "proxy_config_name_at_event", "CAST(NULL AS VARCHAR)"),
         compact_source_column_expr(columns, "proxy_url_at_event", "CAST(NULL AS VARCHAR)"),
+        compact_source_column_expr(columns, "error_class", "CAST(NULL AS VARCHAR)"),
+        compact_source_column_expr(columns, "session_blocked", "false"),
+        compact_source_column_expr(columns, "error_message", "CAST(NULL AS VARCHAR)"),
     ]
     .join(",\n        ");
 
@@ -127,7 +130,7 @@ pub fn compact_copy_usage_events_sql(columns: &HashSet<String>) -> String {
         routing_diagnostics_json, last_message_content, detail_object_payload_present,
         detail_object_path, detail_object_offset, detail_object_length, detail_object_sha256,
         proxy_source_at_event, proxy_config_id_at_event, proxy_config_name_at_event,
-        proxy_url_at_event
+        proxy_url_at_event, error_class, session_blocked, error_message
     )
     SELECT
         {select}

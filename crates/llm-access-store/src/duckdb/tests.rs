@@ -95,7 +95,6 @@ fn assert_usage_event_summary_round_trips(actual: &UsageEvent, expected: &UsageE
     expected_summary.client_request_body_json = None;
     expected_summary.upstream_request_body_json = None;
     expected_summary.full_request_json = None;
-    expected_summary.error_message = None;
     expected_summary.error_body = None;
     assert_usage_event_round_trips(actual, &expected_summary);
 }
@@ -106,7 +105,6 @@ fn assert_usage_event_light_detail_round_trips(actual: &UsageEvent, expected: &U
     expected_summary.client_request_body_json = None;
     expected_summary.upstream_request_body_json = None;
     expected_summary.full_request_json = None;
-    expected_summary.error_message = None;
     expected_summary.error_body = None;
     assert_usage_event_round_trips(actual, &expected_summary);
 }
@@ -1497,6 +1495,9 @@ async fn duckdb_tiered_repository_rolls_over_without_blocking_active_appends() {
     first.client_request_body_json = None;
     first.upstream_request_body_json = None;
     first.full_request_json = None;
+    first.error_message = Some("session permanently blocked by cyber policy".to_string());
+    first.error_class = Some("cyber_policy".to_string());
+    first.session_blocked = true;
     let mut second = test_usage_event();
     second.event_id = "tiered-active-second".to_string();
     second.created_at_ms = 1_700_000_060_000;
@@ -1552,6 +1553,9 @@ async fn duckdb_tiered_repository_rolls_over_without_blocking_active_appends() {
     assert_eq!(second_page.total, 2);
     assert_eq!(second_page.events.len(), 1);
     assert_eq!(second_page.events[0].event_id, first.event_id);
+    assert_eq!(second_page.events[0].error_message.as_deref(), first.error_message.as_deref());
+    assert_eq!(second_page.events[0].error_class.as_deref(), first.error_class.as_deref());
+    assert!(second_page.events[0].session_blocked);
     assert!(!second_page.has_more);
 
     let archived_detail = repo

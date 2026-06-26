@@ -21,7 +21,9 @@ const PUBLIC_USAGE_PAGE_LIMIT: usize = 20;
 /// Tailwind `(border, bg, text, dark:text)` tuple for a usage status pill,
 /// keyed by HTTP status class: 2xx success, 4xx client error, 5xx upstream
 /// error, anything else neutral.
-fn usage_status_color(status_code: i32) -> (&'static str, &'static str, &'static str, &'static str) {
+fn usage_status_color(
+    status_code: i32,
+) -> (&'static str, &'static str, &'static str, &'static str) {
     if (200..300).contains(&status_code) {
         ("border-emerald-500/20", "bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200")
     } else if (400..500).contains(&status_code) {
@@ -29,7 +31,12 @@ fn usage_status_color(status_code: i32) -> (&'static str, &'static str, &'static
     } else if status_code >= 500 {
         ("border-red-500/20", "bg-red-500/10", "text-red-700", "dark:text-red-200")
     } else {
-        ("border-[var(--border)]", "bg-[var(--surface-alt)]", "text-[var(--muted)]", "text-[var(--muted)]")
+        (
+            "border-[var(--border)]",
+            "bg-[var(--surface-alt)]",
+            "text-[var(--muted)]",
+            "text-[var(--muted)]",
+        )
     }
 }
 
@@ -435,7 +442,7 @@ pub fn llm_access_usage_page() -> Html {
                                             .as_deref()
                                             .map(str::trim)
                                             .filter(|value| !value.is_empty())
-                                            .map(ToString::to_string);
+                                            .map(|value| AttrValue::from(value.to_owned()));
                                         let row_class = if session_blocked {
                                             classes!("border-b", "border-red-500/30", "align-top", "bg-red-500/5")
                                         } else {
