@@ -3851,6 +3851,100 @@ async fn fake_codex_responses_overload_sse(
         .expect("overload sse upstream response")
 }
 
+async fn fake_codex_responses_chat_lifecycle_then_overload_sse(
+    State(captured): State<Arc<CapturedCodexUpstream>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Response {
+    let path = request.uri().path().to_string();
+    let query = request.uri().query().map(ToString::to_string);
+    let body = to_bytes(request.into_body(), usize::MAX)
+        .await
+        .expect("upstream request body");
+    let body = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json")
+    };
+    let authorization = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    captured
+        .requests
+        .lock()
+        .expect("captured requests")
+        .push(captured_codex_request(&headers, path, query, body));
+
+    if authorization.as_deref() == Some("Bearer upstream-token-a") {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .body(Body::from(format!(
+                "event: response.created\ndata: {}\n\nevent: response.failed\ndata: {}\n\n",
+                json!({
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_overload",
+                        "status": "in_progress",
+                        "model": "gpt-5.3-codex-spark",
+                        "output": []
+                    }
+                }),
+                json!({
+                    "type": "response.failed",
+                    "response": {
+                        "status": "failed",
+                        "error": {
+                            "type": "service_unavailable_error",
+                            "message": "Our servers are currently overloaded. Please try again later.",
+                            "code": "server_is_overloaded"
+                        }
+                    }
+                })
+            )))
+            .expect("lifecycle then overload upstream response");
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .body(Body::from(format!(
+            "event: response.output_text.delta\ndata: {}\n\nevent: response.completed\ndata: \
+             {}\n\n",
+            json!({
+                "type": "response.output_text.delta",
+                "response_id": "resp_1",
+                "created": 123,
+                "model": "gpt-5.3-codex-spark",
+                "delta": "hello back"
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "created_at": 123,
+                    "model": "gpt-5.3-codex-spark",
+                    "output": [{
+                        "type": "message",
+                        "content": [{
+                            "type": "output_text",
+                            "text": "hello back"
+                        }]
+                    }],
+                    "usage": {
+                        "input_tokens": 12,
+                        "input_tokens_details": {
+                            "cached_tokens": 2
+                        },
+                        "output_tokens": 3
+                    }
+                }
+            })
+        )))
+        .expect("success upstream response")
+}
+
 async fn fake_codex_responses_mid_stream_failed_sse(
     State(captured): State<Arc<CapturedCodexUpstream>>,
     headers: HeaderMap,
@@ -5729,6 +5823,83 @@ async fn codex_dispatch_fails_over_recoverable_overload_in_sse_stream() {
         "recoverable overload should fail over to the second account; client status={status}, \
          attempted accounts={auths:?}"
     );
+}
+
+#[tokio::test]
+async fn codex_dispatch_fails_over_chat_stream_error_before_first_client_chunk() {
+    let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("codex upstream env lock");
+    let captured = Arc::new(CapturedCodexUpstream::default());
+    let app = Router::new()
+        .route("/v1/responses", post(fake_codex_responses_chat_lifecycle_then_overload_sse))
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake upstream");
+    let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve fake upstream");
+    });
+    std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+    let route_store = Arc::new(StaticMultiCodexRouteStore {
+        codex_routes: vec![
+            codex_route_for_account("codex-a", "upstream-token-a"),
+            codex_route_for_account("codex-b", "upstream-token-b"),
+        ],
+        kiro_route: static_kiro_route(),
+    });
+    let store = Arc::new(RecordingControlStore::default());
+    let state = super::ProviderState::new(store.clone(), route_store);
+    let response = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                        "model": "gpt-5.3-codex",
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": true
+                    }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+
+    std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let body = String::from_utf8(body.to_vec()).expect("utf8 response");
+    assert!(body.contains("hello back"), "body: {body}");
+    assert!(body.contains("[DONE]"), "body: {body}");
+    assert!(!body.contains("server_is_overloaded"), "body: {body}");
+
+    let requests = captured.requests.lock().expect("captured requests");
+    let auths = requests
+        .iter()
+        .filter_map(|request| request.authorization.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(auths, vec![
+        "Bearer upstream-token-a".to_string(),
+        "Bearer upstream-token-b".to_string(),
+    ]);
+    drop(requests);
+
+    wait_for_usage_event_count(store.as_ref(), 1).await;
+    let events = store.usage_events.lock().expect("usage events");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].status_code, 200);
+    assert_eq!(events[0].quota_failover_count, 1);
+    assert_eq!(events[0].account_name.as_deref(), Some("codex-b"));
 }
 
 #[tokio::test]

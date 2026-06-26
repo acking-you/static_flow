@@ -12,7 +12,7 @@ use axum::{
     http::{header, Method, Request, StatusCode},
     response::{IntoResponse, Response},
 };
-use eventsource_stream::Eventsource;
+use eventsource_stream::{Event as SseEvent, Eventsource};
 use futures_util::{StreamExt, TryStreamExt};
 use llm_access_codex::{
     anthropic_messages::{
@@ -1296,6 +1296,11 @@ enum CodexUpstreamOutcome {
     Failover { error: CodexClassifiedUpstreamError, ctx: Box<CodexStreamContext> },
 }
 
+struct CodexPreflightEvent {
+    event: SseEvent,
+    chunks: Vec<Bytes>,
+}
+
 /// What the dispatch loop should do with an adapted upstream outcome.
 enum CodexLoopStep {
     Respond(Response),
@@ -1889,36 +1894,99 @@ async fn stream_codex_upstream_response(
         .bytes_stream()
         .map_err(std::io::Error::other)
         .eventsource();
-    let first_event = match events.next().await {
-        Some(Ok(event)) => {
-            if let Some(error) = classify_codex_sse_event_failure(
-                status,
-                &upstream_headers,
-                Some(event.event.as_str()),
-                &event.data,
-            ) {
+    let mut preflight_events = Vec::new();
+    let mut chat_metadata = ChatStreamMetadata::default();
+    let mut anthropic_metadata = AnthropicStreamMetadata::default();
+    loop {
+        let event = match events.next().await {
+            Some(Ok(event)) => event,
+            Some(Err(err)) => {
+                let error = CodexClassifiedUpstreamError {
+                    class: CodexUpstreamErrorClass::Stream,
+                    status: StatusCode::BAD_GATEWAY,
+                    message: format!("failed to parse codex upstream SSE event: {err}"),
+                    body: Bytes::new(),
+                    retry_after: None,
+                };
                 return CodexUpstreamOutcome::Failover {
                     error,
                     ctx: Box::new(ctx),
                 };
-            }
-            Some(event)
-        },
-        Some(Err(err)) => {
-            let error = CodexClassifiedUpstreamError {
-                class: CodexUpstreamErrorClass::Stream,
-                status: StatusCode::BAD_GATEWAY,
-                message: format!("failed to parse codex upstream SSE event: {err}"),
-                body: Bytes::new(),
-                retry_after: None,
-            };
-            return CodexUpstreamOutcome::Failover {
-                error,
-                ctx: Box::new(ctx),
-            };
-        },
-        None => None,
-    };
+            },
+            None => break,
+        };
+        let chunks = match response_adapter {
+            GatewayResponseAdapter::Responses => {
+                if let Some(error) = classify_codex_sse_event_failure(
+                    status,
+                    &upstream_headers,
+                    Some(event.event.as_str()),
+                    &event.data,
+                ) {
+                    return CodexUpstreamOutcome::Failover {
+                        error,
+                        ctx: Box::new(ctx),
+                    };
+                }
+                let bytes = encode_sse_event_with_model_alias(
+                    &event,
+                    ctx.prepared.model.as_deref(),
+                    ctx.prepared.client_visible_model.as_deref(),
+                );
+                vec![bytes]
+            },
+            GatewayResponseAdapter::ChatCompletions => {
+                if let Some(error) = classify_codex_sse_event_failure(
+                    status,
+                    &upstream_headers,
+                    Some(event.event.as_str()),
+                    &event.data,
+                ) {
+                    return CodexUpstreamOutcome::Failover {
+                        error,
+                        ctx: Box::new(ctx),
+                    };
+                }
+                convert_response_event_to_chat_chunk(
+                    &event,
+                    Some(&ctx.prepared.tool_name_restore_map),
+                    &mut chat_metadata,
+                    ctx.prepared.model.as_deref(),
+                    ctx.prepared.client_visible_model.as_deref(),
+                )
+                .map(|chunk| vec![encode_json_sse_chunk(&chunk)])
+                .unwrap_or_default()
+            },
+            GatewayResponseAdapter::AnthropicMessages => {
+                if let Some(error) = classify_codex_sse_event_failure(
+                    status,
+                    &upstream_headers,
+                    Some(event.event.as_str()),
+                    &event.data,
+                ) {
+                    return CodexUpstreamOutcome::Failover {
+                        error,
+                        ctx: Box::new(ctx),
+                    };
+                }
+                convert_response_event_to_anthropic_sse_chunks(
+                    &event,
+                    Some(&ctx.prepared.tool_name_restore_map),
+                    &mut anthropic_metadata,
+                    ctx.prepared.model.as_deref(),
+                    ctx.prepared.client_visible_model.as_deref(),
+                )
+            },
+        };
+        let has_client_chunk = !chunks.is_empty();
+        preflight_events.push(CodexPreflightEvent {
+            event,
+            chunks,
+        });
+        if response_adapter == GatewayResponseAdapter::Responses || has_client_chunk {
+            break;
+        }
+    }
     let failure_headers = upstream_headers.clone();
     let body_stream = stream! {
         let CodexStreamContext {
@@ -1934,9 +2002,8 @@ async fn stream_codex_upstream_response(
             usage_meta,
         } = ctx;
         let _permits = permits;
-        let mut first_event = first_event;
-        let mut chat_metadata = ChatStreamMetadata::default();
-        let mut anthropic_metadata = AnthropicStreamMetadata::default();
+        let mut chat_metadata = chat_metadata;
+        let mut anthropic_metadata = anthropic_metadata;
         let mut guard = CodexStreamRecordGuard {
             prepared,
             key,
@@ -1950,12 +2017,15 @@ async fn stream_codex_upstream_response(
             state: StreamRecordState::Pending,
             record_committed: false,
         };
+        for preflight in preflight_events {
+            guard.usage_collector.observe_event(&preflight.event);
+            for bytes in preflight.chunks {
+                guard.observe_chunk(&bytes, Some(preflight.event.event.as_str()));
+                yield Ok::<Bytes, std::io::Error>(bytes);
+            }
+        }
         loop {
-            let event = if let Some(event) = first_event.take() {
-                Some(Ok(event))
-            } else {
-                events.next().await
-            };
+            let event = events.next().await;
             let Some(event) = event else {
                 break;
             };
