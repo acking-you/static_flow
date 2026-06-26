@@ -36,6 +36,19 @@ use super::{
     ProviderDispatcher, RequestLimiter,
 };
 
+const SAMPLE_PNG_BASE64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
+const SAMPLE_PNG_BYTES: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4, 0,
+    0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 252, 255, 31, 0, 3, 3, 2, 0,
+    239, 191, 167, 219, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
+
+fn distinct_sample_png_base64(index: usize) -> String {
+    format!("{}{}", " ".repeat(index), SAMPLE_PNG_BASE64)
+}
+
 #[test]
 fn codex_backend_api_base_uses_upstream_codex_paths() {
     assert_eq!(
@@ -77,7 +90,7 @@ fn cctest_fast_path_rejects_large_multimodal_and_websearch_requests() {
 
     let mut multimodal = cctest_tag_request_json("f03bc", "64ccfee3c339a9c8", "session-a");
     multimodal["messages"][0]["content"] = json!([
-        {"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}},
+        {"type":"image","source":{"type":"base64","media_type":"image/png","data":SAMPLE_PNG_BASE64}},
         {"type":"text","text":"read this"}
     ]);
     assert!(super::cctest::inspect_cctest_text_probe(
@@ -600,7 +613,7 @@ async fn kiro_remote_media_resolver_rewrites_url_image_sources() {
         &mut payload,
         &StaticRemoteMediaFetcher {
             media_type: "image/png",
-            bytes: b"hello",
+            bytes: SAMPLE_PNG_BYTES,
         },
     )
     .await
@@ -609,7 +622,7 @@ async fn kiro_remote_media_resolver_rewrites_url_image_sources() {
     let source = &payload.messages[0].content[0]["source"];
     assert_eq!(source["type"], "base64");
     assert_eq!(source["media_type"], "image/png");
-    assert_eq!(source["data"], "aGVsbG8=");
+    assert_eq!(source["data"], SAMPLE_PNG_BASE64);
 }
 
 #[tokio::test]
@@ -8606,29 +8619,30 @@ async fn kiro_dispatch_sends_history_images_without_stable_session_upstream() {
             .header("x-api-key", "valid-secret")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(
-                r#"{
-                        "model": "claude-sonnet-4-6",
-                        "max_tokens": 128,
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "image",
-                                        "source": {
-                                            "type": "base64",
-                                            "media_type": "image/png",
-                                            "data": "aGVsbG8="
-                                        }
-                                    },
-                                    {"type": "text", "text": "old image"}
-                                ]
-                            },
-                            {"role": "assistant", "content": "ok"},
-                            {"role": "user", "content": "continue"}
-                        ],
-                        "stream": false
-                    }"#,
+                serde_json::json!({
+                    "model": "claude-sonnet-4-6",
+                    "max_tokens": 128,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",
+                                        "data": SAMPLE_PNG_BASE64
+                                    }
+                                },
+                                {"type": "text", "text": "old image"}
+                            ]
+                        },
+                        {"role": "assistant", "content": "ok"},
+                        {"role": "user", "content": "continue"}
+                    ],
+                    "stream": false
+                })
+                .to_string(),
             ))
             .expect("request"),
     )
@@ -8736,7 +8750,7 @@ async fn kiro_dispatch_keeps_only_the_last_ten_images_before_upstream() {
                 "source": {
                     "type": "base64",
                     "media_type": "image/png",
-                    "data": format!("image-{index}")
+                    "data": distinct_sample_png_base64(index)
                 }
             })
         })
@@ -8779,8 +8793,8 @@ async fn kiro_dispatch_keeps_only_the_last_ten_images_before_upstream() {
         .as_array()
         .expect("images array");
     assert_eq!(images.len(), 10);
-    assert_eq!(images[0]["source"]["bytes"], "image-1");
-    assert_eq!(images[9]["source"]["bytes"], "image-10");
+    assert_eq!(images[0]["source"]["bytes"], distinct_sample_png_base64(1));
+    assert_eq!(images[9]["source"]["bytes"], distinct_sample_png_base64(10));
     let events = store.usage_events.lock().expect("usage events");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].status_code, 200);
@@ -8817,7 +8831,7 @@ async fn kiro_dispatch_sends_opus_images_directly_without_vision_bridge() {
                                 "source": {
                                     "type": "base64",
                                     "media_type": "image/png",
-                                    "data": "aGVsbG8="
+                                    "data": SAMPLE_PNG_BASE64
                                 }
                             }
                         ]

@@ -275,7 +275,13 @@ fn process_message_content(
                         },
                         "image" => {
                             if let Some(source) = block.source {
-                                if let Some(format) = get_image_format_from_source(&source) {
+                                if let Some(format) = get_image_format_from_source(&source)
+                                    .map_err(|err| {
+                                        invalid_request(format!(
+                                            "image block has invalid image data: {err}"
+                                        ))
+                                    })?
+                                {
                                     images.push(KiroImage::from_base64(format, source.data));
                                 }
                             }
