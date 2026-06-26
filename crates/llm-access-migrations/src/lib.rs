@@ -222,7 +222,7 @@ mod tests {
     fn duckdb_migrations_drop_legacy_explicit_art_indexes() {
         let migrations = super::duckdb_migrations();
 
-        assert_eq!(migrations.len(), 3);
+        assert_eq!(migrations.len(), 4);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(migrations[0].name, "init");
         assert!(!migrations[0]
@@ -241,6 +241,14 @@ mod tests {
         assert!(migrations[2]
             .sql
             .contains("CREATE TABLE IF NOT EXISTS proxy_traffic_rollups_hourly"));
+        assert_eq!(migrations[3].version, 4);
+        assert_eq!(migrations[3].name, "usage_error_classification");
+        assert!(migrations[3]
+            .sql
+            .contains("ADD COLUMN IF NOT EXISTS error_class"));
+        assert!(migrations[3]
+            .sql
+            .contains("ADD COLUMN IF NOT EXISTS session_blocked"));
         assert!(!super::duckdb_schema_sql().contains("cdc_"));
     }
 
