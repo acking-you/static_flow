@@ -1845,7 +1845,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                 </span>
             </div>
 
-            <div class={classes!("mt-3", "flex", "items-center", "gap-4", "text-xs", "text-[var(--muted)]")}>
+            <div class={classes!("mt-3", "flex", "flex-wrap", "items-center", "gap-4", "text-xs", "text-[var(--muted)]")}>
                 <span>{ format!("剩余 {}", format_number_i64(key_item.remaining_billable)) }</span>
                 <span>{ format!("输入 {}", format_number_u64(key_item.usage_input_uncached_tokens)) }</span>
                 <span>{ format!("缓存 {}", format_number_u64(key_item.usage_input_cached_tokens)) }</span>
@@ -1859,6 +1859,12 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     key_item.request_min_start_interval_ms.map(|value| value.to_string()).unwrap_or_else(|| "∞".to_string())
                 ) }</span>
                 <span>{ if key_item.codex_image_generation_enabled { "生图 on" } else { "生图 off" } }</span>
+                if key_item.provider_type == "codex" {
+                    <span>{ format!("Image2 {}", format_number_u64(key_item.codex_image_usage_tokens)) }</span>
+                    if key_item.codex_image_usage_missing_events > 0 {
+                        <span>{ format!("image partial {}", key_item.codex_image_usage_missing_events) }</span>
+                    }
+                }
                 <span>{ format!("Credit {}", key_credit_display(&key_item)) }</span>
                 if key_item.usage_credit_missing_events > 0 {
                     <span>{ format!("partial {}", key_item.usage_credit_missing_events) }</span>

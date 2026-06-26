@@ -6099,6 +6099,12 @@ pub struct AdminLlmGatewayKeyView {
     pub usage_output_tokens: u64,
     pub usage_credit_total: f64,
     pub usage_credit_missing_events: u64,
+    #[serde(default)]
+    pub codex_image_usage_tokens: u64,
+    #[serde(default)]
+    pub codex_image_usage_missing_events: u64,
+    #[serde(default)]
+    pub codex_image_last_used_at: Option<i64>,
     pub remaining_billable: i64,
     pub last_used_at: Option<i64>,
     pub created_at: i64,
@@ -6176,6 +6182,10 @@ pub struct AdminLlmGatewayKeysSummaryView {
     pub usage_billable_tokens_sum: u64,
     pub usage_credit_total: f64,
     pub usage_credit_missing_events: u64,
+    #[serde(default)]
+    pub codex_image_usage_tokens_sum: u64,
+    #[serde(default)]
+    pub codex_image_usage_missing_events: u64,
 }
 
 /// Combined admin payload for the key inventory screen.
@@ -8962,6 +8972,9 @@ pub async fn create_admin_llm_gateway_key(
             usage_output_tokens: 0,
             usage_credit_total: 0.0,
             usage_credit_missing_events: 0,
+            codex_image_usage_tokens: 0,
+            codex_image_usage_missing_events: 0,
+            codex_image_last_used_at: None,
             remaining_billable: quota_billable_limit as i64,
             last_used_at: None,
             created_at: 0,
@@ -11236,6 +11249,9 @@ pub async fn create_admin_kiro_key(
             usage_output_tokens: 0,
             usage_credit_total: 0.0,
             usage_credit_missing_events: 0,
+            codex_image_usage_tokens: 0,
+            codex_image_usage_missing_events: 0,
+            codex_image_last_used_at: None,
             remaining_billable: quota_billable_limit as i64,
             last_used_at: None,
             created_at: 0,
@@ -12002,6 +12018,17 @@ mod tests {
         assert!(!key.kiro_full_request_logging_enabled);
         assert!(!key.kiro_remote_media_resolution_enabled);
         assert!(!key.codex_image_generation_enabled);
+    }
+
+    #[test]
+    fn admin_gateway_key_view_defaults_codex_image_usage_to_zero() {
+        let key: AdminLlmGatewayKeyView =
+            serde_json::from_str(r#"{"id":"k","name":"K","provider_type":"codex"}"#)
+                .expect("key should parse");
+
+        assert_eq!(key.codex_image_usage_tokens, 0);
+        assert_eq!(key.codex_image_usage_missing_events, 0);
+        assert_eq!(key.codex_image_last_used_at, None);
     }
 
     #[test]

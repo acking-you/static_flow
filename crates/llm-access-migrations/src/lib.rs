@@ -148,6 +148,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "codex_image_generation_toggle",
         sql: include_str!("../migrations/postgres/0030_codex_image_generation_toggle.sql"),
     },
+    SqlMigration {
+        version: 31,
+        name: "codex_image_key_usage_rollup",
+        sql: include_str!("../migrations/postgres/0031_codex_image_key_usage_rollup.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.
@@ -506,5 +511,19 @@ mod tests {
         assert_eq!(migration.version, 30);
         assert!(migration.sql.contains("codex_image_generation_enabled"));
         assert!(migration.sql.contains("DEFAULT FALSE"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_codex_image_key_usage_rollup() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "codex_image_key_usage_rollup")
+            .expect("codex image key usage rollup migration exists");
+
+        assert_eq!(migration.version, 31);
+        assert!(migration.sql.contains("codex_image_usage_tokens"));
+        assert!(migration.sql.contains("codex_image_usage_missing_events"));
+        assert!(migration.sql.contains("codex_image_last_used_at_ms"));
     }
 }

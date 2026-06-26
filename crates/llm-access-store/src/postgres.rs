@@ -511,7 +511,7 @@ impl PostgresControlRepository {
     }
 
     /// Connect to the Postgres control plane without running migrations.
-    pub async fn connect_read_only(
+    pub async fn connect_without_migrations(
         database_url: &str,
         request_cache_config: Option<RequestCacheConfig>,
     ) -> anyhow::Result<Self> {
@@ -519,28 +519,48 @@ impl PostgresControlRepository {
         Self::from_sqlx_client(client, request_cache_config, ProxyConfigScope::core())
     }
 
-    /// Verify that read-only Codex image gateway columns have already been
-    /// migrated.
+    /// Backward-compatible alias for callers that only need read paths.
+    pub async fn connect_read_only(
+        database_url: &str,
+        request_cache_config: Option<RequestCacheConfig>,
+    ) -> anyhow::Result<Self> {
+        Self::connect_without_migrations(database_url, request_cache_config).await
+    }
+
+    /// Verify that Codex image gateway columns have already been migrated.
     pub async fn verify_codex_image_gateway_schema(&self) -> anyhow::Result<()> {
         let row = self
             .client
             .query_one(
-                "SELECT EXISTS (
-                    SELECT 1
-                    FROM information_schema.columns
-                    WHERE table_schema = 'public'
-                      AND table_name = 'llm_key_route_config'
-                      AND column_name = 'codex_image_generation_enabled'
-                ) AS exists",
+                "SELECT
+                    EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'llm_key_route_config'
+                          AND column_name = 'codex_image_generation_enabled'
+                    ) AS route_toggle_exists,
+                    (
+                        SELECT COUNT(*) = 3
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'llm_key_usage_rollups'
+                          AND column_name IN (
+                              'codex_image_usage_tokens',
+                              'codex_image_usage_missing_events',
+                              'codex_image_last_used_at_ms'
+                          )
+                    ) AS usage_rollup_exists",
                 &[],
             )
             .await
             .context("inspect codex image gateway schema")?;
-        let exists: bool = row.get("exists");
+        let route_toggle_exists: bool = row.get("route_toggle_exists");
+        let usage_rollup_exists: bool = row.get("usage_rollup_exists");
         anyhow::ensure!(
-            exists,
-            "missing llm_key_route_config.codex_image_generation_enabled; run llm-access Postgres \
-             migration 0030 before starting llm-access-codex-image"
+            route_toggle_exists && usage_rollup_exists,
+            "missing codex image gateway schema columns; run llm-access Postgres migrations 0030 \
+             and 0031 before starting llm-access-codex-image"
         );
         Ok(())
     }
@@ -1131,6 +1151,43 @@ mod tests {
         assert_eq!(row.get::<_, i64>("credit_missing_events"), 1);
         assert_eq!(row.get::<_, Option<i64>>("last_used_at_ms"), Some(1_700_000_000_020));
         client.close().await;
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_records_codex_image_usage_separately() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        seed_test_key_bundle(&database_url)
+            .await
+            .expect("seed postgres test key bundle");
+        let repo = super::PostgresControlRepository::connect(&database_url, None)
+            .await
+            .expect("connect postgres repository");
+
+        repo.record_codex_image_key_usage("key-1", Some(42), 1_700_000_000_100)
+            .await
+            .expect("record image token usage");
+        repo.record_codex_image_key_usage("key-1", None, 1_700_000_000_120)
+            .await
+            .expect("record missing image usage");
+
+        let key = repo
+            .get_admin_key("key-1")
+            .await
+            .expect("load admin key")
+            .expect("key exists");
+        assert_eq!(key.codex_image_usage_tokens, 42);
+        assert_eq!(key.codex_image_usage_missing_events, 1);
+        assert_eq!(key.codex_image_last_used_at, Some(1_700_000_000_120));
+        assert_eq!(key.usage_input_uncached_tokens, 0);
+        assert_eq!(key.usage_output_tokens, 0);
+        assert_eq!(key.remaining_billable, 1000);
     }
 
     #[tokio::test]

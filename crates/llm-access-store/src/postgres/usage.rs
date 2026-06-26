@@ -23,6 +23,78 @@ use super::{
 };
 
 impl PostgresControlRepository {
+    /// Accumulate successful Codex image usage for admin visibility without
+    /// affecting normal billable-token quota rollups.
+    pub async fn record_codex_image_key_usage(
+        &self,
+        key_id: &str,
+        usage_tokens: Option<u64>,
+        used_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        self.ensure_connection_alive()?;
+        let usage_missing_events = if usage_tokens.is_none() { 1_i64 } else { 0_i64 };
+        let usage_tokens = usage_tokens
+            .map(i64::try_from)
+            .transpose()
+            .context("codex image usage tokens exceed i64")?
+            .unwrap_or(0);
+        self.client
+            .execute(
+                "INSERT INTO llm_key_usage_rollups (
+                    key_id,
+                    input_uncached_tokens,
+                    input_cached_tokens,
+                    output_tokens,
+                    billable_tokens,
+                    credit_total,
+                    credit_missing_events,
+                    codex_image_usage_tokens,
+                    codex_image_usage_missing_events,
+                    codex_image_last_used_at_ms,
+                    last_used_at_ms,
+                    updated_at_ms
+                 )
+                 SELECT
+                    k.key_id,
+                    0,
+                    0,
+                    0,
+                    0,
+                    '0',
+                    0,
+                    $2,
+                    $3,
+                    $4,
+                    NULL,
+                    $4
+                 FROM llm_keys k
+                 WHERE k.key_id = $1
+                 ON CONFLICT(key_id) DO UPDATE SET
+                    codex_image_usage_tokens =
+                        llm_key_usage_rollups.codex_image_usage_tokens
+                        + EXCLUDED.codex_image_usage_tokens,
+                    codex_image_usage_missing_events =
+                        llm_key_usage_rollups.codex_image_usage_missing_events
+                        + EXCLUDED.codex_image_usage_missing_events,
+                    codex_image_last_used_at_ms = CASE
+                        WHEN llm_key_usage_rollups.codex_image_last_used_at_ms IS NULL THEN
+                            EXCLUDED.codex_image_last_used_at_ms
+                        ELSE GREATEST(
+                            llm_key_usage_rollups.codex_image_last_used_at_ms,
+                            EXCLUDED.codex_image_last_used_at_ms
+                        )
+                    END,
+                    updated_at_ms = GREATEST(
+                        llm_key_usage_rollups.updated_at_ms,
+                        EXCLUDED.updated_at_ms
+                    )",
+                &[&key_id, &usage_tokens, &usage_missing_events, &used_at_ms],
+            )
+            .await
+            .context("record postgres codex image key usage")?;
+        Ok(())
+    }
+
     /// Resolve the effective proxy attribution for one consumed usage event.
     pub async fn resolve_usage_proxy_attribution(
         &self,

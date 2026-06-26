@@ -147,8 +147,11 @@ fn decode_key_bundle(row: &PgRow) -> anyhow::Result<KeyBundle> {
             billable_tokens: row.get(31),
             credit_total,
             credit_missing_events: row.get(33),
-            last_used_at_ms: row.get(34),
-            updated_at_ms: row.get(35),
+            codex_image_usage_tokens: row.get(34),
+            codex_image_usage_missing_events: row.get(35),
+            codex_image_last_used_at_ms: row.get(36),
+            last_used_at_ms: row.get(37),
+            updated_at_ms: row.get(38),
         },
     })
 }
@@ -174,6 +177,10 @@ pub fn admin_key_from_bundle(bundle: &KeyBundle) -> AdminKey {
         usage_output_tokens: bundle.rollup.output_tokens.max(0) as u64,
         usage_credit_total: bundle.rollup.credit_total,
         usage_credit_missing_events: bundle.rollup.credit_missing_events.max(0) as u64,
+        codex_image_usage_tokens: bundle.rollup.codex_image_usage_tokens.max(0) as u64,
+        codex_image_usage_missing_events: bundle.rollup.codex_image_usage_missing_events.max(0)
+            as u64,
+        codex_image_last_used_at: bundle.rollup.codex_image_last_used_at_ms,
         remaining_billable: (quota as i64).saturating_sub(billable as i64),
         last_used_at: bundle.rollup.last_used_at_ms,
         created_at: bundle.key.created_at_ms,
@@ -246,7 +253,7 @@ fn decode_kiro_candidate_credit_summary_row(
 pub fn decode_kiro_admin_key_row(row: PgRow) -> anyhow::Result<AdminKey> {
     let bundle = decode_key_bundle(&row)?;
     let mut key = admin_key_from_bundle(&bundle);
-    key.kiro_candidate_credit_summary = Some(decode_kiro_candidate_credit_summary_row(&row, 36));
+    key.kiro_candidate_credit_summary = Some(decode_kiro_candidate_credit_summary_row(&row, 39));
     Ok(key)
 }
 

@@ -103,6 +103,9 @@ impl PostgresControlRepository {
                     COALESCE(u.billable_tokens, 0),
                     COALESCE(u.credit_total, '0'),
                     COALESCE(u.credit_missing_events, 0),
+                    COALESCE(u.codex_image_usage_tokens, 0),
+                    COALESCE(u.codex_image_usage_missing_events, 0),
+                    u.codex_image_last_used_at_ms,
                     u.last_used_at_ms,
                     COALESCE(u.updated_at_ms, 0),
                     r.preferred_pool_strategy AS preferred_pool_strategy,
@@ -148,6 +151,9 @@ impl PostgresControlRepository {
                     COALESCE(u.billable_tokens, 0),
                     COALESCE(u.credit_total, '0'),
                     COALESCE(u.credit_missing_events, 0),
+                    COALESCE(u.codex_image_usage_tokens, 0),
+                    COALESCE(u.codex_image_usage_missing_events, 0),
+                    u.codex_image_last_used_at_ms,
                     u.last_used_at_ms,
                     COALESCE(u.updated_at_ms, k.updated_at_ms),
                     r.preferred_pool_strategy AS preferred_pool_strategy,
@@ -191,7 +197,9 @@ impl PostgresControlRepository {
                     COALESCE(SUM(u.output_tokens), 0)::BIGINT,
                     COALESCE(SUM(u.billable_tokens), 0)::BIGINT,
                     COALESCE(SUM((u.credit_total)::DOUBLE PRECISION), 0)::DOUBLE PRECISION,
-                    COALESCE(SUM(u.credit_missing_events), 0)::BIGINT
+                    COALESCE(SUM(u.credit_missing_events), 0)::BIGINT,
+                    COALESCE(SUM(u.codex_image_usage_tokens), 0)::BIGINT,
+                    COALESCE(SUM(u.codex_image_usage_missing_events), 0)::BIGINT
                  FROM llm_keys k
                  LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
                  WHERE ($1::text IS NULL OR k.provider_type = $1)",
@@ -212,6 +220,8 @@ impl PostgresControlRepository {
             usage_billable_tokens_sum: row.get::<_, i64>(9).max(0) as u64,
             usage_credit_total: row.get(10),
             usage_credit_missing_events: row.get::<_, i64>(11).max(0) as u64,
+            codex_image_usage_tokens_sum: row.get::<_, i64>(12).max(0) as u64,
+            codex_image_usage_missing_events: row.get::<_, i64>(13).max(0) as u64,
         })
     }
 
@@ -265,6 +275,9 @@ impl PostgresControlRepository {
                     COALESCE(u.billable_tokens, 0),
                     COALESCE(u.credit_total, '0'),
                     COALESCE(u.credit_missing_events, 0),
+                    COALESCE(u.codex_image_usage_tokens, 0),
+                    COALESCE(u.codex_image_usage_missing_events, 0),
+                    u.codex_image_last_used_at_ms,
                     u.last_used_at_ms,
                     COALESCE(u.updated_at_ms, k.updated_at_ms),
                     r.preferred_pool_strategy AS preferred_pool_strategy,
@@ -339,6 +352,10 @@ impl PostgresControlRepository {
                         COALESCE(u.billable_tokens, 0) AS billable_tokens,
                         COALESCE(u.credit_total, '0') AS credit_total,
                         COALESCE(u.credit_missing_events, 0) AS credit_missing_events,
+                        COALESCE(u.codex_image_usage_tokens, 0) AS codex_image_usage_tokens,
+                        COALESCE(u.codex_image_usage_missing_events, 0)
+                            AS codex_image_usage_missing_events,
+                        u.codex_image_last_used_at_ms,
                         u.last_used_at_ms,
                         COALESCE(u.updated_at_ms, k.updated_at_ms) AS rollup_updated_at_ms,
                         CASE COALESCE(NULLIF(BTRIM(r.preferred_pool_strategy), ''), 'balanced')
@@ -517,6 +534,9 @@ impl PostgresControlRepository {
                     page_keys.billable_tokens,
                     page_keys.credit_total,
                     page_keys.credit_missing_events,
+                    page_keys.codex_image_usage_tokens,
+                    page_keys.codex_image_usage_missing_events,
+                    page_keys.codex_image_last_used_at_ms,
 	                    page_keys.last_used_at_ms,
 	                    page_keys.rollup_updated_at_ms,
 	                    COALESCE(summary.candidate_count, 0),
@@ -583,6 +603,9 @@ impl PostgresControlRepository {
                     COALESCE(u.billable_tokens, 0),
                     COALESCE(u.credit_total, '0'),
                     COALESCE(u.credit_missing_events, 0),
+                    COALESCE(u.codex_image_usage_tokens, 0),
+                    COALESCE(u.codex_image_usage_missing_events, 0),
+                    u.codex_image_last_used_at_ms,
                     u.last_used_at_ms,
                     COALESCE(u.updated_at_ms, k.updated_at_ms),
                     r.preferred_pool_strategy AS preferred_pool_strategy,
@@ -727,9 +750,10 @@ impl PostgresControlRepository {
             .execute(
                 "INSERT INTO llm_key_usage_rollups (
                     key_id, input_uncached_tokens, input_cached_tokens, output_tokens,
-                    billable_tokens, credit_total, credit_missing_events, last_used_at_ms,
-                    updated_at_ms
-                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    billable_tokens, credit_total, credit_missing_events,
+                    codex_image_usage_tokens, codex_image_usage_missing_events,
+                    codex_image_last_used_at_ms, last_used_at_ms, updated_at_ms
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                  ON CONFLICT(key_id) DO UPDATE SET
                     input_uncached_tokens = EXCLUDED.input_uncached_tokens,
                     input_cached_tokens = EXCLUDED.input_cached_tokens,
@@ -737,6 +761,10 @@ impl PostgresControlRepository {
                     billable_tokens = EXCLUDED.billable_tokens,
                     credit_total = EXCLUDED.credit_total,
                     credit_missing_events = EXCLUDED.credit_missing_events,
+                    codex_image_usage_tokens = EXCLUDED.codex_image_usage_tokens,
+                    codex_image_usage_missing_events =
+                        EXCLUDED.codex_image_usage_missing_events,
+                    codex_image_last_used_at_ms = EXCLUDED.codex_image_last_used_at_ms,
                     last_used_at_ms = EXCLUDED.last_used_at_ms,
                     updated_at_ms = EXCLUDED.updated_at_ms",
                 &[
@@ -747,6 +775,9 @@ impl PostgresControlRepository {
                     &rollup.billable_tokens,
                     &rollup.credit_total.to_string(),
                     &rollup.credit_missing_events,
+                    &rollup.codex_image_usage_tokens,
+                    &rollup.codex_image_usage_missing_events,
+                    &rollup.codex_image_last_used_at_ms,
                     &rollup.last_used_at_ms,
                     &rollup.updated_at_ms,
                 ],
@@ -877,6 +908,9 @@ impl AdminKeyStore for PostgresControlRepository {
                 COALESCE(u.billable_tokens, 0),
                 COALESCE(u.credit_total, '0'),
                 COALESCE(u.credit_missing_events, 0),
+                COALESCE(u.codex_image_usage_tokens, 0),
+                COALESCE(u.codex_image_usage_missing_events, 0),
+                u.codex_image_last_used_at_ms,
                 u.last_used_at_ms,
                 COALESCE(u.updated_at_ms, k.updated_at_ms),
                 r.preferred_pool_strategy AS preferred_pool_strategy,
@@ -982,6 +1016,9 @@ impl AdminKeyStore for PostgresControlRepository {
             billable_tokens: 0,
             credit_total: 0.0,
             credit_missing_events: 0,
+            codex_image_usage_tokens: 0,
+            codex_image_usage_missing_events: 0,
+            codex_image_last_used_at_ms: None,
             last_used_at_ms: None,
             updated_at_ms: key.created_at_ms,
         };

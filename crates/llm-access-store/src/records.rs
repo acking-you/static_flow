@@ -107,6 +107,12 @@ pub struct KeyUsageRollup {
     pub credit_total: f64,
     /// Number of events missing credit usage.
     pub credit_missing_events: i64,
+    /// Accumulated Codex image-generation tokens reported by upstream.
+    pub codex_image_usage_tokens: i64,
+    /// Number of successful Codex image responses missing upstream usage.
+    pub codex_image_usage_missing_events: i64,
+    /// Last successful Codex image usage timestamp.
+    pub codex_image_last_used_at_ms: Option<i64>,
     /// Last usage timestamp.
     pub last_used_at_ms: Option<i64>,
     /// Update timestamp in Unix milliseconds.

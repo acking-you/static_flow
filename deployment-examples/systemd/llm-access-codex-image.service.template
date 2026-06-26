@@ -9,8 +9,8 @@ Type=simple
 User=ts_user
 Group=ts_user
 TimeoutStartSec=120
-# Requires llm-access Postgres migration 0030 before start; the binary fails
-# fast if llm_key_route_config.codex_image_generation_enabled is missing.
+# Requires llm-access Postgres migrations 0030 and 0031 before start; the
+# binary fails fast if Codex image route/usage rollup columns are missing.
 EnvironmentFile=/etc/llm-access/llm-access.env
 Environment=STATICFLOW_LOG_DIR=/var/log/staticflow-runtime
 Environment=STATICFLOW_LOG_SERVICE=llm-access-codex-image

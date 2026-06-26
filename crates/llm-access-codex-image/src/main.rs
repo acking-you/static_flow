@@ -105,9 +105,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         })?;
     let request_cache_config = request_cache_config(&args)?;
     let control = Arc::new(
-        PostgresControlRepository::connect_read_only(&database_url, request_cache_config)
+        PostgresControlRepository::connect_without_migrations(&database_url, request_cache_config)
             .await
-            .context("connect read-only postgres control repository")?,
+            .context("connect postgres control repository without migrations")?,
     );
     control
         .verify_codex_image_gateway_schema()
@@ -435,6 +435,9 @@ async fn dispatch_image_request(
             last_error_class = Some(status_error_class(status).to_string());
             continue;
         }
+        if status.is_success() {
+            record_codex_image_usage(state, ctx.key, usage_tokens).await;
+        }
         return upstream_response(status, &headers, bytes);
     }
     let status = if concurrency_blocked > 0 && failover_count == 0 {
@@ -668,6 +671,26 @@ fn log_image_event(
         }
     });
     drop(handle);
+}
+
+async fn record_codex_image_usage(
+    state: &AppState,
+    key: &AuthenticatedKey,
+    usage_tokens: Option<u64>,
+) {
+    let used_at_ms = i64::try_from(now_ms()).unwrap_or(i64::MAX);
+    if let Err(err) = state
+        .control
+        .record_codex_image_key_usage(&key.key_id, usage_tokens, used_at_ms)
+        .await
+    {
+        tracing::warn!(
+            key_id = %key.key_id,
+            key_name = %key.key_name,
+            error = %err,
+            "codex image key usage rollup write failed"
+        );
+    }
 }
 
 #[derive(Debug, Default)]
