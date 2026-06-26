@@ -214,6 +214,53 @@ struct LegacyJournalUsageBatchV1 {
     events: Vec<LegacyJournalUsageEventV1>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct LegacyJournalUsageEventWithErrorPayloadsV1 {
+    schema_version: u16,
+    event_id: String,
+    created_at_ms: i64,
+    provider_type: ProviderType,
+    protocol_family: ProtocolFamily,
+    key_id: String,
+    key_name: String,
+    account_name: Option<String>,
+    account_group_id_at_event: Option<String>,
+    route_strategy_at_event: Option<RouteStrategy>,
+    request_method: String,
+    request_url: String,
+    endpoint: String,
+    model: Option<String>,
+    mapped_model: Option<String>,
+    status_code: i64,
+    request_body_bytes: Option<i64>,
+    quota_failover_count: u64,
+    routing_diagnostics_json: Option<String>,
+    input_uncached_tokens: i64,
+    input_cached_tokens: i64,
+    output_tokens: i64,
+    billable_tokens: i64,
+    credit_usage: Option<String>,
+    usage_missing: bool,
+    credit_usage_missing: bool,
+    client_ip: String,
+    ip_region: String,
+    request_headers_json: String,
+    last_message_content: Option<String>,
+    client_request_body_json: Option<String>,
+    upstream_request_body_json: Option<String>,
+    full_request_json: Option<String>,
+    error_message: Option<String>,
+    error_body: Option<String>,
+    response_body: Option<String>,
+    timing: UsageTiming,
+    stream: UsageStreamDetails,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct LegacyJournalUsageBatchWithErrorPayloadsV1 {
+    events: Vec<LegacyJournalUsageEventWithErrorPayloadsV1>,
+}
+
 impl JournalUsageEventV1 {
     /// Convert a runtime usage event into the stable journal wire shape.
     pub fn from_usage_event(event: &UsageEvent) -> Self {
@@ -348,6 +395,53 @@ impl LegacyJournalUsageEventV1 {
             session_blocked: false,
             error_body: None,
             response_body: None,
+            timing: self.timing,
+            stream: self.stream,
+        }
+    }
+}
+
+impl LegacyJournalUsageEventWithErrorPayloadsV1 {
+    fn into_current(self) -> JournalUsageEventV1 {
+        JournalUsageEventV1 {
+            schema_version: self.schema_version,
+            event_id: self.event_id,
+            created_at_ms: self.created_at_ms,
+            provider_type: self.provider_type,
+            protocol_family: self.protocol_family,
+            key_id: self.key_id,
+            key_name: self.key_name,
+            account_name: self.account_name,
+            account_group_id_at_event: self.account_group_id_at_event,
+            route_strategy_at_event: self.route_strategy_at_event,
+            request_method: self.request_method,
+            request_url: self.request_url,
+            endpoint: self.endpoint,
+            model: self.model,
+            mapped_model: self.mapped_model,
+            status_code: self.status_code,
+            request_body_bytes: self.request_body_bytes,
+            quota_failover_count: self.quota_failover_count,
+            routing_diagnostics_json: self.routing_diagnostics_json,
+            input_uncached_tokens: self.input_uncached_tokens,
+            input_cached_tokens: self.input_cached_tokens,
+            output_tokens: self.output_tokens,
+            billable_tokens: self.billable_tokens,
+            credit_usage: self.credit_usage,
+            usage_missing: self.usage_missing,
+            credit_usage_missing: self.credit_usage_missing,
+            client_ip: self.client_ip,
+            ip_region: self.ip_region,
+            request_headers_json: self.request_headers_json,
+            last_message_content: self.last_message_content,
+            client_request_body_json: self.client_request_body_json,
+            upstream_request_body_json: self.upstream_request_body_json,
+            full_request_json: self.full_request_json,
+            error_message: self.error_message,
+            error_class: None,
+            session_blocked: false,
+            error_body: self.error_body,
+            response_body: self.response_body,
             timing: self.timing,
             stream: self.stream,
         }
@@ -579,6 +673,18 @@ pub fn decode_journal_usage_batch(bytes: &[u8]) -> Result<JournalUsageBatchV1, p
     match postcard::from_bytes::<JournalUsageBatchV1>(bytes) {
         Ok(batch) => Ok(batch),
         Err(_) => {
+            if let Ok(legacy) =
+                postcard::from_bytes::<LegacyJournalUsageBatchWithErrorPayloadsV1>(bytes)
+            {
+                return Ok(JournalUsageBatchV1 {
+                    events: legacy
+                        .events
+                        .into_iter()
+                        .map(LegacyJournalUsageEventWithErrorPayloadsV1::into_current)
+                        .collect(),
+                });
+            }
+
             let legacy = postcard::from_bytes::<LegacyJournalUsageBatchV1>(bytes)?;
             Ok(JournalUsageBatchV1 {
                 events: legacy
@@ -674,6 +780,116 @@ mod tests {
         assert_eq!(decoded.events[0].event_id, event.event_id);
         assert_eq!(decoded.events[0].error_message, None);
         assert_eq!(decoded.events[0].error_body, None);
+        assert_eq!(decoded.events[0].stream, event.stream);
+    }
+
+    #[test]
+    fn journal_event_decodes_previous_payload_with_error_fields() {
+        #[derive(Debug, Serialize, Deserialize)]
+        struct PreviousJournalUsageEventV1 {
+            schema_version: u16,
+            event_id: String,
+            created_at_ms: i64,
+            provider_type: ProviderType,
+            protocol_family: ProtocolFamily,
+            key_id: String,
+            key_name: String,
+            account_name: Option<String>,
+            account_group_id_at_event: Option<String>,
+            route_strategy_at_event: Option<llm_access_core::provider::RouteStrategy>,
+            request_method: String,
+            request_url: String,
+            endpoint: String,
+            model: Option<String>,
+            mapped_model: Option<String>,
+            status_code: i64,
+            request_body_bytes: Option<i64>,
+            quota_failover_count: u64,
+            routing_diagnostics_json: Option<String>,
+            input_uncached_tokens: i64,
+            input_cached_tokens: i64,
+            output_tokens: i64,
+            billable_tokens: i64,
+            credit_usage: Option<String>,
+            usage_missing: bool,
+            credit_usage_missing: bool,
+            client_ip: String,
+            ip_region: String,
+            request_headers_json: String,
+            last_message_content: Option<String>,
+            client_request_body_json: Option<String>,
+            upstream_request_body_json: Option<String>,
+            full_request_json: Option<String>,
+            error_message: Option<String>,
+            error_body: Option<String>,
+            response_body: Option<String>,
+            timing: UsageTiming,
+            stream: UsageStreamDetails,
+        }
+
+        #[derive(Debug, Serialize, Deserialize)]
+        struct PreviousJournalUsageBatchV1 {
+            events: Vec<PreviousJournalUsageEventV1>,
+        }
+
+        let mut event = test_usage_event("evt-wire-previous");
+        event.error_message = Some("upstream 423 locked".to_string());
+        event.error_body = Some("{\"error\":\"locked\"}".to_string());
+        event.response_body = Some("{\"detail\":\"retry later\"}".to_string());
+        let previous = PreviousJournalUsageEventV1 {
+            schema_version: 1,
+            event_id: event.event_id.clone(),
+            created_at_ms: event.created_at_ms,
+            provider_type: event.provider_type,
+            protocol_family: event.protocol_family,
+            key_id: event.key_id.clone(),
+            key_name: event.key_name.clone(),
+            account_name: event.account_name.clone(),
+            account_group_id_at_event: event.account_group_id_at_event.clone(),
+            route_strategy_at_event: event.route_strategy_at_event,
+            request_method: event.request_method.clone(),
+            request_url: event.request_url.clone(),
+            endpoint: event.endpoint.clone(),
+            model: event.model.clone(),
+            mapped_model: event.mapped_model.clone(),
+            status_code: event.status_code,
+            request_body_bytes: event.request_body_bytes,
+            quota_failover_count: event.quota_failover_count,
+            routing_diagnostics_json: event.routing_diagnostics_json.clone(),
+            input_uncached_tokens: event.input_uncached_tokens,
+            input_cached_tokens: event.input_cached_tokens,
+            output_tokens: event.output_tokens,
+            billable_tokens: event.billable_tokens,
+            credit_usage: event.credit_usage.clone(),
+            usage_missing: event.usage_missing,
+            credit_usage_missing: event.credit_usage_missing,
+            client_ip: event.client_ip.clone(),
+            ip_region: event.ip_region.clone(),
+            request_headers_json: event.request_headers_json.clone(),
+            last_message_content: event.last_message_content.clone(),
+            client_request_body_json: event.client_request_body_json.clone(),
+            upstream_request_body_json: event.upstream_request_body_json.clone(),
+            full_request_json: event.full_request_json.clone(),
+            error_message: event.error_message.clone(),
+            error_body: event.error_body.clone(),
+            response_body: event.response_body.clone(),
+            timing: event.timing.clone(),
+            stream: event.stream.clone(),
+        };
+        let bytes = postcard::to_allocvec(&PreviousJournalUsageBatchV1 {
+            events: vec![previous],
+        })
+        .expect("encode previous event");
+
+        let decoded = decode_journal_usage_batch(&bytes).expect("decode previous event");
+
+        assert_eq!(decoded.events[0].event_id, event.event_id);
+        assert_eq!(decoded.events[0].error_message, event.error_message);
+        assert_eq!(decoded.events[0].error_body, event.error_body);
+        assert_eq!(decoded.events[0].response_body, event.response_body);
+        assert_eq!(decoded.events[0].error_class, None);
+        assert!(!decoded.events[0].session_blocked);
+        assert_eq!(decoded.events[0].timing, event.timing);
         assert_eq!(decoded.events[0].stream, event.stream);
     }
 
