@@ -14,9 +14,9 @@ ackingliu.top, www.ackingliu.top, staticflow.cc, www.staticflow.cc {
 			flush_interval -1
 			transport http {
 				dial_timeout 10s
-				response_header_timeout 15m
-				read_timeout 15m
-				write_timeout 15m
+				response_header_timeout 35m
+				read_timeout 35m
+				write_timeout 35m
 			}
 			header_up X-Real-IP {remote_host}
 			header_up X-Forwarded-For {remote_host}
@@ -32,9 +32,9 @@ ackingliu.top, www.ackingliu.top, staticflow.cc, www.staticflow.cc {
 			# by Caddy once Cloudflare proxying is disabled.
 			transport http {
 				dial_timeout 10s
-				response_header_timeout 15m
-				read_timeout 15m
-				write_timeout 15m
+				response_header_timeout 35m
+				read_timeout 35m
+				write_timeout 35m
 			}
 			header_up X-Real-IP {remote_host}
 			header_up X-Forwarded-For {remote_host}
