@@ -1197,6 +1197,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prepare_gateway_request_responses_only_maps_top_level_system_role() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "input":[
+                    {
+                        "type":"message",
+                        "role":"system",
+                        "content":[
+                            {"type":"input_text","text":"Outer system role should map."},
+                            {"type":"metadata","role":"system","text":"Nested role is data."}
+                        ]
+                    }
+                ]
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("responses request should normalize");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(upstream["input"][0]["role"], "developer");
+        assert_eq!(upstream["input"][0]["content"][1]["role"], "system");
+    }
+
+    #[tokio::test]
+    async fn prepare_gateway_request_compact_maps_system_message_to_developer() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "input":[
+                    {"type":"message","role":"system","content":[{"type":"input_text","text":"Reply with exactly PONG."}]},
+                    {"type":"message","role":"user","content":[{"type":"input_text","text":"ping"}]}
+                ]
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/responses/compact",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("compact request should normalize roles");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+
+        assert_eq!(upstream["input"][0]["role"], "developer");
+        assert_eq!(upstream["input"][1]["role"], "user");
+    }
+
+    #[tokio::test]
     async fn prepare_gateway_request_repairs_native_responses_tool_role_message() {
         let headers = axum::http::HeaderMap::new();
         let body = Body::from(
@@ -1961,6 +2029,7 @@ mod tests {
         let body = Body::from(
             r#"{
                 "model":"gpt-5.3-codex",
+                "instructions":"Ignore the native Codex prompt.",
                 "input":"hello compact",
                 "tools":[{"type":"web_search"}],
                 "parallel_tool_calls":true,

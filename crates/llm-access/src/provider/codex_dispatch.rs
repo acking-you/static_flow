@@ -1882,6 +1882,10 @@ pub fn codex_status_from_error_json_value(value: &Value) -> Option<StatusCode> {
 
     None
 }
+
+const CODEX_STREAM_PREFLIGHT_MAX_EVENTS: usize = 16;
+const CODEX_STREAM_PREFLIGHT_MAX_BYTES: usize = 64 * 1024;
+
 async fn stream_codex_upstream_response(
     response: reqwest::Response,
     status: StatusCode,
@@ -1895,6 +1899,7 @@ async fn stream_codex_upstream_response(
         .map_err(std::io::Error::other)
         .eventsource();
     let mut preflight_events = Vec::new();
+    let mut preflight_bytes = 0usize;
     let mut chat_metadata = ChatStreamMetadata::default();
     let mut anthropic_metadata = AnthropicStreamMetadata::default();
     loop {
@@ -1915,19 +1920,19 @@ async fn stream_codex_upstream_response(
             },
             None => break,
         };
+        if let Some(error) = classify_codex_sse_event_failure(
+            status,
+            &upstream_headers,
+            Some(event.event.as_str()),
+            &event.data,
+        ) {
+            return CodexUpstreamOutcome::Failover {
+                error,
+                ctx: Box::new(ctx),
+            };
+        }
         let chunks = match response_adapter {
             GatewayResponseAdapter::Responses => {
-                if let Some(error) = classify_codex_sse_event_failure(
-                    status,
-                    &upstream_headers,
-                    Some(event.event.as_str()),
-                    &event.data,
-                ) {
-                    return CodexUpstreamOutcome::Failover {
-                        error,
-                        ctx: Box::new(ctx),
-                    };
-                }
                 let bytes = encode_sse_event_with_model_alias(
                     &event,
                     ctx.prepared.model.as_deref(),
@@ -1935,40 +1940,16 @@ async fn stream_codex_upstream_response(
                 );
                 vec![bytes]
             },
-            GatewayResponseAdapter::ChatCompletions => {
-                if let Some(error) = classify_codex_sse_event_failure(
-                    status,
-                    &upstream_headers,
-                    Some(event.event.as_str()),
-                    &event.data,
-                ) {
-                    return CodexUpstreamOutcome::Failover {
-                        error,
-                        ctx: Box::new(ctx),
-                    };
-                }
-                convert_response_event_to_chat_chunk(
-                    &event,
-                    Some(&ctx.prepared.tool_name_restore_map),
-                    &mut chat_metadata,
-                    ctx.prepared.model.as_deref(),
-                    ctx.prepared.client_visible_model.as_deref(),
-                )
-                .map(|chunk| vec![encode_json_sse_chunk(&chunk)])
-                .unwrap_or_default()
-            },
+            GatewayResponseAdapter::ChatCompletions => convert_response_event_to_chat_chunk(
+                &event,
+                Some(&ctx.prepared.tool_name_restore_map),
+                &mut chat_metadata,
+                ctx.prepared.model.as_deref(),
+                ctx.prepared.client_visible_model.as_deref(),
+            )
+            .map(|chunk| vec![encode_json_sse_chunk(&chunk)])
+            .unwrap_or_default(),
             GatewayResponseAdapter::AnthropicMessages => {
-                if let Some(error) = classify_codex_sse_event_failure(
-                    status,
-                    &upstream_headers,
-                    Some(event.event.as_str()),
-                    &event.data,
-                ) {
-                    return CodexUpstreamOutcome::Failover {
-                        error,
-                        ctx: Box::new(ctx),
-                    };
-                }
                 convert_response_event_to_anthropic_sse_chunks(
                     &event,
                     Some(&ctx.prepared.tool_name_restore_map),
@@ -1979,11 +1960,19 @@ async fn stream_codex_upstream_response(
             },
         };
         let has_client_chunk = !chunks.is_empty();
+        preflight_bytes = preflight_bytes
+            .saturating_add(event.event.len())
+            .saturating_add(event.data.len())
+            .saturating_add(chunks.iter().map(|chunk| chunk.len()).sum::<usize>());
         preflight_events.push(CodexPreflightEvent {
             event,
             chunks,
         });
-        if response_adapter == GatewayResponseAdapter::Responses || has_client_chunk {
+        if response_adapter == GatewayResponseAdapter::Responses
+            || has_client_chunk
+            || preflight_events.len() >= CODEX_STREAM_PREFLIGHT_MAX_EVENTS
+            || preflight_bytes >= CODEX_STREAM_PREFLIGHT_MAX_BYTES
+        {
             break;
         }
     }

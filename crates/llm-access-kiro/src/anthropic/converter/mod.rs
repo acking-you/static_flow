@@ -2967,7 +2967,41 @@ mod tests {
     }
 
     #[test]
-    fn convert_request_rejects_truncated_tool_result_image() {
+    fn convert_request_drops_truncated_history_image() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "iVBORw0KGgo="
+                        }
+                    },
+                    {"type": "text", "text": "old screenshot"}
+                ]),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!("ok"),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("continue"),
+            },
+        ]);
+
+        let result = convert_request(&req).expect("history bad image should be dropped");
+        let history = serde_json::to_value(&result.conversation_state.history).expect("history");
+
+        assert_eq!(history[2]["userInputMessage"]["content"], "old screenshot");
+        assert!(history[2]["userInputMessage"].get("images").is_none());
+    }
+
+    #[test]
+    fn convert_request_drops_truncated_tool_result_image() {
         let req = base_request(vec![
             AnthropicMessage {
                 role: "user".to_string(),
@@ -3005,11 +3039,13 @@ mod tests {
             },
         ]);
 
-        let err = convert_request(&req).expect_err("truncated image should be rejected");
-        let message = err.to_string();
+        let result = convert_request(&req).expect("tool_result bad image should be dropped");
+        let current =
+            serde_json::to_value(&result.conversation_state.current_message.user_input_message)
+                .expect("serialize current message");
 
-        assert!(message.contains("invalid image data"), "{message}");
-        assert!(message.contains("png"), "{message}");
+        assert!(current.get("images").is_none());
+        assert_eq!(current["userInputMessageContext"]["toolResults"][0]["toolUseId"], "tool-1");
     }
 
     #[test]

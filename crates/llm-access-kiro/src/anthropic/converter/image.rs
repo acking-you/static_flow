@@ -3,18 +3,30 @@
 
 use base64::Engine as _;
 
-pub fn get_image_format_from_source(
+pub fn get_image_from_source(
     source: &crate::anthropic::types::ImageSource,
-) -> Result<Option<String>, ImageDataError> {
+) -> Result<Option<ValidatedImageSource>, ImageDataError> {
     let bytes = decode_base64_image_data(&source.data)?;
-    if let Some(format) = detect_image_format_from_bytes(&bytes) {
+    let declared_format = get_image_format(&source.media_type);
+    if let Some(format) = detect_image_format_from_bytes(&bytes)
+        .or_else(|| truncated_declared_format(declared_format, &bytes))
+    {
         validate_image_bytes(format, &bytes)?;
-        return Ok(Some(format.to_string()));
+        return Ok(Some(ValidatedImageSource {
+            format: format.to_string(),
+            data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        }));
     }
-    if get_image_format(&source.media_type).is_some() {
+    if declared_format.is_some() {
         return Err(ImageDataError::new("base64 data does not contain supported image bytes"));
     }
     Ok(None)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedImageSource {
+    pub format: String,
+    pub data: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +67,7 @@ fn decode_base64_image_data(data: &str) -> Result<Vec<u8>, ImageDataError> {
     }
     base64::engine::general_purpose::STANDARD
         .decode(padded.as_bytes())
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(padded.as_bytes()))
         .map_err(|_| ImageDataError::new("base64 data is invalid"))
 }
 
@@ -84,6 +97,13 @@ fn get_image_format(media_type: &str) -> Option<&'static str> {
     }
 }
 
+fn truncated_declared_format(
+    declared_format: Option<&'static str>,
+    bytes: &[u8],
+) -> Option<&'static str> {
+    (declared_format == Some("webp") && bytes.starts_with(b"RIFF")).then_some("webp")
+}
+
 fn validate_image_bytes(format: &str, bytes: &[u8]) -> Result<(), ImageDataError> {
     match format {
         "jpeg" => validate_jpeg(bytes),
@@ -95,7 +115,7 @@ fn validate_image_bytes(format: &str, bytes: &[u8]) -> Result<(), ImageDataError
 }
 
 fn validate_jpeg(bytes: &[u8]) -> Result<(), ImageDataError> {
-    if !bytes.windows(2).any(|window| window == [0xff, 0xd9]) {
+    if !bytes.ends_with(&[0xff, 0xd9]) {
         return Err(ImageDataError::new("jpeg data is missing end-of-image marker"));
     }
     Ok(())
@@ -148,9 +168,6 @@ fn validate_png(bytes: &[u8]) -> Result<(), ImageDataError> {
     if !saw_iend {
         return Err(ImageDataError::new("png data is missing IEND chunk"));
     }
-    if offset != bytes.len() {
-        return Err(ImageDataError::new("png data has trailing bytes after IEND"));
-    }
     Ok(())
 }
 
@@ -174,4 +191,109 @@ fn validate_webp(bytes: &[u8]) -> Result<(), ImageDataError> {
         return Err(ImageDataError::new("webp data is truncated"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::anthropic::types::ImageSource;
+
+    const SAMPLE_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/\
+                                     x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    const SAMPLE_PNG_BYTES: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4,
+        0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 252, 255, 31, 0, 3, 3,
+        2, 0, 239, 191, 167, 219, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+
+    fn source(media_type: &str, data: impl Into<String>) -> ImageSource {
+        ImageSource {
+            source_type: "base64".to_string(),
+            media_type: media_type.to_string(),
+            data: data.into(),
+        }
+    }
+
+    fn encode(bytes: &[u8]) -> String {
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    fn format_from_source(source: &ImageSource) -> Result<Option<String>, ImageDataError> {
+        Ok(get_image_from_source(source)?.map(|image| image.format))
+    }
+
+    #[test]
+    fn accepts_png_with_trailing_bytes_after_iend() {
+        let mut bytes = SAMPLE_PNG_BYTES.to_vec();
+        bytes.extend_from_slice(b"trailing");
+
+        let format = format_from_source(&source("image/png", encode(&bytes)))
+            .expect("trailing bytes should be accepted")
+            .expect("format");
+
+        assert_eq!(format, "png");
+    }
+
+    #[test]
+    fn rejects_supported_media_type_without_supported_magic_bytes() {
+        let err = format_from_source(&source("image/png", encode(b"not an image")))
+            .expect_err("declared image without magic bytes should be rejected");
+
+        assert!(err.to_string().contains("supported image bytes"));
+    }
+
+    #[test]
+    fn rejects_jpeg_when_eoi_is_not_at_end() {
+        let bytes = [0xff, 0xd8, 0xff, 0x00, 0xff, 0xd9, 0x00];
+        let err = format_from_source(&source("image/jpeg", encode(&bytes)))
+            .expect_err("jpeg with non-terminal EOI should be rejected");
+
+        assert!(err.to_string().contains("end-of-image"));
+    }
+
+    #[test]
+    fn rejects_gif_missing_trailer() {
+        let err = format_from_source(&source("image/gif", encode(b"GIF89aabc")))
+            .expect_err("gif without trailer should be rejected");
+
+        assert!(err.to_string().contains("trailer"));
+    }
+
+    #[test]
+    fn rejects_truncated_webp() {
+        let err = format_from_source(&source("image/webp", encode(b"RIFF")))
+            .expect_err("short webp should be rejected");
+
+        assert!(err.to_string().contains("webp data is truncated"));
+    }
+
+    #[test]
+    fn rejects_webp_with_oversized_riff_length() {
+        let bytes = b"RIFF\x08\x00\x00\x00WEBP";
+        let err = format_from_source(&source("image/webp", encode(bytes)))
+            .expect_err("webp with oversized riff length should be rejected");
+
+        assert!(err.to_string().contains("webp data is truncated"));
+    }
+
+    #[test]
+    fn accepts_url_safe_base64_image_data() {
+        let data = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(SAMPLE_PNG_BYTES);
+
+        let image = get_image_from_source(&source("image/png", data))
+            .expect("url-safe image data should be accepted")
+            .expect("image");
+
+        assert_eq!(image.format, "png");
+        assert_eq!(image.data, SAMPLE_PNG_BASE64);
+    }
+
+    #[test]
+    fn accepts_valid_png_fixture() {
+        let format = format_from_source(&source("image/png", SAMPLE_PNG_BASE64))
+            .expect("png fixture should be accepted")
+            .expect("format");
+
+        assert_eq!(format, "png");
+    }
 }

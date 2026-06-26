@@ -77,24 +77,22 @@ fn normalize_native_responses_input_roles(root: &mut Map<String, Value>) {
     let Some(input) = root.get_mut("input") else {
         return;
     };
-    normalize_native_responses_input_roles_value(input);
-}
-fn normalize_native_responses_input_roles_value(value: &mut Value) {
-    match value {
+    match input {
         Value::Array(items) => {
             for item in items {
-                normalize_native_responses_input_roles_value(item);
+                normalize_native_responses_input_item_role(item);
             }
         },
-        Value::Object(obj) => {
-            if obj.get("role").and_then(Value::as_str) == Some("system") {
-                obj.insert("role".to_string(), Value::String("developer".to_string()));
-            }
-            if let Some(content) = obj.get_mut("content") {
-                normalize_native_responses_input_roles_value(content);
-            }
-        },
+        Value::Object(_) => normalize_native_responses_input_item_role(input),
         _ => {},
+    }
+}
+fn normalize_native_responses_input_item_role(value: &mut Value) {
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    if obj.get("role").and_then(Value::as_str) == Some("system") {
+        obj.insert("role".to_string(), Value::String("developer".to_string()));
     }
 }
 /// Repair Chat-Completions-style `tool` messages in a native `/responses` body.
