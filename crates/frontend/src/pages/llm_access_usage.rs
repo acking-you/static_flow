@@ -17,6 +17,29 @@ use crate::{
 };
 
 const PUBLIC_USAGE_PAGE_LIMIT: usize = 20;
+
+/// Tailwind `(border, bg, text, dark:text)` tuple for a usage status pill,
+/// keyed by HTTP status class: 2xx success, 4xx client error, 5xx upstream
+/// error, anything else neutral.
+fn usage_status_color(
+    status_code: i32,
+) -> (&'static str, &'static str, &'static str, &'static str) {
+    if (200..300).contains(&status_code) {
+        ("border-emerald-500/20", "bg-emerald-500/10", "text-emerald-700", "dark:text-emerald-200")
+    } else if (400..500).contains(&status_code) {
+        ("border-amber-500/20", "bg-amber-500/10", "text-amber-700", "dark:text-amber-200")
+    } else if status_code >= 500 {
+        ("border-red-500/20", "bg-red-500/10", "text-red-700", "dark:text-red-200")
+    } else {
+        (
+            "border-[var(--border)]",
+            "bg-[var(--surface-alt)]",
+            "text-[var(--muted)]",
+            "text-[var(--muted)]",
+        )
+    }
+}
+
 const PUBLIC_USAGE_TIME_RANGE_ALL: &str = "all";
 const PUBLIC_USAGE_TIME_RANGE_24H: &str = "24h";
 const PUBLIC_USAGE_TIME_RANGE_7D: &str = "7d";
@@ -412,9 +435,27 @@ pub fn llm_access_usage_page() -> Html {
                                             let first_ms = first_ms.max(0);
                                             (first_ms, first_token_latency_color(first_ms))
                                         });
+                                        let session_blocked = event.session_blocked;
+                                        let status_color = usage_status_color(event.status_code);
+                                        let error_text = event
+                                            .error_message
+                                            .as_deref()
+                                            .map(str::trim)
+                                            .filter(|value| !value.is_empty())
+                                            .map(|value| AttrValue::from(value.to_owned()));
+                                        let row_class = if session_blocked {
+                                            classes!("border-b", "border-red-500/30", "align-top", "bg-red-500/5")
+                                        } else {
+                                            classes!("border-b", "border-[var(--border)]", "align-top")
+                                        };
+                                        let time_cell_class = if session_blocked {
+                                            classes!("py-3", "pr-3", "min-w-[13rem]", "whitespace-nowrap", "font-mono", "text-xs", "border-l-4", "border-l-red-600")
+                                        } else {
+                                            classes!("py-3", "pr-3", "min-w-[13rem]", "whitespace-nowrap", "font-mono", "text-xs")
+                                        };
                                         html! {
-                                            <tr key={event.id.clone()} class={classes!("border-b", "border-[var(--border)]", "align-top")}>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[13rem]", "whitespace-nowrap", "font-mono", "text-xs")}>
+                                            <tr key={event.id.clone()} class={row_class}>
+                                                <td class={time_cell_class}>
                                                     <div>{ format_ms(event.created_at) }</div>
                                                     <div class={classes!("mt-1", "max-w-[10rem]", "truncate", "text-[11px]", "text-[var(--muted)]")} title={event.id.clone()}>
                                                         { event.id.clone() }
@@ -433,11 +474,41 @@ pub fn llm_access_usage_page() -> Html {
                                                         </div>
                                                     </div>
                                                 </td>
-                                                <td class={classes!("py-3", "pr-3", "min-w-[11rem]")}>
+                                                <td class={classes!("py-3", "pr-3", "min-w-[11rem]", "max-w-[24rem]")}>
                                                     <div>{ event.model.clone().unwrap_or_else(|| "-".to_string()) }</div>
-                                                    <div class={classes!("mt-1", "font-mono", "text-xs", "text-[var(--muted)]")}>
-                                                        { format!("status {}", event.status_code) }
+                                                    <div class={classes!("mt-1.5", "flex", "flex-wrap", "items-center", "gap-1.5")}>
+                                                        <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", status_color.0, status_color.1, status_color.2, status_color.3)}>
+                                                            {
+                                                                match event.error_class.as_deref() {
+                                                                    Some(class) if !session_blocked => format!("status {} · {}", event.status_code, class),
+                                                                    _ => format!("status {}", event.status_code),
+                                                                }
+                                                            }
+                                                        </span>
+                                                        if event.quota_failover_count > 0 {
+                                                            <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-amber-500/20", "bg-amber-500/10", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", "text-amber-700", "dark:text-amber-200")}>
+                                                                { format!("故障转移 ×{}", event.quota_failover_count) }
+                                                            </span>
+                                                        }
                                                     </div>
+                                                    if session_blocked {
+                                                        <div class={classes!("mt-2")}>
+                                                            <span class={classes!("codex-session-blocked-badge", "inline-flex", "items-center", "gap-1", "rounded-md", "px-2", "py-1", "text-[11px]", "font-semibold", "tracking-[0.04em]")}>
+                                                                <span aria-hidden="true">{ "⊘" }</span>
+                                                                {
+                                                                    match event.error_class.as_deref() {
+                                                                        Some(class) => format!("会话已永久封禁 · {class}"),
+                                                                        None => "会话已永久封禁".to_string(),
+                                                                    }
+                                                                }
+                                                            </span>
+                                                        </div>
+                                                    }
+                                                    if let Some(message) = error_text {
+                                                        <div class={classes!("mt-2", "font-mono", "text-xs", "leading-relaxed", "break-words", "text-red-700", "dark:text-red-300")} title={message.clone()}>
+                                                            { message }
+                                                        </div>
+                                                    }
                                                     if event.usage_missing {
                                                         <div class={classes!("mt-2", "inline-flex", "rounded-full", "border", "border-amber-500/20", "bg-amber-500/10", "px-2", "py-1", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.12em]", "text-amber-700", "dark:text-amber-200")}>
                                                             { token_usage_missing_label() }

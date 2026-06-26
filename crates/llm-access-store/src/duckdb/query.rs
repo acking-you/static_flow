@@ -723,19 +723,21 @@ fn decode_usage_event_row(
         ip_region: row
             .get::<_, Option<String>>(39)?
             .unwrap_or_else(|| "unknown".to_string()),
+        error_class: row.get(40)?,
+        session_blocked: row.get::<_, Option<bool>>(41)?.unwrap_or(false),
         request_headers_json: if include_detail_payload {
-            row.get::<_, Option<String>>(41)?
+            row.get::<_, Option<String>>(43)?
                 .unwrap_or_else(|| "{}".to_string())
         } else {
             "{}".to_string()
         },
-        last_message_content: row.get(40)?,
-        client_request_body_json: if include_detail_payload { row.get(42)? } else { None },
-        upstream_request_body_json: if include_detail_payload { row.get(43)? } else { None },
-        full_request_json: if include_detail_payload { row.get(44)? } else { None },
-        error_message: if include_detail_payload { row.get(45)? } else { None },
-        error_body: if include_detail_payload { row.get(46)? } else { None },
-        response_body: if include_detail_payload { row.get(47)? } else { None },
+        last_message_content: row.get(42)?,
+        client_request_body_json: if include_detail_payload { row.get(44)? } else { None },
+        upstream_request_body_json: if include_detail_payload { row.get(45)? } else { None },
+        full_request_json: if include_detail_payload { row.get(46)? } else { None },
+        error_message: if include_detail_payload { row.get(47)? } else { row.get(43)? },
+        error_body: if include_detail_payload { row.get(48)? } else { None },
+        response_body: if include_detail_payload { row.get(49)? } else { None },
         timing: UsageTiming {
             latency_ms: row.get(25)?,
             routing_wait_ms: row.get(26)?,

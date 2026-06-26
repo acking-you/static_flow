@@ -46,6 +46,8 @@ fn test_usage_event() -> UsageEvent {
         full_request_json: Some(r#"{"model":"claude-sonnet-4-5"}"#.to_string()),
         error_message: None,
         error_body: None,
+        error_class: None,
+        session_blocked: false,
         response_body: None,
         timing: UsageTiming {
             latency_ms: Some(55),
@@ -93,7 +95,6 @@ fn assert_usage_event_summary_round_trips(actual: &UsageEvent, expected: &UsageE
     expected_summary.client_request_body_json = None;
     expected_summary.upstream_request_body_json = None;
     expected_summary.full_request_json = None;
-    expected_summary.error_message = None;
     expected_summary.error_body = None;
     assert_usage_event_round_trips(actual, &expected_summary);
 }
@@ -104,7 +105,6 @@ fn assert_usage_event_light_detail_round_trips(actual: &UsageEvent, expected: &U
     expected_summary.client_request_body_json = None;
     expected_summary.upstream_request_body_json = None;
     expected_summary.full_request_json = None;
-    expected_summary.error_message = None;
     expected_summary.error_body = None;
     assert_usage_event_round_trips(actual, &expected_summary);
 }
@@ -903,6 +903,8 @@ async fn duckdb_repository_round_trips_error_payloads_in_usage_detail() {
         "400 Bedrock error message: A text block must be included when using documents."
             .to_string(),
     );
+    event.error_class = Some("cyber_policy".to_string());
+    event.session_blocked = true;
     event.error_body = Some(
         r#"{"error":{"message":"A text block must be included when using documents."}}"#
             .to_string(),
@@ -918,6 +920,36 @@ async fn duckdb_repository_round_trips_error_payloads_in_usage_detail() {
         .expect("get usage event detail")
         .expect("usage event detail exists");
     assert_usage_event_detail_payloads(&detail, &event);
+    assert_eq!(detail.error_class.as_deref(), Some("cyber_policy"));
+    assert!(detail.session_blocked);
+
+    // The classification and inline error message must also be readable from the
+    // lightweight summary/list query without opening the detail view.
+    let page = repo
+        .list_usage_events(UsageEventQuery {
+            key_id: Some(event.key_id.clone()),
+            provider_type: None,
+            model: None,
+            account_name: None,
+            endpoint: None,
+            status_code: None,
+            status_kind: None,
+            source: UsageEventSource::All,
+            start_ms: None,
+            end_ms: None,
+            limit: 10,
+            offset: 0,
+        })
+        .await
+        .expect("list usage events");
+    let listed = page
+        .events
+        .iter()
+        .find(|candidate| candidate.event_id == event.event_id)
+        .expect("inserted event present in usage list");
+    assert_eq!(listed.error_message.as_deref(), event.error_message.as_deref());
+    assert_eq!(listed.error_class.as_deref(), Some("cyber_policy"));
+    assert!(listed.session_blocked);
 
     std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
 }
@@ -1463,6 +1495,9 @@ async fn duckdb_tiered_repository_rolls_over_without_blocking_active_appends() {
     first.client_request_body_json = None;
     first.upstream_request_body_json = None;
     first.full_request_json = None;
+    first.error_message = Some("session permanently blocked by cyber policy".to_string());
+    first.error_class = Some("cyber_policy".to_string());
+    first.session_blocked = true;
     let mut second = test_usage_event();
     second.event_id = "tiered-active-second".to_string();
     second.created_at_ms = 1_700_000_060_000;
@@ -1518,6 +1553,9 @@ async fn duckdb_tiered_repository_rolls_over_without_blocking_active_appends() {
     assert_eq!(second_page.total, 2);
     assert_eq!(second_page.events.len(), 1);
     assert_eq!(second_page.events[0].event_id, first.event_id);
+    assert_eq!(second_page.events[0].error_message.as_deref(), first.error_message.as_deref());
+    assert_eq!(second_page.events[0].error_class.as_deref(), first.error_class.as_deref());
+    assert!(second_page.events[0].session_blocked);
     assert!(!second_page.has_more);
 
     let archived_detail = repo

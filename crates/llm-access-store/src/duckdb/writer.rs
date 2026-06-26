@@ -545,6 +545,9 @@ fn execute_usage_event_insert(
         row.proxy_config_id_at_event.as_deref(),
         row.proxy_config_name_at_event.as_deref(),
         row.proxy_url_at_event.as_deref(),
+        row.error_class.as_deref(),
+        row.session_blocked,
+        row.error_message.as_deref(),
     ])?;
     Ok(inserted)
 }

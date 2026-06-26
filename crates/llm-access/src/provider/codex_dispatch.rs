@@ -256,6 +256,8 @@ pub async fn dispatch_codex_proxy(
             );
             capture_client_request_body_json(&mut usage_meta, &body);
             capture_error_message(&mut usage_meta, &message);
+            usage_meta.capture_error_class(rejection.error_class.as_str());
+            usage_meta.mark_session_blocked();
             capture_error_body(
                 &mut usage_meta,
                 &codex_surface_error_body(&gateway_path, StatusCode::BAD_REQUEST, &message),
@@ -1246,6 +1248,25 @@ fn codex_surface_code_for_error_class(class: CodexUpstreamErrorClass) -> Option<
     }
 }
 
+/// Record the upstream error class on the usage event, and flag it as a
+/// permanently session-blocking failure when its disposition is the fatal
+/// `cyber_policy` strict-session block, so the usage log can surface both
+/// without re-deriving the classification at read time.
+fn capture_codex_error_classification(
+    meta: &mut ProviderUsageMetadata,
+    error: &CodexClassifiedUpstreamError,
+) {
+    meta.capture_error_class(error.class.as_str());
+    if matches!(
+        codex_error_disposition(error),
+        CodexErrorDisposition::ReturnToClient {
+            strict_session_block: true,
+        }
+    ) {
+        meta.mark_session_blocked();
+    }
+}
+
 fn maybe_remember_codex_session_rejection(
     rejection: &super::codex_session_rejection::CodexSessionRejection,
     enabled: bool,
@@ -1686,6 +1707,7 @@ async fn adapt_codex_upstream_response_from_parts(
             &affinity_config,
         );
         capture_error_message(&mut usage_meta, &error.message);
+        capture_codex_error_classification(&mut usage_meta, error);
     } else if status.is_success() {
         if let Ok(completed_response) = serde_json::from_slice::<Value>(effective_success_bytes) {
             remember_codex_session_recovery(
@@ -2168,6 +2190,7 @@ async fn record_codex_stream_preflight_failure(
         capture_error_bytes(&mut usage_meta, &error.body);
         capture_error_message(&mut usage_meta, &error.message);
     }
+    capture_codex_error_classification(&mut usage_meta, &error);
     maybe_remember_codex_session_rejection(
         codex_session_rejection.as_ref(),
         route.codex_strict_session_rejection_enabled,

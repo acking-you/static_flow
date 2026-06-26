@@ -1,0 +1,3 @@
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS error_class VARCHAR;
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS session_blocked BOOLEAN DEFAULT false;
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS error_message VARCHAR;

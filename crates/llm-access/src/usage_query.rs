@@ -172,6 +172,16 @@ pub(crate) struct AdminUsageEventView {
     pub(crate) ip_region: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) last_message_content: Option<String>,
+    /// Inline error message surfaced directly in the list so operators never
+    /// need to open the detail view to read why a request failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) error_message: Option<String>,
+    /// Stable upstream error class for failed requests, when classified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) error_class: Option<String>,
+    /// Whether this event belongs to a permanently rejected Codex session.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) session_blocked: bool,
     pub(crate) created_at: i64,
 }
 
@@ -184,7 +194,6 @@ struct AdminUsageEventDetailView {
     client_request_body_json: Option<String>,
     upstream_request_body_json: Option<String>,
     full_request_json: Option<String>,
-    error_message: Option<String>,
     error_body: Option<String>,
     response_body: Option<String>,
 }
@@ -507,7 +516,6 @@ fn detail_from_event(event: &UsageEvent) -> AdminUsageEventDetailView {
         client_request_body_json: event.client_request_body_json.clone(),
         upstream_request_body_json: event.upstream_request_body_json.clone(),
         full_request_json: event.full_request_json.clone(),
-        error_message: event.error_message.clone(),
         error_body: event.error_body.clone(),
         response_body: event.response_body.clone(),
     }
@@ -765,6 +773,9 @@ impl From<&UsageEvent> for AdminUsageEventView {
             client_ip: value.client_ip.clone(),
             ip_region: value.ip_region.clone(),
             last_message_content: value.last_message_content.clone(),
+            error_message: value.error_message.clone(),
+            error_class: value.error_class.clone(),
+            session_blocked: value.session_blocked,
             created_at: value.created_at_ms,
         }
     }

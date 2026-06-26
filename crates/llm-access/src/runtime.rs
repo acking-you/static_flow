@@ -2368,6 +2368,8 @@ mod tests {
             full_request_json: None,
             error_message: None,
             error_body: None,
+            error_class: None,
+            session_blocked: false,
             response_body: None,
             timing: llm_access_core::usage::UsageTiming {
                 latency_ms: Some(20),

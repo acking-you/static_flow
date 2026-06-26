@@ -173,6 +173,8 @@ struct ProviderUsageMetadata {
     upstream_request_body_json: Option<Bytes>,
     full_request_json: Option<Bytes>,
     error_message: Option<String>,
+    error_class: Option<String>,
+    session_blocked: bool,
     error_body: Option<String>,
     response_body: Option<String>,
 }
