@@ -5760,8 +5760,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "tokio",
- "tower 0.5.2",
  "tracing",
  "tracing-subscriber",
 ]

@@ -50,15 +50,19 @@ grep -F 'KIRO_THINKING_SIGNATURE_SECRET' "$REMOTE_SCRIPT" >/dev/null
 grep -F 'LLM_ACCESS_CODEX_IMAGE_CONTROL_DATABASE_URL' "$LOCAL_SCRIPT" >/dev/null
 grep -F 'LLM_ACCESS_CODEX_IMAGE_CONTROL_DATABASE_URL' "$REMOTE_SCRIPT" >/dev/null
 grep -F 'LLM_ACCESS_ACTIVATE_TARGET=api' "$API_ONLY_SCRIPT" >/dev/null
+grep -F 'LLM_ACCESS_ACTIVATE_TARGET=api "$ROOT_DIR/scripts/prepare_llm_access_cloud_release.sh"' "$API_ONLY_SCRIPT" >/dev/null
 grep -F 'LLM_ACCESS_STAGED_SERVICE_UNIT=' "$API_ONLY_SCRIPT" >/dev/null
 grep -F 'render_llm_access_cloud_bundle.sh' "$API_ONLY_SCRIPT" >/dev/null
 grep -F 'LLM_ACCESS_ACTIVATE_TARGET=worker' "$WORKER_ONLY_SCRIPT" >/dev/null
+grep -F 'LLM_ACCESS_ACTIVATE_TARGET=worker "$ROOT_DIR/scripts/prepare_llm_access_cloud_release.sh"' "$WORKER_ONLY_SCRIPT" >/dev/null
 grep -F 'LLM_ACCESS_STAGED_WORKER_SERVICE_UNIT=' "$WORKER_ONLY_SCRIPT" >/dev/null
 grep -F 'render_llm_access_cloud_bundle.sh' "$WORKER_ONLY_SCRIPT" >/dev/null
 grep -F 'LLM_ACCESS_ACTIVATE_TARGET=image' "$IMAGE_ONLY_SCRIPT" >/dev/null
+grep -F 'LLM_ACCESS_ACTIVATE_TARGET=image "$ROOT_DIR/scripts/prepare_llm_access_cloud_release.sh"' "$IMAGE_ONLY_SCRIPT" >/dev/null
 grep -F 'LLM_ACCESS_STAGED_IMAGE_SERVICE_UNIT=' "$IMAGE_ONLY_SCRIPT" >/dev/null
 grep -F 'render_llm_access_cloud_bundle.sh' "$IMAGE_ONLY_SCRIPT" >/dev/null
 grep -F 'llm-access-codex-image.latest' "$REMOTE_SCRIPT" >/dev/null
+grep -F 'skipping staged shared runtime env install for image-only activation' "$REMOTE_SCRIPT" >/dev/null
 
 grep -F 'GCP_HOST=' "$CONFIG_EXAMPLE" >/dev/null
 grep -F 'GCP_SSH_KEY=' "$CONFIG_EXAMPLE" >/dev/null

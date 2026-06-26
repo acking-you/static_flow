@@ -29,7 +29,6 @@ CREATE TABLE IF NOT EXISTS llm_key_route_config (
     request_max_concurrency BIGINT,
     request_min_start_interval_ms BIGINT,
     codex_fast_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-    codex_image_generation_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     kiro_request_validation_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     kiro_cache_estimation_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     kiro_zero_cache_debug_enabled BOOLEAN NOT NULL DEFAULT FALSE,

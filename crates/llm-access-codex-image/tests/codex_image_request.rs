@@ -7,19 +7,26 @@ use serde_json::json;
 
 #[test]
 fn codex_image_path_normalization_accepts_public_aliases() {
-    assert_eq!(
-        normalize_image_gateway_path("/v1/images/generations"),
-        Some(CodexImageEndpoint::Generations)
-    );
-    assert_eq!(
-        normalize_image_gateway_path("/api/codex-gateway/images/edits"),
-        Some(CodexImageEndpoint::Edits)
-    );
-    assert_eq!(
-        normalize_image_gateway_path("/api/llm-gateway/v1/images/generations"),
-        Some(CodexImageEndpoint::Generations)
-    );
-    assert_eq!(normalize_image_gateway_path("/v1/responses"), None);
+    for (path, endpoint) in [
+        ("/v1/images/generations", CodexImageEndpoint::Generations),
+        ("/api/codex-gateway/images/generations", CodexImageEndpoint::Generations),
+        ("/api/codex-gateway/v1/images/generations", CodexImageEndpoint::Generations),
+        ("/api/llm-gateway/v1/images/generations", CodexImageEndpoint::Generations),
+        ("/v1/images/edits", CodexImageEndpoint::Edits),
+        ("/api/codex-gateway/images/edits", CodexImageEndpoint::Edits),
+        ("/api/codex-gateway/v1/images/edits", CodexImageEndpoint::Edits),
+        ("/api/llm-gateway/v1/images/edits", CodexImageEndpoint::Edits),
+    ] {
+        assert_eq!(normalize_image_gateway_path(path), Some(endpoint), "{path}");
+    }
+    for path in [
+        "/v1/responses",
+        "/v1/images/generations/",
+        "/V1/images/generations",
+        "/api/llm-gateway/images/generations",
+    ] {
+        assert_eq!(normalize_image_gateway_path(path), None, "{path}");
+    }
 }
 
 #[test]

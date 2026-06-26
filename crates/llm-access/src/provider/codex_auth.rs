@@ -14,7 +14,6 @@ use serde_json::Value;
 use super::{
     CodexAffinityRuntimeConfig, CodexAuthSnapshot, CodexDispatchRuntimeConfig,
     CodexTurnMetadataHeader, CodexUpstreamSessionHeaders, DEFAULT_WIRE_ORIGINATOR,
-    MAX_CODEX_CLIENT_VERSION_LEN,
 };
 
 pub fn normalized_codex_gateway_path(path: &str) -> Option<&str> {
@@ -48,33 +47,13 @@ pub fn codex_protocol_family_for_endpoint(endpoint: &str) -> ProtocolFamily {
     }
 }
 pub(crate) fn codex_upstream_base_url() -> String {
-    std::env::var("CODEX_UPSTREAM_BASE_URL")
-        .or_else(|_| std::env::var("STATICFLOW_LLM_GATEWAY_UPSTREAM_BASE_URL"))
-        .map(|value| llm_access_codex::request::normalize_upstream_base_url(&value))
-        .unwrap_or_else(|_| "https://chatgpt.com/backend-api/codex".to_string())
+    llm_access_codex::request::codex_upstream_base_url_from_env()
 }
 pub(crate) fn compute_codex_upstream_url(base: &str, path: &str) -> String {
-    let base = base.trim_end_matches('/');
-    if base.contains("/backend-api/codex") && path.starts_with("/v1/") {
-        format!("{}{}", base, path.trim_start_matches("/v1"))
-    } else if base.ends_with("/v1") && path.starts_with("/v1") {
-        format!("{}{}", base.trim_end_matches("/v1"), path)
-    } else {
-        format!("{base}{path}")
-    }
+    llm_access_codex::request::compute_codex_upstream_url(base, path)
 }
 pub fn normalize_codex_client_version(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed.len() > MAX_CODEX_CLIENT_VERSION_LEN {
-        return None;
-    }
-    if !trimmed
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
-    {
-        return None;
-    }
-    Some(trimmed.to_string())
+    llm_access_codex::request::normalize_codex_client_version(raw)
 }
 pub(crate) fn resolve_codex_client_version(raw: Option<&str>) -> String {
     raw.and_then(normalize_codex_client_version)
@@ -100,7 +79,7 @@ pub async fn load_codex_dispatch_runtime_config(
     }
 }
 pub fn codex_user_agent(client_version: &str) -> String {
-    format!("{DEFAULT_WIRE_ORIGINATOR}/{client_version}")
+    llm_access_codex::request::codex_user_agent(client_version)
 }
 pub fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
     headers

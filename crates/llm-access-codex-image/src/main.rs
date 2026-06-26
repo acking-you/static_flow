@@ -1,6 +1,7 @@
 //! Standalone Codex image gateway executable.
 
 use std::{
+    collections::HashMap,
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -16,10 +17,11 @@ use axum::{
     routing::get,
     Router,
 };
+use bytes::BytesMut;
 use clap::{Parser, Subcommand};
 use llm_access_codex_image::{
     dispatch::{eligible_image_routes, should_failover_status},
-    limiter::ImageAccountLimiter,
+    limiter::{ImageAccountLimiter, ImageKeyLimitRejection, ImageKeyLimiter},
     logging::{
         build_image_log_event, ImageLogConfig, ImageLogInput, ImageLogWriter, UpstreamLogInput,
     },
@@ -28,7 +30,7 @@ use llm_access_codex_image::{
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType},
     store::{
-        codex_auth_access_token_expires_at_ms, AdminConfigStore, AuthenticatedKey, ControlStore,
+        codex_access_token_expires_at_ms, AdminConfigStore, AuthenticatedKey, ControlStore,
         ProviderCodexRoute, ProviderProxyConfig, ProviderRouteStore, DEFAULT_CODEX_CLIENT_VERSION,
         KEY_STATUS_ACTIVE,
     },
@@ -41,8 +43,8 @@ const DEFAULT_BIND_ADDR: &str = "127.0.0.1:19082";
 const DEFAULT_CONTROL_DATABASE_URL_ENV: &str = "LLM_ACCESS_CODEX_IMAGE_CONTROL_DATABASE_URL";
 const DEFAULT_REQUEST_CACHE_URL_ENV: &str = "LLM_ACCESS_REQUEST_CACHE_URL";
 const DEFAULT_REQUEST_CACHE_KEY_PREFIX: &str = "llma";
-const DEFAULT_UPSTREAM_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const MAX_IMAGE_REQUEST_BODY_BYTES: usize = 24 * 1024 * 1024;
+const MAX_IMAGE_UPSTREAM_RESPONSE_BODY_BYTES: u64 = 96 * 1024 * 1024;
 
 #[derive(Debug, Parser)]
 #[command(name = "llm-access-codex-image")]
@@ -76,7 +78,10 @@ struct ServeArgs {
 struct AppState {
     control: Arc<PostgresControlRepository>,
     limiter: Arc<ImageAccountLimiter>,
+    key_limiter: Arc<ImageKeyLimiter>,
     image_log: Arc<Mutex<ImageLogWriter>>,
+    default_client: reqwest::Client,
+    proxy_clients: Arc<Mutex<HashMap<String, reqwest::Client>>>,
     upstream_base: String,
     codex_client_version: String,
 }
@@ -104,6 +109,10 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             .await
             .context("connect read-only postgres control repository")?,
     );
+    control
+        .verify_codex_image_gateway_schema()
+        .await
+        .context("verify codex image gateway control-plane schema")?;
     let runtime_config = control
         .get_admin_runtime_config()
         .await
@@ -121,10 +130,15 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         control,
         limiter: Arc::new(ImageAccountLimiter::default()),
+        key_limiter: Arc::new(ImageKeyLimiter::default()),
         image_log: Arc::new(Mutex::new(image_log)),
-        upstream_base: codex_upstream_base_url(),
-        codex_client_version: normalize_codex_client_version(&runtime_config.codex_client_version)
-            .unwrap_or_else(|| DEFAULT_CODEX_CLIENT_VERSION.to_string()),
+        default_client: provider_client(None)?,
+        proxy_clients: Arc::new(Mutex::new(HashMap::new())),
+        upstream_base: llm_access_codex::request::codex_upstream_base_url_from_env(),
+        codex_client_version: llm_access_codex::request::normalize_codex_client_version(
+            &runtime_config.codex_client_version,
+        )
+        .unwrap_or_else(|| DEFAULT_CODEX_CLIENT_VERSION.to_string()),
     });
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
@@ -244,6 +258,27 @@ fn reject_key(key: &AuthenticatedKey) -> Option<axum::response::Response> {
     None
 }
 
+fn image_key_limit_response(rejection: &ImageKeyLimitRejection) -> axum::response::Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        format!(
+            "key image request limit reached: {} in_flight={} request_max_concurrency={} \
+             request_min_start_interval_ms={}",
+            rejection.reason,
+            rejection.in_flight,
+            rejection
+                .max_concurrency
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unlimited".to_string()),
+            rejection
+                .min_start_interval_ms
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unlimited".to_string()),
+        ),
+    )
+        .into_response()
+}
+
 async fn dispatch_image_request(
     state: &AppState,
     ctx: ImageDispatchRequest<'_>,
@@ -259,6 +294,40 @@ async fn dispatch_image_request(
         Ok(candidates) => candidates,
         Err(err) => return (err.status, err.message).into_response(),
     };
+    let key_limits = candidates
+        .first()
+        .map(|candidate| {
+            (candidate.request_max_concurrency, candidate.request_min_start_interval_ms)
+        })
+        .unwrap_or((None, None));
+    let _key_permit =
+        match state
+            .key_limiter
+            .try_acquire(&ctx.key.key_id, key_limits.0, key_limits.1)
+        {
+            Ok(permit) => permit,
+            Err(rejection) => {
+                log_image_event(
+                    state,
+                    ctx.request_id,
+                    ctx.key,
+                    None,
+                    ctx.endpoint_name,
+                    &ctx.image_request,
+                    UpstreamLogInput {
+                        status: Some(StatusCode::TOO_MANY_REQUESTS.as_u16()),
+                        duration_ms: duration_ms(ctx.started),
+                        failover_count: 0,
+                        error_class: Some(rejection.reason),
+                        response_image_count: None,
+                        response_image_bytes: None,
+                        usage_tokens: None,
+                        usage_missing: true,
+                    },
+                );
+                return image_key_limit_response(&rejection);
+            },
+        };
     let mut failover_count = 0_u64;
     let mut concurrency_blocked = 0_usize;
     let mut last_error_class = None::<String>;
@@ -268,24 +337,28 @@ async fn dispatch_image_request(
             last_error_class = Some("auth_missing".to_string());
             continue;
         };
-        if access_token_expired(&route.auth_json) {
+        let auth = match parse_codex_image_auth(&route.auth_json) {
+            Ok(auth) => auth,
+            Err(error_class) => {
+                failover_count += 1;
+                last_error_class = Some(error_class.to_string());
+                continue;
+            },
+        };
+        if access_token_expired(&auth.access_token) {
             failover_count += 1;
             last_error_class = Some("auth_expired".to_string());
             continue;
         }
-        let Some(access_token) = access_token_from_auth_json(&route.auth_json) else {
-            failover_count += 1;
-            last_error_class = Some("auth_missing".to_string());
-            continue;
-        };
         let Some(_permit) = state.limiter.try_acquire(
             &route.account_name,
             Some(route.account_codex_image_generation_max_concurrency),
         ) else {
             concurrency_blocked += 1;
+            last_error_class = Some("concurrency_blocked".to_string());
             continue;
         };
-        let client = match provider_client(route.proxy.as_ref()) {
+        let client = match provider_client_for_route(state, route.proxy.as_ref()) {
             Ok(client) => client,
             Err(err) => {
                 tracing::warn!(account = %route.account_name, error = %err, "codex image client build failed");
@@ -294,13 +367,16 @@ async fn dispatch_image_request(
                 continue;
             },
         };
-        let upstream_url = compute_codex_upstream_url(&state.upstream_base, ctx.upstream_path);
+        let upstream_url = llm_access_codex::request::compute_codex_upstream_url(
+            &state.upstream_base,
+            ctx.upstream_path,
+        );
         let request_builder = add_image_upstream_headers(
             client.post(upstream_url),
             ctx.headers,
-            &access_token,
-            account_id_from_auth_json(&route.auth_json),
-            fedramp_from_auth_json(&route.auth_json),
+            &auth.access_token,
+            auth.account_id,
+            auth.fedramp,
             &state.codex_client_version,
         )
         .body(ctx.image_request.raw.to_string());
@@ -315,7 +391,9 @@ async fn dispatch_image_request(
         };
         let status = upstream.status();
         let headers = upstream.headers().clone();
-        let bytes = match upstream.bytes().await {
+        let bytes = match limited_upstream_bytes(upstream, MAX_IMAGE_UPSTREAM_RESPONSE_BODY_BYTES)
+            .await
+        {
             Ok(bytes) => bytes,
             Err(err) => {
                 tracing::warn!(account = %route.account_name, error = %err, "codex image upstream response read failed");
@@ -324,8 +402,12 @@ async fn dispatch_image_request(
                 continue;
             },
         };
-        let metrics = response_image_metrics(&bytes);
-        let usage_tokens = usage_tokens_from_response(&bytes);
+        let response_json = serde_json::from_slice::<Value>(&bytes).ok();
+        let metrics = response_json
+            .as_ref()
+            .map(response_image_metrics)
+            .unwrap_or_default();
+        let usage_tokens = response_json.as_ref().and_then(usage_tokens_from_response);
         log_image_event(
             state,
             ctx.request_id,
@@ -355,8 +437,13 @@ async fn dispatch_image_request(
         }
         return upstream_response(status, &headers, bytes);
     }
-    let status = if concurrency_blocked > 0 {
+    let status = if concurrency_blocked > 0 && failover_count == 0 {
         StatusCode::TOO_MANY_REQUESTS
+    } else if matches!(
+        last_error_class.as_deref(),
+        Some("auth_missing" | "auth_invalid_json" | "auth_expired" | "auth")
+    ) {
+        StatusCode::SERVICE_UNAVAILABLE
     } else {
         StatusCode::BAD_GATEWAY
     };
@@ -474,6 +561,62 @@ fn provider_client(proxy: Option<&ProviderProxyConfig>) -> anyhow::Result<reqwes
     Ok(builder.build()?)
 }
 
+fn provider_client_for_route(
+    state: &AppState,
+    proxy: Option<&ProviderProxyConfig>,
+) -> anyhow::Result<reqwest::Client> {
+    let Some(proxy_config) = proxy else {
+        return Ok(state.default_client.clone());
+    };
+    let cache_key = proxy_client_key(proxy_config);
+    let mut clients = state
+        .proxy_clients
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(client) = clients.get(&cache_key) {
+        return Ok(client.clone());
+    }
+    let client = provider_client(Some(proxy_config))?;
+    clients.insert(cache_key, client.clone());
+    Ok(client)
+}
+
+fn proxy_client_key(proxy_config: &ProviderProxyConfig) -> String {
+    format!(
+        "{}\0{}\0{}",
+        proxy_config.proxy_url,
+        proxy_config.proxy_username.as_deref().unwrap_or_default(),
+        proxy_config.proxy_password.as_deref().unwrap_or_default()
+    )
+}
+
+async fn limited_upstream_bytes(
+    mut response: reqwest::Response,
+    max_bytes: u64,
+) -> anyhow::Result<Bytes> {
+    if response
+        .content_length()
+        .is_some_and(|content_length| content_length > max_bytes)
+    {
+        return Err(anyhow!("codex image upstream response exceeds {} bytes", max_bytes));
+    }
+    let mut body = BytesMut::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .context("read codex image upstream response chunk")?
+    {
+        let next_len = u64::try_from(body.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+        if next_len > max_bytes {
+            return Err(anyhow!("codex image upstream response exceeds {} bytes", max_bytes));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body.freeze())
+}
+
 fn upstream_response(
     status: StatusCode,
     headers: &reqwest::header::HeaderMap,
@@ -515,14 +658,16 @@ fn log_image_event(
         input_images: &input_images,
         upstream,
     });
-    if let Err(err) = state
-        .image_log
-        .lock()
-        .expect("codex image log mutex poisoned")
-        .append(&event)
-    {
-        tracing::warn!(error = %err, "codex image request log write failed");
-    }
+    let image_log = Arc::clone(&state.image_log);
+    let handle = tokio::task::spawn_blocking(move || {
+        let mut writer = image_log
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Err(err) = writer.append(&event) {
+            tracing::warn!(error = %err, "codex image request log write failed");
+        }
+    });
+    drop(handle);
 }
 
 #[derive(Debug, Default)]
@@ -531,10 +676,7 @@ struct ImageResponseMetrics {
     image_bytes: Option<u64>,
 }
 
-fn response_image_metrics(bytes: &[u8]) -> ImageResponseMetrics {
-    let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
-        return ImageResponseMetrics::default();
-    };
+fn response_image_metrics(value: &Value) -> ImageResponseMetrics {
     let Some(items) = value.get("data").and_then(Value::as_array) else {
         return ImageResponseMetrics::default();
     };
@@ -550,8 +692,7 @@ fn response_image_metrics(bytes: &[u8]) -> ImageResponseMetrics {
     }
 }
 
-fn usage_tokens_from_response(bytes: &[u8]) -> Option<u64> {
-    let value = serde_json::from_slice::<Value>(bytes).ok()?;
+fn usage_tokens_from_response(value: &Value) -> Option<u64> {
     value
         .pointer("/usage/total_tokens")
         .and_then(Value::as_u64)
@@ -563,34 +704,38 @@ fn approx_base64_bytes(value: &str) -> u64 {
     ((value.len() as u64).saturating_mul(3) / 4).saturating_sub(padding)
 }
 
-fn access_token_from_auth_json(auth_json: &str) -> Option<String> {
-    let value = serde_json::from_str::<Value>(auth_json).ok()?;
-    json_string_any(&value, &["access_token", "accessToken"]).or_else(|| {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexImageAuth {
+    access_token: String,
+    account_id: Option<String>,
+    fedramp: bool,
+}
+
+fn parse_codex_image_auth(auth_json: &str) -> Result<CodexImageAuth, &'static str> {
+    let value = serde_json::from_str::<Value>(auth_json).map_err(|_| "auth_invalid_json")?;
+    let access_token = json_string_any(&value, &["access_token", "accessToken"]).or_else(|| {
         value
             .get("tokens")
             .and_then(|tokens| json_string_any(tokens, &["access_token", "accessToken"]))
-    })
-}
-
-fn account_id_from_auth_json(auth_json: &str) -> Option<String> {
-    let value = serde_json::from_str::<Value>(auth_json).ok()?;
-    json_string_any(&value, &["account_id", "accountId"]).or_else(|| {
+    });
+    let Some(access_token) = access_token else {
+        return Err("auth_missing");
+    };
+    let account_id = json_string_any(&value, &["account_id", "accountId"]).or_else(|| {
         value
             .get("account")
             .and_then(|account| json_string_any(account, &["id", "account_id", "accountId"]))
+    });
+    let fedramp = value
+        .get("is_fedramp_account")
+        .or_else(|| value.get("isFedrampAccount"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok(CodexImageAuth {
+        access_token,
+        account_id,
+        fedramp,
     })
-}
-
-fn fedramp_from_auth_json(auth_json: &str) -> bool {
-    serde_json::from_str::<Value>(auth_json)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("is_fedramp_account")
-                .or_else(|| value.get("isFedrampAccount"))
-                .and_then(Value::as_bool)
-        })
-        .unwrap_or(false)
 }
 
 fn json_string_any(value: &Value, keys: &[&str]) -> Option<String> {
@@ -601,8 +746,8 @@ fn json_string_any(value: &Value, keys: &[&str]) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn access_token_expired(auth_json: &str) -> bool {
-    codex_auth_access_token_expires_at_ms(auth_json)
+fn access_token_expired(access_token: &str) -> bool {
+    codex_access_token_expires_at_ms(Some(access_token))
         .is_some_and(|expires_at| i64::try_from(now_ms()).unwrap_or(i64::MAX) >= expires_at)
 }
 
@@ -633,37 +778,8 @@ fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn codex_upstream_base_url() -> String {
-    std::env::var("CODEX_UPSTREAM_BASE_URL")
-        .or_else(|_| std::env::var("STATICFLOW_LLM_GATEWAY_UPSTREAM_BASE_URL"))
-        .map(|value| llm_access_codex::request::normalize_upstream_base_url(&value))
-        .unwrap_or_else(|_| DEFAULT_UPSTREAM_BASE_URL.to_string())
-}
-
-fn compute_codex_upstream_url(base: &str, path: &str) -> String {
-    let base = base.trim_end_matches('/');
-    if base.contains("/backend-api/codex") && path.starts_with("/v1/") {
-        format!("{}{}", base, path.trim_start_matches("/v1"))
-    } else if base.ends_with("/v1") && path.starts_with("/v1") {
-        format!("{}{}", base.trim_end_matches("/v1"), path)
-    } else {
-        format!("{base}{path}")
-    }
-}
-
-fn normalize_codex_client_version(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed.len() > 64 {
-        return None;
-    }
-    trimmed
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
-        .then(|| trimmed.to_string())
-}
-
 fn codex_user_agent(client_version: &str) -> String {
-    format!("codex_cli_rs/{client_version}")
+    llm_access_codex::request::codex_user_agent(client_version)
 }
 
 fn status_error_class(status: StatusCode) -> &'static str {
@@ -700,4 +816,119 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn codex_image_auth_parser_accepts_flat_and_nested_shapes() {
+        let flat = parse_codex_image_auth(
+            r#"{
+                "accessToken": " token-a ",
+                "accountId": "acct-a",
+                "isFedrampAccount": true
+            }"#,
+        )
+        .expect("flat auth json");
+        assert_eq!(flat.access_token, "token-a");
+        assert_eq!(flat.account_id.as_deref(), Some("acct-a"));
+        assert!(flat.fedramp);
+
+        let nested = parse_codex_image_auth(
+            r#"{
+                "tokens": { "access_token": "token-b" },
+                "account": { "id": "acct-b" }
+            }"#,
+        )
+        .expect("nested auth json");
+        assert_eq!(nested.access_token, "token-b");
+        assert_eq!(nested.account_id.as_deref(), Some("acct-b"));
+        assert!(!nested.fedramp);
+
+        assert_eq!(parse_codex_image_auth(r#"{"accountId":"acct"}"#).unwrap_err(), "auth_missing");
+        assert_eq!(parse_codex_image_auth("not-json").unwrap_err(), "auth_invalid_json");
+    }
+
+    #[test]
+    fn response_metrics_and_usage_share_one_parsed_json_value() {
+        let value = json!({
+            "data": [
+                { "b64_json": "QUJDRA==" },
+                { "b64_json": "QUI=" }
+            ],
+            "usage": { "total_tokens": 42 }
+        });
+
+        let metrics = response_image_metrics(&value);
+        assert_eq!(metrics.image_count, Some(2));
+        assert_eq!(metrics.image_bytes, Some(6));
+        assert_eq!(usage_tokens_from_response(&value), Some(42));
+    }
+
+    #[test]
+    fn image_request_header_helpers_are_strict() {
+        let mut headers = HeaderMap::new();
+        assert!(!is_json_request(&headers));
+        headers.insert(header::CONTENT_TYPE, "application/json; charset=utf-8".parse().unwrap());
+        assert!(is_json_request(&headers));
+
+        assert_eq!(bearer_secret(&headers), None);
+        headers.insert(header::AUTHORIZATION, "Bearer secret-1".parse().unwrap());
+        assert_eq!(bearer_secret(&headers), Some("secret-1"));
+        headers.insert(header::AUTHORIZATION, "Basic secret-1".parse().unwrap());
+        assert_eq!(bearer_secret(&headers), None);
+    }
+
+    #[test]
+    fn reject_key_enforces_status_provider_and_quota_gate() {
+        let active = AuthenticatedKey {
+            key_id: "key-1".to_string(),
+            key_name: "Key One".to_string(),
+            provider_type: "codex".to_string(),
+            protocol_family: "openai".to_string(),
+            status: KEY_STATUS_ACTIVE.to_string(),
+            quota_billable_limit: 10,
+            billable_tokens_used: 0,
+        };
+        assert!(reject_key(&active).is_none());
+
+        let mut disabled = active.clone();
+        disabled.status = "disabled".to_string();
+        assert!(reject_key(&disabled).is_some());
+
+        let mut wrong_provider = active.clone();
+        wrong_provider.provider_type = "kiro".to_string();
+        assert!(reject_key(&wrong_provider).is_some());
+
+        let mut exhausted = active;
+        exhausted.billable_tokens_used = 10;
+        assert!(reject_key(&exhausted).is_some());
+    }
+
+    #[test]
+    fn shared_codex_upstream_helpers_cover_backend_and_v1_bases() {
+        assert_eq!(
+            llm_access_codex::request::compute_codex_upstream_url(
+                "https://chatgpt.com/backend-api/codex",
+                "/v1/images/generations",
+            ),
+            "https://chatgpt.com/backend-api/codex/images/generations"
+        );
+        assert_eq!(
+            llm_access_codex::request::compute_codex_upstream_url(
+                "https://api.example.com/v1",
+                "/v1/images/edits",
+            ),
+            "https://api.example.com/v1/images/edits"
+        );
+        assert_eq!(
+            llm_access_codex::request::normalize_codex_client_version(" 0.142.0 "),
+            Some("0.142.0".to_string())
+        );
+        assert_eq!(codex_user_agent("0.142.0"), "codex_cli_rs/0.142.0");
+    }
 }

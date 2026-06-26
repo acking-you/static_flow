@@ -258,10 +258,12 @@ fi
 systemctl is-active juicefs-llm-access.service >/dev/null || fail "juicefs-llm-access.service is not active"
 findmnt -T /mnt/llm-access >/dev/null || fail "/mnt/llm-access is not mounted"
 sudo install -d -m 0755 "$BACKUP_DIR"
-if [[ -e "$STAGED_NEON_ENV" ]]; then
+if [[ "$ACTIVATE_TARGET" == "image" && -e "$STAGED_NEON_ENV" ]]; then
+  log "skipping staged shared runtime env install for image-only activation"
+elif [[ -e "$STAGED_NEON_ENV" ]]; then
   [[ -r "$STAGED_NEON_ENV" ]] || fail "staged llm-access runtime env is not readable: $STAGED_NEON_ENV"
   require_env_file_var "$STAGED_NEON_ENV" LLM_ACCESS_CONTROL_DATABASE_URL "staged llm-access runtime env"
-  if [[ "$ACTIVATE_TARGET" == "image" ]]; then
+  if [[ "$ACTIVATE_TARGET" == "both" ]]; then
     require_env_file_var "$STAGED_NEON_ENV" LLM_ACCESS_CODEX_IMAGE_CONTROL_DATABASE_URL "staged llm-access runtime env"
   fi
   require_env_file_var "$STAGED_NEON_ENV" KIRO_THINKING_SIGNATURE_SECRET "staged llm-access runtime env"
@@ -322,7 +324,7 @@ installed_sha=""
 installed_worker_sha=""
 installed_image_sha=""
 
-if [[ -e "$STAGED_NEON_ENV" && -e "$BACKUP_DIR/neon.env.preinstall" ]]; then
+if [[ "$ACTIVATE_TARGET" != "image" && -e "$STAGED_NEON_ENV" && -e "$BACKUP_DIR/neon.env.preinstall" ]]; then
   sudo mv "$BACKUP_DIR/neon.env.preinstall" "$neon_env_backup_path"
 fi
 

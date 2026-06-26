@@ -3,7 +3,9 @@
 use axum::http::StatusCode;
 use llm_access_codex_image::{
     dispatch::{eligible_image_routes, should_failover_status},
-    limiter::{image_account_limiter_scope, ImageAccountLimiter},
+    limiter::{
+        image_account_limiter_scope, image_key_limiter_scope, ImageAccountLimiter, ImageKeyLimiter,
+    },
     logging::{build_image_log_event, ImageLogInput, UpstreamLogInput},
 };
 use llm_access_core::{provider::RouteStrategy, store::ProviderCodexRoute};
@@ -89,10 +91,37 @@ async fn image_account_limiter_honors_lowered_account_limit() {
 #[test]
 fn image_failover_only_retries_transient_or_auth_failures() {
     assert!(!should_failover_status(StatusCode::BAD_REQUEST));
+    assert!(!should_failover_status(StatusCode::NOT_FOUND));
+    assert!(!should_failover_status(StatusCode::UNPROCESSABLE_ENTITY));
     assert!(should_failover_status(StatusCode::UNAUTHORIZED));
     assert!(should_failover_status(StatusCode::FORBIDDEN));
     assert!(should_failover_status(StatusCode::TOO_MANY_REQUESTS));
+    assert!(should_failover_status(StatusCode::INTERNAL_SERVER_ERROR));
+    assert!(should_failover_status(StatusCode::SERVICE_UNAVAILABLE));
     assert!(should_failover_status(StatusCode::BAD_GATEWAY));
+}
+
+#[tokio::test]
+async fn image_key_limiter_uses_independent_scope_and_route_limits() {
+    assert_eq!(image_key_limiter_scope("key-1"), "key:codex-image:key-1");
+
+    let limiter = ImageKeyLimiter::default();
+    let first = limiter
+        .try_acquire("key-1", Some(1), None)
+        .expect("first key permit should be available");
+    let blocked = limiter
+        .try_acquire("key-1", Some(1), None)
+        .expect_err("key max concurrency should block");
+    assert_eq!(blocked.reason, "key_max_concurrency");
+    drop(first);
+
+    limiter
+        .try_acquire("key-2", None, Some(60_000))
+        .expect("first interval permit should be available");
+    let blocked = limiter
+        .try_acquire("key-2", None, Some(60_000))
+        .expect_err("key min start interval should block");
+    assert_eq!(blocked.reason, "key_min_start_interval");
 }
 
 #[test]
@@ -123,6 +152,8 @@ fn image_log_event_redacts_prompt_and_image_payloads() {
 
     assert!(!encoded.contains("AAABBBCCC"));
     assert!(!encoded.contains("data:image"));
+    assert!(!encoded.contains("example.com"));
+    assert!(!encoded.contains("input.png"));
     assert!(!encoded.contains("confidential text"));
     assert!(encoded.contains("prompt_hash"));
     assert!(encoded.contains("input_image_count"));

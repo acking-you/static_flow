@@ -63,7 +63,9 @@ fi
 GCP_SSH_KEY="$(expand_path "$GCP_SSH_KEY")"
 SSH_OPTS=(-i "$GCP_SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes)
 
-"$ROOT_DIR/scripts/prepare_llm_access_cloud_release.sh"
+# The image gateway is read-only against Postgres. Apply llm-access migration
+# 0030 from the control-plane service before activating this binary.
+LLM_ACCESS_ACTIVATE_TARGET=image "$ROOT_DIR/scripts/prepare_llm_access_cloud_release.sh"
 "$ROOT_DIR/scripts/render_llm_access_cloud_bundle.sh" "$RENDER_DIR"
 
 scp "${SSH_OPTS[@]}" \

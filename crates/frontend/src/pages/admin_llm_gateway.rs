@@ -504,7 +504,7 @@ fn account_image_rate_limit_bucket<'a>(
         let display_name = bucket.display_name.to_ascii_lowercase();
         [limit_id.as_str(), limit_name.as_str(), display_name.as_str()]
             .iter()
-            .any(|value| value.contains("gpt-image") || value.contains("image"))
+            .any(|value| value.contains("image"))
     })
 }
 

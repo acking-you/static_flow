@@ -519,6 +519,32 @@ impl PostgresControlRepository {
         Self::from_sqlx_client(client, request_cache_config, ProxyConfigScope::core())
     }
 
+    /// Verify that read-only Codex image gateway columns have already been
+    /// migrated.
+    pub async fn verify_codex_image_gateway_schema(&self) -> anyhow::Result<()> {
+        let row = self
+            .client
+            .query_one(
+                "SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'llm_key_route_config'
+                      AND column_name = 'codex_image_generation_enabled'
+                ) AS exists",
+                &[],
+            )
+            .await
+            .context("inspect codex image gateway schema")?;
+        let exists: bool = row.get("exists");
+        anyhow::ensure!(
+            exists,
+            "missing llm_key_route_config.codex_image_generation_enabled; run llm-access Postgres \
+             migration 0030 before starting llm-access-codex-image"
+        );
+        Ok(())
+    }
+
     fn from_sqlx_client(
         client: SqlxClient,
         request_cache_config: Option<RequestCacheConfig>,

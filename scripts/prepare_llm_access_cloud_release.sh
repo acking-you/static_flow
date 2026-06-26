@@ -92,6 +92,13 @@ load_config
 
 BUILD_JOBS="${BUILD_JOBS:-4}"
 ALLOW_DIRTY="${ALLOW_DIRTY:-0}"
+PREPARE_TARGET="${LLM_ACCESS_ACTIVATE_TARGET:-both}"
+case "$PREPARE_TARGET" in
+  api | worker | image | both) ;;
+  *)
+    fail "unsupported prepare target: $PREPARE_TARGET (expected api, worker, image, or both)"
+    ;;
+esac
 require_var CARGO_TARGET_DIR
 require_var GCP_SSH_KEY
 require_var REMOTE_RELEASE_DIR
@@ -111,7 +118,9 @@ LOCAL_NEON_ENV_FILE="$(expand_path "$LOCAL_NEON_ENV_FILE")"
 [[ -r "$GCP_SSH_KEY" ]] || fail "SSH key is not readable: $GCP_SSH_KEY"
 [[ -r "$LOCAL_NEON_ENV_FILE" ]] || fail "local llm-access runtime env is not readable: $LOCAL_NEON_ENV_FILE"
 require_env_file_var "$LOCAL_NEON_ENV_FILE" LLM_ACCESS_CONTROL_DATABASE_URL "local llm-access runtime env"
-require_env_file_var "$LOCAL_NEON_ENV_FILE" LLM_ACCESS_CODEX_IMAGE_CONTROL_DATABASE_URL "local llm-access runtime env"
+if [[ "$PREPARE_TARGET" == "image" || "$PREPARE_TARGET" == "both" ]]; then
+  require_env_file_var "$LOCAL_NEON_ENV_FILE" LLM_ACCESS_CODEX_IMAGE_CONTROL_DATABASE_URL "local llm-access runtime env"
+fi
 require_env_file_var "$LOCAL_NEON_ENV_FILE" KIRO_THINKING_SIGNATURE_SECRET "local llm-access runtime env"
 
 cd "$ROOT_DIR"

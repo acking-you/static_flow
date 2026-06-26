@@ -1,5 +1,5 @@
 use std::{
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::{BufWriter, Write},
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
@@ -72,7 +72,7 @@ pub struct ImageLogEvent {
     pub account_name: Option<String>,
     /// Normalized endpoint name.
     pub endpoint: String,
-    /// SHA-256 hash of the prompt.
+    /// SHA-256 correlation hash of the prompt; not a secrecy boundary.
     pub prompt_hash: String,
     /// Requested image size.
     pub size: Option<String>,
@@ -120,6 +120,9 @@ pub struct ImageLogConfig {
 pub struct ImageLogWriter {
     config: ImageLogConfig,
     active_started_at_ms: u64,
+    active_writer: Option<BufWriter<File>>,
+    active_bytes: u64,
+    sealed_sequence: u64,
 }
 
 impl ImageLogWriter {
@@ -128,46 +131,54 @@ impl ImageLogWriter {
         fs::create_dir_all(&config.log_dir).with_context(|| {
             format!("create codex image log directory `{}`", config.log_dir.display())
         })?;
+        let active_bytes = config
+            .log_dir
+            .join("codex-image-active.jsonl")
+            .metadata()
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
         Ok(Self {
             config,
             active_started_at_ms: now_ms(),
+            active_writer: None,
+            active_bytes,
+            sealed_sequence: 0,
         })
     }
 
     /// Appends one redacted event as a JSON line.
     pub fn append(&mut self, event: &ImageLogEvent) -> anyhow::Result<()> {
         self.rotate_if_needed()?;
-        let active_path = self.active_path();
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&active_path)
-            .with_context(|| format!("open codex image log `{}`", active_path.display()))?;
-        let mut writer = BufWriter::new(file);
-        serde_json::to_writer(&mut writer, event).context("serialize codex image log event")?;
+        let line = serde_json::to_vec(event).context("serialize codex image log event")?;
+        let writer = self.active_writer()?;
+        writer
+            .write_all(&line)
+            .context("write codex image log event")?;
         writer
             .write_all(b"\n")
             .context("write codex image log newline")?;
         writer.flush().context("flush codex image log event")?;
+        self.active_bytes = self
+            .active_bytes
+            .saturating_add(u64::try_from(line.len() + 1).unwrap_or(u64::MAX));
         Ok(())
     }
 
     fn rotate_if_needed(&mut self) -> anyhow::Result<()> {
         let active_path = self.active_path();
-        let size_exceeded = active_path
-            .metadata()
-            .map(|metadata| metadata.len() >= self.config.max_file_bytes.max(1))
-            .unwrap_or(false);
+        let size_exceeded = self.active_bytes >= self.config.max_file_bytes.max(1);
         let age_exceeded = now_ms().saturating_sub(self.active_started_at_ms)
             >= self.config.max_file_age_ms.max(1);
         if !size_exceeded && !age_exceeded {
             return Ok(());
         }
+        if let Some(mut writer) = self.active_writer.take() {
+            writer
+                .flush()
+                .context("flush codex image log before rotation")?;
+        }
         if active_path.exists() {
-            let sealed_path = self
-                .config
-                .log_dir
-                .join(format!("codex-image-{}.jsonl", now_ms()));
+            let sealed_path = self.next_sealed_path();
             fs::rename(&active_path, &sealed_path).with_context(|| {
                 format!(
                     "rotate codex image log `{}` to `{}`",
@@ -177,7 +188,38 @@ impl ImageLogWriter {
             })?;
         }
         self.active_started_at_ms = now_ms();
+        self.active_bytes = 0;
         self.prune_sealed_logs()
+    }
+
+    fn active_writer(&mut self) -> anyhow::Result<&mut BufWriter<File>> {
+        if self.active_writer.is_none() {
+            let active_path = self.active_path();
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&active_path)
+                .with_context(|| format!("open codex image log `{}`", active_path.display()))?;
+            self.active_writer = Some(BufWriter::new(file));
+        }
+        Ok(self
+            .active_writer
+            .as_mut()
+            .expect("active writer just opened"))
+    }
+
+    fn next_sealed_path(&mut self) -> PathBuf {
+        loop {
+            self.sealed_sequence = self.sealed_sequence.saturating_add(1);
+            let path = self.config.log_dir.join(format!(
+                "codex-image-{}-{}.jsonl",
+                now_ms(),
+                self.sealed_sequence
+            ));
+            if !path.exists() {
+                return path;
+            }
+        }
     }
 
     fn prune_sealed_logs(&self) -> anyhow::Result<()> {
@@ -216,6 +258,11 @@ impl ImageLogWriter {
 
     fn active_path(&self) -> PathBuf {
         self.config.log_dir.join("codex-image-active.jsonl")
+    }
+
+    #[cfg(test)]
+    fn force_active_started_at_ms(&mut self, active_started_at_ms: u64) {
+        self.active_started_at_ms = active_started_at_ms;
     }
 }
 
@@ -259,4 +306,105 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, thread, time::Duration};
+
+    use super::*;
+
+    fn test_event(request_id: &str) -> ImageLogEvent {
+        build_image_log_event(ImageLogInput {
+            request_id,
+            key_id: "key-1",
+            key_name: "Key One",
+            account_name: Some("codex-a"),
+            endpoint: "generations",
+            prompt: "draw a lake",
+            size: Some("1024x1024"),
+            quality: Some("high"),
+            n: 1,
+            input_images: &[],
+            upstream: UpstreamLogInput {
+                status: Some(200),
+                duration_ms: 10,
+                failover_count: 0,
+                error_class: None,
+                response_image_count: Some(1),
+                response_image_bytes: Some(128),
+                usage_tokens: Some(12),
+                usage_missing: false,
+            },
+        })
+    }
+
+    fn sealed_logs(dir: &std::path::Path) -> Vec<PathBuf> {
+        let mut files = fs::read_dir(dir)
+            .expect("read log dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("codex-image-")
+                            && name.ends_with(".jsonl")
+                            && name != "codex-image-active.jsonl"
+                    })
+            })
+            .collect::<Vec<_>>();
+        files.sort();
+        files
+    }
+
+    #[test]
+    fn image_log_writer_rotates_by_size_and_prunes_sealed_logs() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let mut writer = ImageLogWriter::new(ImageLogConfig {
+            log_dir: temp.path().to_path_buf(),
+            max_file_bytes: 1,
+            max_file_age_ms: u64::MAX,
+            max_files: 2,
+        })
+        .expect("writer");
+
+        writer.append(&test_event("req-1")).expect("append 1");
+        thread::sleep(Duration::from_millis(2));
+        writer.append(&test_event("req-2")).expect("append 2");
+        thread::sleep(Duration::from_millis(2));
+        writer.append(&test_event("req-3")).expect("append 3");
+        thread::sleep(Duration::from_millis(2));
+        writer.append(&test_event("req-4")).expect("append 4");
+
+        let sealed = sealed_logs(temp.path());
+        assert_eq!(sealed.len(), 2);
+        assert!(temp.path().join("codex-image-active.jsonl").exists());
+        let sealed_names = sealed
+            .iter()
+            .filter_map(|path| path.file_name()?.to_str())
+            .collect::<Vec<_>>();
+        assert!(sealed_names
+            .iter()
+            .all(|name| *name != "codex-image-active.jsonl"));
+    }
+
+    #[test]
+    fn image_log_writer_rotates_by_age() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let mut writer = ImageLogWriter::new(ImageLogConfig {
+            log_dir: temp.path().to_path_buf(),
+            max_file_bytes: u64::MAX,
+            max_file_age_ms: 1,
+            max_files: 4,
+        })
+        .expect("writer");
+
+        writer.append(&test_event("req-1")).expect("append 1");
+        writer.force_active_started_at_ms(0);
+        writer.append(&test_event("req-2")).expect("append 2");
+
+        assert_eq!(sealed_logs(temp.path()).len(), 1);
+        assert!(temp.path().join("codex-image-active.jsonl").exists());
+    }
 }

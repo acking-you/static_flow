@@ -13,6 +13,13 @@ use crate::{
     error::{bad_request, internal_error, CodexGatewayResult},
     instructions::codex_default_instructions,
 };
+
+/// Default Codex upstream base used by StaticFlow deployments.
+pub const DEFAULT_CODEX_UPSTREAM_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+/// Default Codex wire originator/user-agent prefix.
+pub const DEFAULT_CODEX_WIRE_ORIGINATOR: &str = "codex_cli_rs";
+const MAX_CODEX_CLIENT_VERSION_LEN: usize = 64;
+
 /// Rewrite chat/completions requests onto the upstream responses endpoint.
 pub fn rewrite_responses_path(path: &str, query: &str) -> String {
     let rewritten = if let Some(suffix) = path.strip_prefix("/v1/chat/completions") {
@@ -33,6 +40,44 @@ pub fn normalize_upstream_base_url(base: &str) -> String {
     }
     normalized
 }
+/// Resolve the configured Codex upstream base URL from supported environment
+/// variables.
+pub fn codex_upstream_base_url_from_env() -> String {
+    std::env::var("CODEX_UPSTREAM_BASE_URL")
+        .or_else(|_| std::env::var("STATICFLOW_LLM_GATEWAY_UPSTREAM_BASE_URL"))
+        .map(|value| normalize_upstream_base_url(&value))
+        .unwrap_or_else(|_| DEFAULT_CODEX_UPSTREAM_BASE_URL.to_string())
+}
+
+/// Join a normalized Codex upstream base with a public OpenAI-compatible path.
+pub fn compute_codex_upstream_url(base: &str, path: &str) -> String {
+    let base = base.trim_end_matches('/');
+    if base.contains("/backend-api/codex") && path.starts_with("/v1/") {
+        format!("{}{}", base, path.trim_start_matches("/v1"))
+    } else if base.ends_with("/v1") && path.starts_with("/v1") {
+        format!("{}{}", base.trim_end_matches("/v1"), path)
+    } else {
+        format!("{base}{path}")
+    }
+}
+
+/// Validate and normalize the Codex client version used in wire headers.
+pub fn normalize_codex_client_version(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_CODEX_CLIENT_VERSION_LEN {
+        return None;
+    }
+    trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+        .then(|| trimmed.to_string())
+}
+
+/// Build the Codex user-agent value for a normalized client version.
+pub fn codex_user_agent(client_version: &str) -> String {
+    format!("{DEFAULT_CODEX_WIRE_ORIGINATOR}/{client_version}")
+}
+
 /// Detect whether an upstream base URL points at an Azure OpenAI deployment.
 ///
 /// Azure's `/responses` surface differs from chatgpt.com (notably it persists
@@ -407,5 +452,29 @@ pub fn normalize_responses_request(
                 *service_tier = Value::String("priority".to_string());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_upstream_url_helpers_cover_backend_and_v1_bases() {
+        assert_eq!(
+            normalize_upstream_base_url("https://chatgpt.com"),
+            DEFAULT_CODEX_UPSTREAM_BASE_URL
+        );
+        assert_eq!(
+            compute_codex_upstream_url(DEFAULT_CODEX_UPSTREAM_BASE_URL, "/v1/responses"),
+            "https://chatgpt.com/backend-api/codex/responses"
+        );
+        assert_eq!(
+            compute_codex_upstream_url("https://api.example.com/v1", "/v1/responses"),
+            "https://api.example.com/v1/responses"
+        );
+        assert_eq!(normalize_codex_client_version(" 0.142.0 "), Some("0.142.0".to_string()));
+        assert_eq!(normalize_codex_client_version("bad version"), None);
+        assert_eq!(codex_user_agent("0.142.0"), "codex_cli_rs/0.142.0");
     }
 }

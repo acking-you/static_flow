@@ -494,4 +494,17 @@ mod tests {
             .contains("codex_strict_session_rejection_enabled"));
         assert!(migration.sql.contains("DEFAULT FALSE"));
     }
+
+    #[test]
+    fn postgres_migrations_include_codex_image_generation_toggle() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "codex_image_generation_toggle")
+            .expect("codex image generation migration exists");
+
+        assert_eq!(migration.version, 30);
+        assert!(migration.sql.contains("codex_image_generation_enabled"));
+        assert!(migration.sql.contains("DEFAULT FALSE"));
+    }
 }

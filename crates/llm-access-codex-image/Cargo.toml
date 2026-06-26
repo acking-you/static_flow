@@ -24,4 +24,4 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
-tower = { version = "0.5", features = ["util"] }
+tempfile = "3"

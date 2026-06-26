@@ -119,7 +119,6 @@ use crate::{
 
 const MAX_PROVIDER_PROXY_BODY_BYTES: usize = 32 * 1024 * 1024;
 const DEFAULT_WIRE_ORIGINATOR: &str = "codex_cli_rs";
-const MAX_CODEX_CLIENT_VERSION_LEN: usize = 64;
 const KIRO_PROVIDER_AWS_SDK_VERSION: &str = "1.0.34";
 const KIRO_REMOTE_IMAGE_MAX_BYTES: usize = 1_000_000;
 const KIRO_REMOTE_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
