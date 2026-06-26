@@ -156,6 +156,12 @@ struct PublicLlmGatewayUsageEventView {
     credit_usage_missing: bool,
     client_ip: String,
     ip_region: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error_class: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    session_blocked: bool,
     created_at: i64,
 }
 
@@ -779,6 +785,9 @@ impl From<&AdminUsageEventView> for PublicLlmGatewayUsageEventView {
             credit_usage_missing: value.credit_usage_missing,
             client_ip: value.client_ip.clone(),
             ip_region: value.ip_region.clone(),
+            error_message: value.error_message.clone(),
+            error_class: value.error_class.clone(),
+            session_blocked: value.session_blocked,
             created_at: value.created_at,
         }
     }

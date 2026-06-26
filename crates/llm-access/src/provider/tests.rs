@@ -9857,6 +9857,8 @@ async fn kiro_websearch_usage_omits_heavy_payload_on_success() {
             r#"{"error":{"message":"A text block must be included when using documents."}}"#
                 .to_string(),
         ),
+        error_class: None,
+        session_blocked: false,
         response_body: None,
     };
 
@@ -9935,6 +9937,8 @@ async fn kiro_websearch_usage_captures_heavy_payload_on_error_by_default() {
             r#"{"error":{"message":"A text block must be included when using documents."}}"#
                 .to_string(),
         ),
+        error_class: None,
+        session_blocked: false,
         response_body: None,
     };
 
@@ -10022,6 +10026,8 @@ async fn kiro_usage_captures_full_payload_when_key_full_request_logging_enabled(
         full_request_json: Some(captured_json_bytes(r#"{"full":true}"#)),
         error_message: None,
         error_body: None,
+        error_class: None,
+        session_blocked: false,
         response_body: None,
     };
 
@@ -10082,6 +10088,8 @@ fn provider_usage_metadata_tracks_stream_outcome_fields() {
         full_request_json: None,
         error_message: None,
         error_body: None,
+        error_class: None,
+        session_blocked: false,
         response_body: None,
     };
 

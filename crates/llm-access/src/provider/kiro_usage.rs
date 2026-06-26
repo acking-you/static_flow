@@ -277,6 +277,8 @@ pub async fn record_kiro_usage(record: KiroUsageRecord<'_>) -> anyhow::Result<()
         upstream_request_body_json,
         full_request_json,
         error_message: record.meta.error_message.clone(),
+        error_class: record.meta.error_class.clone(),
+        session_blocked: record.meta.session_blocked,
         error_body: record.meta.error_body.clone(),
         response_body: record.meta.response_body.clone(),
         timing: record.meta.to_timing(),
@@ -337,6 +339,8 @@ pub async fn record_kiro_websearch_usage(
             })
             .flatten(),
         error_message: record.meta.error_message.clone(),
+        error_class: record.meta.error_class.clone(),
+        session_blocked: record.meta.session_blocked,
         error_body: record.meta.error_body.clone(),
         response_body: record.meta.response_body.clone(),
         timing: record.meta.to_timing(),
@@ -389,6 +393,8 @@ pub async fn record_kiro_cctest_usage(record: KiroCctestUsageRecord<'_>) -> anyh
         full_request_json: captured_body_json(&record.meta.full_request_json)
             .or_else(|| captured_body_json(&record.meta.client_request_body_json)),
         error_message: record.meta.error_message.clone(),
+        error_class: record.meta.error_class.clone(),
+        session_blocked: record.meta.session_blocked,
         error_body: record.meta.error_body.clone(),
         response_body: record.meta.response_body.clone(),
         timing: record.meta.to_timing(),

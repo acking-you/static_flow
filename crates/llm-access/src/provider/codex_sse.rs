@@ -265,6 +265,8 @@ pub async fn record_codex_preflight_failure(record: CodexPreflightFailureRecord<
         upstream_request_body_json: captured_body_json(&record.meta.upstream_request_body_json),
         full_request_json: captured_body_json(&record.meta.full_request_json),
         error_message: record.meta.error_message.clone(),
+        error_class: record.meta.error_class.clone(),
+        session_blocked: record.meta.session_blocked,
         error_body: record.meta.error_body.clone(),
         response_body: record.meta.response_body.clone(),
         timing: record.meta.to_timing(),
@@ -340,6 +342,8 @@ pub async fn record_codex_usage(
             })
             .flatten(),
         error_message: meta.error_message.clone(),
+        error_class: meta.error_class.clone(),
+        session_blocked: meta.session_blocked,
         error_body: meta.error_body.clone(),
         response_body: meta.response_body.clone(),
         timing: meta.to_timing(),

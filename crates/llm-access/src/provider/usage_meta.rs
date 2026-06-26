@@ -54,9 +54,29 @@ impl ProviderUsageMetadata {
             upstream_request_body_json: None,
             full_request_json: None,
             error_message: None,
+            error_class: None,
+            session_blocked: false,
             error_body: None,
             response_body: None,
         }
+    }
+
+    /// Record the stable upstream error class for a failed request. First
+    /// non-empty classification wins, mirroring [`Self::error_message`] capture.
+    pub(super) fn capture_error_class(&mut self, class: &str) {
+        if self.error_class.is_some() {
+            return;
+        }
+        let trimmed = class.trim();
+        if !trimmed.is_empty() {
+            self.error_class = Some(trimmed.to_string());
+        }
+    }
+
+    /// Mark this event as belonging to a permanently rejected Codex session
+    /// (the fatal `cyber_policy` strict-session block).
+    pub(super) fn mark_session_blocked(&mut self) {
+        self.session_blocked = true;
     }
 
     fn elapsed_ms(&self) -> i64 {

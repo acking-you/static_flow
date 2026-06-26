@@ -30,6 +30,11 @@ const DUCKDB_MIGRATIONS: &[SqlMigration] = &[
         name: "proxy_traffic_rollups",
         sql: include_str!("../migrations/duckdb/0003_proxy_traffic_rollups.sql"),
     },
+    SqlMigration {
+        version: 4,
+        name: "usage_error_classification",
+        sql: include_str!("../migrations/duckdb/0004_usage_error_classification.sql"),
+    },
 ];
 
 const POSTGRES_MIGRATIONS: &[SqlMigration] = &[

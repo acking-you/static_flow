@@ -6436,3 +6436,28 @@ html {
     }
   }
 }
+
+/* Codex permanent session-block marker in the usage log: a solid crimson badge
+   with a deep-red pulse so a fatal cyber_policy session ban is glanceable. */
+.codex-session-blocked-badge {
+  background-color: #b91c1c;
+  color: #fef2f2;
+  box-shadow: 0 0 0 1px rgba(185, 28, 28, 0.65), 0 0 12px rgba(239, 68, 68, 0.5);
+  animation: codex-session-blocked-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes codex-session-blocked-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px rgba(185, 28, 28, 0.6), 0 0 6px rgba(239, 68, 68, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(185, 28, 28, 0.9), 0 0 18px rgba(239, 68, 68, 0.75);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .codex-session-blocked-badge {
+    animation: none;
+  }
+}

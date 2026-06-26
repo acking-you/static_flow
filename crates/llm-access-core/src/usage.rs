@@ -110,6 +110,14 @@ pub struct UsageEvent {
     pub full_request_json: Option<String>,
     /// Best-effort error message surfaced for failed requests.
     pub error_message: Option<String>,
+    /// Stable upstream error class for failed requests (e.g. `cyber_policy`,
+    /// `server_overloaded`, `invalid_request`), when the failure was classified.
+    #[serde(default)]
+    pub error_class: Option<String>,
+    /// Whether this event belongs to a Codex session that is now permanently
+    /// rejected for this key (the fatal `cyber_policy` strict-session block).
+    #[serde(default)]
+    pub session_blocked: bool,
     /// Raw error response body surfaced for failed requests.
     pub error_body: Option<String>,
     /// Raw response body captured for explicit diagnostic events.

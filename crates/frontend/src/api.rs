@@ -5972,6 +5972,15 @@ pub struct PublicLlmGatewayUsageEventView {
     pub credit_usage_missing: bool,
     pub client_ip: String,
     pub ip_region: String,
+    /// Inline error message surfaced directly in the list (no detail view needed).
+    #[serde(default)]
+    pub error_message: Option<String>,
+    /// Stable upstream error class for failed requests, when classified.
+    #[serde(default)]
+    pub error_class: Option<String>,
+    /// Whether this event belongs to a permanently rejected Codex session.
+    #[serde(default)]
+    pub session_blocked: bool,
     pub created_at: i64,
 }
 
@@ -6315,6 +6324,15 @@ pub struct AdminLlmGatewayUsageEventView {
     pub client_ip: String,
     pub ip_region: String,
     pub last_message_content: Option<String>,
+    /// Inline error message surfaced directly in the list (no detail view needed).
+    #[serde(default)]
+    pub error_message: Option<String>,
+    /// Stable upstream error class for failed requests, when classified.
+    #[serde(default)]
+    pub error_class: Option<String>,
+    /// Whether this event belongs to a permanently rejected Codex session.
+    #[serde(default)]
+    pub session_blocked: bool,
     pub created_at: i64,
 }
 
@@ -6362,6 +6380,8 @@ pub struct AdminLlmGatewayUsageEventDetailView {
     pub upstream_request_body_json: Option<String>,
     pub full_request_json: Option<String>,
     pub error_message: Option<String>,
+    pub error_class: Option<String>,
+    pub session_blocked: bool,
     pub error_body: Option<String>,
     pub response_body: Option<String>,
     pub created_at: i64,

@@ -182,6 +182,10 @@ pub struct UsageEventRow {
     pub full_request_json: Option<String>,
     /// Best-effort error message surfaced for failed requests.
     pub error_message: Option<String>,
+    /// Stable upstream error class for failed requests, when classified.
+    pub error_class: Option<String>,
+    /// Whether this event belongs to a permanently rejected Codex session.
+    pub session_blocked: bool,
     /// Raw error response body surfaced for failed requests.
     pub error_body: Option<String>,
     /// Raw response body captured for explicit diagnostic events.
@@ -265,6 +269,8 @@ impl UsageEventRow {
             upstream_request_body_json: event.upstream_request_body_json.clone(),
             full_request_json: event.full_request_json.clone(),
             error_message: event.error_message.clone(),
+            error_class: event.error_class.clone(),
+            session_blocked: event.session_blocked,
             error_body: event.error_body.clone(),
             response_body: event.response_body.clone(),
             detail_object_payload_present: has_external_detail_payloads(
@@ -333,7 +339,7 @@ pub fn insert_usage_event_sql() -> &'static str {
         routing_diagnostics_json, last_message_content, detail_object_payload_present,
         detail_object_path, detail_object_offset, detail_object_length, detail_object_sha256,
         proxy_source_at_event, proxy_config_id_at_event, proxy_config_name_at_event,
-        proxy_url_at_event
+        proxy_url_at_event, error_class, session_blocked, error_message
      ) VALUES (
         ?1, ?2, ?3, ?4, to_timestamp(?4 / 1000.0),
         CAST(to_timestamp(?4 / 1000.0) AS DATE),
@@ -341,7 +347,7 @@ pub fn insert_usage_event_sql() -> &'static str {
         ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
         ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31,
         ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46,
-        ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54
+        ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57
      )
      ON CONFLICT DO NOTHING"
 }

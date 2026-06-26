@@ -296,6 +296,7 @@ pub fn duckdb_relation_has_rows(conn: &duckdb::Connection, relation_name: &str) 
 fn usage_event_summary_select_exprs(columns: &HashSet<String>) -> Vec<String> {
     let mut exprs = usage_event_base_select_exprs(columns, false, None);
     exprs.push("CAST(NULL AS VARCHAR) AS last_message_content".to_string());
+    exprs.push(usage_event_column_expr(columns, "error_message", "CAST(NULL AS VARCHAR)"));
     exprs
 }
 #[cfg(feature = "duckdb-runtime")]
@@ -419,6 +420,8 @@ fn usage_event_base_select_exprs(
         usage_event_column_expr(columns, "bytes_streamed", "CAST(NULL AS BIGINT)"),
         usage_event_column_expr(columns, "client_ip", "CAST(NULL AS VARCHAR)"),
         usage_event_column_expr(columns, "ip_region", "CAST(NULL AS VARCHAR)"),
+        usage_event_column_expr(columns, "error_class", "CAST(NULL AS VARCHAR)"),
+        usage_event_column_expr(columns, "session_blocked", "false"),
     ]
 }
 #[cfg(feature = "duckdb-runtime")]
