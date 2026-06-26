@@ -1,8 +1,15 @@
-//! Image format detection from explicit media types, base64 prefixes, and
-//! raw magic bytes.
+//! Image decoding, format detection, and structural validation for Anthropic
+//! image blocks before they are forwarded to the Kiro upstream.
 
 use base64::Engine as _;
 
+/// Decode, identify, and structurally validate an Anthropic image block.
+///
+/// Returns the detected format plus a canonical standard-base64 re-encoding of
+/// the decoded bytes (normalizing any whitespace or URL-safe input), or
+/// `Ok(None)` when the payload is not a recognized image and declares no
+/// supported `media_type`. An `Err` means the payload claims to be — or looks
+/// like — a supported image but failed to decode or is structurally truncated.
 pub fn get_image_from_source(
     source: &crate::anthropic::types::ImageSource,
 ) -> Result<Option<ValidatedImageSource>, ImageDataError> {
@@ -51,23 +58,25 @@ impl std::fmt::Display for ImageDataError {
 impl std::error::Error for ImageDataError {}
 
 fn decode_base64_image_data(data: &str) -> Result<Vec<u8>, ImageDataError> {
-    let compact = data
-        .chars()
-        .filter(|ch| !ch.is_ascii_whitespace())
-        .collect::<String>();
+    // base64 is ASCII, so strip ASCII whitespace over raw bytes and skip the
+    // UTF-8 round-trip a `String` would force; the decoders below surface any
+    // remaining invalid byte.
+    let mut compact: Vec<u8> = data
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect();
     if compact.is_empty() {
         return Err(ImageDataError::new("image data is empty"));
     }
     if compact.len() % 4 == 1 {
         return Err(ImageDataError::new("base64 data has invalid length"));
     }
-    let mut padded = compact;
-    while padded.len() % 4 != 0 {
-        padded.push('=');
+    while !compact.len().is_multiple_of(4) {
+        compact.push(b'=');
     }
     base64::engine::general_purpose::STANDARD
-        .decode(padded.as_bytes())
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(padded.as_bytes()))
+        .decode(&compact)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(&compact))
         .map_err(|_| ImageDataError::new("base64 data is invalid"))
 }
 
@@ -97,6 +106,12 @@ fn get_image_format(media_type: &str) -> Option<&'static str> {
     }
 }
 
+/// Recover the format for a WEBP too short for magic-byte detection.
+///
+/// `detect_image_format_from_bytes` requires the `WEBP` fourcc at offset 8,
+/// which a truncated header lacks. Treating a `RIFF`-prefixed payload declared
+/// as `image/webp` as webp lets `validate_webp` surface a precise "truncated"
+/// error instead of the generic "not a supported image".
 fn truncated_declared_format(
     declared_format: Option<&'static str>,
     bytes: &[u8],
@@ -114,6 +129,8 @@ fn validate_image_bytes(format: &str, bytes: &[u8]) -> Result<(), ImageDataError
     }
 }
 
+/// Reject a JPEG whose final two bytes are not the `FFD9` end-of-image marker
+/// (a stream truncated before its tail).
 fn validate_jpeg(bytes: &[u8]) -> Result<(), ImageDataError> {
     if !bytes.ends_with(&[0xff, 0xd9]) {
         return Err(ImageDataError::new("jpeg data is missing end-of-image marker"));
@@ -121,6 +138,9 @@ fn validate_jpeg(bytes: &[u8]) -> Result<(), ImageDataError> {
     Ok(())
 }
 
+/// Walk the PNG chunk sequence to confirm a complete `IHDR..IEND` structure and
+/// reject truncated chunk streams. Trailing bytes after `IEND` are tolerated,
+/// matching how image decoders and the upstream treat them.
 fn validate_png(bytes: &[u8]) -> Result<(), ImageDataError> {
     let mut offset = 8usize;
     let mut saw_ihdr = false;
@@ -171,6 +191,7 @@ fn validate_png(bytes: &[u8]) -> Result<(), ImageDataError> {
     Ok(())
 }
 
+/// Reject a GIF missing its `0x3B` trailer byte.
 fn validate_gif(bytes: &[u8]) -> Result<(), ImageDataError> {
     if !bytes.ends_with(&[0x3b]) {
         return Err(ImageDataError::new("gif data is missing trailer"));
@@ -178,6 +199,7 @@ fn validate_gif(bytes: &[u8]) -> Result<(), ImageDataError> {
     Ok(())
 }
 
+/// Reject a WEBP whose declared RIFF size exceeds the bytes actually present.
 fn validate_webp(bytes: &[u8]) -> Result<(), ImageDataError> {
     if bytes.len() < 12 {
         return Err(ImageDataError::new("webp data is truncated"));

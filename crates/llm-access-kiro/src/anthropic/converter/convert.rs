@@ -331,6 +331,13 @@ fn process_message_content(
     })
 }
 
+/// How to treat an image block whose payload fails decoding/validation.
+///
+/// The current user turn uses [`InvalidImagePolicy::Reject`] so the client gets
+/// an actionable error it can fix. History and `tool_result` images use
+/// [`InvalidImagePolicy::Drop`]: that content was already accepted in an earlier
+/// request, so a now-detected defect must not retroactively fail the whole
+/// conversation.
 #[derive(Clone, Copy)]
 enum InvalidImagePolicy {
     Reject,
