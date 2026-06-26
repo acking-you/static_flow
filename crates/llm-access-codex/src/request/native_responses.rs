@@ -16,24 +16,16 @@ use crate::{
     error::{bad_request, bad_request_with_detail, CodexGatewayResult},
     instructions::codex_default_instructions,
 };
-/// Insert the default Codex instructions when the request omits them.
+/// Set the native Codex instructions used by the upstream model preset.
 ///
-/// The upstream `/responses` API requires a non-empty `instructions` field.
-/// When the client sends no `instructions`, a JSON null, or a whitespace-only
-/// string, this fills in [`codex_default_instructions`]; a meaningful
-/// client-supplied value is left untouched.
-pub fn inject_default_instructions_when_missing(root: &mut Map<String, Value>) {
-    let needs_default_instructions = match root.get("instructions") {
-        None | Some(Value::Null) => true,
-        Some(Value::String(value)) => value.trim().is_empty(),
-        Some(_) => false,
-    };
-    if needs_default_instructions {
-        root.insert(
-            "instructions".to_string(),
-            Value::String(codex_default_instructions().to_string()),
-        );
-    }
+/// The upstream Codex client resolves this text from model metadata rather than
+/// taking it from the user's request. The gateway mirrors that boundary by
+/// replacing any client-supplied `instructions`.
+pub fn set_codex_default_instructions(root: &mut Map<String, Value>) {
+    root.insert(
+        "instructions".to_string(),
+        Value::String(codex_default_instructions().to_string()),
+    );
 }
 /// Normalize a native `/responses` request body in place for the upstream.
 ///
@@ -51,6 +43,7 @@ pub fn normalize_native_responses_request(path: &str, root: &mut Map<String, Val
     if path == "/v1/responses/compact" {
         retain_native_compact_fields(root);
     }
+    normalize_native_responses_input_roles(root);
 }
 fn remove_native_responses_upstream_unsupported_fields(root: &mut Map<String, Value>) {
     for field in NATIVE_RESPONSES_UPSTREAM_UNSUPPORTED_FIELDS {
@@ -78,6 +71,28 @@ fn normalize_native_responses_input_for_upstream(root: &mut Map<String, Value>) 
             *input = Value::Array(vec![item]);
         },
         _ => {},
+    }
+}
+fn normalize_native_responses_input_roles(root: &mut Map<String, Value>) {
+    let Some(input) = root.get_mut("input") else {
+        return;
+    };
+    match input {
+        Value::Array(items) => {
+            for item in items {
+                normalize_native_responses_input_item_role(item);
+            }
+        },
+        Value::Object(_) => normalize_native_responses_input_item_role(input),
+        _ => {},
+    }
+}
+fn normalize_native_responses_input_item_role(value: &mut Value) {
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    if obj.get("role").and_then(Value::as_str) == Some("system") {
+        obj.insert("role".to_string(), Value::String("developer".to_string()));
     }
 }
 /// Repair Chat-Completions-style `tool` messages in a native `/responses` body.
@@ -192,7 +207,7 @@ fn validate_native_responses_input_roles(input: Option<&Value>) -> CodexGatewayR
         }
         let message = format!(
             "responses input item {index} has unsupported role `{role}`; supported roles are \
-             `assistant`, `system`, `developer`, and `user`"
+             `assistant`, `developer`, and `user`"
         );
         return Err(bad_request(&message));
     }

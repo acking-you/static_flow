@@ -12,7 +12,7 @@ use axum::{
     http::{header, Method, Request, StatusCode},
     response::{IntoResponse, Response},
 };
-use eventsource_stream::Eventsource;
+use eventsource_stream::{Event as SseEvent, Eventsource};
 use futures_util::{StreamExt, TryStreamExt};
 use llm_access_codex::{
     anthropic_messages::{
@@ -1296,6 +1296,11 @@ enum CodexUpstreamOutcome {
     Failover { error: CodexClassifiedUpstreamError, ctx: Box<CodexStreamContext> },
 }
 
+struct CodexPreflightEvent {
+    event: SseEvent,
+    chunks: Vec<Bytes>,
+}
+
 /// What the dispatch loop should do with an adapted upstream outcome.
 enum CodexLoopStep {
     Respond(Response),
@@ -1877,6 +1882,59 @@ pub fn codex_status_from_error_json_value(value: &Value) -> Option<StatusCode> {
 
     None
 }
+
+/// Upper bound on how many leading SSE events the dispatcher buffers while
+/// waiting for the first client-visible chunk. Codex normally emits only a
+/// couple of lifecycle events (`response.created`, `response.in_progress`)
+/// before content, so 16 leaves ample headroom while bounding the buffer — and
+/// the time-to-first-byte — if an upstream only ever emits lifecycle events.
+const CODEX_STREAM_PREFLIGHT_MAX_EVENTS: usize = 16;
+/// Companion byte cap for [`CODEX_STREAM_PREFLIGHT_MAX_EVENTS`]: stop buffering
+/// preflight events once their combined wire + encoded size reaches this, so a
+/// burst of large lifecycle payloads cannot grow the preflight buffer unbounded.
+const CODEX_STREAM_PREFLIGHT_MAX_BYTES: usize = 64 * 1024;
+
+/// Adapt one upstream Codex SSE event into the client-visible byte chunks for
+/// the active response protocol.
+///
+/// Shared by the preflight buffering loop and the main streaming loop so the
+/// two paths cannot diverge in how an event is encoded. Returns an empty vec
+/// for events that produce no downstream bytes (e.g. lifecycle events under the
+/// chat/Anthropic adapters); `chat_metadata`/`anthropic_metadata` are threaded
+/// through so streaming state stays continuous across the preflight -> stream
+/// boundary.
+fn adapt_codex_event_to_client_chunks(
+    response_adapter: GatewayResponseAdapter,
+    event: &SseEvent,
+    prepared: &llm_access_codex::types::PreparedGatewayRequest,
+    chat_metadata: &mut ChatStreamMetadata,
+    anthropic_metadata: &mut AnthropicStreamMetadata,
+) -> Vec<Bytes> {
+    match response_adapter {
+        GatewayResponseAdapter::Responses => vec![encode_sse_event_with_model_alias(
+            event,
+            prepared.model.as_deref(),
+            prepared.client_visible_model.as_deref(),
+        )],
+        GatewayResponseAdapter::ChatCompletions => convert_response_event_to_chat_chunk(
+            event,
+            Some(&prepared.tool_name_restore_map),
+            chat_metadata,
+            prepared.model.as_deref(),
+            prepared.client_visible_model.as_deref(),
+        )
+        .map(|chunk| vec![encode_json_sse_chunk(&chunk)])
+        .unwrap_or_default(),
+        GatewayResponseAdapter::AnthropicMessages => convert_response_event_to_anthropic_sse_chunks(
+            event,
+            Some(&prepared.tool_name_restore_map),
+            anthropic_metadata,
+            prepared.model.as_deref(),
+            prepared.client_visible_model.as_deref(),
+        ),
+    }
+}
+
 async fn stream_codex_upstream_response(
     response: reqwest::Response,
     status: StatusCode,
@@ -1889,36 +1947,63 @@ async fn stream_codex_upstream_response(
         .bytes_stream()
         .map_err(std::io::Error::other)
         .eventsource();
-    let first_event = match events.next().await {
-        Some(Ok(event)) => {
-            if let Some(error) = classify_codex_sse_event_failure(
-                status,
-                &upstream_headers,
-                Some(event.event.as_str()),
-                &event.data,
-            ) {
+    let mut preflight_events = Vec::new();
+    let mut preflight_bytes = 0usize;
+    let mut chat_metadata = ChatStreamMetadata::default();
+    let mut anthropic_metadata = AnthropicStreamMetadata::default();
+    loop {
+        let event = match events.next().await {
+            Some(Ok(event)) => event,
+            Some(Err(err)) => {
+                let error = CodexClassifiedUpstreamError {
+                    class: CodexUpstreamErrorClass::Stream,
+                    status: StatusCode::BAD_GATEWAY,
+                    message: format!("failed to parse codex upstream SSE event: {err}"),
+                    body: Bytes::new(),
+                    retry_after: None,
+                };
                 return CodexUpstreamOutcome::Failover {
                     error,
                     ctx: Box::new(ctx),
                 };
-            }
-            Some(event)
-        },
-        Some(Err(err)) => {
-            let error = CodexClassifiedUpstreamError {
-                class: CodexUpstreamErrorClass::Stream,
-                status: StatusCode::BAD_GATEWAY,
-                message: format!("failed to parse codex upstream SSE event: {err}"),
-                body: Bytes::new(),
-                retry_after: None,
-            };
+            },
+            None => break,
+        };
+        if let Some(error) = classify_codex_sse_event_failure(
+            status,
+            &upstream_headers,
+            Some(event.event.as_str()),
+            &event.data,
+        ) {
             return CodexUpstreamOutcome::Failover {
                 error,
                 ctx: Box::new(ctx),
             };
-        },
-        None => None,
-    };
+        }
+        let chunks = adapt_codex_event_to_client_chunks(
+            response_adapter,
+            &event,
+            &ctx.prepared,
+            &mut chat_metadata,
+            &mut anthropic_metadata,
+        );
+        let has_client_chunk = !chunks.is_empty();
+        preflight_bytes = preflight_bytes
+            .saturating_add(event.event.len())
+            .saturating_add(event.data.len())
+            .saturating_add(chunks.iter().map(|chunk| chunk.len()).sum::<usize>());
+        preflight_events.push(CodexPreflightEvent {
+            event,
+            chunks,
+        });
+        if response_adapter == GatewayResponseAdapter::Responses
+            || has_client_chunk
+            || preflight_events.len() >= CODEX_STREAM_PREFLIGHT_MAX_EVENTS
+            || preflight_bytes >= CODEX_STREAM_PREFLIGHT_MAX_BYTES
+        {
+            break;
+        }
+    }
     let failure_headers = upstream_headers.clone();
     let body_stream = stream! {
         let CodexStreamContext {
@@ -1934,9 +2019,8 @@ async fn stream_codex_upstream_response(
             usage_meta,
         } = ctx;
         let _permits = permits;
-        let mut first_event = first_event;
-        let mut chat_metadata = ChatStreamMetadata::default();
-        let mut anthropic_metadata = AnthropicStreamMetadata::default();
+        let mut chat_metadata = chat_metadata;
+        let mut anthropic_metadata = anthropic_metadata;
         let mut guard = CodexStreamRecordGuard {
             prepared,
             key,
@@ -1950,12 +2034,15 @@ async fn stream_codex_upstream_response(
             state: StreamRecordState::Pending,
             record_committed: false,
         };
+        for preflight in preflight_events {
+            guard.usage_collector.observe_event(&preflight.event);
+            for bytes in preflight.chunks {
+                guard.observe_chunk(&bytes, Some(preflight.event.event.as_str()));
+                yield Ok::<Bytes, std::io::Error>(bytes);
+            }
+        }
         loop {
-            let event = if let Some(event) = first_event.take() {
-                Some(Ok(event))
-            } else {
-                events.next().await
-            };
+            let event = events.next().await;
             let Some(event) = event else {
                 break;
             };
@@ -1998,41 +2085,16 @@ async fn stream_codex_upstream_response(
                         return;
                     }
                     guard.usage_collector.observe_event(&event);
-                    match response_adapter {
-                        GatewayResponseAdapter::Responses => {
-                            let bytes = encode_sse_event_with_model_alias(
-                                &event,
-                                guard.prepared.model.as_deref(),
-                                guard.prepared.client_visible_model.as_deref(),
-                            );
-                            guard.observe_chunk(&bytes, Some(event.event.as_str()));
-                            yield Ok::<Bytes, std::io::Error>(bytes);
-                        },
-                        GatewayResponseAdapter::ChatCompletions => {
-                            if let Some(chunk) = convert_response_event_to_chat_chunk(
-                                &event,
-                                Some(&guard.prepared.tool_name_restore_map),
-                                &mut chat_metadata,
-                                guard.prepared.model.as_deref(),
-                                guard.prepared.client_visible_model.as_deref(),
-                            ) {
-                                let bytes = encode_json_sse_chunk(&chunk);
-                                guard.observe_chunk(&bytes, Some(event.event.as_str()));
-                                yield Ok::<Bytes, std::io::Error>(bytes);
-                            }
-                        },
-                        GatewayResponseAdapter::AnthropicMessages => {
-                            for bytes in convert_response_event_to_anthropic_sse_chunks(
-                                &event,
-                                Some(&guard.prepared.tool_name_restore_map),
-                                &mut anthropic_metadata,
-                                guard.prepared.model.as_deref(),
-                                guard.prepared.client_visible_model.as_deref(),
-                            ) {
-                                guard.observe_chunk(&bytes, Some(event.event.as_str()));
-                                yield Ok::<Bytes, std::io::Error>(bytes);
-                            }
-                        },
+                    let chunks = adapt_codex_event_to_client_chunks(
+                        response_adapter,
+                        &event,
+                        &guard.prepared,
+                        &mut chat_metadata,
+                        &mut anthropic_metadata,
+                    );
+                    for bytes in chunks {
+                        guard.observe_chunk(&bytes, Some(event.event.as_str()));
+                        yield Ok::<Bytes, std::io::Error>(bytes);
                     }
                 },
                 Err(err) => {

@@ -15,6 +15,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use base64::Engine as _;
 use llm_access_codex::types::CodexResolvedSessionSource;
 use llm_access_core::{
     provider::RouteStrategy,
@@ -35,6 +36,21 @@ use super::{
     CodexAffinityId, CodexAffinityRuntimeConfig, CodexAffinitySource, CodexSessionAffinity,
     ProviderDispatcher, RequestLimiter,
 };
+
+const SAMPLE_PNG_BASE64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
+const SAMPLE_PNG_BYTES: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4, 0,
+    0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 252, 255, 31, 0, 3, 3, 2, 0,
+    239, 191, 167, 219, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
+
+fn distinct_sample_png_base64(index: usize) -> String {
+    let mut bytes = SAMPLE_PNG_BYTES.to_vec();
+    bytes.push((index & 0xff) as u8);
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
 
 #[test]
 fn codex_backend_api_base_uses_upstream_codex_paths() {
@@ -77,7 +93,7 @@ fn cctest_fast_path_rejects_large_multimodal_and_websearch_requests() {
 
     let mut multimodal = cctest_tag_request_json("f03bc", "64ccfee3c339a9c8", "session-a");
     multimodal["messages"][0]["content"] = json!([
-        {"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}},
+        {"type":"image","source":{"type":"base64","media_type":"image/png","data":SAMPLE_PNG_BASE64}},
         {"type":"text","text":"read this"}
     ]);
     assert!(super::cctest::inspect_cctest_text_probe(
@@ -600,7 +616,7 @@ async fn kiro_remote_media_resolver_rewrites_url_image_sources() {
         &mut payload,
         &StaticRemoteMediaFetcher {
             media_type: "image/png",
-            bytes: b"hello",
+            bytes: SAMPLE_PNG_BYTES,
         },
     )
     .await
@@ -609,7 +625,7 @@ async fn kiro_remote_media_resolver_rewrites_url_image_sources() {
     let source = &payload.messages[0].content[0]["source"];
     assert_eq!(source["type"], "base64");
     assert_eq!(source["media_type"], "image/png");
-    assert_eq!(source["data"], "aGVsbG8=");
+    assert_eq!(source["data"], SAMPLE_PNG_BASE64);
 }
 
 #[tokio::test]
@@ -3851,6 +3867,201 @@ async fn fake_codex_responses_overload_sse(
         .expect("overload sse upstream response")
 }
 
+async fn fake_codex_responses_chat_lifecycle_then_overload_sse(
+    State(captured): State<Arc<CapturedCodexUpstream>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Response {
+    let path = request.uri().path().to_string();
+    let query = request.uri().query().map(ToString::to_string);
+    let body = to_bytes(request.into_body(), usize::MAX)
+        .await
+        .expect("upstream request body");
+    let body = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json")
+    };
+    let authorization = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    captured
+        .requests
+        .lock()
+        .expect("captured requests")
+        .push(captured_codex_request(&headers, path, query, body));
+
+    if authorization.as_deref() == Some("Bearer upstream-token-a") {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .body(Body::from(format!(
+                "event: response.created\ndata: {}\n\nevent: response.failed\ndata: {}\n\n",
+                json!({
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_overload",
+                        "status": "in_progress",
+                        "model": "gpt-5.3-codex-spark",
+                        "output": []
+                    }
+                }),
+                json!({
+                    "type": "response.failed",
+                    "response": {
+                        "status": "failed",
+                        "error": {
+                            "type": "service_unavailable_error",
+                            "message": "Our servers are currently overloaded. Please try again later.",
+                            "code": "server_is_overloaded"
+                        }
+                    }
+                })
+            )))
+            .expect("lifecycle then overload upstream response");
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .body(Body::from(format!(
+            "event: response.output_text.delta\ndata: {}\n\nevent: response.completed\ndata: \
+             {}\n\n",
+            json!({
+                "type": "response.output_text.delta",
+                "response_id": "resp_1",
+                "created": 123,
+                "model": "gpt-5.3-codex-spark",
+                "delta": "hello back"
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "created_at": 123,
+                    "model": "gpt-5.3-codex-spark",
+                    "output": [{
+                        "type": "message",
+                        "content": [{
+                            "type": "output_text",
+                            "text": "hello back"
+                        }]
+                    }],
+                    "usage": {
+                        "input_tokens": 12,
+                        "input_tokens_details": {
+                            "cached_tokens": 2
+                        },
+                        "output_tokens": 3
+                    }
+                }
+            })
+        )))
+        .expect("success upstream response")
+}
+
+async fn fake_codex_responses_long_lifecycle_then_overload_sse(
+    State(captured): State<Arc<CapturedCodexUpstream>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Response {
+    let path = request.uri().path().to_string();
+    let query = request.uri().query().map(ToString::to_string);
+    let body = to_bytes(request.into_body(), usize::MAX)
+        .await
+        .expect("upstream request body");
+    let body = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice::<serde_json::Value>(&body).expect("upstream json")
+    };
+    let authorization = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    captured
+        .requests
+        .lock()
+        .expect("captured requests")
+        .push(captured_codex_request(&headers, path, query, body));
+
+    if authorization.as_deref() == Some("Bearer upstream-token-a") {
+        let mut body = String::new();
+        for index in 0..32 {
+            body.push_str(&format!(
+                "event: response.created\ndata: {}\n\n",
+                json!({
+                    "type": "response.created",
+                    "response": {
+                        "id": format!("resp_lifecycle_{index}"),
+                        "status": "in_progress",
+                        "model": "gpt-5.3-codex-spark",
+                        "output": []
+                    }
+                })
+            ));
+        }
+        body.push_str(&format!(
+            "event: response.failed\ndata: {}\n\n",
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "status": "failed",
+                    "error": {
+                        "type": "service_unavailable_error",
+                        "message": "Our servers are currently overloaded. Please try again later.",
+                        "code": "server_is_overloaded"
+                    }
+                }
+            })
+        ));
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .body(Body::from(body))
+            .expect("long lifecycle then overload upstream response");
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .body(Body::from(format!(
+            "event: response.output_text.delta\ndata: {}\n\nevent: response.completed\ndata: \
+             {}\n\n",
+            json!({
+                "type": "response.output_text.delta",
+                "response_id": "resp_1",
+                "created": 123,
+                "model": "gpt-5.3-codex-spark",
+                "delta": "hello back"
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "created_at": 123,
+                    "model": "gpt-5.3-codex-spark",
+                    "output": [{
+                        "type": "message",
+                        "content": [{
+                            "type": "output_text",
+                            "text": "hello back"
+                        }]
+                    }],
+                    "usage": {
+                        "input_tokens": 12,
+                        "input_tokens_details": {
+                            "cached_tokens": 2
+                        },
+                        "output_tokens": 3
+                    }
+                }
+            })
+        )))
+        .expect("success upstream response")
+}
+
 async fn fake_codex_responses_mid_stream_failed_sse(
     State(captured): State<Arc<CapturedCodexUpstream>>,
     headers: HeaderMap,
@@ -5729,6 +5940,231 @@ async fn codex_dispatch_fails_over_recoverable_overload_in_sse_stream() {
         "recoverable overload should fail over to the second account; client status={status}, \
          attempted accounts={auths:?}"
     );
+}
+
+#[tokio::test]
+async fn codex_dispatch_fails_over_chat_stream_error_before_first_client_chunk() {
+    let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("codex upstream env lock");
+    let captured = Arc::new(CapturedCodexUpstream::default());
+    let app = Router::new()
+        .route("/v1/responses", post(fake_codex_responses_chat_lifecycle_then_overload_sse))
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake upstream");
+    let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve fake upstream");
+    });
+    std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+    let route_store = Arc::new(StaticMultiCodexRouteStore {
+        codex_routes: vec![
+            codex_route_for_account("codex-a", "upstream-token-a"),
+            codex_route_for_account("codex-b", "upstream-token-b"),
+        ],
+        kiro_route: static_kiro_route(),
+    });
+    let store = Arc::new(RecordingControlStore::default());
+    let state = super::ProviderState::new(store.clone(), route_store);
+    let response = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                        "model": "gpt-5.3-codex",
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": true
+                    }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+
+    std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let body = String::from_utf8(body.to_vec()).expect("utf8 response");
+    assert!(body.contains("hello back"), "body: {body}");
+    assert!(body.contains("[DONE]"), "body: {body}");
+    assert!(!body.contains("server_is_overloaded"), "body: {body}");
+
+    let requests = captured.requests.lock().expect("captured requests");
+    let auths = requests
+        .iter()
+        .filter_map(|request| request.authorization.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(auths, vec![
+        "Bearer upstream-token-a".to_string(),
+        "Bearer upstream-token-b".to_string(),
+    ]);
+    drop(requests);
+
+    wait_for_usage_event_count(store.as_ref(), 1).await;
+    let events = store.usage_events.lock().expect("usage events");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].status_code, 200);
+    assert_eq!(events[0].quota_failover_count, 1);
+    assert_eq!(events[0].account_name.as_deref(), Some("codex-b"));
+}
+
+#[tokio::test]
+async fn codex_dispatch_fails_over_anthropic_stream_error_before_first_client_chunk() {
+    let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("codex upstream env lock");
+    let captured = Arc::new(CapturedCodexUpstream::default());
+    let app = Router::new()
+        .route("/v1/responses", post(fake_codex_responses_chat_lifecycle_then_overload_sse))
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake upstream");
+    let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve fake upstream");
+    });
+    std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+    let route_store = Arc::new(StaticMultiCodexRouteStore {
+        codex_routes: vec![
+            codex_route_for_account("codex-a", "upstream-token-a"),
+            codex_route_for_account("codex-b", "upstream-token-b"),
+        ],
+        kiro_route: static_kiro_route(),
+    });
+    let store = Arc::new(RecordingControlStore::default());
+    let state = super::ProviderState::new(store.clone(), route_store);
+    let response = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/api/llm-gateway/v1/messages")
+            .header("x-api-key", "codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                        "model": "gpt-5.3-codex",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": true
+                    }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+
+    std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let body = String::from_utf8(body.to_vec()).expect("utf8 response");
+    assert!(body.contains("event: content_block_delta"), "body: {body}");
+    assert!(body.contains("hello back"), "body: {body}");
+    assert!(!body.contains("server_is_overloaded"), "body: {body}");
+
+    let requests = captured.requests.lock().expect("captured requests");
+    let auths = requests
+        .iter()
+        .filter_map(|request| request.authorization.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(auths, vec![
+        "Bearer upstream-token-a".to_string(),
+        "Bearer upstream-token-b".to_string(),
+    ]);
+    drop(requests);
+
+    wait_for_usage_event_count(store.as_ref(), 1).await;
+    let events = store.usage_events.lock().expect("usage events");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].status_code, 200);
+    assert_eq!(events[0].quota_failover_count, 1);
+    assert_eq!(events[0].account_name.as_deref(), Some("codex-b"));
+}
+
+#[tokio::test]
+async fn codex_dispatch_stops_preflight_buffering_after_lifecycle_event_cap() {
+    let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
+        .lock()
+        .expect("codex upstream env lock");
+    let captured = Arc::new(CapturedCodexUpstream::default());
+    let app = Router::new()
+        .route("/v1/responses", post(fake_codex_responses_long_lifecycle_then_overload_sse))
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake upstream");
+    let upstream_base = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve fake upstream");
+    });
+    std::env::set_var("CODEX_UPSTREAM_BASE_URL", upstream_base);
+
+    let route_store = Arc::new(StaticMultiCodexRouteStore {
+        codex_routes: vec![
+            codex_route_for_account("codex-a", "upstream-token-a"),
+            codex_route_for_account("codex-b", "upstream-token-b"),
+        ],
+        kiro_route: static_kiro_route(),
+    });
+    let store = Arc::new(RecordingControlStore::default());
+    let state = super::ProviderState::new(store.clone(), route_store);
+    let response = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer codex-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                        "model": "gpt-5.3-codex",
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "stream": true
+                    }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+
+    std::env::remove_var("CODEX_UPSTREAM_BASE_URL");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let body = String::from_utf8(body.to_vec()).expect("utf8 response");
+    assert!(!body.contains("server_is_overloaded"), "body: {body}");
+
+    let requests = captured.requests.lock().expect("captured requests");
+    let auths = requests
+        .iter()
+        .filter_map(|request| request.authorization.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(auths, vec!["Bearer upstream-token-a".to_string()]);
+    drop(requests);
+
+    wait_for_usage_event_count(store.as_ref(), 1).await;
+    let events = store.usage_events.lock().expect("usage events");
+    assert_eq!(events.len(), 1);
+    assert_ne!(events[0].quota_failover_count, 1);
 }
 
 #[tokio::test]
@@ -8435,29 +8871,30 @@ async fn kiro_dispatch_sends_history_images_without_stable_session_upstream() {
             .header("x-api-key", "valid-secret")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(
-                r#"{
-                        "model": "claude-sonnet-4-6",
-                        "max_tokens": 128,
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "image",
-                                        "source": {
-                                            "type": "base64",
-                                            "media_type": "image/png",
-                                            "data": "aGVsbG8="
-                                        }
-                                    },
-                                    {"type": "text", "text": "old image"}
-                                ]
-                            },
-                            {"role": "assistant", "content": "ok"},
-                            {"role": "user", "content": "continue"}
-                        ],
-                        "stream": false
-                    }"#,
+                serde_json::json!({
+                    "model": "claude-sonnet-4-6",
+                    "max_tokens": 128,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",
+                                        "data": SAMPLE_PNG_BASE64
+                                    }
+                                },
+                                {"type": "text", "text": "old image"}
+                            ]
+                        },
+                        {"role": "assistant", "content": "ok"},
+                        {"role": "user", "content": "continue"}
+                    ],
+                    "stream": false
+                })
+                .to_string(),
             ))
             .expect("request"),
     )
@@ -8565,7 +9002,7 @@ async fn kiro_dispatch_keeps_only_the_last_ten_images_before_upstream() {
                 "source": {
                     "type": "base64",
                     "media_type": "image/png",
-                    "data": format!("image-{index}")
+                    "data": distinct_sample_png_base64(index)
                 }
             })
         })
@@ -8608,8 +9045,8 @@ async fn kiro_dispatch_keeps_only_the_last_ten_images_before_upstream() {
         .as_array()
         .expect("images array");
     assert_eq!(images.len(), 10);
-    assert_eq!(images[0]["source"]["bytes"], "image-1");
-    assert_eq!(images[9]["source"]["bytes"], "image-10");
+    assert_eq!(images[0]["source"]["bytes"], distinct_sample_png_base64(1));
+    assert_eq!(images[9]["source"]["bytes"], distinct_sample_png_base64(10));
     let events = store.usage_events.lock().expect("usage events");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].status_code, 200);
@@ -8646,7 +9083,7 @@ async fn kiro_dispatch_sends_opus_images_directly_without_vision_bridge() {
                                 "source": {
                                     "type": "base64",
                                     "media_type": "image/png",
-                                    "data": "aGVsbG8="
+                                    "data": SAMPLE_PNG_BASE64
                                 }
                             }
                         ]

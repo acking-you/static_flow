@@ -353,6 +353,19 @@ mod tests {
         "SGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCnRyYWlsZXIKPDwgL1Np",
         "emUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKMAolJUVPRg=="
     );
+    const SAMPLE_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/\
+                                     x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    const SAMPLE_JPEG_BASE64: &str = concat!(
+        "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////",
+        "////////////////////////2wBDAf//////////////////////////////////////////////////",
+        "////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/",
+        "xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA",
+        "/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/Aaf/xAAUEQEAAAAAAAAA",
+        "AAAAAAAAAAAA/9oACAECAQE/Aaf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAU",
+        "EAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EABQRAQAAAAAAAAAA",
+        "AAAAAAAAABD/2gAIAQMBAT8QH//EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8QH//EABQQ",
+        "AQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8QH//Z"
+    );
 
     fn base_request(messages: Vec<AnthropicMessage>) -> MessagesRequest {
         MessagesRequest {
@@ -997,7 +1010,7 @@ mod tests {
                         "source": {
                             "type": "base64",
                             "media_type": "image/png",
-                            "data": "aGVsbG8="
+                            "data": SAMPLE_PNG_BASE64
                         }
                     }
                 ]),
@@ -1237,7 +1250,7 @@ mod tests {
                     "source": {
                         "type": "base64",
                         "media_type": "image/png",
-                        "data": "aGVsbG8="
+                        "data": SAMPLE_PNG_BASE64
                     }
                 }
             ]),
@@ -1298,7 +1311,7 @@ mod tests {
                         "source": {
                             "type": "base64",
                             "media_type": "image/png",
-                            "data": "aGVsbG8="
+                            "data": SAMPLE_PNG_BASE64
                         }
                     }
                 ]),
@@ -2492,7 +2505,7 @@ mod tests {
                     "source": {
                         "type": "base64",
                         "media_type": "image/png",
-                        "data": "aGVsbG8="
+                        "data": SAMPLE_PNG_BASE64
                     }
                 }
             ]),
@@ -2806,7 +2819,7 @@ mod tests {
                         "source": {
                             "type": "base64",
                             "media_type": "image/png",
-                            "data": "aGVsbG8="
+                            "data": SAMPLE_PNG_BASE64
                         }
                     }
                 ]),
@@ -2900,7 +2913,7 @@ mod tests {
                                 "source": {
                                     "type": "base64",
                                     "media_type": "image/png",
-                                    "data": "aGVsbG8="
+                                    "data": SAMPLE_PNG_BASE64
                                 }
                             }
                         ]
@@ -2927,6 +2940,112 @@ mod tests {
             current["userInputMessageContext"]["toolResults"][0]["content"][0]["text"],
             "(empty result)"
         );
+    }
+
+    #[test]
+    fn convert_request_rejects_truncated_direct_image() {
+        let req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!([
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "iVBORw0KGgo="
+                    }
+                },
+                {"type": "text", "text": "Read the screenshot"}
+            ]),
+        }]);
+
+        let err = convert_request(&req).expect_err("truncated image should be rejected");
+        let message = err.to_string();
+
+        assert!(message.contains("invalid image data"), "{message}");
+        assert!(message.contains("png"), "{message}");
+    }
+
+    #[test]
+    fn convert_request_drops_truncated_history_image() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "iVBORw0KGgo="
+                        }
+                    },
+                    {"type": "text", "text": "old screenshot"}
+                ]),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!("ok"),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("continue"),
+            },
+        ]);
+
+        let result = convert_request(&req).expect("history bad image should be dropped");
+        let history = serde_json::to_value(&result.conversation_state.history).expect("history");
+
+        assert_eq!(history[2]["userInputMessage"]["content"], "old screenshot");
+        assert!(history[2]["userInputMessage"].get("images").is_none());
+    }
+
+    #[test]
+    fn convert_request_drops_truncated_tool_result_image() {
+        let req = base_request(vec![
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Read the screenshot"),
+            },
+            AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_use",
+                        "id": "tool-1",
+                        "name": "read_image",
+                        "input": {"path": "/tmp/screenshot.png"}
+                    }
+                ]),
+            },
+            AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!([
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-1",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": "iVBORw0KGgo="
+                                }
+                            }
+                        ]
+                    }
+                ]),
+            },
+        ]);
+
+        let result = convert_request(&req).expect("tool_result bad image should be dropped");
+        let current =
+            serde_json::to_value(&result.conversation_state.current_message.user_input_message)
+                .expect("serialize current message");
+
+        assert!(current.get("images").is_none());
+        assert_eq!(current["userInputMessageContext"]["toolResults"][0]["toolUseId"], "tool-1");
     }
 
     #[test]
@@ -2959,7 +3078,7 @@ mod tests {
                                 "source": {
                                     "type": "base64",
                                     "media_type": "image/png",
-                                    "data": "aGVsbG8="
+                                    "data": SAMPLE_PNG_BASE64
                                 }
                             }
                         ])
@@ -3017,7 +3136,7 @@ mod tests {
                                 "source": {
                                     "type": "base64",
                                     "media_type": "image/png",
-                                    "data": "aGVsbG8="
+                                    "data": SAMPLE_PNG_BASE64
                                 }
                             }
                         ]
@@ -3069,7 +3188,7 @@ mod tests {
                                 "source": {
                                     "type": "base64",
                                     "media_type": "image/png",
-                                    "data": "cG5n"
+                                    "data": SAMPLE_PNG_BASE64
                                 }
                             },
                             {
@@ -3077,7 +3196,7 @@ mod tests {
                                 "source": {
                                     "type": "base64",
                                     "media_type": "image/jpeg",
-                                    "data": "anBlZw=="
+                                    "data": SAMPLE_JPEG_BASE64
                                 }
                             }
                         ]
@@ -3291,7 +3410,7 @@ mod tests {
                                 "source": {
                                     "type": "base64",
                                     "media_type": "image/png",
-                                    "data": "aGVsbG8="
+                                    "data": SAMPLE_PNG_BASE64
                                 }
                             }
                         ]

@@ -14,7 +14,7 @@ use super::session::resolve_conversation_id_from_metadata;
 use super::{
     document::kiro_document_from_block,
     identity::response_identity_for_current_turn,
-    image::get_image_format_from_source,
+    image::get_image_from_source,
     invalid_request,
     model::map_model,
     schema::{apply_multimodal_tool_schema_compatibility, request_message_contains_image},
@@ -257,6 +257,7 @@ pub fn convert_normalized_request_with_resolved_session(
 // polymorphic `content` field (string or array of typed blocks).
 fn process_message_content(
     content: &serde_json::Value,
+    invalid_image_policy: InvalidImagePolicy,
 ) -> Result<ProcessedMessageContent, ConversionError> {
     let mut text_parts = Vec::new();
     let mut images = Vec::new();
@@ -275,8 +276,10 @@ fn process_message_content(
                         },
                         "image" => {
                             if let Some(source) = block.source {
-                                if let Some(format) = get_image_format_from_source(&source) {
-                                    images.push(KiroImage::from_base64(format, source.data));
+                                if let Some(image) =
+                                    image_from_source(source, invalid_image_policy)?
+                                {
+                                    images.push(image);
                                 }
                             }
                         },
@@ -326,6 +329,35 @@ fn process_message_content(
         documents,
         tool_results,
     })
+}
+
+/// How to treat an image block whose payload fails decoding/validation.
+///
+/// The current user turn uses [`InvalidImagePolicy::Reject`] so the client gets
+/// an actionable error it can fix. History and `tool_result` images use
+/// [`InvalidImagePolicy::Drop`]: that content was already accepted in an earlier
+/// request, so a now-detected defect must not retroactively fail the whole
+/// conversation.
+#[derive(Clone, Copy)]
+enum InvalidImagePolicy {
+    Reject,
+    Drop,
+}
+
+fn image_from_source(
+    source: crate::anthropic::types::ImageSource,
+    invalid_image_policy: InvalidImagePolicy,
+) -> Result<Option<KiroImage>, ConversionError> {
+    match get_image_from_source(&source) {
+        Ok(Some(image)) => Ok(Some(KiroImage::from_base64(image.format, image.data))),
+        Ok(None) => Ok(None),
+        Err(err) => match invalid_image_policy {
+            InvalidImagePolicy::Reject => {
+                Err(invalid_request(format!("image block has invalid image data: {err}")))
+            },
+            InvalidImagePolicy::Drop => Ok(None),
+        },
+    }
 }
 
 // Builds the Kiro history from Anthropic messages that precede the current
@@ -394,7 +426,7 @@ fn merge_current_user_messages(
     let mut documents = Vec::new();
     let mut tool_results = Vec::new();
     for message in messages {
-        let processed = process_message_content(&message.content)?;
+        let processed = process_message_content(&message.content, InvalidImagePolicy::Reject)?;
         if !processed.text.is_empty() {
             content_parts.push(processed.text);
         }
@@ -431,7 +463,7 @@ fn merge_user_messages(
     let mut documents = Vec::new();
     let mut tool_results = Vec::new();
     for message in messages {
-        let processed = process_message_content(&message.content)?;
+        let processed = process_message_content(&message.content, InvalidImagePolicy::Drop)?;
         if !processed.text.is_empty() {
             content_parts.push(processed.text);
         }

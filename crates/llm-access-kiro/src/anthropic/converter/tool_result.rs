@@ -1,9 +1,7 @@
 //! Extraction of tool-result text and attachments from Anthropic
 //! tool_result blocks (including stringified JSON content).
 
-use super::{
-    document::kiro_document_from_block, image::get_image_format_from_source, ConversionError,
-};
+use super::{document::kiro_document_from_block, image::get_image_from_source, ConversionError};
 use crate::{
     anthropic::types::ContentBlock,
     wire::{KiroDocument, KiroImage},
@@ -36,8 +34,8 @@ fn extract_tool_result_attachments_from_value(
                 match block.block_type.as_str() {
                     "image" => {
                         if let Some(source) = block.source {
-                            if let Some(format) = get_image_format_from_source(&source) {
-                                images.push(KiroImage::from_base64(format, source.data));
+                            if let Ok(Some(image)) = get_image_from_source(&source) {
+                                images.push(KiroImage::from_base64(image.format, image.data));
                             }
                         }
                     },
@@ -59,8 +57,8 @@ fn extract_tool_result_attachments_from_value(
             match block.block_type.as_str() {
                 "image" => {
                     if let Some(source) = block.source {
-                        if let Some(format) = get_image_format_from_source(&source) {
-                            images.push(KiroImage::from_base64(format, source.data));
+                        if let Ok(Some(image)) = get_image_from_source(&source) {
+                            images.push(KiroImage::from_base64(image.format, image.data));
                         }
                     }
                 },
