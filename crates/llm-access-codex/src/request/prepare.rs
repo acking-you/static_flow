@@ -21,8 +21,8 @@ use super::{
     headers::extract_header_value,
     last_message::extract_last_message_content_from_value,
     native_responses::{
-        inject_default_instructions_when_missing, normalize_native_responses_request,
-        repair_native_responses_request, validate_native_responses_request,
+        normalize_native_responses_request, repair_native_responses_request,
+        set_codex_default_instructions, validate_native_responses_request,
     },
     normalization::{
         filter_responses_request_fields, normalize_codex_public_model, normalize_responses_request,
@@ -185,7 +185,7 @@ pub fn prepare_gateway_request_from_bytes(
             if let Some(prompt_cache_key) = extract_non_empty_string(root.get("prompt_cache_key")) {
                 thread_anchor = Some(prompt_cache_key.to_string());
             }
-            inject_default_instructions_when_missing(root);
+            set_codex_default_instructions(root);
             normalize_native_responses_request(gateway_path, root);
             repair_native_responses_request(gateway_path, root)?;
             validate_native_responses_request(gateway_path, root)?;
