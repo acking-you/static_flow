@@ -6,13 +6,24 @@ use std::{
 
 use llm_access_core::store::DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY;
 
-/// Process-local limiter for Codex image requests.
+/// Process-local in-flight limiter for per-account Codex image concurrency.
+///
+/// The cap is enforced only within this process: each running gateway (the
+/// standalone binary and/or the integrated Codex API binary) keeps its own
+/// counter, so the effective per-account concurrency is `cap * number of
+/// gateway processes serving that account`. Treat the configured cap as a
+/// per-process bound, not a global reservation.
 #[derive(Clone, Debug, Default)]
 pub struct ImageAccountLimiter {
     states: Arc<Mutex<HashMap<String, u64>>>,
 }
 
-/// Process-local limiter for key-level Codex image throttling.
+/// Process-local limiter for per-key Codex image throttling.
+///
+/// Enforces two independent gates per key: a max in-flight concurrency and a
+/// minimum interval between request *starts*. Like [`ImageAccountLimiter`] the
+/// state is per-process (see its note on aggregate concurrency across
+/// processes).
 #[derive(Clone, Debug, Default)]
 pub struct ImageKeyLimiter {
     states: Arc<Mutex<HashMap<String, ImageKeyLimitState>>>,
@@ -86,7 +97,17 @@ impl ImageAccountLimiter {
 }
 
 impl ImageKeyLimiter {
-    /// Attempts to acquire one key image permit without waiting.
+    /// Attempt to admit one key-level image request without waiting.
+    ///
+    /// Both gates must pass: `in_flight` must be below `max_concurrency` (when
+    /// set) and at least `min_start_interval_ms` must have elapsed since the
+    /// last admitted *start* (when set). A `0` bound disables that gate.
+    ///
+    /// The interval clock is advanced only on a successful admit, so a
+    /// rejected request never moves it. The clock gates request *starts*, so a
+    /// request that is admitted but then fails on every upstream account still
+    /// counts as a start — this intentionally rate-limits retries rather than
+    /// letting a client hammer the gateway while all accounts are unavailable.
     pub fn try_acquire(
         &self,
         key_id: &str,
@@ -109,7 +130,12 @@ impl ImageKeyLimiter {
             .unwrap_or(true);
         if concurrency_ready && interval_ready {
             state.in_flight = state.in_flight.saturating_add(1);
-            state.last_start = Some(Instant::now());
+            // Stamp the interval clock only when an interval is configured.
+            // Leaving `last_start == None` for unthrottled keys lets the permit
+            // `Drop` reclaim the idle map entry instead of leaking it forever.
+            if min_interval.is_some() {
+                state.last_start = Some(Instant::now());
+            }
             return Ok(ImageKeyPermit {
                 scope,
                 states: Arc::clone(&self.states),
@@ -148,6 +174,13 @@ impl Drop for ImageKeyPermit {
             return;
         };
         state.in_flight = state.in_flight.saturating_sub(1);
+        // Reclaim the entry once the key is idle and carries no interval clock
+        // to preserve. Keys with a configured min-start-interval keep their
+        // `last_start` so the next request stays throttled; that retained set
+        // is bounded by the number of interval-configured keys.
+        if state.in_flight == 0 && state.last_start.is_none() {
+            states.remove(&self.scope);
+        }
     }
 }
 

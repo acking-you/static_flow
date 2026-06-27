@@ -6260,7 +6260,12 @@ fn normalize_kiro_key_patch(
     request.request_min_start_interval_ms_unlimited = false;
     request.codex_fast_enabled = None;
     request.codex_strict_session_rejection_enabled = None;
+    // Codex-only image toggles must never persist onto a Kiro key, even though
+    // they would be inert there — drop all three (the legacy alias plus the
+    // standalone/direct switches) before delegating to the shared normalizer.
     request.codex_image_generation_enabled = None;
+    request.codex_image_standalone_generation_enabled = None;
+    request.codex_image_direct_generation_enabled = None;
     normalize_key_patch(request)
 }
 

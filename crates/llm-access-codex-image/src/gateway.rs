@@ -1,3 +1,22 @@
+//! Shared Codex image gateway.
+//!
+//! [`CodexImageGateway`] is the single OpenAI-compatible `gpt-image` dispatch
+//! engine used by both entrypoints of this feature:
+//! - the standalone `llm-access-codex-image` binary ([`main`](crate)), and
+//! - the main `llm-access` Codex API binary, which embeds it in its router.
+//!
+//! The two entrypoints differ only in [`ImageGatewayMode`] (which per-key gate
+//! is enforced) and in how the dependencies are wired; the request handling,
+//! account failover, concurrency limiting, redacted logging, and usage rollup
+//! all live here so the behavior cannot drift between the two binaries.
+//!
+//! Request flow: [`CodexImageGateway::handle_request`] validates the public
+//! request (path/method/content-type/bearer/key gate/body) and hands a parsed
+//! [`request::CodexImageRequest`] to [`CodexImageGateway::dispatch_image_request`],
+//! which acquires a per-key permit and then walks the eligible Codex accounts,
+//! failing over on auth/transient errors until one succeeds or all are
+//! exhausted.
+
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -27,7 +46,13 @@ use crate::{
     request::{normalize_image_gateway_path, parse_image_request, upstream_image_path},
 };
 
+/// Upper bound on the downstream image request body. Covers prompts plus the
+/// base64 reference images of an `images/edits` call while rejecting payloads
+/// large enough to be a memory-exhaustion vector.
 const MAX_IMAGE_REQUEST_BODY_BYTES: usize = 24 * 1024 * 1024;
+/// Upper bound on the buffered upstream image response. `gpt-image` responses
+/// carry base64 image data (size × `n`), so this is generous, but it is still
+/// capped so a single response cannot exhaust process memory.
 const MAX_IMAGE_UPSTREAM_RESPONSE_BODY_BYTES: u64 = 96 * 1024 * 1024;
 
 /// Runtime configuration for one Codex image gateway instance.
@@ -139,6 +164,18 @@ impl CodexImageGateway {
         .await
     }
 
+    /// Resolve eligible Codex accounts and forward the image request, failing
+    /// over across accounts until one returns a non-retryable response.
+    ///
+    /// A per-key permit (concurrency + min-start-interval) is acquired once for
+    /// the whole request and held by RAII until this function returns. Each
+    /// candidate then takes a per-account concurrency permit for the duration
+    /// of its single upstream attempt. Auth gaps, expired tokens, blocked
+    /// account slots, proxy/transport errors, and retryable upstream statuses
+    /// ([`should_failover_status`]) advance to the next candidate; every other
+    /// status is returned to the client. When all candidates are exhausted the
+    /// aggregate status reflects the dominant failure mode (429 when only
+    /// account slots were busy, 503 on auth exhaustion, else 502).
     async fn dispatch_image_request(
         &self,
         ctx: ImageDispatchRequest<'_>,
@@ -301,7 +338,7 @@ impl CodexImageGateway {
                 continue;
             }
             if status.is_success() {
-                self.record_codex_image_usage(ctx.key, usage_tokens).await;
+                self.spawn_record_codex_image_usage(ctx.key, usage_tokens);
             }
             return upstream_response(status, &headers, bytes);
         }
@@ -335,6 +372,14 @@ impl CodexImageGateway {
         (status, "all eligible codex image accounts failed for this request").into_response()
     }
 
+    /// Refresh the per-account auth/proxy fields of a route candidate from the
+    /// account store just before dispatch, since the route-selection snapshot
+    /// can be stale relative to the latest token refresh.
+    ///
+    /// Only `auth_json` (the freshly resolved token), `cached_error_message`,
+    /// and `proxy` are taken from the hydrated account; every other key-level
+    /// field is kept from `candidate` via struct-update so newly added
+    /// `ProviderCodexRoute` fields are carried through automatically.
     async fn hydrate_codex_image_route(
         &self,
         candidate: ProviderCodexRoute,
@@ -346,32 +391,22 @@ impl CodexImageGateway {
             .ok()
             .flatten()?;
         Some(ProviderCodexRoute {
-            account_name: candidate.account_name,
-            account_group_id_at_event: candidate.account_group_id_at_event,
-            route_strategy_at_event: candidate.route_strategy_at_event,
             auth_json: hydrated.auth_json,
-            map_gpt53_codex_to_spark: candidate.map_gpt53_codex_to_spark,
-            auth_refresh_enabled: candidate.auth_refresh_enabled,
-            codex_fast_enabled: candidate.codex_fast_enabled,
-            codex_strict_session_rejection_enabled: candidate
-                .codex_strict_session_rejection_enabled,
-            codex_image_generation_enabled: candidate.codex_image_generation_enabled,
-            codex_image_direct_generation_enabled: candidate.codex_image_direct_generation_enabled,
-            request_max_concurrency: candidate.request_max_concurrency,
-            request_min_start_interval_ms: candidate.request_min_start_interval_ms,
-            account_request_max_concurrency: candidate.account_request_max_concurrency,
-            account_request_min_start_interval_ms: candidate.account_request_min_start_interval_ms,
-            account_codex_image_generation_enabled: candidate
-                .account_codex_image_generation_enabled,
-            account_codex_image_generation_max_concurrency: candidate
-                .account_codex_image_generation_max_concurrency,
             cached_error_message: candidate
                 .cached_error_message
                 .or(hydrated.cached_error_message),
             proxy: candidate.proxy.or(hydrated.proxy),
+            ..candidate
         })
     }
 
+    /// Return a pooled `reqwest::Client` for the route's proxy configuration.
+    ///
+    /// Clients own their connection pool, so they are reused rather than rebuilt
+    /// per request: the no-proxy case shares `default_client`, and each distinct
+    /// proxy config is built once and memoized (cloning a `Client` is a cheap
+    /// `Arc` bump that shares the pool). The cache is keyed by the full proxy
+    /// URL + credentials and is bounded by the number of configured proxies.
     fn provider_client_for_route(
         &self,
         proxy: Option<&ProviderProxyConfig>,
@@ -392,6 +427,12 @@ impl CodexImageGateway {
         Ok(client)
     }
 
+    /// Append one redacted image request log event off the request path.
+    ///
+    /// The event is built synchronously (cheap) but the blocking file append is
+    /// moved to a `spawn_blocking` task so neither disk I/O nor the writer mutex
+    /// stalls the async request handler. The join handle is intentionally
+    /// dropped: logging is best-effort and must not delay or fail the response.
     fn log_image_event(
         &self,
         request_id: &str,
@@ -432,20 +473,32 @@ impl CodexImageGateway {
         drop(handle);
     }
 
-    async fn record_codex_image_usage(&self, key: &AuthenticatedKey, usage_tokens: Option<u64>) {
+    /// Fire-and-forget the per-key Codex image usage rollup.
+    ///
+    /// Spawned rather than awaited so the held per-account and per-key
+    /// concurrency permits release and the image bytes return to the client
+    /// without blocking on a control-plane write. This rollup is an
+    /// admin-visibility metric only — quota/billing is gated up front in
+    /// [`reject_key`] via `remaining_billable`, so losing a row to a
+    /// mid-flight crash is acceptable and never over-serves a key.
+    fn spawn_record_codex_image_usage(&self, key: &AuthenticatedKey, usage_tokens: Option<u64>) {
+        let control_store = Arc::clone(&self.control_store);
+        let key_id = key.key_id.clone();
+        let key_name = key.key_name.clone();
         let used_at_ms = i64::try_from(now_ms()).unwrap_or(i64::MAX);
-        if let Err(err) = self
-            .control_store
-            .record_codex_image_key_usage(&key.key_id, usage_tokens, used_at_ms)
-            .await
-        {
-            tracing::warn!(
-                key_id = %key.key_id,
-                key_name = %key.key_name,
-                error = %err,
-                "codex image key usage rollup write failed"
-            );
-        }
+        tokio::spawn(async move {
+            if let Err(err) = control_store
+                .record_codex_image_key_usage(&key_id, usage_tokens, used_at_ms)
+                .await
+            {
+                tracing::warn!(
+                    key_id = %key_id,
+                    key_name = %key_name,
+                    error = %err,
+                    "codex image key usage rollup write failed"
+                );
+            }
+        });
     }
 }
 
@@ -574,6 +627,11 @@ fn proxy_client_key(proxy_config: &ProviderProxyConfig) -> String {
     )
 }
 
+/// Buffer an upstream response body, rejecting it once it exceeds `max_bytes`.
+///
+/// Checks the advertised `Content-Length` first for a cheap early reject, then
+/// enforces the cap incrementally while streaming chunks so a missing or lying
+/// length header still cannot drive unbounded memory growth.
 async fn limited_upstream_bytes(
     mut response: reqwest::Response,
     max_bytes: u64,
@@ -796,8 +854,15 @@ mod tests {
         assert_eq!(nested.account_id.as_deref(), Some("acct-b"));
         assert!(!nested.fedramp);
 
-        assert_eq!(parse_codex_image_auth(r#"{"accountId":"acct"}"#).unwrap_err(), "auth_missing");
-        assert_eq!(parse_codex_image_auth("not-json").unwrap_err(), "auth_invalid_json");
+        assert_eq!(
+            parse_codex_image_auth(r#"{"accountId":"acct"}"#)
+                .expect_err("auth without a token must be rejected"),
+            "auth_missing"
+        );
+        assert_eq!(
+            parse_codex_image_auth("not-json").expect_err("non-json auth must be rejected"),
+            "auth_invalid_json"
+        );
     }
 
     #[test]
@@ -820,13 +885,22 @@ mod tests {
     fn image_request_header_helpers_are_strict() {
         let mut headers = HeaderMap::new();
         assert!(!is_json_request(&headers));
-        headers.insert(header::CONTENT_TYPE, "application/json; charset=utf-8".parse().unwrap());
+        headers.insert(
+            header::CONTENT_TYPE,
+            "application/json; charset=utf-8".parse().expect("content-type header"),
+        );
         assert!(is_json_request(&headers));
 
         assert_eq!(bearer_secret(&headers), None);
-        headers.insert(header::AUTHORIZATION, "Bearer secret-1".parse().unwrap());
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer secret-1".parse().expect("authorization header"),
+        );
         assert_eq!(bearer_secret(&headers), Some("secret-1"));
-        headers.insert(header::AUTHORIZATION, "Basic secret-1".parse().unwrap());
+        headers.insert(
+            header::AUTHORIZATION,
+            "Basic secret-1".parse().expect("authorization header"),
+        );
         assert_eq!(bearer_secret(&headers), None);
     }
 

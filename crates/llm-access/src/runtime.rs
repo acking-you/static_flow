@@ -217,6 +217,14 @@ fn default_codex_image_log_config(
     }
 }
 
+/// Build the integrated Codex image gateway's log config from runtime settings.
+///
+/// `log_dir` defaults to `state_root/codex-image-logs`, the same relative path
+/// the standalone binary uses. `ImageLogWriter` rotation is process-local (no
+/// cross-process file lock), so the integrated and standalone gateways must not
+/// point at the same directory on the same host — give each a distinct
+/// `state_root` (or `--image-log-dir`) when both run together. This log is
+/// separate from the usage journal, which lives in its own directory.
 fn image_log_config_from_runtime(
     log_dir: PathBuf,
     runtime_config: &llm_access_core::store::AdminRuntimeConfig,

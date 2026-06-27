@@ -29,7 +29,19 @@ impl ImageDispatchError {
     }
 }
 
-/// Filters resolved Codex routes to accounts allowed to serve image requests.
+/// Filter resolved Codex routes to the accounts allowed to serve this image
+/// request, enforcing the entrypoint-specific per-key gate first.
+///
+/// The two entrypoints have independent per-key switches so an operator can
+/// enable the standalone image binary and the in-process Codex API path
+/// separately for the same key:
+/// - [`ImageGatewayMode::StandaloneBinary`] gates on `codex_image_generation_enabled`.
+/// - [`ImageGatewayMode::IntegratedCodexApi`] gates on `codex_image_direct_generation_enabled`.
+///
+/// The key-level flag is duplicated across every candidate route for a key, so
+/// any candidate being disabled means the key is disabled (`FORBIDDEN`).
+/// Surviving routes are then filtered to image-enabled accounts; an empty set
+/// is reported as `SERVICE_UNAVAILABLE` (capacity, not authorization).
 pub fn eligible_image_routes(
     mode: ImageGatewayMode,
     routes: Vec<ProviderCodexRoute>,
