@@ -241,7 +241,11 @@ impl ImageLogWriter {
                     && file_name.ends_with(".jsonl")
                     && file_name != "codex-image-active.jsonl"
                 {
-                    Some(entry)
+                    let modified = entry
+                        .metadata()
+                        .and_then(|metadata| metadata.modified())
+                        .unwrap_or(UNIX_EPOCH);
+                    Some((entry, modified))
                 } else {
                     None
                 }
@@ -250,13 +254,8 @@ impl ImageLogWriter {
         if files.len() <= self.config.max_files {
             return Ok(());
         }
-        files.sort_by_key(|entry| {
-            entry
-                .metadata()
-                .and_then(|metadata| metadata.modified())
-                .unwrap_or(UNIX_EPOCH)
-        });
-        for entry in files.iter().take(files.len() - self.config.max_files) {
+        files.sort_by_key(|(_, modified)| *modified);
+        for (entry, _) in files.iter().take(files.len() - self.config.max_files) {
             let _ = fs::remove_file(entry.path());
         }
         Ok(())
