@@ -2205,6 +2205,24 @@ mod tests {
             .await
             .expect("connect postgres repository");
 
+        let default_page = repo
+            .list_admin_codex_accounts_page(llm_access_core::store::AdminPageRequest {
+                limit: 2,
+                offset: 0,
+            })
+            .await
+            .expect("list default codex accounts page");
+        assert_eq!(default_page.total, 3);
+        assert!(default_page.has_more);
+        assert_eq!(
+            default_page
+                .accounts
+                .iter()
+                .map(|account| account.name.as_str())
+                .collect::<Vec<_>>(),
+            ["codex-new", "codex-mid"]
+        );
+
         let primary_sorted = repo
             .list_admin_codex_accounts_filtered_page(
                 &AdminCodexAccountPageQuery {

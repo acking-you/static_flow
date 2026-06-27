@@ -204,6 +204,7 @@ impl PostgresControlRepository {
                 "SELECT
                     account_name,
                     account_id,
+                    email,
                     status,
                     COALESCE(
                         CASE
