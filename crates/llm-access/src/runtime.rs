@@ -2443,6 +2443,7 @@ mod tests {
             error_body: None,
             error_class: None,
             session_blocked: false,
+            response_image_count: None,
             response_body: None,
             timing: llm_access_core::usage::UsageTiming {
                 latency_ms: Some(20),

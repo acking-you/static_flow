@@ -33,13 +33,16 @@ use axum::{
     response::IntoResponse,
 };
 use bytes::BytesMut;
-use llm_access_codex::request::{codex_user_agent, extract_header_value};
+use llm_access_codex::request::{
+    codex_user_agent, extract_client_ip_from_headers, extract_header_value,
+};
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType},
     store::{
         codex_access_token_expires_at_ms, AuthenticatedKey, ControlStore, ProviderCodexRoute,
         ProviderProxyConfig, ProviderRouteStore, KEY_STATUS_ACTIVE,
     },
+    usage::{UsageEvent, UsageStreamDetails, UsageTiming},
 };
 use serde_json::Value;
 
@@ -230,6 +233,25 @@ impl CodexImageGateway {
                             usage_missing: true,
                         },
                     );
+                    tracing::info!(
+                        request_id = ctx.request_id,
+                        mode = ?self.mode,
+                        key_id = %ctx.key.key_id,
+                        reason = rejection.reason,
+                        "codex image request rejected by per-key limit"
+                    );
+                    self.spawn_image_usage_event(
+                        &ctx,
+                        ImageUsageOutcome {
+                            account_name: None,
+                            status: StatusCode::TOO_MANY_REQUESTS,
+                            response_image_count: None,
+                            usage_tokens: None,
+                            error_class: Some(rejection.reason.to_string()),
+                            error_message: None,
+                            failover_count: 0,
+                        },
+                    );
                     return image_key_limit_response(&rejection);
                 },
             };
@@ -263,6 +285,13 @@ impl CodexImageGateway {
                 last_error_class = Some("concurrency_blocked".to_string());
                 continue;
             };
+            tracing::debug!(
+                request_id = ctx.request_id,
+                account = %route.account_name,
+                endpoint = ctx.endpoint_name,
+                attempt = failover_count + 1,
+                "codex image dispatching to account"
+            );
             let client = match self.provider_client_for_route(route.proxy.as_ref()) {
                 Ok(client) => client,
                 Err(err) => {
@@ -345,6 +374,38 @@ impl CodexImageGateway {
             if status.is_success() {
                 self.spawn_record_codex_image_usage(ctx.key, usage_tokens);
             }
+            let error_class =
+                (!status.is_success()).then(|| status_error_class(status).to_string());
+            let error_message = if status.is_success() {
+                None
+            } else {
+                error_message_from_bytes(&bytes)
+            };
+            tracing::info!(
+                request_id = ctx.request_id,
+                mode = ?self.mode,
+                key_id = %ctx.key.key_id,
+                account = %route.account_name,
+                endpoint = ctx.endpoint_name,
+                status = status.as_u16(),
+                failover = failover_count,
+                duration_ms = duration_ms(ctx.started),
+                image_count = ?metrics.image_count,
+                usage_tokens = ?usage_tokens,
+                "codex image request completed"
+            );
+            self.spawn_image_usage_event(
+                &ctx,
+                ImageUsageOutcome {
+                    account_name: Some(route.account_name.clone()),
+                    status,
+                    response_image_count: metrics.image_count,
+                    usage_tokens,
+                    error_class,
+                    error_message,
+                    failover_count,
+                },
+            );
             return upstream_response(status, &headers, bytes);
         }
         let status = if concurrency_blocked > 0 && failover_count == 0 {
@@ -374,7 +435,122 @@ impl CodexImageGateway {
                 usage_missing: true,
             },
         );
+        tracing::warn!(
+            request_id = ctx.request_id,
+            mode = ?self.mode,
+            key_id = %ctx.key.key_id,
+            endpoint = ctx.endpoint_name,
+            status = status.as_u16(),
+            failover = failover_count,
+            concurrency_blocked,
+            error_class = last_error_class.as_deref().unwrap_or("no_eligible_account"),
+            "codex image request exhausted all eligible accounts"
+        );
+        self.spawn_image_usage_event(
+            &ctx,
+            ImageUsageOutcome {
+                account_name: None,
+                status,
+                response_image_count: None,
+                usage_tokens: None,
+                error_class: Some(
+                    last_error_class
+                        .clone()
+                        .unwrap_or_else(|| "no_eligible_account".to_string()),
+                ),
+                error_message: Some(
+                    "all eligible codex image accounts failed for this request".to_string(),
+                ),
+                failover_count,
+            },
+        );
         (status, "all eligible codex image accounts failed for this request").into_response()
+    }
+
+    /// Emit a DuckDB usage event for a completed image request when running
+    /// inside the main Codex API binary ([`ImageGatewayMode::IntegratedCodexApi`]).
+    ///
+    /// Image traffic then shows up in the usage analytics alongside text/Kiro
+    /// requests, with the gpt-image usage tokens counted toward the key's
+    /// billable quota (Codex bills image generation by token) and the returned
+    /// image count surfaced for the usage visualization. The standalone binary
+    /// has no usage worker/journal, so it intentionally skips this and relies on
+    /// the redacted JSONL image log plus the per-key image-token rollup instead.
+    ///
+    /// Fire-and-forget: enqueuing onto the usage journal must not block the
+    /// client response, mirroring [`Self::spawn_record_codex_image_usage`].
+    fn spawn_image_usage_event(&self, ctx: &ImageDispatchRequest<'_>, outcome: ImageUsageOutcome) {
+        if self.mode != ImageGatewayMode::IntegratedCodexApi {
+            return;
+        }
+        // Codex bills image generation by token, so fold the reported usage into
+        // both the output and billable columns; `usage_missing` records when the
+        // upstream omitted a usage block so the UI can flag estimate-free rows.
+        let billable = outcome
+            .usage_tokens
+            .map(|tokens| i64::try_from(tokens).unwrap_or(i64::MAX))
+            .unwrap_or(0);
+        let endpoint = format!("/v1/images/{}", ctx.endpoint_name);
+        let event = UsageEvent {
+            event_id: format!("llm-usage-{}", ctx.request_id),
+            created_at_ms: i64::try_from(now_ms()).unwrap_or(i64::MAX),
+            provider_type: ProviderType::Codex,
+            protocol_family: ProtocolFamily::OpenAi,
+            key_id: ctx.key.key_id.clone(),
+            key_name: ctx.key.key_name.clone(),
+            account_name: outcome.account_name,
+            account_group_id_at_event: None,
+            route_strategy_at_event: None,
+            request_method: "POST".to_string(),
+            request_url: endpoint.clone(),
+            endpoint,
+            model: Some(ctx.image_request.model.clone()),
+            mapped_model: Some(ctx.image_request.model.clone()),
+            status_code: i64::from(outcome.status.as_u16()),
+            request_body_bytes: None,
+            quota_failover_count: outcome.failover_count,
+            routing_diagnostics_json: None,
+            input_uncached_tokens: 0,
+            input_cached_tokens: 0,
+            output_tokens: billable,
+            billable_tokens: billable,
+            credit_usage: None,
+            usage_missing: outcome.usage_tokens.is_none(),
+            credit_usage_missing: false,
+            client_ip: extract_client_ip_from_headers(ctx.headers),
+            // The image gateway has no GeoIP resolver (it lives in `llm-access`),
+            // so region enrichment is left to the decoder's default.
+            ip_region: "unknown".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: None,
+            client_request_body_json: None,
+            upstream_request_body_json: None,
+            full_request_json: None,
+            error_message: outcome.error_message,
+            error_class: outcome.error_class,
+            session_blocked: false,
+            response_image_count: outcome
+                .response_image_count
+                .map(|count| i64::try_from(count).unwrap_or(i64::MAX)),
+            error_body: None,
+            response_body: None,
+            timing: UsageTiming {
+                latency_ms: Some(i64::try_from(duration_ms(ctx.started)).unwrap_or(i64::MAX)),
+                ..UsageTiming::default()
+            },
+            stream: UsageStreamDetails::default(),
+        };
+        let control_store = Arc::clone(&self.control_store);
+        let request_id = ctx.request_id.to_string();
+        tokio::spawn(async move {
+            if let Err(err) = control_store.apply_usage_rollup_owned(event).await {
+                tracing::warn!(
+                    request_id = %request_id,
+                    error = %err,
+                    "codex image usage event write failed"
+                );
+            }
+        });
     }
 
     /// Refresh the per-account auth/proxy fields of a route candidate from the
@@ -519,6 +695,42 @@ struct ImageDispatchRequest<'a> {
     endpoint_name: &'static str,
     upstream_path: &'a str,
     image_request: crate::request::CodexImageRequest,
+}
+
+/// The terminal outcome of an image request, used to build at most one
+/// integrated-mode usage event per request (not one per failover attempt).
+struct ImageUsageOutcome {
+    /// Account that served the request, or `None` when no account was reached.
+    account_name: Option<String>,
+    /// Final HTTP status returned to the client.
+    status: StatusCode,
+    /// Number of images in a successful response, when known.
+    response_image_count: Option<u64>,
+    /// gpt-image usage tokens reported by the upstream, when present.
+    usage_tokens: Option<u64>,
+    /// Stable error class for failed requests.
+    error_class: Option<String>,
+    /// Short human-readable error surfaced inline in the usage UI.
+    error_message: Option<String>,
+    /// Number of account failovers before the terminal outcome.
+    failover_count: u64,
+}
+
+/// Best-effort short error message extracted from an upstream image error body,
+/// so a failed image request surfaces a reason inline in the usage UI without
+/// opening the detail view. Mirrors the text gateway's error-message capture and
+/// caps length to keep the usage row compact.
+fn error_message_from_bytes(bytes: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<Value>(bytes).ok()?;
+    let message = value
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("message").and_then(Value::as_str))?;
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.chars().take(500).collect())
 }
 
 fn reject_key(key: &AuthenticatedKey) -> Option<axum::response::Response> {

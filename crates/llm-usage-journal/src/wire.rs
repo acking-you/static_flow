@@ -158,6 +158,9 @@ pub struct JournalUsageEventV1 {
     /// Whether this event belongs to a permanently rejected Codex session.
     #[serde(default)]
     pub session_blocked: bool,
+    /// Number of images returned by an image generation/edit request.
+    #[serde(default)]
+    pub response_image_count: Option<i64>,
     /// Raw error response body surfaced for failed requests.
     #[serde(default)]
     pub error_body: Option<String>,
@@ -301,6 +304,7 @@ impl JournalUsageEventV1 {
             error_message: event.error_message.clone(),
             error_class: event.error_class.clone(),
             session_blocked: event.session_blocked,
+            response_image_count: event.response_image_count,
             error_body: event.error_body.clone(),
             response_body: event.response_body.clone(),
             timing: event.timing.clone(),
@@ -346,6 +350,7 @@ impl JournalUsageEventV1 {
             error_message: self.error_message,
             error_class: self.error_class,
             session_blocked: self.session_blocked,
+            response_image_count: self.response_image_count,
             error_body: self.error_body,
             response_body: self.response_body,
             timing: self.timing,
@@ -393,6 +398,7 @@ impl LegacyJournalUsageEventV1 {
             error_message: None,
             error_class: None,
             session_blocked: false,
+            response_image_count: None,
             error_body: None,
             response_body: None,
             timing: self.timing,
@@ -440,6 +446,7 @@ impl LegacyJournalUsageEventWithErrorPayloadsV1 {
             error_message: self.error_message,
             error_class: None,
             session_blocked: false,
+            response_image_count: None,
             error_body: self.error_body,
             response_body: self.response_body,
             timing: self.timing,
@@ -730,6 +737,7 @@ mod tests {
         let bytes = postcard::to_allocvec(&batch).expect("encode batch");
         let decoded: JournalUsageBatchV1 = postcard::from_bytes(&bytes).expect("decode batch");
         assert_eq!(decoded.events[0].event_id, "evt-wire-2");
+        assert_eq!(decoded.events[0].response_image_count, Some(2));
     }
 
     #[test]
@@ -889,6 +897,7 @@ mod tests {
         assert_eq!(decoded.events[0].response_body, event.response_body);
         assert_eq!(decoded.events[0].error_class, None);
         assert!(!decoded.events[0].session_blocked);
+        assert_eq!(decoded.events[0].response_image_count, None);
         assert_eq!(decoded.events[0].timing, event.timing);
         assert_eq!(decoded.events[0].stream, event.stream);
     }
@@ -1013,6 +1022,7 @@ mod tests {
             error_body: None,
             error_class: None,
             session_blocked: false,
+            response_image_count: Some(2),
             response_body: None,
             timing: UsageTiming {
                 latency_ms: Some(123),

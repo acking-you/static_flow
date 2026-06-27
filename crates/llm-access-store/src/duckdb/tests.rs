@@ -48,6 +48,7 @@ fn test_usage_event() -> UsageEvent {
         error_body: None,
         error_class: None,
         session_blocked: false,
+        response_image_count: None,
         response_body: None,
         timing: UsageTiming {
             latency_ms: Some(55),
@@ -905,6 +906,7 @@ async fn duckdb_repository_round_trips_error_payloads_in_usage_detail() {
     );
     event.error_class = Some("cyber_policy".to_string());
     event.session_blocked = true;
+    event.response_image_count = Some(3);
     event.error_body = Some(
         r#"{"error":{"message":"A text block must be included when using documents."}}"#
             .to_string(),
@@ -922,6 +924,7 @@ async fn duckdb_repository_round_trips_error_payloads_in_usage_detail() {
     assert_usage_event_detail_payloads(&detail, &event);
     assert_eq!(detail.error_class.as_deref(), Some("cyber_policy"));
     assert!(detail.session_blocked);
+    assert_eq!(detail.response_image_count, Some(3));
 
     // The classification and inline error message must also be readable from the
     // lightweight summary/list query without opening the detail view.
@@ -950,6 +953,7 @@ async fn duckdb_repository_round_trips_error_payloads_in_usage_detail() {
     assert_eq!(listed.error_message.as_deref(), event.error_message.as_deref());
     assert_eq!(listed.error_class.as_deref(), Some("cyber_policy"));
     assert!(listed.session_blocked);
+    assert_eq!(listed.response_image_count, Some(3));
 
     std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
 }

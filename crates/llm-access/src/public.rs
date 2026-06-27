@@ -162,6 +162,8 @@ struct PublicLlmGatewayUsageEventView {
     error_class: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     session_blocked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    response_image_count: Option<i64>,
     created_at: i64,
 }
 
@@ -788,6 +790,7 @@ impl From<&AdminUsageEventView> for PublicLlmGatewayUsageEventView {
             error_message: value.error_message.clone(),
             error_class: value.error_class.clone(),
             session_blocked: value.session_blocked,
+            response_image_count: value.response_image_count,
             created_at: value.created_at,
         }
     }

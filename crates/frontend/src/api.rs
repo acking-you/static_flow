@@ -5982,6 +5982,9 @@ pub struct PublicLlmGatewayUsageEventView {
     /// Whether this event belongs to a permanently rejected Codex session.
     #[serde(default)]
     pub session_blocked: bool,
+    /// Number of images returned by a Codex image generation/edit request.
+    #[serde(default)]
+    pub response_image_count: Option<i64>,
     pub created_at: i64,
 }
 
@@ -6355,6 +6358,9 @@ pub struct AdminLlmGatewayUsageEventView {
     /// Whether this event belongs to a permanently rejected Codex session.
     #[serde(default)]
     pub session_blocked: bool,
+    /// Number of images returned by a Codex image generation/edit request.
+    #[serde(default)]
+    pub response_image_count: Option<i64>,
     pub created_at: i64,
 }
 
@@ -6404,6 +6410,8 @@ pub struct AdminLlmGatewayUsageEventDetailView {
     pub error_message: Option<String>,
     pub error_class: Option<String>,
     pub session_blocked: bool,
+    #[serde(default)]
+    pub response_image_count: Option<i64>,
     pub error_body: Option<String>,
     pub response_body: Option<String>,
     pub created_at: i64,

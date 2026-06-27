@@ -300,6 +300,7 @@ fn usage_event_summary_select_exprs(columns: &HashSet<String>) -> Vec<String> {
     let mut exprs = usage_event_base_select_exprs(columns, false, None);
     exprs.push("CAST(NULL AS VARCHAR) AS last_message_content".to_string());
     exprs.push(usage_event_column_expr(columns, "error_message", "CAST(NULL AS VARCHAR)"));
+    exprs.push(usage_event_column_expr(columns, "response_image_count", "CAST(NULL AS BIGINT)"));
     exprs
 }
 #[cfg(feature = "duckdb-runtime")]
@@ -360,6 +361,7 @@ fn usage_event_detail_select_exprs(
     exprs.push(usage_event_column_expr(columns, "detail_object_offset", "CAST(NULL AS BIGINT)"));
     exprs.push(usage_event_column_expr(columns, "detail_object_length", "CAST(NULL AS BIGINT)"));
     exprs.push(usage_event_column_expr(columns, "detail_object_sha256", "CAST(NULL AS VARCHAR)"));
+    exprs.push(usage_event_column_expr(columns, "response_image_count", "CAST(NULL AS BIGINT)"));
     exprs
 }
 #[cfg(feature = "duckdb-runtime")]

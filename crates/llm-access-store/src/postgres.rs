@@ -1712,6 +1712,7 @@ mod tests {
             error_body: None,
             error_class: None,
             session_blocked: false,
+            response_image_count: None,
             response_body: None,
             timing: llm_access_core::usage::UsageTiming {
                 latency_ms: Some(120),
@@ -1818,6 +1819,7 @@ mod tests {
                 error_body: None,
                 error_class: None,
                 session_blocked: false,
+                response_image_count: None,
                 response_body: None,
                 timing: llm_access_core::usage::UsageTiming::default(),
                 stream: llm_access_core::usage::UsageStreamDetails::default(),
@@ -1859,6 +1861,7 @@ mod tests {
                 error_body: None,
                 error_class: None,
                 session_blocked: false,
+                response_image_count: None,
                 response_body: None,
                 timing: llm_access_core::usage::UsageTiming::default(),
                 stream: llm_access_core::usage::UsageStreamDetails::default(),
@@ -1932,6 +1935,7 @@ mod tests {
             error_body: None,
             error_class: None,
             session_blocked: false,
+            response_image_count: None,
             response_body: None,
             timing: llm_access_core::usage::UsageTiming {
                 latency_ms: Some(120),
@@ -2022,6 +2026,7 @@ mod tests {
             error_body: None,
             error_class: None,
             session_blocked: false,
+            response_image_count: None,
             response_body: None,
             timing: llm_access_core::usage::UsageTiming {
                 latency_ms: Some(120),

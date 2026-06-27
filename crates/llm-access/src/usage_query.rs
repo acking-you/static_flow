@@ -182,6 +182,9 @@ pub(crate) struct AdminUsageEventView {
     /// Whether this event belongs to a permanently rejected Codex session.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) session_blocked: bool,
+    /// Number of images returned by a Codex image generation/edit request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) response_image_count: Option<i64>,
     pub(crate) created_at: i64,
 }
 
@@ -776,6 +779,7 @@ impl From<&UsageEvent> for AdminUsageEventView {
             error_message: value.error_message.clone(),
             error_class: value.error_class.clone(),
             session_blocked: value.session_blocked,
+            response_image_count: value.response_image_count,
             created_at: value.created_at_ms,
         }
     }
