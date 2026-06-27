@@ -15,6 +15,9 @@ pub struct AdminCodexAccount {
     pub status: String,
     /// Upstream account id.
     pub account_id: Option<String>,
+    /// Upstream account email, visible only to internal admin views.
+    #[serde(default)]
+    pub email: Option<String>,
     /// Upstream plan type, when known.
     pub plan_type: Option<String>,
     /// Manual routing tier override used for weighted auto routing.
@@ -169,6 +172,12 @@ fn admin_codex_account_matches_query(
             .contains(&search)
         || account
             .account_id
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .contains(&search)
+        || account
+            .email
             .as_deref()
             .unwrap_or("")
             .to_ascii_lowercase()
@@ -417,6 +426,7 @@ mod tests {
             name: name.to_string(),
             status: status.to_string(),
             account_id: Some(format!("acct-{name}")),
+            email: Some(format!("{name}@example.com")),
             plan_type: plan_type.map(str::to_string),
             route_weight_tier: "auto".to_string(),
             primary_remaining_percent,
@@ -485,6 +495,20 @@ mod tests {
         });
         assert_eq!(searched.len(), 1);
         assert_eq!(searched[0].name, "codex-old");
+
+        let mut searched_email = vec![
+            sample_admin_codex_account("codex-new", "active", Some("Pro"), Some(70.0), None),
+            sample_admin_codex_account("codex-old", "active", Some("Plus"), Some(20.0), None),
+        ];
+        super::apply_admin_codex_account_query(
+            &mut searched_email,
+            &super::AdminCodexAccountPageQuery {
+                search: Some("codex-new@example.com".to_string()),
+                ..super::AdminCodexAccountPageQuery::default()
+            },
+        );
+        assert_eq!(searched_email.len(), 1);
+        assert_eq!(searched_email[0].name, "codex-new");
 
         let mut unhealthy = vec![
             sample_admin_codex_account("codex-new", "active", Some("Pro"), Some(70.0), None),

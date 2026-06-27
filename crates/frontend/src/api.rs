@@ -9906,6 +9906,7 @@ pub struct AccountSummaryView {
     pub name: String,
     pub status: String,
     pub account_id: Option<String>,
+    pub email: Option<String>,
     pub plan_type: Option<String>,
     pub route_weight_tier: String,
     pub primary_remaining_percent: Option<f64>,
@@ -9938,6 +9939,7 @@ impl Default for AccountSummaryView {
             name: String::new(),
             status: String::new(),
             account_id: None,
+            email: None,
             plan_type: None,
             route_weight_tier: "auto".to_string(),
             primary_remaining_percent: None,
@@ -10306,6 +10308,7 @@ pub async fn import_admin_llm_gateway_account(
             name: name.to_string(),
             status: "active".to_string(),
             account_id: account_id.map(str::to_string),
+            email: None,
             plan_type: Some("Pro".to_string()),
             route_weight_tier: "auto".to_string(),
             primary_remaining_percent: Some(100.0),
@@ -10433,6 +10436,7 @@ pub async fn patch_admin_llm_gateway_account(
             name: name.to_string(),
             status: input.status.clone().unwrap_or_else(|| "active".to_string()),
             account_id: None,
+            email: None,
             plan_type: Some("Pro".to_string()),
             route_weight_tier: input
                 .route_weight_tier
@@ -10497,6 +10501,7 @@ pub async fn refresh_admin_llm_gateway_account(name: &str) -> Result<AccountSumm
             name: name.to_string(),
             status: "active".to_string(),
             account_id: None,
+            email: None,
             plan_type: Some("Pro".to_string()),
             route_weight_tier: "auto".to_string(),
             primary_remaining_percent: Some(100.0),
@@ -10562,6 +10567,7 @@ pub async fn refresh_admin_llm_gateway_account_auth(
             name: name.to_string(),
             status: "active".to_string(),
             account_id: None,
+            email: None,
             plan_type: Some("Pro".to_string()),
             route_weight_tier: "auto".to_string(),
             primary_remaining_percent: Some(100.0),
@@ -10636,6 +10642,7 @@ pub async fn consume_admin_llm_gateway_account_rate_limit_reset_credit(
                 name: name.to_string(),
                 status: "active".to_string(),
                 account_id: None,
+                email: None,
                 plan_type: Some("Pro".to_string()),
                 route_weight_tier: "auto".to_string(),
                 primary_remaining_percent: Some(100.0),
@@ -12065,6 +12072,18 @@ mod tests {
         assert_eq!(key.codex_image_usage_tokens, 0);
         assert_eq!(key.codex_image_usage_missing_events, 0);
         assert_eq!(key.codex_image_last_used_at, None);
+    }
+
+    #[test]
+    fn account_summary_view_preserves_email_and_defaults_missing_email() {
+        let account: AccountSummaryView =
+            serde_json::from_str(r#"{"name":"codex-a","email":"a@example.com"}"#)
+                .expect("account should parse");
+        assert_eq!(account.email.as_deref(), Some("a@example.com"));
+
+        let legacy: AccountSummaryView =
+            serde_json::from_str(r#"{"name":"codex-a"}"#).expect("legacy account should parse");
+        assert_eq!(legacy.email, None);
     }
 
     #[test]

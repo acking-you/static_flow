@@ -11,7 +11,7 @@ use crate::{
     components::{pagination::Pagination, token_usage_trend_chart::TokenUsageTrendChart},
     pages::llm_access_shared::{
         first_token_latency_color, format_latency_ms, format_ms, format_number_i64,
-        format_number_u64, token_usage_missing_label, total_latency_color,
+        format_number_u64, token_usage_missing_label, total_latency_color, usage_error_summary,
     },
     router::Route,
 };
@@ -443,12 +443,13 @@ pub fn llm_access_usage_page() -> Html {
                                         let is_image_event =
                                             image_count.is_some() || event.endpoint.contains("/images/");
                                         let status_color = usage_status_color(event.status_code);
-                                        let error_text = event
-                                            .error_message
-                                            .as_deref()
-                                            .map(str::trim)
-                                            .filter(|value| !value.is_empty())
-                                            .map(|value| AttrValue::from(value.to_owned()));
+                                        let error_text = usage_error_summary(
+                                            event.status_code,
+                                            event.error_message.as_deref(),
+                                            event.error_class.as_deref(),
+                                            session_blocked,
+                                        )
+                                        .map(AttrValue::from);
                                         let row_class = if session_blocked {
                                             classes!("border-b", "border-red-500/30", "align-top", "bg-red-500/5")
                                         } else {

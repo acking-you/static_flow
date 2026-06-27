@@ -12,10 +12,10 @@
 //!
 //! Request flow: [`CodexImageGateway::handle_request`] validates the public
 //! request (path/method/content-type/bearer/key gate/body) and hands a parsed
-//! [`request::CodexImageRequest`] to [`CodexImageGateway::dispatch_image_request`],
-//! which acquires a per-key permit and then walks the eligible Codex accounts,
-//! failing over on auth/transient errors until one succeeds or all are
-//! exhausted.
+//! [`request::CodexImageRequest`] to
+//! [`CodexImageGateway::dispatch_image_request`], which acquires a per-key
+//! permit and then walks the eligible Codex accounts, failing over on
+//! auth/transient errors until one succeeds or all are exhausted.
 
 use std::{
     collections::HashMap,
@@ -240,18 +240,15 @@ impl CodexImageGateway {
                         reason = rejection.reason,
                         "codex image request rejected by per-key limit"
                     );
-                    self.spawn_image_usage_event(
-                        &ctx,
-                        ImageUsageOutcome {
-                            account_name: None,
-                            status: StatusCode::TOO_MANY_REQUESTS,
-                            response_image_count: None,
-                            usage_tokens: None,
-                            error_class: Some(rejection.reason.to_string()),
-                            error_message: None,
-                            failover_count: 0,
-                        },
-                    );
+                    self.spawn_image_usage_event(&ctx, ImageUsageOutcome {
+                        account_name: None,
+                        status: StatusCode::TOO_MANY_REQUESTS,
+                        response_image_count: None,
+                        usage_tokens: None,
+                        error_class: Some(rejection.reason.to_string()),
+                        error_message: None,
+                        failover_count: 0,
+                    });
                     return image_key_limit_response(&rejection);
                 },
             };
@@ -376,11 +373,8 @@ impl CodexImageGateway {
             }
             let error_class =
                 (!status.is_success()).then(|| status_error_class(status).to_string());
-            let error_message = if status.is_success() {
-                None
-            } else {
-                error_message_from_bytes(&bytes)
-            };
+            let error_message =
+                if status.is_success() { None } else { error_message_from_bytes(&bytes) };
             tracing::info!(
                 request_id = ctx.request_id,
                 mode = ?self.mode,
@@ -394,18 +388,15 @@ impl CodexImageGateway {
                 usage_tokens = ?usage_tokens,
                 "codex image request completed"
             );
-            self.spawn_image_usage_event(
-                &ctx,
-                ImageUsageOutcome {
-                    account_name: Some(route.account_name.clone()),
-                    status,
-                    response_image_count: metrics.image_count,
-                    usage_tokens,
-                    error_class,
-                    error_message,
-                    failover_count,
-                },
-            );
+            self.spawn_image_usage_event(&ctx, ImageUsageOutcome {
+                account_name: Some(route.account_name.clone()),
+                status,
+                response_image_count: metrics.image_count,
+                usage_tokens,
+                error_class,
+                error_message,
+                failover_count,
+            });
             return upstream_response(status, &headers, bytes);
         }
         let status = if concurrency_blocked > 0 && failover_count == 0 {
@@ -446,36 +437,35 @@ impl CodexImageGateway {
             error_class = last_error_class.as_deref().unwrap_or("no_eligible_account"),
             "codex image request exhausted all eligible accounts"
         );
-        self.spawn_image_usage_event(
-            &ctx,
-            ImageUsageOutcome {
-                account_name: None,
-                status,
-                response_image_count: None,
-                usage_tokens: None,
-                error_class: Some(
-                    last_error_class
-                        .clone()
-                        .unwrap_or_else(|| "no_eligible_account".to_string()),
-                ),
-                error_message: Some(
-                    "all eligible codex image accounts failed for this request".to_string(),
-                ),
-                failover_count,
-            },
-        );
+        self.spawn_image_usage_event(&ctx, ImageUsageOutcome {
+            account_name: None,
+            status,
+            response_image_count: None,
+            usage_tokens: None,
+            error_class: Some(
+                last_error_class
+                    .clone()
+                    .unwrap_or_else(|| "no_eligible_account".to_string()),
+            ),
+            error_message: Some(
+                "all eligible codex image accounts failed for this request".to_string(),
+            ),
+            failover_count,
+        });
         (status, "all eligible codex image accounts failed for this request").into_response()
     }
 
     /// Emit a DuckDB usage event for a completed image request when running
-    /// inside the main Codex API binary ([`ImageGatewayMode::IntegratedCodexApi`]).
+    /// inside the main Codex API binary
+    /// ([`ImageGatewayMode::IntegratedCodexApi`]).
     ///
     /// Image traffic then shows up in the usage analytics alongside text/Kiro
     /// requests, with the gpt-image usage tokens counted toward the key's
     /// billable quota (Codex bills image generation by token) and the returned
     /// image count surfaced for the usage visualization. The standalone binary
-    /// has no usage worker/journal, so it intentionally skips this and relies on
-    /// the redacted JSONL image log plus the per-key image-token rollup instead.
+    /// has no usage worker/journal, so it intentionally skips this and relies
+    /// on the redacted JSONL image log plus the per-key image-token rollup
+    /// instead.
     ///
     /// Fire-and-forget: enqueuing onto the usage journal must not block the
     /// client response, mirroring [`Self::spawn_record_codex_image_usage`].
@@ -583,11 +573,12 @@ impl CodexImageGateway {
 
     /// Return a pooled `reqwest::Client` for the route's proxy configuration.
     ///
-    /// Clients own their connection pool, so they are reused rather than rebuilt
-    /// per request: the no-proxy case shares `default_client`, and each distinct
-    /// proxy config is built once and memoized (cloning a `Client` is a cheap
-    /// `Arc` bump that shares the pool). The cache is keyed by the full proxy
-    /// URL + credentials and is bounded by the number of configured proxies.
+    /// Clients own their connection pool, so they are reused rather than
+    /// rebuilt per request: the no-proxy case shares `default_client`, and
+    /// each distinct proxy config is built once and memoized (cloning a
+    /// `Client` is a cheap `Arc` bump that shares the pool). The cache is
+    /// keyed by the full proxy URL + credentials and is bounded by the
+    /// number of configured proxies.
     fn provider_client_for_route(
         &self,
         proxy: Option<&ProviderProxyConfig>,
@@ -596,11 +587,17 @@ impl CodexImageGateway {
             return Ok(self.default_client.clone());
         };
         let cache_key = proxy_client_key(proxy_config);
-        let mut clients = lock_unpoisoned(&self.proxy_clients);
-        if let Some(client) = clients.get(&cache_key) {
-            return Ok(client.clone());
+        {
+            let clients = lock_unpoisoned(&self.proxy_clients);
+            if let Some(client) = clients.get(&cache_key) {
+                return Ok(client.clone());
+            }
         }
         let client = provider_client(Some(proxy_config))?;
+        let mut clients = lock_unpoisoned(&self.proxy_clients);
+        if let Some(existing) = clients.get(&cache_key) {
+            return Ok(existing.clone());
+        }
         clients.insert(cache_key, client.clone());
         Ok(client)
     }
@@ -608,9 +605,10 @@ impl CodexImageGateway {
     /// Append one redacted image request log event off the request path.
     ///
     /// The event is built synchronously (cheap) but the blocking file append is
-    /// moved to a `spawn_blocking` task so neither disk I/O nor the writer mutex
-    /// stalls the async request handler. The join handle is intentionally
-    /// dropped: logging is best-effort and must not delay or fail the response.
+    /// moved to a `spawn_blocking` task so neither disk I/O nor the writer
+    /// mutex stalls the async request handler. The join handle is
+    /// intentionally dropped: logging is best-effort and must not delay or
+    /// fail the response.
     fn log_image_event(
         &self,
         request_id: &str,
@@ -718,8 +716,8 @@ struct ImageUsageOutcome {
 
 /// Best-effort short error message extracted from an upstream image error body,
 /// so a failed image request surfaces a reason inline in the usage UI without
-/// opening the detail view. Mirrors the text gateway's error-message capture and
-/// caps length to keep the usage row compact.
+/// opening the detail view. Mirrors the text gateway's error-message capture
+/// and caps length to keep the usage row compact.
 fn error_message_from_bytes(bytes: &[u8]) -> Option<String> {
     let value = serde_json::from_slice::<Value>(bytes).ok()?;
     let message = value
@@ -849,13 +847,14 @@ async fn limited_upstream_bytes(
     mut response: reqwest::Response,
     max_bytes: u64,
 ) -> anyhow::Result<Bytes> {
-    if response
-        .content_length()
-        .is_some_and(|content_length| content_length > max_bytes)
-    {
+    let content_length = response.content_length();
+    if content_length.is_some_and(|content_length| content_length > max_bytes) {
         return Err(anyhow!("codex image upstream response exceeds {} bytes", max_bytes));
     }
-    let mut body = BytesMut::new();
+    let mut body = match content_length.and_then(|length| usize::try_from(length).ok()) {
+        Some(capacity) => BytesMut::with_capacity(capacity),
+        None => BytesMut::new(),
+    };
     while let Some(chunk) = response
         .chunk()
         .await
@@ -1088,7 +1087,9 @@ mod tests {
         assert!(!is_json_request(&headers));
         headers.insert(
             header::CONTENT_TYPE,
-            "application/json; charset=utf-8".parse().expect("content-type header"),
+            "application/json; charset=utf-8"
+                .parse()
+                .expect("content-type header"),
         );
         assert!(is_json_request(&headers));
 
@@ -1098,10 +1099,8 @@ mod tests {
             "Bearer secret-1".parse().expect("authorization header"),
         );
         assert_eq!(bearer_secret(&headers), Some("secret-1"));
-        headers.insert(
-            header::AUTHORIZATION,
-            "Basic secret-1".parse().expect("authorization header"),
-        );
+        headers
+            .insert(header::AUTHORIZATION, "Basic secret-1".parse().expect("authorization header"));
         assert_eq!(bearer_secret(&headers), None);
     }
 

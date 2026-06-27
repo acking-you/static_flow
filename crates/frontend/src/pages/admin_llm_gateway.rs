@@ -69,7 +69,7 @@ use crate::{
         confirm_destructive, credit_usage_missing_label, first_token_latency_color,
         format_latency_ms, format_ms, format_number_i64, format_number_u64,
         format_optional_bytes_human, format_percent, format_reset_hint, token_usage_missing_label,
-        total_latency_color, MaskedSecretCode,
+        total_latency_color, usage_error_summary, MaskedSecretCode,
     },
     router::Route,
 };
@@ -9082,6 +9082,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                 };
                                 let acc_plan_type = acc.plan_type.clone();
                                 let acc_account_id = acc.account_id.clone();
+                                let acc_email = acc.email.clone();
                                 let spark_mapping_enabled = acc.map_gpt53_codex_to_spark;
                                 let auto_refresh_enabled = acc.auto_refresh_enabled;
                                 let selected_proxy_value = (*account_proxy_inputs)
@@ -9287,6 +9288,9 @@ pub fn admin_llm_gateway_page() -> Html {
                                             <div class={classes!("mt-2", "space-y-0.5", "text-xs", "font-mono", "text-[var(--muted)]")}>
                                                 if let Some(ref aid) = acc_account_id {
                                                     <div class={classes!("break-all")}>{ format!("id: {}", aid) }</div>
+                                                }
+                                                if let Some(email) = acc_email.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+                                                    <div class={classes!("break-all")}>{ format!("email: {}", email) }</div>
                                                 }
                                                 <div>{ configured_proxy_line.clone() }</div>
                                                 <div>
@@ -9807,7 +9811,19 @@ pub fn admin_llm_gateway_page() -> Html {
                                             let first_ms = first_ms.max(0);
                                             (first_ms, first_token_latency_color(first_ms))
                                         });
-                                        let status_ok = event.status_code == 200;
+                                        let status_ok = (200..300).contains(&event.status_code);
+                                        let error_class_label = event
+                                            .error_class
+                                            .as_deref()
+                                            .map(str::trim)
+                                            .filter(|value| !value.is_empty())
+                                            .map(str::to_string);
+                                        let status_error_summary = usage_error_summary(
+                                            event.status_code,
+                                            event.error_message.as_deref(),
+                                            event.error_class.as_deref(),
+                                            event.session_blocked,
+                                        );
                                         html! {
                                             <tr class={classes!("border-t", "border-[var(--border)]", "align-top")}>
                                                 <td class={classes!("py-2.5", "pl-3", "pr-3", "whitespace-nowrap")}>
@@ -9838,16 +9854,33 @@ pub fn admin_llm_gateway_page() -> Html {
                                                         </span>
                                                     }
                                                 </td>
-                                                <td class={classes!("py-2.5", "pr-3", "whitespace-nowrap")}>
-                                                    <span class={classes!(
-                                                        "inline-flex", "h-5", "w-5", "items-center", "justify-center", "rounded-full", "text-[10px]", "font-bold",
-                                                        if status_ok { "bg-emerald-500/15" } else { "bg-red-500/15" },
-                                                        if status_ok { "text-emerald-700" } else { "text-red-700" },
-                                                        if status_ok { "dark:text-emerald-200" } else { "dark:text-red-200" },
-                                                    )} title={format!("{}", event.status_code)}>
-                                                        { if status_ok { "" } else { "!" } }
-                                                    </span>
-                                                    <span class={classes!("ml-1", "text-xs", "font-mono")}>{ event.status_code }</span>
+                                                <td class={classes!("py-2.5", "pr-3", "min-w-[14rem]", "max-w-[24rem]")}>
+                                                    <div class={classes!("flex", "flex-wrap", "items-center", "gap-1.5")}>
+                                                        <span class={classes!(
+                                                            "inline-flex", "items-center", "rounded-full", "border", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold",
+                                                            if status_ok { "border-emerald-500/20" } else if event.status_code >= 500 { "border-red-500/20" } else { "border-amber-500/20" },
+                                                            if status_ok { "bg-emerald-500/10" } else if event.status_code >= 500 { "bg-red-500/10" } else { "bg-amber-500/10" },
+                                                            if status_ok { "text-emerald-700" } else if event.status_code >= 500 { "text-red-700" } else { "text-amber-700" },
+                                                            if status_ok { "dark:text-emerald-200" } else if event.status_code >= 500 { "dark:text-red-200" } else { "dark:text-amber-200" },
+                                                        )}>
+                                                            { format!("status {}", event.status_code) }
+                                                        </span>
+                                                        if let Some(class_label) = error_class_label.clone() {
+                                                            <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-red-500/20", "bg-red-500/10", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", "text-red-700", "dark:text-red-200")}>
+                                                                { class_label }
+                                                            </span>
+                                                        }
+                                                        if event.session_blocked {
+                                                            <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-red-600/25", "bg-red-600/10", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", "text-red-800", "dark:text-red-200")}>
+                                                                { "session blocked" }
+                                                            </span>
+                                                        }
+                                                    </div>
+                                                    if let Some(summary) = status_error_summary.clone() {
+                                                        <div class={classes!("mt-1.5", "max-w-[24rem]", "break-words", "font-mono", "text-[11px]", "leading-relaxed", "text-red-700", "dark:text-red-300")} title={summary.clone()}>
+                                                            { summary }
+                                                        </div>
+                                                    }
                                                 </td>
                                                 <td class={classes!("py-2.5", "pr-3", "whitespace-nowrap")}>
                                                     <span class={classes!("inline-flex", "rounded-full", "border", "px-2", "py-0.5", "text-[11px]", "font-semibold", latency_color.0, latency_color.1, latency_color.2, latency_color.3)}>

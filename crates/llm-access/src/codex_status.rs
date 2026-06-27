@@ -1641,6 +1641,7 @@ mod tests {
             name: name.to_string(),
             status: KEY_STATUS_ACTIVE.to_string(),
             account_id: Some(format!("acct-{name}")),
+            email: Some(format!("{name}@example.com")),
             plan_type: None,
             route_weight_tier: "auto".to_string(),
             primary_remaining_percent: None,
