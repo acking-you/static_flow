@@ -2697,6 +2697,7 @@ async fn duckdb_tiered_publish_handles_reordered_pending_usage_event_columns() {
         let mut event = test_usage_event();
         event.event_id = "compact-reordered-event".to_string();
         event.client_ip = "unknown".to_string();
+        event.response_image_count = Some(3);
         writer
             .insert_usage_events(&[super::UsageEventRow::from_usage_event(&event)])
             .expect("insert pending event");
@@ -2720,7 +2721,7 @@ async fn duckdb_tiered_publish_handles_reordered_pending_usage_event_columns() {
                 input_uncached_tokens, input_cached_tokens, output_tokens,
                 billable_tokens, credit_usage, usage_missing, credit_usage_missing,
                 ip_region, request_headers_json, last_message_content,
-                detail_object_payload_present
+                detail_object_payload_present, response_image_count
             FROM usage_events;
             DROP TABLE usage_events;
             ALTER TABLE usage_events_reordered RENAME TO usage_events;
@@ -2750,13 +2751,22 @@ async fn duckdb_tiered_publish_handles_reordered_pending_usage_event_columns() {
         .expect("open archived reordered segment");
     let row = archived
         .query_row(
-            "SELECT client_ip, request_body_bytes FROM usage_events WHERE event_id = ?1",
+            "SELECT client_ip, request_body_bytes, response_image_count
+             FROM usage_events
+             WHERE event_id = ?1",
             ["compact-reordered-event"],
-            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<i64>>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            },
         )
         .expect("read archived reordered event");
     assert_eq!(row.0.as_deref(), Some("unknown"));
     assert_eq!(row.1, Some(1234));
+    assert_eq!(row.2, Some(3));
 
     std::fs::remove_dir_all(&root).expect("cleanup reordered compact publish test directory");
 }
