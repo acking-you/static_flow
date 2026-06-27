@@ -19,8 +19,11 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Context};
@@ -30,6 +33,7 @@ use axum::{
     response::IntoResponse,
 };
 use bytes::BytesMut;
+use llm_access_codex::request::{codex_user_agent, extract_header_value};
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType},
     store::{
@@ -44,6 +48,7 @@ use crate::{
     limiter::{ImageAccountLimiter, ImageKeyLimitRejection, ImageKeyLimiter},
     logging::{build_image_log_event, ImageLogInput, ImageLogWriter, UpstreamLogInput},
     request::{normalize_image_gateway_path, parse_image_request, upstream_image_path},
+    util::{lock_unpoisoned, now_ms},
 };
 
 /// Upper bound on the downstream image request body. Covers prompts plus the
@@ -415,10 +420,7 @@ impl CodexImageGateway {
             return Ok(self.default_client.clone());
         };
         let cache_key = proxy_client_key(proxy_config);
-        let mut clients = self
-            .proxy_clients
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut clients = lock_unpoisoned(&self.proxy_clients);
         if let Some(client) = clients.get(&cache_key) {
             return Ok(client.clone());
         }
@@ -463,9 +465,7 @@ impl CodexImageGateway {
         });
         let image_log = Arc::clone(&self.image_log);
         let handle = tokio::task::spawn_blocking(move || {
-            let mut writer = image_log
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut writer = lock_unpoisoned(&image_log);
             if let Err(err) = writer.append(&event) {
                 tracing::warn!(error = %err, "codex image request log write failed");
             }
@@ -573,12 +573,13 @@ fn add_image_upstream_headers(
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .header(
             reqwest::header::USER_AGENT,
-            header_value(headers, header::USER_AGENT.as_str())
+            extract_header_value(headers, header::USER_AGENT.as_str())
                 .unwrap_or_else(|| codex_user_agent(codex_client_version)),
         )
         .header(
             reqwest::header::HeaderName::from_static("originator"),
-            header_value(headers, "originator").unwrap_or_else(|| "codex_cli_rs".to_string()),
+            extract_header_value(headers, "originator")
+                .unwrap_or_else(|| "codex_cli_rs".to_string()),
         );
     for header_name in [
         "openai-beta",
@@ -589,7 +590,7 @@ fn add_image_upstream_headers(
         "tracestate",
         "baggage",
     ] {
-        if let Some(value) = header_value(headers, header_name) {
+        if let Some(value) = extract_header_value(headers, header_name) {
             builder = builder.header(header_name, value);
         }
     }
@@ -703,7 +704,9 @@ fn usage_tokens_from_response(value: &Value) -> Option<u64> {
 }
 
 fn approx_base64_bytes(value: &str) -> u64 {
-    let padding = value.chars().rev().take_while(|ch| *ch == '=').count() as u64;
+    // base64 is ASCII, so count trailing '=' padding over bytes and skip char
+    // decoding of a potentially multi-megabyte image payload.
+    let padding = value.bytes().rev().take_while(|byte| *byte == b'=').count() as u64;
     ((value.len() as u64).saturating_mul(3) / 4).saturating_sub(padding)
 }
 
@@ -772,19 +775,6 @@ fn bearer_secret(headers: &HeaderMap) -> Option<&str> {
     (!token.is_empty()).then_some(token)
 }
 
-fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
-fn codex_user_agent(client_version: &str) -> String {
-    llm_access_codex::request::codex_user_agent(client_version)
-}
-
 fn status_error_class(status: StatusCode) -> &'static str {
     if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
         "auth"
@@ -810,15 +800,14 @@ fn duration_ms(started: Instant) -> u64 {
     started.elapsed().as_millis() as u64
 }
 
+/// Build a process-unique request id for log correlation.
+///
+/// `now_ms()` alone collides for requests served within the same millisecond,
+/// so a monotonic per-process counter is appended to keep ids unique.
 fn new_request_id() -> String {
-    format!("codex-img-{}-{}", std::process::id(), now_ms())
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
+    static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let sequence = REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("codex-img-{}-{}-{}", std::process::id(), now_ms(), sequence)
 }
 
 #[cfg(test)]

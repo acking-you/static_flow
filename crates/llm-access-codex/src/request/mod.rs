@@ -28,8 +28,8 @@ mod session;
 mod tools;
 
 pub use headers::{
-    external_origin, extract_client_ip_from_headers, resolve_request_url_from_headers,
-    serialize_headers_json,
+    external_origin, extract_client_ip_from_headers, extract_header_value,
+    resolve_request_url_from_headers, serialize_headers_json,
 };
 pub use last_message::extract_last_message_content;
 pub use normalization::{

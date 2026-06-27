@@ -2,12 +2,14 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{BufWriter, Write},
     path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
+    time::UNIX_EPOCH,
 };
 
 use anyhow::Context;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+
+use crate::util::now_ms;
 
 /// Upstream outcome fields recorded in the image request log.
 #[derive(Debug, Clone, Copy)]
@@ -304,13 +306,6 @@ pub fn build_image_log_event(input: ImageLogInput<'_>) -> ImageLogEvent {
 fn prompt_hash(prompt: &str) -> String {
     let digest = Sha256::digest(prompt.as_bytes());
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

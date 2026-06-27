@@ -1,10 +1,12 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use llm_access_core::store::DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY;
+
+use crate::util::lock_unpoisoned;
 
 /// Process-local in-flight limiter for per-account Codex image concurrency.
 ///
@@ -182,10 +184,4 @@ impl Drop for ImageKeyPermit {
             states.remove(&self.scope);
         }
     }
-}
-
-fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }

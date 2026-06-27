@@ -1,4 +1,9 @@
-//! Standalone Codex image gateway.
+//! Codex image gateway.
+//!
+//! Provides the shared [`gateway::CodexImageGateway`] dispatch engine plus its
+//! routing, concurrency, logging, and request-validation building blocks. It is
+//! consumed both by this crate's standalone `serve` binary and, in-process, by
+//! the main `llm-access` Codex API service (see [`dispatch::ImageGatewayMode`]).
 
 /// Image-route eligibility and failover classification.
 pub mod dispatch;
@@ -10,3 +15,5 @@ pub mod limiter;
 pub mod logging;
 /// JSON request validation and path normalization for the public image API.
 pub mod request;
+/// Process-local time and lock helpers shared across the gateway modules.
+mod util;
