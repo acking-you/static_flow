@@ -59,6 +59,7 @@ impl PostgresControlRepository {
                 "SELECT
                     account_name,
                     account_id,
+                    email,
                     status,
                     COALESCE(
                         CASE
@@ -333,6 +334,7 @@ impl PostgresControlRepository {
                 SELECT
                     a.account_name,
                     a.account_id,
+                    a.email,
                     a.status,
                     COALESCE(
                         CASE
@@ -431,6 +433,7 @@ impl PostgresControlRepository {
                    OR lower(status) LIKE $1
                    OR lower(COALESCE(plan_type, '')) LIKE $1
                    OR lower(COALESCE(account_id, '')) LIKE $1
+                   OR lower(COALESCE(email, '')) LIKE $1
                    OR lower(COALESCE(route_weight_tier, '')) LIKE $1)
               AND ($2::boolean = FALSE OR status <> 'disabled')
               AND ($3::boolean = FALSE
@@ -470,6 +473,7 @@ impl PostgresControlRepository {
              SELECT
                 account_name,
                 account_id,
+                email,
                 status,
                 map_gpt53_codex_to_spark,
                 auth_refresh_enabled,
@@ -611,6 +615,7 @@ impl PostgresControlRepository {
             name: row.account_name.clone(),
             status: row.status.clone(),
             account_id: row.account_id.clone(),
+            email: row.email.clone(),
             plan_type: row.plan_type.clone(),
             route_weight_tier: settings
                 .route_weight_tier
@@ -653,6 +658,7 @@ impl PostgresControlRepository {
             name: record.account_name.clone(),
             status: record.status.clone(),
             account_id: record.account_id.clone(),
+            email: record.email.clone(),
             plan_type: None,
             route_weight_tier: settings
                 .route_weight_tier

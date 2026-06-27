@@ -400,6 +400,7 @@ struct ProxyEndpointCheckRow {
 struct CodexAdminAccountListRow {
     account_name: String,
     account_id: Option<String>,
+    email: Option<String>,
     status: String,
     map_gpt53_codex_to_spark: bool,
     auth_refresh_enabled: bool,

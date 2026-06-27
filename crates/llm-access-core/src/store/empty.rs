@@ -591,6 +591,7 @@ impl AdminCodexAccountStore for EmptyAdminCodexAccountStore {
             name: account.name,
             status: KEY_STATUS_ACTIVE.to_string(),
             account_id: account.account_id,
+            email: None,
             plan_type: None,
             route_weight_tier: account
                 .route_weight_tier

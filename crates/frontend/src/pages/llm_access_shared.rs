@@ -273,6 +273,32 @@ pub fn credit_usage_missing_label() -> &'static str {
     "credit usage unavailable"
 }
 
+pub fn usage_error_summary(
+    status_code: i32,
+    error_message: Option<&str>,
+    error_class: Option<&str>,
+    session_blocked: bool,
+) -> Option<String> {
+    let message = error_message
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(message) = message {
+        return Some(message.to_string());
+    }
+
+    let class = error_class.map(str::trim).filter(|value| !value.is_empty());
+    if session_blocked {
+        return Some(match class {
+            Some(class) => format!("会话已永久封禁 · {class}"),
+            None => "会话已永久封禁".to_string(),
+        });
+    }
+    if let Some(class) = class {
+        return Some(class.to_string());
+    }
+    (!(200..300).contains(&status_code)).then(|| format!("HTTP {status_code}"))
+}
+
 fn resolved_public_url(path: &str) -> String {
     if path.starts_with("http://") || path.starts_with("https://") {
         return path.to_string();
@@ -473,7 +499,7 @@ mod tests {
         codex_model_catalog_download_command, codex_provider_config, credit_usage_missing_label,
         first_token_latency_color, format_bytes_human, format_kiro_disabled_reason,
         format_latency_ms, preferred_model_slug_from_catalog_json, token_usage_missing_label,
-        total_latency_color,
+        total_latency_color, usage_error_summary,
     };
 
     #[test]
@@ -543,6 +569,38 @@ mod tests {
     fn usage_missing_badge_labels_are_specific() {
         assert_eq!(token_usage_missing_label(), "token usage unavailable");
         assert_eq!(credit_usage_missing_label(), "credit usage unavailable");
+    }
+
+    #[test]
+    fn usage_error_summary_prefers_error_message() {
+        assert_eq!(
+            usage_error_summary(
+                423,
+                Some("System messages are not allowed"),
+                Some("upstream_user_error"),
+                false
+            )
+            .as_deref(),
+            Some("System messages are not allowed")
+        );
+    }
+
+    #[test]
+    fn usage_error_summary_falls_back_to_class_and_status() {
+        assert_eq!(
+            usage_error_summary(423, Some("   "), Some("upstream_user_error"), false).as_deref(),
+            Some("upstream_user_error")
+        );
+        assert_eq!(usage_error_summary(423, None, None, false).as_deref(), Some("HTTP 423"));
+        assert_eq!(usage_error_summary(200, None, None, false), None);
+    }
+
+    #[test]
+    fn usage_error_summary_surfaces_session_blocked_without_message() {
+        assert_eq!(
+            usage_error_summary(403, None, Some("cyber_policy"), true).as_deref(),
+            Some("会话已永久封禁 · cyber_policy")
+        );
     }
 
     #[test]
