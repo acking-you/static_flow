@@ -57,6 +57,12 @@ pub struct ProviderCodexRoute {
     /// Whether fatal Codex session errors reject repeated requests for the same
     /// key/session before selecting another account.
     pub codex_strict_session_rejection_enabled: bool,
+    /// Whether this key is allowed to dispatch Codex image requests through
+    /// the standalone image gateway binary.
+    pub codex_image_generation_enabled: bool,
+    /// Whether this key is allowed to dispatch Codex image requests directly
+    /// through the main Codex API service.
+    pub codex_image_direct_generation_enabled: bool,
     /// Request concurrency cap configured on this key route.
     pub request_max_concurrency: Option<u64>,
     /// Minimum interval between request starts configured on this key route.
@@ -66,6 +72,10 @@ pub struct ProviderCodexRoute {
     /// Minimum interval between request starts configured on the selected
     /// account.
     pub account_request_min_start_interval_ms: Option<u64>,
+    /// Whether the selected account may be used for Codex image requests.
+    pub account_codex_image_generation_enabled: bool,
+    /// Image request concurrency cap configured on the selected account.
+    pub account_codex_image_generation_max_concurrency: u64,
     /// Cached account error message captured from the latest status view.
     pub cached_error_message: Option<String>,
     /// Resolved proxy settings for this upstream request.

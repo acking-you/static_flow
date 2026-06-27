@@ -90,6 +90,23 @@ impl PostgresControlRepository {
                         THEN (settings_json ->> 'request_min_start_interval_ms')::bigint
                         ELSE NULL
                     END,
+                    COALESCE(
+                        CASE
+                            WHEN jsonb_typeof(settings_json -> 'codex_image_generation_enabled')
+                                = 'boolean'
+                            THEN (settings_json ->> 'codex_image_generation_enabled')::boolean
+                        END,
+                        false
+                    ),
+                    COALESCE(
+                        CASE
+                            WHEN jsonb_typeof(settings_json -> \
+                 'codex_image_generation_max_concurrency') = 'number'
+                            THEN (settings_json ->> \
+                 'codex_image_generation_max_concurrency')::bigint
+                        END,
+                        3
+                    ),
                     last_refresh_at_ms,
                     last_error,
                     COALESCE(
@@ -217,6 +234,23 @@ impl PostgresControlRepository {
                         THEN (settings_json ->> 'request_min_start_interval_ms')::bigint
                         ELSE NULL
                     END,
+                    COALESCE(
+                        CASE
+                            WHEN jsonb_typeof(settings_json -> 'codex_image_generation_enabled')
+                                = 'boolean'
+                            THEN (settings_json ->> 'codex_image_generation_enabled')::boolean
+                        END,
+                        false
+                    ),
+                    COALESCE(
+                        CASE
+                            WHEN jsonb_typeof(settings_json -> \
+                 'codex_image_generation_max_concurrency') = 'number'
+                            THEN (settings_json ->> \
+                 'codex_image_generation_max_concurrency')::bigint
+                        END,
+                        3
+                    ),
                     last_refresh_at_ms,
                     last_error,
                     COALESCE(
@@ -332,6 +366,23 @@ impl PostgresControlRepository {
                         THEN (a.settings_json ->> 'request_min_start_interval_ms')::bigint
                         ELSE NULL
                     END AS request_min_start_interval_ms,
+                    COALESCE(
+                        CASE
+                            WHEN jsonb_typeof(a.settings_json -> 'codex_image_generation_enabled')
+                                = 'boolean'
+                            THEN (a.settings_json ->> 'codex_image_generation_enabled')::boolean
+                        END,
+                        false
+                    ) AS codex_image_generation_enabled,
+                    COALESCE(
+                        CASE
+                            WHEN jsonb_typeof(a.settings_json -> \
+                        'codex_image_generation_max_concurrency') = 'number'
+                            THEN (a.settings_json ->> \
+                        'codex_image_generation_max_concurrency')::bigint
+                        END,
+                        3
+                    ) AS codex_image_generation_max_concurrency,
                     a.last_refresh_at_ms,
                     a.last_error,
                     COALESCE(
@@ -427,6 +478,8 @@ impl PostgresControlRepository {
                 proxy_config_id,
                 request_max_concurrency,
                 request_min_start_interval_ms,
+                codex_image_generation_enabled,
+                codex_image_generation_max_concurrency,
                 last_refresh_at_ms,
                 last_error,
                 access_token,
@@ -547,6 +600,10 @@ impl PostgresControlRepository {
             request_min_start_interval_ms: row
                 .request_min_start_interval_ms
                 .and_then(non_negative_i64_to_u64),
+            codex_image_generation_enabled: row.codex_image_generation_enabled,
+            codex_image_generation_max_concurrency: row
+                .codex_image_generation_max_concurrency
+                .max(1) as u64,
         };
         let (effective_proxy_source, effective_proxy_url, effective_proxy_config_name) =
             self.resolve_codex_account_proxy_view_with_context(&settings, context);
@@ -566,6 +623,8 @@ impl PostgresControlRepository {
             auto_refresh_enabled: settings.auth_refresh_enabled,
             request_max_concurrency: settings.request_max_concurrency,
             request_min_start_interval_ms: settings.request_min_start_interval_ms,
+            codex_image_generation_enabled: settings.codex_image_generation_enabled,
+            codex_image_generation_max_concurrency: settings.codex_image_generation_max_concurrency,
             proxy_mode: settings.proxy_mode,
             proxy_config_id: settings.proxy_config_id,
             effective_proxy_source,
@@ -606,6 +665,8 @@ impl PostgresControlRepository {
             auto_refresh_enabled: settings.auth_refresh_enabled,
             request_max_concurrency: settings.request_max_concurrency,
             request_min_start_interval_ms: settings.request_min_start_interval_ms,
+            codex_image_generation_enabled: settings.codex_image_generation_enabled,
+            codex_image_generation_max_concurrency: settings.codex_image_generation_max_concurrency,
             proxy_mode: settings.proxy_mode,
             proxy_config_id: settings.proxy_config_id,
             effective_proxy_source,
@@ -850,6 +911,12 @@ impl AdminCodexAccountStore for PostgresControlRepository {
         if let Some(value) = patch.request_min_start_interval_ms {
             settings.request_min_start_interval_ms = value;
         }
+        if let Some(value) = patch.codex_image_generation_enabled {
+            settings.codex_image_generation_enabled = value;
+        }
+        if let Some(value) = patch.codex_image_generation_max_concurrency {
+            settings.codex_image_generation_max_concurrency = value;
+        }
         record.settings_json =
             serde_json::to_string(&settings).context("serialize postgres codex settings")?;
         record.updated_at_ms = patch.updated_at_ms;
@@ -950,10 +1017,15 @@ impl AdminCodexAccountStore for PostgresControlRepository {
             auth_refresh_enabled: settings.auth_refresh_enabled,
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
+            codex_image_generation_enabled: true,
+            codex_image_direct_generation_enabled: false,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             account_request_max_concurrency: settings.request_max_concurrency,
             account_request_min_start_interval_ms: settings.request_min_start_interval_ms,
+            account_codex_image_generation_enabled: settings.codex_image_generation_enabled,
+            account_codex_image_generation_max_concurrency: settings
+                .codex_image_generation_max_concurrency,
             cached_error_message,
             proxy,
         }))

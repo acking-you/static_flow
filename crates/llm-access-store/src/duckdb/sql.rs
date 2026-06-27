@@ -110,6 +110,7 @@ pub fn compact_copy_usage_events_sql(columns: &HashSet<String>) -> String {
         compact_source_column_expr(columns, "error_class", "CAST(NULL AS VARCHAR)"),
         compact_source_column_expr(columns, "session_blocked", "false"),
         compact_source_column_expr(columns, "error_message", "CAST(NULL AS VARCHAR)"),
+        compact_source_column_expr(columns, "response_image_count", "CAST(NULL AS BIGINT)"),
     ]
     .join(",\n        ");
 
@@ -130,7 +131,8 @@ pub fn compact_copy_usage_events_sql(columns: &HashSet<String>) -> String {
         routing_diagnostics_json, last_message_content, detail_object_payload_present,
         detail_object_path, detail_object_offset, detail_object_length, detail_object_sha256,
         proxy_source_at_event, proxy_config_id_at_event, proxy_config_name_at_event,
-        proxy_url_at_event, error_class, session_blocked, error_message
+        proxy_url_at_event, error_class, session_blocked, error_message,
+        response_image_count
     )
     SELECT
         {select}
@@ -300,6 +302,7 @@ fn usage_event_summary_select_exprs(columns: &HashSet<String>) -> Vec<String> {
     let mut exprs = usage_event_base_select_exprs(columns, false, None);
     exprs.push("CAST(NULL AS VARCHAR) AS last_message_content".to_string());
     exprs.push(usage_event_column_expr(columns, "error_message", "CAST(NULL AS VARCHAR)"));
+    exprs.push(usage_event_column_expr(columns, "response_image_count", "CAST(NULL AS BIGINT)"));
     exprs
 }
 #[cfg(feature = "duckdb-runtime")]
@@ -360,6 +363,7 @@ fn usage_event_detail_select_exprs(
     exprs.push(usage_event_column_expr(columns, "detail_object_offset", "CAST(NULL AS BIGINT)"));
     exprs.push(usage_event_column_expr(columns, "detail_object_length", "CAST(NULL AS BIGINT)"));
     exprs.push(usage_event_column_expr(columns, "detail_object_sha256", "CAST(NULL AS VARCHAR)"));
+    exprs.push(usage_event_column_expr(columns, "response_image_count", "CAST(NULL AS BIGINT)"));
     exprs
 }
 #[cfg(feature = "duckdb-runtime")]

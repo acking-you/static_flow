@@ -66,6 +66,12 @@ pub struct KeyRouteConfig {
     pub codex_fast_enabled: bool,
     /// Whether repeated fatal Codex session errors are rejected early.
     pub codex_strict_session_rejection_enabled: bool,
+    /// Whether Codex image generation/edit requests are enabled through the
+    /// standalone image gateway for this key.
+    pub codex_image_generation_enabled: bool,
+    /// Whether Codex image generation/edit requests are enabled directly
+    /// through the main Codex API service for this key.
+    pub codex_image_direct_generation_enabled: bool,
     /// Whether Kiro public request validation is enabled.
     pub kiro_request_validation_enabled: bool,
     /// Whether Kiro cache estimation is enabled.
@@ -105,6 +111,12 @@ pub struct KeyUsageRollup {
     pub credit_total: f64,
     /// Number of events missing credit usage.
     pub credit_missing_events: i64,
+    /// Accumulated Codex image-generation tokens reported by upstream.
+    pub codex_image_usage_tokens: i64,
+    /// Number of successful Codex image responses missing upstream usage.
+    pub codex_image_usage_missing_events: i64,
+    /// Last successful Codex image usage timestamp.
+    pub codex_image_last_used_at_ms: Option<i64>,
     /// Last usage timestamp.
     pub last_used_at_ms: Option<i64>,
     /// Update timestamp in Unix milliseconds.

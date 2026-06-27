@@ -118,6 +118,11 @@ pub struct UsageEvent {
     /// rejected for this key (the fatal `cyber_policy` strict-session block).
     #[serde(default)]
     pub session_blocked: bool,
+    /// Number of images returned by an `images/generations` or `images/edits`
+    /// request. `None` for non-image requests; surfaced so the usage UI can
+    /// visualize Codex image generation distinctly from token traffic.
+    #[serde(default)]
+    pub response_image_count: Option<i64>,
     /// Raw error response body surfaced for failed requests.
     pub error_body: Option<String>,
     /// Raw response body captured for explicit diagnostic events.

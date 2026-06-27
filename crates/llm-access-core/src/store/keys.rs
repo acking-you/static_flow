@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{KEY_STATUS_ACTIVE, KEY_STATUS_DISABLED};
 
+const fn default_true() -> bool {
+    true
+}
+
 /// Admin-facing projection of one managed API key.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AdminKey {
@@ -36,6 +40,15 @@ pub struct AdminKey {
     pub usage_credit_total: f64,
     /// Number of events missing credit usage.
     pub usage_credit_missing_events: u64,
+    /// Accumulated Codex image-generation tokens reported by upstream.
+    #[serde(default)]
+    pub codex_image_usage_tokens: u64,
+    /// Number of successful Codex image responses missing upstream usage.
+    #[serde(default)]
+    pub codex_image_usage_missing_events: u64,
+    /// Last successful Codex image usage timestamp.
+    #[serde(default)]
+    pub codex_image_last_used_at: Option<i64>,
     /// Remaining billable tokens.
     pub remaining_billable: i64,
     /// Last usage timestamp.
@@ -67,6 +80,18 @@ pub struct AdminKey {
     /// early for this key.
     #[serde(default)]
     pub codex_strict_session_rejection_enabled: bool,
+    /// Deprecated compatibility alias for the standalone Codex image gateway
+    /// switch.
+    #[serde(default = "default_true")]
+    pub codex_image_generation_enabled: bool,
+    /// Whether Codex image generation/edit requests are enabled through the
+    /// standalone image gateway for this key.
+    #[serde(default = "default_true")]
+    pub codex_image_standalone_generation_enabled: bool,
+    /// Whether Codex image generation/edit requests are enabled directly
+    /// through the main Codex API service for this key.
+    #[serde(default)]
+    pub codex_image_direct_generation_enabled: bool,
     /// Whether Kiro request validation is enabled.
     pub kiro_request_validation_enabled: bool,
     /// Whether Kiro cache estimation is enabled.
@@ -180,6 +205,10 @@ pub struct AdminKeysSummary {
     pub usage_credit_total: f64,
     /// Sum of events missing credit usage.
     pub usage_credit_missing_events: u64,
+    /// Sum of Codex image-generation tokens reported by upstream.
+    pub codex_image_usage_tokens_sum: u64,
+    /// Sum of successful Codex image responses missing upstream usage.
+    pub codex_image_usage_missing_events: u64,
 }
 
 /// Admin key list query shared by paginated inventory screens.
@@ -244,6 +273,12 @@ pub fn summarize_admin_keys(keys: &[AdminKey]) -> AdminKeysSummary {
         summary.usage_credit_missing_events = summary
             .usage_credit_missing_events
             .saturating_add(key.usage_credit_missing_events);
+        summary.codex_image_usage_tokens_sum = summary
+            .codex_image_usage_tokens_sum
+            .saturating_add(key.codex_image_usage_tokens);
+        summary.codex_image_usage_missing_events = summary
+            .codex_image_usage_missing_events
+            .saturating_add(key.codex_image_usage_missing_events);
     }
     summary
 }
@@ -352,6 +387,13 @@ pub struct AdminKeyPatch {
     pub codex_fast_enabled: Option<bool>,
     /// New Codex strict session-rejection toggle.
     pub codex_strict_session_rejection_enabled: Option<bool>,
+    /// Deprecated compatibility alias for the standalone Codex image gateway
+    /// switch.
+    pub codex_image_generation_enabled: Option<bool>,
+    /// New standalone Codex image generation/edit toggle.
+    pub codex_image_standalone_generation_enabled: Option<bool>,
+    /// New direct Codex image generation/edit toggle.
+    pub codex_image_direct_generation_enabled: Option<bool>,
     /// New Kiro request-validation toggle.
     pub kiro_request_validation_enabled: Option<bool>,
     /// New Kiro cache-estimation toggle.
@@ -374,4 +416,75 @@ pub struct AdminKeyPatch {
     pub kiro_billable_model_multipliers_override_json: Option<Option<String>>,
     /// Update timestamp.
     pub updated_at_ms: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn admin_key_with_codex_image_usage(id: &str, image_tokens: u64, missing: u64) -> AdminKey {
+        AdminKey {
+            id: id.to_string(),
+            name: id.to_string(),
+            secret: "secret".to_string(),
+            key_hash: "hash".to_string(),
+            status: KEY_STATUS_ACTIVE.to_string(),
+            provider_type: "codex".to_string(),
+            public_visible: true,
+            quota_billable_limit: 1_000,
+            usage_input_uncached_tokens: 0,
+            usage_input_cached_tokens: 0,
+            usage_output_tokens: 0,
+            usage_credit_total: 0.0,
+            usage_credit_missing_events: 0,
+            codex_image_usage_tokens: image_tokens,
+            codex_image_usage_missing_events: missing,
+            codex_image_last_used_at: Some(1_700_000_000_000),
+            remaining_billable: 1_000,
+            last_used_at: None,
+            created_at: 1,
+            updated_at: 1,
+            route_strategy: None,
+            account_group_id: None,
+            fixed_account_name: None,
+            auto_account_names: None,
+            preferred_pool_strategy: "balanced".to_string(),
+            model_name_map: None,
+            request_max_concurrency: None,
+            request_min_start_interval_ms: None,
+            codex_fast_enabled: true,
+            codex_strict_session_rejection_enabled: false,
+            codex_image_generation_enabled: true,
+            codex_image_standalone_generation_enabled: true,
+            codex_image_direct_generation_enabled: false,
+            kiro_request_validation_enabled: false,
+            kiro_cache_estimation_enabled: false,
+            kiro_zero_cache_debug_enabled: false,
+            kiro_full_request_logging_enabled: false,
+            kiro_remote_media_resolution_enabled: false,
+            kiro_latency_routing_enabled: true,
+            kiro_protected_content_validation_enabled: false,
+            kiro_cctest_text_handling_enabled: false,
+            kiro_cache_policy_override_json: None,
+            kiro_billable_model_multipliers_override_json: None,
+            effective_kiro_cache_policy_json: "{}".to_string(),
+            uses_global_kiro_cache_policy: true,
+            effective_kiro_billable_model_multipliers_json: "{}".to_string(),
+            uses_global_kiro_billable_model_multipliers: true,
+            kiro_candidate_credit_summary: None,
+        }
+    }
+
+    #[test]
+    fn summarize_admin_keys_accumulates_codex_image_usage() {
+        let keys = vec![
+            admin_key_with_codex_image_usage("key-a", 10, 1),
+            admin_key_with_codex_image_usage("key-b", 15, 2),
+        ];
+
+        let summary = summarize_admin_keys(&keys);
+
+        assert_eq!(summary.codex_image_usage_tokens_sum, 25);
+        assert_eq!(summary.codex_image_usage_missing_events, 3);
+    }
 }

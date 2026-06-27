@@ -52,7 +52,8 @@ use super::{
         UsageChartPoint, UsageEventPage, UsageEventQuery, UsageEventTotals, UsageFilterOptions,
         UsageMetricsQuery, UsageMetricsSnapshot, UsageRollupApplyReport, UsageRollupBatch,
     },
-    DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_STATUS_REFRESH_SECONDS, KEY_STATUS_ACTIVE,
+    DEFAULT_AUTH_CACHE_TTL_SECONDS, DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY,
+    DEFAULT_CODEX_STATUS_REFRESH_SECONDS, KEY_STATUS_ACTIVE,
 };
 use crate::usage::UsageEvent;
 
@@ -357,6 +358,9 @@ impl AdminKeyStore for EmptyAdminKeyStore {
             usage_output_tokens: 0,
             usage_credit_total: 0.0,
             usage_credit_missing_events: 0,
+            codex_image_usage_tokens: 0,
+            codex_image_usage_missing_events: 0,
+            codex_image_last_used_at: None,
             remaining_billable: key.quota_billable_limit as i64,
             last_used_at: None,
             created_at: key.created_at_ms,
@@ -371,6 +375,9 @@ impl AdminKeyStore for EmptyAdminKeyStore {
             request_min_start_interval_ms: key.request_min_start_interval_ms,
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
+            codex_image_generation_enabled: true,
+            codex_image_standalone_generation_enabled: true,
+            codex_image_direct_generation_enabled: false,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,
@@ -595,6 +602,8 @@ impl AdminCodexAccountStore for EmptyAdminCodexAccountStore {
             auto_refresh_enabled: account.auto_refresh_enabled,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            codex_image_generation_enabled: false,
+            codex_image_generation_max_concurrency: DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY,
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
             effective_proxy_source: "none".to_string(),

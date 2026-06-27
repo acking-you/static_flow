@@ -5698,6 +5698,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "llm-access-codex",
+ "llm-access-codex-image",
  "llm-access-core",
  "llm-access-kiro",
  "llm-access-store",
@@ -5743,6 +5744,27 @@ dependencies = [
  "urlencoding",
  "uuid",
  "zstd",
+]
+
+[[package]]
+name = "llm-access-codex-image"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bytes",
+ "clap",
+ "llm-access-codex",
+ "llm-access-core",
+ "llm-access-store",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

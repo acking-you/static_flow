@@ -548,6 +548,7 @@ fn execute_usage_event_insert(
         row.error_class.as_deref(),
         row.session_blocked,
         row.error_message.as_deref(),
+        row.response_image_count,
     ])?;
     Ok(inserted)
 }

@@ -307,6 +307,9 @@ pub async fn hydrate_codex_route_for_dispatch(
     route.auth_refresh_enabled = loaded.auth_refresh_enabled;
     route.account_request_max_concurrency = loaded.account_request_max_concurrency;
     route.account_request_min_start_interval_ms = loaded.account_request_min_start_interval_ms;
+    route.account_codex_image_generation_enabled = loaded.account_codex_image_generation_enabled;
+    route.account_codex_image_generation_max_concurrency =
+        loaded.account_codex_image_generation_max_concurrency;
     route.cached_error_message = loaded.cached_error_message;
     route.proxy = loaded.proxy;
     Ok(route)

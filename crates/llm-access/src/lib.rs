@@ -54,6 +54,11 @@ use axum::{
     Json, Router,
 };
 use config::{CliCommand, ServeConfig, StorageConfig};
+use llm_access_codex_image::{
+    dispatch::ImageGatewayMode,
+    gateway::{CodexImageGateway, CodexImageGatewayConfig},
+    logging::ImageLogWriter,
+};
 use llm_access_core::store::{
     AdminAccountGroupStore, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,
     AdminKiroAccountStore, AdminProxyStore, AdminReviewQueueStore, PublicAccessStore,
@@ -72,6 +77,7 @@ pub(crate) static KIRO_UPSTREAM_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mute
 #[derive(Clone)]
 struct HttpState {
     provider_state: provider::ProviderState,
+    codex_image_gateway: Arc<CodexImageGateway>,
     cluster_state: Option<Arc<crate::cluster::ClusterRuntimeState>>,
     geoip: geoip::GeoIpResolver,
     request_activity: Arc<activity::RequestActivityTracker>,
@@ -194,9 +200,22 @@ pub fn router_with_simulator(
         geoip.clone(),
         runtime.kiro_latency_ranker(),
     );
+    let codex_image_gateway = Arc::new(
+        CodexImageGateway::new(CodexImageGatewayConfig {
+            mode: ImageGatewayMode::IntegratedCodexApi,
+            control_store: runtime.control_store(),
+            route_store: runtime.provider_route_store(),
+            image_log: ImageLogWriter::new(runtime.codex_image_log_config())
+                .expect("create integrated codex image log writer"),
+            upstream_base: llm_access_codex::request::codex_upstream_base_url_from_env(),
+            codex_client_version: runtime.codex_client_version(),
+        })
+        .expect("create integrated codex image gateway"),
+    );
     let kiro_cache_simulator = provider_state.kiro_cache_simulator();
     let state = HttpState {
         provider_state,
+        codex_image_gateway,
         cluster_state: runtime.cluster_state(),
         geoip,
         request_activity,
@@ -453,12 +472,20 @@ pub fn router_with_simulator(
         .route("/v1/chat/completions", post(provider_entry_handler))
         .route("/v1/responses", post(provider_entry_handler))
         .route("/v1/models", get(provider_entry_handler))
+        .route("/v1/images/generations", any(codex_image_handler))
+        .route("/v1/images/edits", any(codex_image_handler))
         .route("/v1/messages", post(provider_entry_handler))
         .route("/v1/messages/count_tokens", post(kiro::count_tokens))
         .route("/cc/v1/messages", post(provider_entry_handler))
         .route("/api/kiro-gateway/v1/models", get(kiro::get_models))
         .route("/api/kiro-gateway/v1/messages/count_tokens", post(kiro::count_tokens))
         .route("/api/kiro-gateway/cc/v1/messages/count_tokens", post(kiro::count_tokens))
+        .route("/api/codex-gateway/images/generations", any(codex_image_handler))
+        .route("/api/codex-gateway/images/edits", any(codex_image_handler))
+        .route("/api/codex-gateway/v1/images/generations", any(codex_image_handler))
+        .route("/api/codex-gateway/v1/images/edits", any(codex_image_handler))
+        .route("/api/llm-gateway/v1/images/generations", any(codex_image_handler))
+        .route("/api/llm-gateway/v1/images/edits", any(codex_image_handler))
         .route("/api/llm-gateway/*path", any(provider_entry_handler))
         .route("/api/kiro-gateway/*path", any(provider_entry_handler))
         .route("/api/codex-gateway/*path", any(provider_entry_handler))
@@ -513,6 +540,10 @@ async fn provider_entry_handler(
     request: Request<Body>,
 ) -> Response {
     provider::provider_entry(state.provider_state, request).await
+}
+
+async fn codex_image_handler(State(state): State<HttpState>, request: Request<Body>) -> Response {
+    state.codex_image_gateway.handle_request(request).await
 }
 
 /// Run the HTTP server until interrupted.
@@ -874,6 +905,27 @@ mod tests {
             .expect("body");
         let body = String::from_utf8(body.to_vec()).expect("utf8 body");
         assert!(body.contains(r#""input_tokens":"#));
+    }
+
+    #[tokio::test]
+    async fn router_routes_v1_image_generation_to_codex_image_gateway() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/images/generations")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"prompt":"draw a test"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert_eq!(String::from_utf8(body.to_vec()).expect("utf8"), "missing bearer token");
     }
 
     #[tokio::test]

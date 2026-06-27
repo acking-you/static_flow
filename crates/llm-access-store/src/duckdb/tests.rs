@@ -48,6 +48,7 @@ fn test_usage_event() -> UsageEvent {
         error_body: None,
         error_class: None,
         session_blocked: false,
+        response_image_count: None,
         response_body: None,
         timing: UsageTiming {
             latency_ms: Some(55),
@@ -905,6 +906,7 @@ async fn duckdb_repository_round_trips_error_payloads_in_usage_detail() {
     );
     event.error_class = Some("cyber_policy".to_string());
     event.session_blocked = true;
+    event.response_image_count = Some(3);
     event.error_body = Some(
         r#"{"error":{"message":"A text block must be included when using documents."}}"#
             .to_string(),
@@ -922,6 +924,7 @@ async fn duckdb_repository_round_trips_error_payloads_in_usage_detail() {
     assert_usage_event_detail_payloads(&detail, &event);
     assert_eq!(detail.error_class.as_deref(), Some("cyber_policy"));
     assert!(detail.session_blocked);
+    assert_eq!(detail.response_image_count, Some(3));
 
     // The classification and inline error message must also be readable from the
     // lightweight summary/list query without opening the detail view.
@@ -950,6 +953,7 @@ async fn duckdb_repository_round_trips_error_payloads_in_usage_detail() {
     assert_eq!(listed.error_message.as_deref(), event.error_message.as_deref());
     assert_eq!(listed.error_class.as_deref(), Some("cyber_policy"));
     assert!(listed.session_blocked);
+    assert_eq!(listed.response_image_count, Some(3));
 
     std::fs::remove_dir_all(&root).expect("cleanup duckdb test directory");
 }
@@ -2693,6 +2697,7 @@ async fn duckdb_tiered_publish_handles_reordered_pending_usage_event_columns() {
         let mut event = test_usage_event();
         event.event_id = "compact-reordered-event".to_string();
         event.client_ip = "unknown".to_string();
+        event.response_image_count = Some(3);
         writer
             .insert_usage_events(&[super::UsageEventRow::from_usage_event(&event)])
             .expect("insert pending event");
@@ -2716,7 +2721,7 @@ async fn duckdb_tiered_publish_handles_reordered_pending_usage_event_columns() {
                 input_uncached_tokens, input_cached_tokens, output_tokens,
                 billable_tokens, credit_usage, usage_missing, credit_usage_missing,
                 ip_region, request_headers_json, last_message_content,
-                detail_object_payload_present
+                detail_object_payload_present, response_image_count
             FROM usage_events;
             DROP TABLE usage_events;
             ALTER TABLE usage_events_reordered RENAME TO usage_events;
@@ -2746,13 +2751,22 @@ async fn duckdb_tiered_publish_handles_reordered_pending_usage_event_columns() {
         .expect("open archived reordered segment");
     let row = archived
         .query_row(
-            "SELECT client_ip, request_body_bytes FROM usage_events WHERE event_id = ?1",
+            "SELECT client_ip, request_body_bytes, response_image_count
+             FROM usage_events
+             WHERE event_id = ?1",
             ["compact-reordered-event"],
-            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<i64>>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            },
         )
         .expect("read archived reordered event");
     assert_eq!(row.0.as_deref(), Some("unknown"));
     assert_eq!(row.1, Some(1234));
+    assert_eq!(row.2, Some(3));
 
     std::fs::remove_dir_all(&root).expect("cleanup reordered compact publish test directory");
 }

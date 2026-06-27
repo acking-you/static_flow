@@ -90,6 +90,8 @@ const PROXY_TRAFFIC_QUERY_WINDOW_DAYS: u64 = 30;
 const ADMIN_CODEX_IMPORT_JOB_LIST_LIMIT: usize = 10;
 const ACCOUNT_PAGE_SIZE: usize = 8;
 const KEY_PAGE_SIZE: usize = 8;
+const CODEX_IMAGE_DEFAULT_CONCURRENCY: u64 = 3;
+const CODEX_IMAGE_MAX_CONCURRENCY: u64 = 1024;
 const ACCOUNT_ACCENT_BORDERS: &[&str] = &[
     "border-l-4 border-l-teal-500/70",
     "border-l-4 border-l-violet-500/70",
@@ -482,6 +484,28 @@ fn account_rate_limit_bucket<'a>(
                 .iter()
                 .find(|bucket| bucket.account_name.as_deref() == Some(account_name))
         })
+}
+
+fn account_image_rate_limit_bucket<'a>(
+    status: Option<&'a LlmGatewayRateLimitStatusResponse>,
+    account_name: &str,
+) -> Option<&'a LlmGatewayRateLimitBucketView> {
+    let status = status?;
+    status.buckets.iter().find(|bucket| {
+        if bucket.account_name.as_deref() != Some(account_name) {
+            return false;
+        }
+        let limit_id = bucket.limit_id.to_ascii_lowercase();
+        let limit_name = bucket
+            .limit_name
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let display_name = bucket.display_name.to_ascii_lowercase();
+        [limit_id.as_str(), limit_name.as_str(), display_name.as_str()]
+            .iter()
+            .any(|value| value.contains("image"))
+    })
 }
 
 fn account_limit_remaining_percent(
@@ -1245,6 +1269,10 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
     let codex_fast_enabled = use_state(|| key_item.codex_fast_enabled);
     let codex_strict_session_rejection_enabled =
         use_state(|| key_item.codex_strict_session_rejection_enabled);
+    let codex_image_standalone_generation_enabled =
+        use_state(|| key_item.codex_image_standalone_generation_enabled);
+    let codex_image_direct_generation_enabled =
+        use_state(|| key_item.codex_image_direct_generation_enabled);
     let saving = use_state(|| false);
     let feedback = use_state(|| None::<String>);
 
@@ -1262,6 +1290,9 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
         let request_min_start_interval_ms = request_min_start_interval_ms.clone();
         let codex_fast_enabled = codex_fast_enabled.clone();
         let codex_strict_session_rejection_enabled = codex_strict_session_rejection_enabled.clone();
+        let codex_image_standalone_generation_enabled =
+            codex_image_standalone_generation_enabled.clone();
+        let codex_image_direct_generation_enabled = codex_image_direct_generation_enabled.clone();
         use_effect_with((props.key_item.clone(), props.account_groups.clone()), move |_| {
             name.set(key_item.name.clone());
             quota.set(key_item.quota_billable_limit.to_string());
@@ -1293,6 +1324,10 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
             codex_fast_enabled.set(key_item.codex_fast_enabled);
             codex_strict_session_rejection_enabled
                 .set(key_item.codex_strict_session_rejection_enabled);
+            codex_image_standalone_generation_enabled
+                .set(key_item.codex_image_standalone_generation_enabled);
+            codex_image_direct_generation_enabled
+                .set(key_item.codex_image_direct_generation_enabled);
             || ()
         });
     }
@@ -1361,6 +1396,9 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
         let request_min_start_interval_ms = request_min_start_interval_ms.clone();
         let codex_fast_enabled = codex_fast_enabled.clone();
         let codex_strict_session_rejection_enabled = codex_strict_session_rejection_enabled.clone();
+        let codex_image_standalone_generation_enabled =
+            codex_image_standalone_generation_enabled.clone();
+        let codex_image_direct_generation_enabled = codex_image_direct_generation_enabled.clone();
         let saving = saving.clone();
         let feedback = feedback.clone();
         let on_flash = props.on_flash.clone();
@@ -1381,6 +1419,10 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
             let codex_fast_enabled_value = *codex_fast_enabled;
             let codex_strict_session_rejection_enabled_value =
                 *codex_strict_session_rejection_enabled;
+            let codex_image_standalone_generation_enabled_value =
+                *codex_image_standalone_generation_enabled;
+            let codex_image_direct_generation_enabled_value =
+                *codex_image_direct_generation_enabled;
             let saving = saving.clone();
             let feedback = feedback.clone();
             let on_flash = on_flash.clone();
@@ -1439,6 +1481,13 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     codex_fast_enabled: Some(codex_fast_enabled_value),
                     codex_strict_session_rejection_enabled: Some(
                         codex_strict_session_rejection_enabled_value,
+                    ),
+                    codex_image_generation_enabled: None,
+                    codex_image_standalone_generation_enabled: Some(
+                        codex_image_standalone_generation_enabled_value,
+                    ),
+                    codex_image_direct_generation_enabled: Some(
+                        codex_image_direct_generation_enabled_value,
                     ),
                     kiro_request_validation_enabled: None,
                     kiro_cache_estimation_enabled: None,
@@ -1704,6 +1753,38 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     />
                     <span>{ "严格拒绝 fatal session" }</span>
                 </label>
+                <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
+                    <input
+                        type="checkbox"
+                        checked={*codex_image_standalone_generation_enabled}
+                        onchange={{
+                            let codex_image_standalone_generation_enabled =
+                                codex_image_standalone_generation_enabled.clone();
+                            Callback::from(move |event: Event| {
+                                if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                    codex_image_standalone_generation_enabled.set(target.checked());
+                                }
+                            })
+                        }}
+                    />
+                    <span>{ "独立 Image2 入口" }</span>
+                </label>
+                <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
+                    <input
+                        type="checkbox"
+                        checked={*codex_image_direct_generation_enabled}
+                        onchange={{
+                            let codex_image_direct_generation_enabled =
+                                codex_image_direct_generation_enabled.clone();
+                            Callback::from(move |event: Event| {
+                                if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                    codex_image_direct_generation_enabled.set(target.checked());
+                                }
+                            })
+                        }}
+                    />
+                    <span>{ "Codex API 直连 Image2" }</span>
+                </label>
                 <select
                     key={format!("{}-status-{}", key_item.id, (*status).clone())}
                     class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-1.5", "text-sm")}
@@ -1800,7 +1881,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                 </span>
             </div>
 
-            <div class={classes!("mt-3", "flex", "items-center", "gap-4", "text-xs", "text-[var(--muted)]")}>
+            <div class={classes!("mt-3", "flex", "flex-wrap", "items-center", "gap-4", "text-xs", "text-[var(--muted)]")}>
                 <span>{ format!("剩余 {}", format_number_i64(key_item.remaining_billable)) }</span>
                 <span>{ format!("输入 {}", format_number_u64(key_item.usage_input_uncached_tokens)) }</span>
                 <span>{ format!("缓存 {}", format_number_u64(key_item.usage_input_cached_tokens)) }</span>
@@ -1813,6 +1894,14 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     "间隔 {}ms",
                     key_item.request_min_start_interval_ms.map(|value| value.to_string()).unwrap_or_else(|| "∞".to_string())
                 ) }</span>
+                <span>{ if key_item.codex_image_standalone_generation_enabled { "独立生图 on" } else { "独立生图 off" } }</span>
+                <span>{ if key_item.codex_image_direct_generation_enabled { "直连生图 on" } else { "直连生图 off" } }</span>
+                if key_item.provider_type == "codex" {
+                    <span>{ format!("Image2 {}", format_number_u64(key_item.codex_image_usage_tokens)) }</span>
+                    if key_item.codex_image_usage_missing_events > 0 {
+                        <span>{ format!("image partial {}", key_item.codex_image_usage_missing_events) }</span>
+                    }
+                }
                 <span>{ format!("Credit {}", key_credit_display(&key_item)) }</span>
                 if key_item.usage_credit_missing_events > 0 {
                     <span>{ format!("partial {}", key_item.usage_credit_missing_events) }</span>
@@ -2776,6 +2865,8 @@ pub fn admin_llm_gateway_page() -> Html {
     let account_route_weight_tier_inputs = use_state(BTreeMap::<String, String>::new);
     let account_request_max_inputs = use_state(BTreeMap::<String, String>::new);
     let account_request_min_inputs = use_state(BTreeMap::<String, String>::new);
+    let account_image_enabled_inputs = use_state(BTreeMap::<String, bool>::new);
+    let account_image_concurrency_inputs = use_state(BTreeMap::<String, String>::new);
     let show_import_form = use_state(|| false);
     let account_search = use_state(String::new);
     let account_active_query = use_state(String::new);
@@ -3120,6 +3211,8 @@ pub fn admin_llm_gateway_page() -> Html {
         let account_route_weight_tier_inputs = account_route_weight_tier_inputs.clone();
         let account_request_max_inputs = account_request_max_inputs.clone();
         let account_request_min_inputs = account_request_min_inputs.clone();
+        let account_image_enabled_inputs = account_image_enabled_inputs.clone();
+        let account_image_concurrency_inputs = account_image_concurrency_inputs.clone();
         let account_group_candidate_accounts = account_group_candidate_accounts.clone();
         let account_group_candidate_loading = account_group_candidate_loading.clone();
         let keys_search = keys_search.clone();
@@ -3199,6 +3292,8 @@ pub fn admin_llm_gateway_page() -> Html {
             let account_route_weight_tier_inputs = account_route_weight_tier_inputs.clone();
             let account_request_max_inputs = account_request_max_inputs.clone();
             let account_request_min_inputs = account_request_min_inputs.clone();
+            let account_image_enabled_inputs = account_image_enabled_inputs.clone();
+            let account_image_concurrency_inputs = account_image_concurrency_inputs.clone();
             let account_group_candidate_accounts = account_group_candidate_accounts.clone();
             let account_group_candidate_loading = account_group_candidate_loading.clone();
             let keys_search = keys_search.clone();
@@ -3514,6 +3609,23 @@ pub fn admin_llm_gateway_page() -> Html {
                                     )
                                 })
                                 .collect::<BTreeMap<_, _>>();
+                            let next_image_enabled_inputs = accounts_resp
+                                .accounts
+                                .iter()
+                                .map(|account| {
+                                    (account.name.clone(), account.codex_image_generation_enabled)
+                                })
+                                .collect::<BTreeMap<_, _>>();
+                            let next_image_concurrency_inputs = accounts_resp
+                                .accounts
+                                .iter()
+                                .map(|account| {
+                                    (
+                                        account.name.clone(),
+                                        account.codex_image_generation_max_concurrency.to_string(),
+                                    )
+                                })
+                                .collect::<BTreeMap<_, _>>();
                             accounts_total.set(accounts_resp.total);
                             account_page_limit.set(accounts_resp.limit.max(1));
                             accounts.set(accounts_resp.accounts);
@@ -3521,6 +3633,8 @@ pub fn admin_llm_gateway_page() -> Html {
                             account_route_weight_tier_inputs.set(next_route_weight_tier_inputs);
                             account_request_max_inputs.set(next_request_max_inputs);
                             account_request_min_inputs.set(next_request_min_inputs);
+                            account_image_enabled_inputs.set(next_image_enabled_inputs);
+                            account_image_concurrency_inputs.set(next_image_concurrency_inputs);
                             codex_rate_limit_status.set(codex_status_resp);
                         } else if active_tab_value != TAB_GROUPS {
                             accounts_total.set(0);
@@ -3530,6 +3644,8 @@ pub fn admin_llm_gateway_page() -> Html {
                             account_route_weight_tier_inputs.set(BTreeMap::new());
                             account_request_max_inputs.set(BTreeMap::new());
                             account_request_min_inputs.set(BTreeMap::new());
+                            account_image_enabled_inputs.set(BTreeMap::new());
+                            account_image_concurrency_inputs.set(BTreeMap::new());
                         }
                         if active_tab_value != TAB_GROUPS {
                             account_group_candidate_accounts.set(Vec::new());
@@ -4970,6 +5086,8 @@ pub fn admin_llm_gateway_page() -> Html {
                         proxy_config_id: None,
                         request_max_concurrency: None,
                         request_min_start_interval_ms: None,
+                        codex_image_generation_enabled: None,
+                        codex_image_generation_max_concurrency: None,
                         request_max_concurrency_unlimited: false,
                         request_min_start_interval_ms_unlimited: false,
                     },
@@ -5019,6 +5137,8 @@ pub fn admin_llm_gateway_page() -> Html {
                         proxy_config_id: None,
                         request_max_concurrency: None,
                         request_min_start_interval_ms: None,
+                        codex_image_generation_enabled: None,
+                        codex_image_generation_max_concurrency: None,
                         request_max_concurrency_unlimited: false,
                         request_min_start_interval_ms_unlimited: false,
                     },
@@ -5068,6 +5188,8 @@ pub fn admin_llm_gateway_page() -> Html {
                         proxy_config_id: None,
                         request_max_concurrency: None,
                         request_min_start_interval_ms: None,
+                        codex_image_generation_enabled: None,
+                        codex_image_generation_max_concurrency: None,
                         request_max_concurrency_unlimited: false,
                         request_min_start_interval_ms_unlimited: false,
                     },
@@ -5099,6 +5221,8 @@ pub fn admin_llm_gateway_page() -> Html {
         let account_route_weight_tier_inputs = account_route_weight_tier_inputs.clone();
         let account_request_max_inputs = account_request_max_inputs.clone();
         let account_request_min_inputs = account_request_min_inputs.clone();
+        let account_image_enabled_inputs = account_image_enabled_inputs.clone();
+        let account_image_concurrency_inputs = account_image_concurrency_inputs.clone();
         let accounts = accounts.clone();
         let load_error = load_error.clone();
         Callback::from(move |account_name: String| {
@@ -5107,9 +5231,15 @@ pub fn admin_llm_gateway_page() -> Html {
             let account_route_weight_tier_inputs = account_route_weight_tier_inputs.clone();
             let account_request_max_inputs = account_request_max_inputs.clone();
             let account_request_min_inputs = account_request_min_inputs.clone();
+            let account_image_enabled_inputs = account_image_enabled_inputs.clone();
+            let account_image_concurrency_inputs = account_image_concurrency_inputs.clone();
             let accounts = accounts.clone();
             let load_error = load_error.clone();
             wasm_bindgen_futures::spawn_local(async move {
+                let current_account = (*accounts)
+                    .iter()
+                    .find(|account| account.name == account_name)
+                    .cloned();
                 let selection = (*account_proxy_inputs)
                     .get(&account_name)
                     .cloned()
@@ -5126,6 +5256,24 @@ pub fn admin_llm_gateway_page() -> Html {
                     .get(&account_name)
                     .cloned()
                     .unwrap_or_default();
+                let image_enabled = (*account_image_enabled_inputs)
+                    .get(&account_name)
+                    .copied()
+                    .or_else(|| {
+                        current_account
+                            .as_ref()
+                            .map(|account| account.codex_image_generation_enabled)
+                    })
+                    .unwrap_or(false);
+                let image_concurrency_raw = (*account_image_concurrency_inputs)
+                    .get(&account_name)
+                    .cloned()
+                    .or_else(|| {
+                        current_account.as_ref().map(|account| {
+                            account.codex_image_generation_max_concurrency.to_string()
+                        })
+                    })
+                    .unwrap_or_else(|| CODEX_IMAGE_DEFAULT_CONCURRENCY.to_string());
                 let (proxy_mode, proxy_config_id) = if selection == "direct" {
                     (Some("direct".to_string()), None)
                 } else if let Some(proxy_config_id) = selection.strip_prefix("fixed:") {
@@ -5158,6 +5306,22 @@ pub fn admin_llm_gateway_page() -> Html {
                         },
                     }
                 };
+                let codex_image_generation_max_concurrency = if image_concurrency_raw
+                    .trim()
+                    .is_empty()
+                {
+                    CODEX_IMAGE_DEFAULT_CONCURRENCY
+                } else {
+                    match image_concurrency_raw.trim().parse::<u64>() {
+                        Ok(value) if (1..=CODEX_IMAGE_MAX_CONCURRENCY).contains(&value) => value,
+                        _ => {
+                            load_error.set(Some(format!(
+                                "生图并发必须是 1..={CODEX_IMAGE_MAX_CONCURRENCY} 的整数"
+                            )));
+                            return;
+                        },
+                    }
+                };
 
                 let mut inflight = (*account_action_inflight).clone();
                 inflight.insert(account_name.clone());
@@ -5174,6 +5338,10 @@ pub fn admin_llm_gateway_page() -> Html {
                         proxy_config_id,
                         request_max_concurrency,
                         request_min_start_interval_ms,
+                        codex_image_generation_enabled: Some(image_enabled),
+                        codex_image_generation_max_concurrency: Some(
+                            codex_image_generation_max_concurrency,
+                        ),
                         request_max_concurrency_unlimited: request_max_concurrency.is_none(),
                         request_min_start_interval_ms_unlimited: request_min_start_interval_ms
                             .is_none(),
@@ -5216,6 +5384,17 @@ pub fn admin_llm_gateway_page() -> Html {
                                 .unwrap_or_default(),
                         );
                         account_request_min_inputs.set(next_request_min_inputs);
+                        let mut next_image_enabled_inputs = (*account_image_enabled_inputs).clone();
+                        next_image_enabled_inputs
+                            .insert(updated.name.clone(), updated.codex_image_generation_enabled);
+                        account_image_enabled_inputs.set(next_image_enabled_inputs);
+                        let mut next_image_concurrency_inputs =
+                            (*account_image_concurrency_inputs).clone();
+                        next_image_concurrency_inputs.insert(
+                            updated.name.clone(),
+                            updated.codex_image_generation_max_concurrency.to_string(),
+                        );
+                        account_image_concurrency_inputs.set(next_image_concurrency_inputs);
                         load_error.set(None);
                     },
                     Err(err) => load_error.set(Some(err)),
@@ -8891,6 +9070,8 @@ pub fn admin_llm_gateway_page() -> Html {
                                 let acc_name_for_settings_save = acc.name.clone();
                                 let acc_name_for_request_max_change = acc.name.clone();
                                 let acc_name_for_request_min_change = acc.name.clone();
+                                let acc_name_for_image_enabled_change = acc.name.clone();
+                                let acc_name_for_image_concurrency_change = acc.name.clone();
                                 let acc_name = acc.name.clone();
                                 let acc_status = acc.status.clone();
                                 let account_disabled = acc_status == "disabled";
@@ -8933,6 +9114,17 @@ pub fn admin_llm_gateway_page() -> Html {
                                             .map(|value| value.to_string())
                                             .unwrap_or_default()
                                     });
+                                let selected_image_enabled = (*account_image_enabled_inputs)
+                                    .get(&acc_name)
+                                    .copied()
+                                    .unwrap_or(acc.codex_image_generation_enabled);
+                                let selected_image_concurrency_value =
+                                    (*account_image_concurrency_inputs)
+                                        .get(&acc_name)
+                                        .cloned()
+                                        .unwrap_or_else(|| {
+                                            acc.codex_image_generation_max_concurrency.to_string()
+                                        });
                                 let configured_proxy_line = account_configured_proxy_label(acc);
                                 let effective_proxy_line = format!(
                                     "effective: {} · {}",
@@ -8948,6 +9140,26 @@ pub fn admin_llm_gateway_page() -> Html {
                                         .map(|value| format!("{} ms", value))
                                         .unwrap_or_else(|| "∞".to_string())
                                 );
+                                let image_rate_limit_bucket = account_image_rate_limit_bucket(
+                                    (*codex_rate_limit_status).as_ref(),
+                                    &acc_name,
+                                );
+                                let image_quota_line = if acc.codex_image_generation_enabled {
+                                    if let Some(bucket) = image_rate_limit_bucket {
+                                        format!(
+                                            "image on · concurrency {} · bucket {}",
+                                            acc.codex_image_generation_max_concurrency,
+                                            bucket.display_name
+                                        )
+                                    } else {
+                                        format!(
+                                            "image on · concurrency {} · common Codex quota",
+                                            acc.codex_image_generation_max_concurrency
+                                        )
+                                    }
+                                } else {
+                                    "image off · common Codex quota".to_string()
+                                };
                                 let last_refresh_line = acc
                                     .last_refresh
                                     .map(format_ms)
@@ -9084,6 +9296,7 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     }
                                                 </div>
                                                 <div>{ scheduler_line.clone() }</div>
+                                                <div>{ image_quota_line.clone() }</div>
                                                 <div>{ format!("route weight tier: {}", acc.route_weight_tier) }</div>
                                                 <div>{ format!("reset credits available: {}", reset_credits_label) }</div>
                                                 <div class={classes!("flex", "gap-3", "flex-wrap")}>
@@ -9187,6 +9400,41 @@ pub fn admin_llm_gateway_page() -> Html {
                                                     <option value="pro5x" selected={selected_route_weight_tier == "pro5x"}>{ "Pro5x" }</option>
                                                     <option value="pro20x" selected={selected_route_weight_tier == "pro20x"}>{ "Pro20x" }</option>
                                                 </select>
+                                                <label class={classes!("inline-flex", "items-center", "gap-1.5", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2", "py-1.5", "text-xs")}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={selected_image_enabled}
+                                                        onchange={{
+                                                            let account_image_enabled_inputs = account_image_enabled_inputs.clone();
+                                                            Callback::from(move |event: Event| {
+                                                                if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                                    let mut next = (*account_image_enabled_inputs).clone();
+                                                                    next.insert(acc_name_for_image_enabled_change.clone(), target.checked());
+                                                                    account_image_enabled_inputs.set(next);
+                                                                }
+                                                            })
+                                                        }}
+                                                    />
+                                                    <span>{ "生图" }</span>
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    max={CODEX_IMAGE_MAX_CONCURRENCY.to_string()}
+                                                    class={classes!("w-24", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-2", "py-1.5", "text-xs")}
+                                                    placeholder="生图并发"
+                                                    value={selected_image_concurrency_value.clone()}
+                                                    oninput={{
+                                                        let account_image_concurrency_inputs = account_image_concurrency_inputs.clone();
+                                                        Callback::from(move |event: InputEvent| {
+                                                            if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                                                let mut next = (*account_image_concurrency_inputs).clone();
+                                                                next.insert(acc_name_for_image_concurrency_change.clone(), target.value());
+                                                                account_image_concurrency_inputs.set(next);
+                                                            }
+                                                        })
+                                                    }}
+                                                />
                                                 <button
                                                     class={classes!("btn-terminal")}
                                                     onclick={Callback::from(move |_| on_save_account_settings.emit(acc_name_for_settings_save.clone()))}

@@ -568,6 +568,12 @@ pub(crate) struct PatchLlmGatewayKeyRequest {
     #[serde(default)]
     codex_strict_session_rejection_enabled: Option<bool>,
     #[serde(default)]
+    codex_image_generation_enabled: Option<bool>,
+    #[serde(default)]
+    codex_image_standalone_generation_enabled: Option<bool>,
+    #[serde(default)]
+    codex_image_direct_generation_enabled: Option<bool>,
+    #[serde(default)]
     kiro_request_validation_enabled: Option<bool>,
     #[serde(default)]
     kiro_cache_estimation_enabled: Option<bool>,
@@ -700,6 +706,10 @@ pub(crate) struct PatchLlmGatewayAccountRequest {
     request_max_concurrency_unlimited: bool,
     #[serde(default)]
     request_min_start_interval_ms_unlimited: bool,
+    #[serde(default)]
+    codex_image_generation_enabled: Option<bool>,
+    #[serde(default)]
+    codex_image_generation_max_concurrency: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5366,10 +5376,15 @@ fn codex_validation_route(
         auth_refresh_enabled: true,
         codex_fast_enabled: true,
         codex_strict_session_rejection_enabled: false,
+        codex_image_generation_enabled: true,
+        codex_image_direct_generation_enabled: false,
         request_max_concurrency: None,
         request_min_start_interval_ms: None,
         account_request_max_concurrency: None,
         account_request_min_start_interval_ms: None,
+        account_codex_image_generation_enabled: true,
+        account_codex_image_generation_max_concurrency:
+            core_store::DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY,
         cached_error_message: None,
         proxy: Some(proxy),
     }
@@ -6199,6 +6214,9 @@ fn normalize_key_patch(
             Some(None) => Some(None),
             None => None,
         };
+    let codex_image_standalone_generation_enabled = request
+        .codex_image_standalone_generation_enabled
+        .or(request.codex_image_generation_enabled);
     Ok(AdminKeyPatch {
         name,
         status,
@@ -6214,6 +6232,9 @@ fn normalize_key_patch(
         request_min_start_interval_ms,
         codex_fast_enabled: request.codex_fast_enabled,
         codex_strict_session_rejection_enabled: request.codex_strict_session_rejection_enabled,
+        codex_image_generation_enabled: request.codex_image_generation_enabled,
+        codex_image_standalone_generation_enabled,
+        codex_image_direct_generation_enabled: request.codex_image_direct_generation_enabled,
         kiro_request_validation_enabled: request.kiro_request_validation_enabled,
         kiro_cache_estimation_enabled: request.kiro_cache_estimation_enabled,
         kiro_zero_cache_debug_enabled: request.kiro_zero_cache_debug_enabled,
@@ -6239,6 +6260,12 @@ fn normalize_kiro_key_patch(
     request.request_min_start_interval_ms_unlimited = false;
     request.codex_fast_enabled = None;
     request.codex_strict_session_rejection_enabled = None;
+    // Codex-only image toggles must never persist onto a Kiro key, even though
+    // they would be inert there — drop all three (the legacy alias plus the
+    // standalone/direct switches) before delegating to the shared normalizer.
+    request.codex_image_generation_enabled = None;
+    request.codex_image_standalone_generation_enabled = None;
+    request.codex_image_direct_generation_enabled = None;
     normalize_key_patch(request)
 }
 
@@ -6603,6 +6630,9 @@ fn normalize_account_patch(
         request_max_concurrency.flatten(),
         request_min_start_interval_ms.flatten(),
     )?;
+    if let Some(value) = request.codex_image_generation_max_concurrency {
+        validate_codex_image_generation_max_concurrency(value)?;
+    }
     Ok(AdminCodexAccountPatch {
         status,
         map_gpt53_codex_to_spark: request.map_gpt53_codex_to_spark,
@@ -6612,6 +6642,8 @@ fn normalize_account_patch(
         proxy_config_id,
         request_max_concurrency,
         request_min_start_interval_ms,
+        codex_image_generation_enabled: request.codex_image_generation_enabled,
+        codex_image_generation_max_concurrency: request.codex_image_generation_max_concurrency,
         updated_at_ms: now_ms(),
     })
 }
@@ -6977,6 +7009,13 @@ fn validate_codex_request_limit_inputs(
     Ok(())
 }
 
+fn validate_codex_image_generation_max_concurrency(value: u64) -> Result<(), AdminHttpError> {
+    if value == 0 || value > MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY {
+        return Err(bad_request("codex_image_generation_max_concurrency is out of range"));
+    }
+    Ok(())
+}
+
 fn validate_i64_backed_u64(field: &str, value: u64) -> Result<(), AdminHttpError> {
     if value <= i64::MAX as u64 {
         Ok(())
@@ -7318,6 +7357,9 @@ mod tests {
             request_min_start_interval_ms_unlimited: false,
             codex_fast_enabled: None,
             codex_strict_session_rejection_enabled: None,
+            codex_image_generation_enabled: None,
+            codex_image_standalone_generation_enabled: None,
+            codex_image_direct_generation_enabled: None,
             kiro_request_validation_enabled: None,
             kiro_cache_estimation_enabled: None,
             kiro_zero_cache_debug_enabled: None,
@@ -7346,6 +7388,9 @@ mod tests {
             usage_output_tokens: 0,
             usage_credit_total: 0.0,
             usage_credit_missing_events: 0,
+            codex_image_usage_tokens: 0,
+            codex_image_usage_missing_events: 0,
+            codex_image_last_used_at: None,
             remaining_billable: 1_000_000,
             last_used_at: None,
             created_at: 10,
@@ -7360,6 +7405,9 @@ mod tests {
             request_min_start_interval_ms: None,
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
+            codex_image_generation_enabled: false,
+            codex_image_standalone_generation_enabled: false,
+            codex_image_direct_generation_enabled: false,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,
@@ -7623,6 +7671,8 @@ mod tests {
             request_min_start_interval_ms: None,
             request_max_concurrency_unlimited: false,
             request_min_start_interval_ms_unlimited: false,
+            codex_image_generation_enabled: None,
+            codex_image_generation_max_concurrency: None,
         })
         .expect("auto refresh toggle should be accepted");
 
@@ -8063,6 +8113,9 @@ mod tests {
             auto_refresh_enabled: true,
             request_max_concurrency: Some(3),
             request_min_start_interval_ms: Some(1000),
+            codex_image_generation_enabled: false,
+            codex_image_generation_max_concurrency:
+                core_store::DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY,
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
             effective_proxy_source: "binding".to_string(),
@@ -8123,6 +8176,9 @@ mod tests {
             auto_refresh_enabled: true,
             request_max_concurrency: Some(3),
             request_min_start_interval_ms: Some(1000),
+            codex_image_generation_enabled: false,
+            codex_image_generation_max_concurrency:
+                core_store::DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY,
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
             effective_proxy_source: "binding".to_string(),
@@ -8179,6 +8235,9 @@ mod tests {
             auto_refresh_enabled: true,
             request_max_concurrency: Some(3),
             request_min_start_interval_ms: Some(1000),
+            codex_image_generation_enabled: false,
+            codex_image_generation_max_concurrency:
+                core_store::DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY,
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
             effective_proxy_source: "binding".to_string(),

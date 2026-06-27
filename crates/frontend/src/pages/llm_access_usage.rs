@@ -436,6 +436,12 @@ pub fn llm_access_usage_page() -> Html {
                                             (first_ms, first_token_latency_color(first_ms))
                                         });
                                         let session_blocked = event.session_blocked;
+                                        // Codex image generation events carry a (possibly zero) image
+                                        // count and hit the `/v1/images/...` endpoints; surface them
+                                        // distinctly from token traffic.
+                                        let image_count = event.response_image_count;
+                                        let is_image_event =
+                                            image_count.is_some() || event.endpoint.contains("/images/");
                                         let status_color = usage_status_color(event.status_code);
                                         let error_text = event
                                             .error_message
@@ -490,6 +496,17 @@ pub fn llm_access_usage_page() -> Html {
                                                                 { format!("故障转移 ×{}", event.quota_failover_count) }
                                                             </span>
                                                         }
+                                                        if is_image_event {
+                                                            <span class={classes!("inline-flex", "items-center", "gap-1", "rounded-full", "border", "border-fuchsia-500/30", "bg-gradient-to-r", "from-fuchsia-500/15", "to-purple-500/15", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", "text-fuchsia-700", "shadow-[0_0_10px_-2px_rgba(217,70,239,0.45)]", "dark:text-fuchsia-200")}>
+                                                                <span aria-hidden="true">{ "🎨" }</span>
+                                                                {
+                                                                    match image_count {
+                                                                        Some(count) if count > 0 => format!("生图 ×{count}"),
+                                                                        _ => "生图".to_string(),
+                                                                    }
+                                                                }
+                                                            </span>
+                                                        }
                                                     </div>
                                                     if session_blocked {
                                                         <div class={classes!("mt-2")}>
@@ -538,6 +555,9 @@ pub fn llm_access_usage_page() -> Html {
                                                         <span>{ format!("Cached {}", format_number_u64(event.input_cached_tokens)) }</span>
                                                         <span>{ format!("Out {}", format_number_u64(event.output_tokens)) }</span>
                                                         <span class={classes!("font-semibold", "text-[var(--text)]")}>{ format!("Billable {}", format_number_u64(event.billable_tokens)) }</span>
+                                                        if let Some(count) = image_count {
+                                                            <span class={classes!("font-semibold", "text-fuchsia-700", "dark:text-fuchsia-300")}>{ format!("🎨 生图 {} 张", count) }</span>
+                                                        }
                                                     </div>
                                                 </td>
                                             </tr>

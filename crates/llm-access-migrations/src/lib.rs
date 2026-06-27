@@ -35,6 +35,11 @@ const DUCKDB_MIGRATIONS: &[SqlMigration] = &[
         name: "usage_error_classification",
         sql: include_str!("../migrations/duckdb/0004_usage_error_classification.sql"),
     },
+    SqlMigration {
+        version: 5,
+        name: "usage_image_metrics",
+        sql: include_str!("../migrations/duckdb/0005_usage_image_metrics.sql"),
+    },
 ];
 
 const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
@@ -143,6 +148,21 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "codex_strict_session_rejection",
         sql: include_str!("../migrations/postgres/0029_codex_strict_session_rejection.sql"),
     },
+    SqlMigration {
+        version: 30,
+        name: "codex_image_generation_toggle",
+        sql: include_str!("../migrations/postgres/0030_codex_image_generation_toggle.sql"),
+    },
+    SqlMigration {
+        version: 31,
+        name: "codex_image_key_usage_rollup",
+        sql: include_str!("../migrations/postgres/0031_codex_image_key_usage_rollup.sql"),
+    },
+    SqlMigration {
+        version: 32,
+        name: "codex_image_direct_toggle",
+        sql: include_str!("../migrations/postgres/0032_codex_image_direct_toggle.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.
@@ -222,7 +242,7 @@ mod tests {
     fn duckdb_migrations_drop_legacy_explicit_art_indexes() {
         let migrations = super::duckdb_migrations();
 
-        assert_eq!(migrations.len(), 4);
+        assert_eq!(migrations.len(), 5);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(migrations[0].name, "init");
         assert!(!migrations[0]
@@ -249,6 +269,11 @@ mod tests {
         assert!(migrations[3]
             .sql
             .contains("ADD COLUMN IF NOT EXISTS session_blocked"));
+        assert_eq!(migrations[4].version, 5);
+        assert_eq!(migrations[4].name, "usage_image_metrics");
+        assert!(migrations[4]
+            .sql
+            .contains("ADD COLUMN IF NOT EXISTS response_image_count"));
         assert!(!super::duckdb_schema_sql().contains("cdc_"));
     }
 
@@ -487,6 +512,49 @@ mod tests {
         assert!(migration
             .sql
             .contains("codex_strict_session_rejection_enabled"));
+        assert!(migration.sql.contains("DEFAULT FALSE"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_codex_image_generation_toggle() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "codex_image_generation_toggle")
+            .expect("codex image generation migration exists");
+
+        assert_eq!(migration.version, 30);
+        assert!(migration.sql.contains("codex_image_generation_enabled"));
+        assert!(migration.sql.contains("DEFAULT FALSE"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_codex_image_key_usage_rollup() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "codex_image_key_usage_rollup")
+            .expect("codex image key usage rollup migration exists");
+
+        assert_eq!(migration.version, 31);
+        assert!(migration.sql.contains("codex_image_usage_tokens"));
+        assert!(migration.sql.contains("codex_image_usage_missing_events"));
+        assert!(migration.sql.contains("codex_image_last_used_at_ms"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_codex_image_direct_toggle() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "codex_image_direct_toggle")
+            .expect("codex image direct toggle migration exists");
+
+        assert_eq!(migration.version, 32);
+        assert!(migration
+            .sql
+            .contains("codex_image_direct_generation_enabled"));
+        assert!(migration.sql.contains("DEFAULT TRUE"));
         assert!(migration.sql.contains("DEFAULT FALSE"));
     }
 }

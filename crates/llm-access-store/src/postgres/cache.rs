@@ -446,6 +446,10 @@ impl PostgresControlRepository {
             codex_strict_session_rejection_enabled: bundle
                 .route
                 .codex_strict_session_rejection_enabled,
+            codex_image_generation_enabled: bundle.route.codex_image_generation_enabled,
+            codex_image_direct_generation_enabled: bundle
+                .route
+                .codex_image_direct_generation_enabled,
             codex_weight_free: runtime_config.codex_weight_free,
             codex_weight_plus: runtime_config.codex_weight_plus,
             codex_weight_pro5x: runtime_config.codex_weight_pro5x,
@@ -580,6 +584,9 @@ impl PostgresControlRepository {
                         route_weight_tier: settings.route_weight_tier,
                         request_max_concurrency: settings.request_max_concurrency,
                         request_min_start_interval_ms: settings.request_min_start_interval_ms,
+                        codex_image_generation_enabled: settings.codex_image_generation_enabled,
+                        codex_image_generation_max_concurrency: settings
+                            .codex_image_generation_max_concurrency,
                         last_refresh_at_ms: row.last_refresh_at_ms,
                         last_error: row.last_error,
                         access_token: row.access_token,
@@ -641,6 +648,9 @@ impl PostgresControlRepository {
                 route_weight_tier: settings.route_weight_tier,
                 request_max_concurrency: settings.request_max_concurrency,
                 request_min_start_interval_ms: settings.request_min_start_interval_ms,
+                codex_image_generation_enabled: settings.codex_image_generation_enabled,
+                codex_image_generation_max_concurrency: settings
+                    .codex_image_generation_max_concurrency,
                 last_refresh_at_ms: row.last_refresh_at_ms,
                 last_error: row.last_error,
                 access_token: row.access_token,

@@ -5972,7 +5972,8 @@ pub struct PublicLlmGatewayUsageEventView {
     pub credit_usage_missing: bool,
     pub client_ip: String,
     pub ip_region: String,
-    /// Inline error message surfaced directly in the list (no detail view needed).
+    /// Inline error message surfaced directly in the list (no detail view
+    /// needed).
     #[serde(default)]
     pub error_message: Option<String>,
     /// Stable upstream error class for failed requests, when classified.
@@ -5981,6 +5982,9 @@ pub struct PublicLlmGatewayUsageEventView {
     /// Whether this event belongs to a permanently rejected Codex session.
     #[serde(default)]
     pub session_blocked: bool,
+    /// Number of images returned by a Codex image generation/edit request.
+    #[serde(default)]
+    pub response_image_count: Option<i64>,
     pub created_at: i64,
 }
 
@@ -6066,6 +6070,10 @@ const fn default_true() -> bool {
     true
 }
 
+const fn default_codex_image_generation_max_concurrency() -> u64 {
+    3
+}
+
 fn default_kiro_pool_strategy() -> String {
     llm_store::default_kiro_pool_strategy()
 }
@@ -6095,6 +6103,12 @@ pub struct AdminLlmGatewayKeyView {
     pub usage_output_tokens: u64,
     pub usage_credit_total: f64,
     pub usage_credit_missing_events: u64,
+    #[serde(default)]
+    pub codex_image_usage_tokens: u64,
+    #[serde(default)]
+    pub codex_image_usage_missing_events: u64,
+    #[serde(default)]
+    pub codex_image_last_used_at: Option<i64>,
     pub remaining_billable: i64,
     pub last_used_at: Option<i64>,
     pub created_at: i64,
@@ -6112,6 +6126,12 @@ pub struct AdminLlmGatewayKeyView {
     pub codex_fast_enabled: bool,
     #[serde(default)]
     pub codex_strict_session_rejection_enabled: bool,
+    #[serde(default = "default_true")]
+    pub codex_image_generation_enabled: bool,
+    #[serde(default = "default_true")]
+    pub codex_image_standalone_generation_enabled: bool,
+    #[serde(default)]
+    pub codex_image_direct_generation_enabled: bool,
     #[serde(default = "default_true")]
     pub kiro_request_validation_enabled: bool,
     #[serde(default = "default_true")]
@@ -6170,6 +6190,10 @@ pub struct AdminLlmGatewayKeysSummaryView {
     pub usage_billable_tokens_sum: u64,
     pub usage_credit_total: f64,
     pub usage_credit_missing_events: u64,
+    #[serde(default)]
+    pub codex_image_usage_tokens_sum: u64,
+    #[serde(default)]
+    pub codex_image_usage_missing_events: u64,
 }
 
 /// Combined admin payload for the key inventory screen.
@@ -6324,7 +6348,8 @@ pub struct AdminLlmGatewayUsageEventView {
     pub client_ip: String,
     pub ip_region: String,
     pub last_message_content: Option<String>,
-    /// Inline error message surfaced directly in the list (no detail view needed).
+    /// Inline error message surfaced directly in the list (no detail view
+    /// needed).
     #[serde(default)]
     pub error_message: Option<String>,
     /// Stable upstream error class for failed requests, when classified.
@@ -6333,6 +6358,9 @@ pub struct AdminLlmGatewayUsageEventView {
     /// Whether this event belongs to a permanently rejected Codex session.
     #[serde(default)]
     pub session_blocked: bool,
+    /// Number of images returned by a Codex image generation/edit request.
+    #[serde(default)]
+    pub response_image_count: Option<i64>,
     pub created_at: i64,
 }
 
@@ -6382,6 +6410,8 @@ pub struct AdminLlmGatewayUsageEventDetailView {
     pub error_message: Option<String>,
     pub error_class: Option<String>,
     pub session_blocked: bool,
+    #[serde(default)]
+    pub response_image_count: Option<i64>,
     pub error_body: Option<String>,
     pub response_body: Option<String>,
     pub created_at: i64,
@@ -8956,6 +8986,9 @@ pub async fn create_admin_llm_gateway_key(
             usage_output_tokens: 0,
             usage_credit_total: 0.0,
             usage_credit_missing_events: 0,
+            codex_image_usage_tokens: 0,
+            codex_image_usage_missing_events: 0,
+            codex_image_last_used_at: None,
             remaining_billable: quota_billable_limit as i64,
             last_used_at: None,
             created_at: 0,
@@ -8985,6 +9018,9 @@ pub async fn create_admin_llm_gateway_key(
             uses_global_kiro_billable_model_multipliers: true,
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
+            codex_image_generation_enabled: true,
+            codex_image_standalone_generation_enabled: true,
+            codex_image_direct_generation_enabled: false,
             kiro_candidate_credit_summary: None,
         })
     }
@@ -9032,6 +9068,9 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub request_min_start_interval_ms: Option<u64>,
     pub codex_fast_enabled: Option<bool>,
     pub codex_strict_session_rejection_enabled: Option<bool>,
+    pub codex_image_generation_enabled: Option<bool>,
+    pub codex_image_standalone_generation_enabled: Option<bool>,
+    pub codex_image_direct_generation_enabled: Option<bool>,
     pub kiro_request_validation_enabled: Option<bool>,
     pub kiro_cache_estimation_enabled: Option<bool>,
     pub kiro_zero_cache_debug_enabled: Option<bool>,
@@ -9068,6 +9107,9 @@ pub async fn patch_admin_llm_gateway_key(
             request.request_min_start_interval_ms,
             request.codex_fast_enabled,
             request.codex_strict_session_rejection_enabled,
+            request.codex_image_generation_enabled,
+            request.codex_image_standalone_generation_enabled,
+            request.codex_image_direct_generation_enabled,
             request.kiro_request_validation_enabled,
             request.kiro_cache_estimation_enabled,
             request.kiro_zero_cache_debug_enabled,
@@ -9176,6 +9218,24 @@ pub async fn patch_admin_llm_gateway_key(
         if let Some(enabled) = request.codex_strict_session_rejection_enabled {
             body.insert(
                 "codex_strict_session_rejection_enabled".to_string(),
+                serde_json::Value::Bool(enabled),
+            );
+        }
+        if let Some(enabled) = request.codex_image_generation_enabled {
+            body.insert(
+                "codex_image_generation_enabled".to_string(),
+                serde_json::Value::Bool(enabled),
+            );
+        }
+        if let Some(enabled) = request.codex_image_standalone_generation_enabled {
+            body.insert(
+                "codex_image_standalone_generation_enabled".to_string(),
+                serde_json::Value::Bool(enabled),
+            );
+        }
+        if let Some(enabled) = request.codex_image_direct_generation_enabled {
+            body.insert(
+                "codex_image_direct_generation_enabled".to_string(),
                 serde_json::Value::Bool(enabled),
             );
         }
@@ -9855,6 +9915,10 @@ pub struct AccountSummaryView {
     pub auto_refresh_enabled: bool,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
+    #[serde(default)]
+    pub codex_image_generation_enabled: bool,
+    #[serde(default = "default_codex_image_generation_max_concurrency")]
+    pub codex_image_generation_max_concurrency: u64,
     pub proxy_mode: String,
     pub proxy_config_id: Option<String>,
     pub effective_proxy_source: String,
@@ -9883,6 +9947,9 @@ impl Default for AccountSummaryView {
             auto_refresh_enabled: true,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            codex_image_generation_enabled: false,
+            codex_image_generation_max_concurrency: default_codex_image_generation_max_concurrency(
+            ),
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
             effective_proxy_source: "binding".to_string(),
@@ -10248,6 +10315,9 @@ pub async fn import_admin_llm_gateway_account(
             auto_refresh_enabled: true,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            codex_image_generation_enabled: false,
+            codex_image_generation_max_concurrency: default_codex_image_generation_max_concurrency(
+            ),
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
             effective_proxy_source: "binding".to_string(),
@@ -10347,6 +10417,8 @@ pub struct PatchAdminLlmGatewayAccountInput {
     pub proxy_config_id: Option<String>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
+    pub codex_image_generation_enabled: Option<bool>,
+    pub codex_image_generation_max_concurrency: Option<u64>,
     pub request_max_concurrency_unlimited: bool,
     pub request_min_start_interval_ms_unlimited: bool,
 }
@@ -10373,6 +10445,10 @@ pub async fn patch_admin_llm_gateway_account(
             auto_refresh_enabled: input.auto_refresh_enabled.unwrap_or(true),
             request_max_concurrency: input.request_max_concurrency,
             request_min_start_interval_ms: input.request_min_start_interval_ms,
+            codex_image_generation_enabled: input.codex_image_generation_enabled.unwrap_or(false),
+            codex_image_generation_max_concurrency: input
+                .codex_image_generation_max_concurrency
+                .unwrap_or_else(default_codex_image_generation_max_concurrency),
             proxy_mode: input
                 .proxy_mode
                 .clone()
@@ -10430,6 +10506,9 @@ pub async fn refresh_admin_llm_gateway_account(name: &str) -> Result<AccountSumm
             auto_refresh_enabled: true,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            codex_image_generation_enabled: false,
+            codex_image_generation_max_concurrency: default_codex_image_generation_max_concurrency(
+            ),
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
             effective_proxy_source: "binding".to_string(),
@@ -10492,6 +10571,9 @@ pub async fn refresh_admin_llm_gateway_account_auth(
             auto_refresh_enabled: true,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            codex_image_generation_enabled: false,
+            codex_image_generation_max_concurrency: default_codex_image_generation_max_concurrency(
+            ),
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
             effective_proxy_source: "binding".to_string(),
@@ -10563,6 +10645,9 @@ pub async fn consume_admin_llm_gateway_account_rate_limit_reset_credit(
                 auto_refresh_enabled: true,
                 request_max_concurrency: None,
                 request_min_start_interval_ms: None,
+                codex_image_generation_enabled: false,
+                codex_image_generation_max_concurrency:
+                    default_codex_image_generation_max_concurrency(),
                 proxy_mode: "inherit".to_string(),
                 proxy_config_id: None,
                 effective_proxy_source: "binding".to_string(),
@@ -11196,6 +11281,9 @@ pub async fn create_admin_kiro_key(
             usage_output_tokens: 0,
             usage_credit_total: 0.0,
             usage_credit_missing_events: 0,
+            codex_image_usage_tokens: 0,
+            codex_image_usage_missing_events: 0,
+            codex_image_last_used_at: None,
             remaining_billable: quota_billable_limit as i64,
             last_used_at: None,
             created_at: 0,
@@ -11225,6 +11313,9 @@ pub async fn create_admin_kiro_key(
             uses_global_kiro_billable_model_multipliers: true,
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
+            codex_image_generation_enabled: false,
+            codex_image_standalone_generation_enabled: false,
+            codex_image_direct_generation_enabled: false,
             kiro_candidate_credit_summary: None,
         })
     }
@@ -11960,6 +12051,20 @@ mod tests {
 
         assert!(!key.kiro_full_request_logging_enabled);
         assert!(!key.kiro_remote_media_resolution_enabled);
+        assert!(key.codex_image_generation_enabled);
+        assert!(key.codex_image_standalone_generation_enabled);
+        assert!(!key.codex_image_direct_generation_enabled);
+    }
+
+    #[test]
+    fn admin_gateway_key_view_defaults_codex_image_usage_to_zero() {
+        let key: AdminLlmGatewayKeyView =
+            serde_json::from_str(r#"{"id":"k","name":"K","provider_type":"codex"}"#)
+                .expect("key should parse");
+
+        assert_eq!(key.codex_image_usage_tokens, 0);
+        assert_eq!(key.codex_image_usage_missing_events, 0);
+        assert_eq!(key.codex_image_last_used_at, None);
     }
 
     #[test]
@@ -12084,6 +12189,8 @@ mod tests {
         .expect("account summary should parse");
 
         assert_eq!(account.rate_limit_reset_credits_available, Some(2));
+        assert!(!account.codex_image_generation_enabled);
+        assert_eq!(account.codex_image_generation_max_concurrency, 3);
     }
 
     #[test]

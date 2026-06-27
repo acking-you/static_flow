@@ -660,10 +660,15 @@ mod tests {
             auth_refresh_enabled: true,
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
+            codex_image_generation_enabled: true,
+            codex_image_direct_generation_enabled: false,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             account_request_max_concurrency: None,
             account_request_min_start_interval_ms: None,
+            account_codex_image_generation_enabled: true,
+            account_codex_image_generation_max_concurrency:
+                llm_access_core::store::DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY,
             cached_error_message: None,
             proxy: None,
         }

@@ -1,0 +1,37 @@
+[Unit]
+Description=StaticFlow Codex Image Gateway
+After=network-online.target mnt-llm\x2daccess.mount
+Wants=network-online.target
+RequiresMountsFor=/mnt/llm-access
+
+[Service]
+Type=simple
+User=ts_user
+Group=ts_user
+TimeoutStartSec=120
+# Requires llm-access Postgres migrations 0030 and 0031 before start; the
+# binary fails fast if Codex image route/usage rollup columns are missing.
+EnvironmentFile=/etc/llm-access/llm-access.env
+Environment=STATICFLOW_LOG_DIR=/var/log/staticflow-runtime
+Environment=STATICFLOW_LOG_SERVICE=llm-access-codex-image
+Environment=STATICFLOW_LOG_STDOUT=0
+WorkingDirectory=/mnt/llm-access
+ExecStart=/usr/bin/bash -lc 'set -a; . /mnt/llm-access/config/neon.env; exec /usr/local/bin/llm-access-codex-image serve --bind 127.0.0.1:19082 --state-root /mnt/llm-access --postgres-control-database-url-env LLM_ACCESS_CODEX_IMAGE_CONTROL_DATABASE_URL --request-cache-url-env LLM_ACCESS_REQUEST_CACHE_URL --request-cache-key-prefix llma --image-log-dir /var/lib/staticflow/llm-access/codex-image-logs'
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+StateDirectory=staticflow/llm-access
+MemoryAccounting=yes
+# Upstream image responses are capped in-process; revisit this limit if
+# MAX_IMAGE_UPSTREAM_RESPONSE_BODY_BYTES or account concurrency changes.
+MemoryHigh=768M
+MemoryMax=1024M
+MemorySwapMax=256M
+TasksMax=128
+OOMPolicy=kill
+# Do not add ProtectSystem/ReadWritePaths/PrivateTmp for this unit when
+# /mnt/llm-access is a JuiceFS FUSE mount with default_permissions. Those
+# systemd mount namespace features can fail before ExecStart with 226/NAMESPACE.
+
+[Install]
+WantedBy=multi-user.target

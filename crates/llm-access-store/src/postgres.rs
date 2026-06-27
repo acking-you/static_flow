@@ -408,6 +408,8 @@ struct CodexAdminAccountListRow {
     proxy_config_id: Option<String>,
     request_max_concurrency: Option<i64>,
     request_min_start_interval_ms: Option<i64>,
+    codex_image_generation_enabled: bool,
+    codex_image_generation_max_concurrency: i64,
     last_refresh_at_ms: Option<i64>,
     last_error: Option<String>,
     access_token: Option<String>,
@@ -465,6 +467,8 @@ struct CodexAccountSettings {
     proxy_config_id: Option<String>,
     request_max_concurrency: Option<u64>,
     request_min_start_interval_ms: Option<u64>,
+    codex_image_generation_enabled: bool,
+    codex_image_generation_max_concurrency: u64,
 }
 
 impl Default for CodexAccountSettings {
@@ -477,6 +481,9 @@ impl Default for CodexAccountSettings {
             proxy_config_id: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            codex_image_generation_enabled: false,
+            codex_image_generation_max_concurrency:
+                llm_access_core::store::DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY,
         }
     }
 }
@@ -500,6 +507,72 @@ impl PostgresControlRepository {
     ) -> anyhow::Result<Self> {
         let client = SqlxClient::connect(database_url).await?;
         llm_access_migrations::run_postgres_migrations(&client.pool).await?;
+        Self::from_sqlx_client(client, request_cache_config, proxy_scope)
+    }
+
+    /// Connect to the Postgres control plane without running migrations.
+    pub async fn connect_without_migrations(
+        database_url: &str,
+        request_cache_config: Option<RequestCacheConfig>,
+    ) -> anyhow::Result<Self> {
+        let client = SqlxClient::connect(database_url).await?;
+        Self::from_sqlx_client(client, request_cache_config, ProxyConfigScope::core())
+    }
+
+    /// Backward-compatible alias for callers that only need read paths.
+    pub async fn connect_read_only(
+        database_url: &str,
+        request_cache_config: Option<RequestCacheConfig>,
+    ) -> anyhow::Result<Self> {
+        Self::connect_without_migrations(database_url, request_cache_config).await
+    }
+
+    /// Verify that Codex image gateway columns have already been migrated.
+    pub async fn verify_codex_image_gateway_schema(&self) -> anyhow::Result<()> {
+        let row = self
+            .client
+            .query_one(
+                "SELECT
+                    (
+                        SELECT COUNT(*) = 2
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'llm_key_route_config'
+                          AND column_name IN (
+                              'codex_image_generation_enabled',
+                              'codex_image_direct_generation_enabled'
+                          )
+                    ) AS route_toggle_exists,
+                    (
+                        SELECT COUNT(*) = 3
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'llm_key_usage_rollups'
+                          AND column_name IN (
+                              'codex_image_usage_tokens',
+                              'codex_image_usage_missing_events',
+                              'codex_image_last_used_at_ms'
+                          )
+                    ) AS usage_rollup_exists",
+                &[],
+            )
+            .await
+            .context("inspect codex image gateway schema")?;
+        let route_toggle_exists: bool = row.get("route_toggle_exists");
+        let usage_rollup_exists: bool = row.get("usage_rollup_exists");
+        anyhow::ensure!(
+            route_toggle_exists && usage_rollup_exists,
+            "missing codex image gateway schema columns; run llm-access Postgres migrations 0030 \
+             through 0032 before starting llm-access-codex-image"
+        );
+        Ok(())
+    }
+
+    fn from_sqlx_client(
+        client: SqlxClient,
+        request_cache_config: Option<RequestCacheConfig>,
+        proxy_scope: ProxyConfigScope,
+    ) -> anyhow::Result<Self> {
         let request_cache = request_cache_config.map(RequestCache::new).transpose()?;
         Ok(Self {
             client,
@@ -635,6 +708,21 @@ impl ControlStore for PostgresControlRepository {
     async fn apply_usage_rollup(&self, event: &UsageEvent) -> anyhow::Result<()> {
         self.apply_usage_rollups_batch(std::slice::from_ref(event))
             .await
+    }
+
+    async fn record_codex_image_key_usage(
+        &self,
+        key_id: &str,
+        usage_tokens: Option<u64>,
+        used_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        PostgresControlRepository::record_codex_image_key_usage(
+            self,
+            key_id,
+            usage_tokens,
+            used_at_ms,
+        )
+        .await
     }
 }
 
@@ -1081,6 +1169,43 @@ mod tests {
         assert_eq!(row.get::<_, i64>("credit_missing_events"), 1);
         assert_eq!(row.get::<_, Option<i64>>("last_used_at_ms"), Some(1_700_000_000_020));
         client.close().await;
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_records_codex_image_usage_separately() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        seed_test_key_bundle(&database_url)
+            .await
+            .expect("seed postgres test key bundle");
+        let repo = super::PostgresControlRepository::connect(&database_url, None)
+            .await
+            .expect("connect postgres repository");
+
+        repo.record_codex_image_key_usage("key-1", Some(42), 1_700_000_000_100)
+            .await
+            .expect("record image token usage");
+        repo.record_codex_image_key_usage("key-1", None, 1_700_000_000_120)
+            .await
+            .expect("record missing image usage");
+
+        let key = repo
+            .get_admin_key("key-1")
+            .await
+            .expect("load admin key")
+            .expect("key exists");
+        assert_eq!(key.codex_image_usage_tokens, 42);
+        assert_eq!(key.codex_image_usage_missing_events, 1);
+        assert_eq!(key.codex_image_last_used_at, Some(1_700_000_000_120));
+        assert_eq!(key.usage_input_uncached_tokens, 0);
+        assert_eq!(key.usage_output_tokens, 0);
+        assert_eq!(key.remaining_billable, 1000);
     }
 
     #[tokio::test]
@@ -1587,6 +1712,7 @@ mod tests {
             error_body: None,
             error_class: None,
             session_blocked: false,
+            response_image_count: None,
             response_body: None,
             timing: llm_access_core::usage::UsageTiming {
                 latency_ms: Some(120),
@@ -1693,6 +1819,7 @@ mod tests {
                 error_body: None,
                 error_class: None,
                 session_blocked: false,
+                response_image_count: None,
                 response_body: None,
                 timing: llm_access_core::usage::UsageTiming::default(),
                 stream: llm_access_core::usage::UsageStreamDetails::default(),
@@ -1734,6 +1861,7 @@ mod tests {
                 error_body: None,
                 error_class: None,
                 session_blocked: false,
+                response_image_count: None,
                 response_body: None,
                 timing: llm_access_core::usage::UsageTiming::default(),
                 stream: llm_access_core::usage::UsageStreamDetails::default(),
@@ -1807,6 +1935,7 @@ mod tests {
             error_body: None,
             error_class: None,
             session_blocked: false,
+            response_image_count: None,
             response_body: None,
             timing: llm_access_core::usage::UsageTiming {
                 latency_ms: Some(120),
@@ -1897,6 +2026,7 @@ mod tests {
             error_body: None,
             error_class: None,
             session_blocked: false,
+            response_image_count: None,
             response_body: None,
             timing: llm_access_core::usage::UsageTiming {
                 latency_ms: Some(120),

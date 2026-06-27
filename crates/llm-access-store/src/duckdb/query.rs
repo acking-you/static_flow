@@ -725,6 +725,7 @@ fn decode_usage_event_row(
             .unwrap_or_else(|| "unknown".to_string()),
         error_class: row.get(40)?,
         session_blocked: row.get::<_, Option<bool>>(41)?.unwrap_or(false),
+        response_image_count: if include_detail_payload { row.get(54)? } else { row.get(44)? },
         request_headers_json: if include_detail_payload {
             row.get::<_, Option<String>>(43)?
                 .unwrap_or_else(|| "{}".to_string())

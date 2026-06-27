@@ -28,11 +28,15 @@ mod session;
 mod tools;
 
 pub use headers::{
-    external_origin, extract_client_ip_from_headers, resolve_request_url_from_headers,
-    serialize_headers_json,
+    external_origin, extract_client_ip_from_headers, extract_header_value,
+    resolve_request_url_from_headers, serialize_headers_json,
 };
 pub use last_message::extract_last_message_content;
-pub use normalization::normalize_upstream_base_url;
+pub use normalization::{
+    codex_upstream_base_url_from_env, codex_user_agent, compute_codex_upstream_url,
+    normalize_codex_client_version, normalize_upstream_base_url, DEFAULT_CODEX_UPSTREAM_BASE_URL,
+    DEFAULT_CODEX_WIRE_ORIGINATOR,
+};
 pub use policy::{
     align_responses_store_with_upstream, apply_codex_fast_policy, apply_gpt53_codex_spark_mapping,
 };

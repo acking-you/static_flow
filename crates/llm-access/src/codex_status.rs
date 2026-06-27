@@ -1650,6 +1650,9 @@ mod tests {
             auto_refresh_enabled: true,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            codex_image_generation_enabled: false,
+            codex_image_generation_max_concurrency:
+                llm_access_core::store::DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY,
             proxy_mode: "inherit".to_string(),
             proxy_config_id: None,
             effective_proxy_source: "binding".to_string(),

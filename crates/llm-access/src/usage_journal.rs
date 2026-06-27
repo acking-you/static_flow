@@ -438,6 +438,7 @@ mod tests {
             error_body: None,
             error_class: None,
             session_blocked: false,
+            response_image_count: None,
             response_body: None,
             timing: UsageTiming::default(),
             stream: UsageStreamDetails::default(),

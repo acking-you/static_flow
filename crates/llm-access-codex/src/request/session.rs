@@ -10,7 +10,7 @@ use bytes::Bytes;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use super::extract_non_empty_string;
+use super::{extract_header_value, extract_non_empty_string};
 use crate::{
     error::{internal_error, CodexGatewayResult},
     types::{CodexResolvedSessionSource, CodexSessionProjection, PreparedGatewayRequest},
@@ -529,7 +529,7 @@ fn write_json_string(value: &str, hasher: &mut Sha256) {
 }
 
 fn parse_codex_turn_metadata_header(headers: &HeaderMap) -> CodexTurnMetadataHeader {
-    let Some(raw) = header_value(headers, SESSION_METADATA_HEADER) else {
+    let Some(raw) = extract_header_value(headers, SESSION_METADATA_HEADER) else {
         return CodexTurnMetadataHeader::default();
     };
     let Ok(value) = serde_json::from_str::<Value>(&raw) else {
@@ -542,16 +542,7 @@ fn parse_codex_turn_metadata_header(headers: &HeaderMap) -> CodexTurnMetadataHea
 }
 
 fn first_header_value(headers: &HeaderMap, names: &[&str]) -> Option<String> {
-    names.iter().find_map(|name| header_value(headers, name))
-}
-
-fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
+    names.iter().find_map(|name| extract_header_value(headers, name))
 }
 
 fn json_string_field(value: &Value, name: &str) -> Option<String> {

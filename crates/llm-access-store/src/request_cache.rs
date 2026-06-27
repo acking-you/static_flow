@@ -6,7 +6,9 @@ use llm_access_core::store::{
     CodexRateLimitStatus, ProviderProxyConfig, DEFAULT_KIRO_COMPACT_TRIGGER_TOKENS,
     DEFAULT_KIRO_CONTEXT_USAGE_MIN_REQUEST_TOKENS,
 };
-use redis::{AsyncCommands, Commands};
+use redis::AsyncCommands;
+#[cfg(feature = "duckdb-runtime")]
+use redis::Commands;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -21,7 +23,9 @@ const ACCOUNT_PRINCIPAL_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const CODEX_STATUS_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const PROXY_METADATA_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const USAGE_PROXY_ATTRIBUTION_TTL: Duration = Duration::from_secs(30 * 60);
+#[cfg(feature = "duckdb-runtime")]
 const USAGE_CATALOG_LOOKUP_TTL: Duration = Duration::from_secs(15 * 60);
+#[cfg(feature = "duckdb-runtime")]
 const USAGE_CATALOG_EVENT_LOCATOR_TTL: Duration = Duration::from_secs(30 * 60);
 const NEGATIVE_AUTH_TTL: Duration = Duration::from_secs(5 * 60);
 
@@ -39,6 +43,10 @@ const fn default_kiro_compact_trigger_tokens() -> u64 {
 
 fn default_kiro_pool_strategy() -> String {
     llm_access_core::store::default_kiro_pool_strategy()
+}
+
+const fn default_codex_image_generation_max_concurrency() -> u64 {
+    llm_access_core::store::DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY
 }
 
 /// Shared Valkey configuration for the request-path cache layer.
@@ -127,6 +135,10 @@ pub(crate) struct CachedCodexRequestSnapshot {
     pub codex_fast_enabled: bool,
     #[serde(default)]
     pub codex_strict_session_rejection_enabled: bool,
+    #[serde(default = "default_true")]
+    pub codex_image_generation_enabled: bool,
+    #[serde(default)]
+    pub codex_image_direct_generation_enabled: bool,
     pub codex_weight_free: i64,
     pub codex_weight_plus: i64,
     pub codex_weight_pro5x: i64,
@@ -216,6 +228,10 @@ pub(crate) struct CachedCodexAccountView {
     pub route_weight_tier: Option<String>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
+    #[serde(default)]
+    pub codex_image_generation_enabled: bool,
+    #[serde(default = "default_codex_image_generation_max_concurrency")]
+    pub codex_image_generation_max_concurrency: u64,
     pub last_refresh_at_ms: Option<i64>,
     pub last_error: Option<String>,
     pub access_token: Option<String>,
@@ -258,7 +274,70 @@ pub(crate) struct CachedAccountAuth {
     pub auth_json: String,
 }
 
+#[cfg(test)]
+mod codex_image_cache_tests {
+    use serde_json::json;
+
+    use super::{CachedCodexAccountView, CachedCodexRequestSnapshot};
+
+    #[test]
+    fn legacy_codex_request_snapshot_defaults_standalone_image_generation_enabled_and_direct_disabled(
+    ) {
+        let snapshot: CachedCodexRequestSnapshot = serde_json::from_value(json!({
+            "key": {
+                "key_id": "key-1",
+                "key_name": "Codex",
+                "provider_type": "codex",
+                "protocol_family": "openai",
+                "status": "active",
+                "quota_billable_limit": 1000,
+                "billable_tokens_used": 0
+            },
+            "generation": 7,
+            "route_strategy": "auto",
+            "account_group_id_at_event": null,
+            "selected_account_names": ["acc-a"],
+            "use_all_active_accounts": false,
+            "request_max_concurrency": null,
+            "request_min_start_interval_ms": null,
+            "codex_fast_enabled": true,
+            "codex_strict_session_rejection_enabled": false,
+            "codex_weight_free": 1,
+            "codex_weight_plus": 2,
+            "codex_weight_pro5x": 5,
+            "codex_weight_pro20x": 20
+        }))
+        .expect("legacy snapshot must decode");
+
+        assert!(snapshot.codex_image_generation_enabled);
+        assert!(!snapshot.codex_image_direct_generation_enabled);
+    }
+
+    #[test]
+    fn legacy_codex_account_view_defaults_image_settings_closed() {
+        let view: CachedCodexAccountView = serde_json::from_value(json!({
+            "generation": 1,
+            "account_name": "acc-a",
+            "status": "active",
+            "map_gpt53_codex_to_spark": false,
+            "auth_refresh_enabled": true,
+            "route_weight_tier": null,
+            "request_max_concurrency": null,
+            "request_min_start_interval_ms": null,
+            "last_refresh_at_ms": null,
+            "last_error": null,
+            "access_token": null,
+            "proxy": null
+        }))
+        .expect("legacy account view must decode");
+
+        assert!(!view.codex_image_generation_enabled);
+        assert_eq!(view.codex_image_generation_max_concurrency, 3);
+    }
+}
+
 impl RequestCache {
+    #[cfg(feature = "duckdb-runtime")]
     const USAGE_CATALOG_CACHE_NAMESPACE: &str = "usage:catalog:v2";
 
     pub(crate) fn new(config: RequestCacheConfig) -> anyhow::Result<Self> {
@@ -329,14 +408,17 @@ impl RequestCache {
         format!("{}:usage:proxy:scope:{scope}:{provider}:{account_name}", self.key_prefix)
     }
 
+    #[cfg(feature = "duckdb-runtime")]
     pub(crate) fn usage_catalog_generation_key(&self) -> String {
         format!("{}:{}:gen", self.key_prefix, Self::USAGE_CATALOG_CACHE_NAMESPACE)
     }
 
+    #[cfg(feature = "duckdb-runtime")]
     pub(crate) fn usage_catalog_rollups_key(&self) -> String {
         format!("{}:{}:rollups", self.key_prefix, Self::USAGE_CATALOG_CACHE_NAMESPACE)
     }
 
+    #[cfg(feature = "duckdb-runtime")]
     pub(crate) fn usage_catalog_filtered_segments_key(&self, query_fingerprint: &str) -> String {
         format!(
             "{}:{}:segments:filtered:{query_fingerprint}",
@@ -345,10 +427,12 @@ impl RequestCache {
         )
     }
 
+    #[cfg(feature = "duckdb-runtime")]
     pub(crate) fn usage_catalog_event_locator_key(&self, event_id: &str) -> String {
         format!("{}:{}:event:{event_id}", self.key_prefix, Self::USAGE_CATALOG_CACHE_NAMESPACE)
     }
 
+    #[cfg(feature = "duckdb-runtime")]
     pub(crate) fn usage_catalog_filter_options_key(&self, query_fingerprint: &str) -> String {
         format!(
             "{}:{}:filter-options:{query_fingerprint}",
@@ -432,6 +516,7 @@ impl RequestCache {
         )
     }
 
+    #[cfg(feature = "duckdb-runtime")]
     pub(crate) fn usage_catalog_rollups_ttl(&self) -> Duration {
         deterministic_jitter_ttl(
             &self.usage_catalog_rollups_key(),
@@ -455,6 +540,7 @@ impl RequestCache {
         )
     }
 
+    #[cfg(feature = "duckdb-runtime")]
     pub(crate) fn usage_catalog_filtered_segments_ttl(&self, query_fingerprint: &str) -> Duration {
         deterministic_jitter_ttl(
             &self.usage_catalog_filtered_segments_key(query_fingerprint),
@@ -464,6 +550,7 @@ impl RequestCache {
         )
     }
 
+    #[cfg(feature = "duckdb-runtime")]
     pub(crate) fn usage_catalog_event_locator_ttl(&self, event_id: &str) -> Duration {
         deterministic_jitter_ttl(
             &self.usage_catalog_event_locator_key(event_id),
@@ -473,6 +560,7 @@ impl RequestCache {
         )
     }
 
+    #[cfg(feature = "duckdb-runtime")]
     pub(crate) fn usage_catalog_filter_options_ttl(&self, query_fingerprint: &str) -> Duration {
         deterministic_jitter_ttl(
             &self.usage_catalog_filter_options_key(query_fingerprint),
@@ -586,6 +674,7 @@ impl RequestCache {
             .with_context(|| format!("redis INCR `{key}`"))
     }
 
+    #[cfg(feature = "duckdb-runtime")]
     pub(crate) fn get_json_blocking<T>(&self, key: &str) -> anyhow::Result<Option<T>>
     where
         T: DeserializeOwned,
@@ -599,6 +688,7 @@ impl RequestCache {
             .transpose()
     }
 
+    #[cfg(feature = "duckdb-runtime")]
     pub(crate) fn set_json_blocking<T>(
         &self,
         key: &str,
@@ -621,6 +711,7 @@ impl RequestCache {
         Ok(())
     }
 
+    #[cfg(feature = "duckdb-runtime")]
     pub(crate) fn get_i64_blocking(&self, key: &str) -> anyhow::Result<Option<i64>> {
         let mut conn = self.connection_blocking()?;
         let value: Option<i64> = conn
@@ -629,6 +720,7 @@ impl RequestCache {
         Ok(value)
     }
 
+    #[cfg(feature = "duckdb-runtime")]
     pub(crate) fn incr_blocking(&self, key: &str) -> anyhow::Result<i64> {
         let mut conn = self.connection_blocking()?;
         conn.incr(key, 1)
@@ -642,6 +734,7 @@ impl RequestCache {
             .context("connect request cache redis")
     }
 
+    #[cfg(feature = "duckdb-runtime")]
     fn connection_blocking(&self) -> anyhow::Result<redis::Connection> {
         self.client
             .get_connection()
@@ -729,6 +822,8 @@ mod tests {
             request_min_start_interval_ms: Some(50),
             codex_fast_enabled: false,
             codex_strict_session_rejection_enabled: true,
+            codex_image_generation_enabled: false,
+            codex_image_direct_generation_enabled: false,
             codex_weight_free: 1,
             codex_weight_plus: 2,
             codex_weight_pro5x: 3,

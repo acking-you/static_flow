@@ -15,6 +15,7 @@ members = [
     "crates/llm-access",
     "crates/llm-access-core",
     "crates/llm-access-codex",
+    "crates/llm-access-codex-image",
     "crates/llm-access-kiro",
     "crates/llm-access-migrations",
     "crates/llm-access-store",
