@@ -533,12 +533,15 @@ impl PostgresControlRepository {
             .client
             .query_one(
                 "SELECT
-                    EXISTS (
-                        SELECT 1
+                    (
+                        SELECT COUNT(*) = 2
                         FROM information_schema.columns
                         WHERE table_schema = 'public'
                           AND table_name = 'llm_key_route_config'
-                          AND column_name = 'codex_image_generation_enabled'
+                          AND column_name IN (
+                              'codex_image_generation_enabled',
+                              'codex_image_direct_generation_enabled'
+                          )
                     ) AS route_toggle_exists,
                     (
                         SELECT COUNT(*) = 3
@@ -560,7 +563,7 @@ impl PostgresControlRepository {
         anyhow::ensure!(
             route_toggle_exists && usage_rollup_exists,
             "missing codex image gateway schema columns; run llm-access Postgres migrations 0030 \
-             and 0031 before starting llm-access-codex-image"
+             through 0032 before starting llm-access-codex-image"
         );
         Ok(())
     }
@@ -705,6 +708,21 @@ impl ControlStore for PostgresControlRepository {
     async fn apply_usage_rollup(&self, event: &UsageEvent) -> anyhow::Result<()> {
         self.apply_usage_rollups_batch(std::slice::from_ref(event))
             .await
+    }
+
+    async fn record_codex_image_key_usage(
+        &self,
+        key_id: &str,
+        usage_tokens: Option<u64>,
+        used_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        PostgresControlRepository::record_codex_image_key_usage(
+            self,
+            key_id,
+            usage_tokens,
+            used_at_ms,
+        )
+        .await
     }
 }
 

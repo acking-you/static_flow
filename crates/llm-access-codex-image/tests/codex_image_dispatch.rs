@@ -2,7 +2,7 @@
 
 use axum::http::StatusCode;
 use llm_access_codex_image::{
-    dispatch::{eligible_image_routes, should_failover_status},
+    dispatch::{eligible_image_routes, should_failover_status, ImageGatewayMode},
     limiter::{
         image_account_limiter_scope, image_key_limiter_scope, ImageAccountLimiter, ImageKeyLimiter,
     },
@@ -21,6 +21,7 @@ fn route(account_name: &str, key_enabled: bool, account_enabled: bool) -> Provid
         codex_fast_enabled: true,
         codex_strict_session_rejection_enabled: false,
         codex_image_generation_enabled: key_enabled,
+        codex_image_direct_generation_enabled: false,
         request_max_concurrency: None,
         request_min_start_interval_ms: None,
         account_request_max_concurrency: None,
@@ -33,21 +34,57 @@ fn route(account_name: &str, key_enabled: bool, account_enabled: bool) -> Provid
     }
 }
 
+fn direct_route(
+    account_name: &str,
+    standalone_enabled: bool,
+    direct_enabled: bool,
+    account_enabled: bool,
+) -> ProviderCodexRoute {
+    let mut route = route(account_name, standalone_enabled, account_enabled);
+    route.codex_image_direct_generation_enabled = direct_enabled;
+    route
+}
+
 #[test]
 fn image_route_selection_rejects_disabled_key_and_disabled_accounts() {
-    let err = eligible_image_routes(vec![route("codex-a", false, true)])
-        .expect_err("key-level image switch must be enforced");
+    let err = eligible_image_routes(ImageGatewayMode::StandaloneBinary, vec![route(
+        "codex-a", false, true,
+    )])
+    .expect_err("key-level image switch must be enforced");
     assert_eq!(err.status, StatusCode::FORBIDDEN);
 
-    let err = eligible_image_routes(vec![route("codex-a", true, false)])
-        .expect_err("account-level image switch must be enforced");
+    let err = eligible_image_routes(ImageGatewayMode::StandaloneBinary, vec![route(
+        "codex-a", true, false,
+    )])
+    .expect_err("account-level image switch must be enforced");
     assert_eq!(err.status, StatusCode::SERVICE_UNAVAILABLE);
 
-    let selected =
-        eligible_image_routes(vec![route("codex-a", true, false), route("codex-b", true, true)])
-            .expect("image-enabled accounts should be selected");
+    let selected = eligible_image_routes(ImageGatewayMode::StandaloneBinary, vec![
+        route("codex-a", true, false),
+        route("codex-b", true, true),
+    ])
+    .expect("image-enabled accounts should be selected");
     assert_eq!(selected.len(), 1);
     assert_eq!(selected[0].account_name, "codex-b");
+}
+
+#[test]
+fn image_route_selection_uses_separate_standalone_and_direct_key_gates() {
+    let direct_disabled = direct_route("codex-a", true, false, true);
+    let err = eligible_image_routes(ImageGatewayMode::IntegratedCodexApi, vec![direct_disabled])
+        .expect_err("direct image switch must be enforced separately");
+    assert_eq!(err.status, StatusCode::FORBIDDEN);
+
+    let standalone_disabled = direct_route("codex-a", false, true, true);
+    let selected =
+        eligible_image_routes(ImageGatewayMode::IntegratedCodexApi, vec![standalone_disabled])
+            .expect("direct mode must not depend on standalone switch");
+    assert_eq!(selected[0].account_name, "codex-a");
+
+    let direct_disabled = direct_route("codex-a", true, false, true);
+    let selected = eligible_image_routes(ImageGatewayMode::StandaloneBinary, vec![direct_disabled])
+        .expect("standalone mode must not depend on direct switch");
+    assert_eq!(selected[0].account_name, "codex-a");
 }
 
 #[tokio::test]
@@ -127,6 +164,7 @@ async fn image_key_limiter_uses_independent_scope_and_route_limits() {
 #[test]
 fn image_log_event_redacts_prompt_and_image_payloads() {
     let event = build_image_log_event(ImageLogInput {
+        gateway_mode: "direct",
         request_id: "req-1",
         key_id: "key-1",
         key_name: "Key One",

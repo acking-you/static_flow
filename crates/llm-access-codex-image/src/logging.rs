@@ -33,6 +33,8 @@ pub struct UpstreamLogInput<'a> {
 /// Input used to build a redacted image request log event.
 #[derive(Debug, Clone, Copy)]
 pub struct ImageLogInput<'a> {
+    /// Gateway entrypoint mode.
+    pub gateway_mode: &'a str,
     /// Stable request id for correlating logs.
     pub request_id: &'a str,
     /// Authenticated key id.
@@ -62,6 +64,8 @@ pub struct ImageLogInput<'a> {
 pub struct ImageLogEvent {
     /// Schema version for future log readers.
     pub schema_version: u64,
+    /// Gateway entrypoint mode.
+    pub gateway_mode: String,
     /// Stable request id for correlating logs.
     pub request_id: String,
     /// Authenticated key id.
@@ -270,6 +274,7 @@ impl ImageLogWriter {
 pub fn build_image_log_event(input: ImageLogInput<'_>) -> ImageLogEvent {
     ImageLogEvent {
         schema_version: 1,
+        gateway_mode: input.gateway_mode.to_string(),
         request_id: input.request_id.to_string(),
         key_id: input.key_id.to_string(),
         key_name: input.key_name.to_string(),
@@ -316,6 +321,7 @@ mod tests {
 
     fn test_event(request_id: &str) -> ImageLogEvent {
         build_image_log_event(ImageLogInput {
+            gateway_mode: "standalone",
             request_id,
             key_id: "key-1",
             key_name: "Key One",

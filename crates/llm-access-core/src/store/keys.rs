@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{KEY_STATUS_ACTIVE, KEY_STATUS_DISABLED};
 
+const fn default_true() -> bool {
+    true
+}
+
 /// Admin-facing projection of one managed API key.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AdminKey {
@@ -76,9 +80,18 @@ pub struct AdminKey {
     /// early for this key.
     #[serde(default)]
     pub codex_strict_session_rejection_enabled: bool,
-    /// Whether Codex image generation/edit requests are enabled for this key.
-    #[serde(default)]
+    /// Deprecated compatibility alias for the standalone Codex image gateway
+    /// switch.
+    #[serde(default = "default_true")]
     pub codex_image_generation_enabled: bool,
+    /// Whether Codex image generation/edit requests are enabled through the
+    /// standalone image gateway for this key.
+    #[serde(default = "default_true")]
+    pub codex_image_standalone_generation_enabled: bool,
+    /// Whether Codex image generation/edit requests are enabled directly
+    /// through the main Codex API service for this key.
+    #[serde(default)]
+    pub codex_image_direct_generation_enabled: bool,
     /// Whether Kiro request validation is enabled.
     pub kiro_request_validation_enabled: bool,
     /// Whether Kiro cache estimation is enabled.
@@ -374,8 +387,13 @@ pub struct AdminKeyPatch {
     pub codex_fast_enabled: Option<bool>,
     /// New Codex strict session-rejection toggle.
     pub codex_strict_session_rejection_enabled: Option<bool>,
-    /// New Codex image generation/edit toggle.
+    /// Deprecated compatibility alias for the standalone Codex image gateway
+    /// switch.
     pub codex_image_generation_enabled: Option<bool>,
+    /// New standalone Codex image generation/edit toggle.
+    pub codex_image_standalone_generation_enabled: Option<bool>,
+    /// New direct Codex image generation/edit toggle.
+    pub codex_image_direct_generation_enabled: Option<bool>,
     /// New Kiro request-validation toggle.
     pub kiro_request_validation_enabled: Option<bool>,
     /// New Kiro cache-estimation toggle.
@@ -437,6 +455,8 @@ mod tests {
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
             codex_image_generation_enabled: true,
+            codex_image_standalone_generation_enabled: true,
+            codex_image_direct_generation_enabled: false,
             kiro_request_validation_enabled: false,
             kiro_cache_estimation_enabled: false,
             kiro_zero_cache_debug_enabled: false,

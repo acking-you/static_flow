@@ -135,8 +135,10 @@ pub(crate) struct CachedCodexRequestSnapshot {
     pub codex_fast_enabled: bool,
     #[serde(default)]
     pub codex_strict_session_rejection_enabled: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub codex_image_generation_enabled: bool,
+    #[serde(default)]
+    pub codex_image_direct_generation_enabled: bool,
     pub codex_weight_free: i64,
     pub codex_weight_plus: i64,
     pub codex_weight_pro5x: i64,
@@ -279,7 +281,8 @@ mod codex_image_cache_tests {
     use super::{CachedCodexAccountView, CachedCodexRequestSnapshot};
 
     #[test]
-    fn legacy_codex_request_snapshot_defaults_image_generation_disabled() {
+    fn legacy_codex_request_snapshot_defaults_standalone_image_generation_enabled_and_direct_disabled(
+    ) {
         let snapshot: CachedCodexRequestSnapshot = serde_json::from_value(json!({
             "key": {
                 "key_id": "key-1",
@@ -306,7 +309,8 @@ mod codex_image_cache_tests {
         }))
         .expect("legacy snapshot must decode");
 
-        assert!(!snapshot.codex_image_generation_enabled);
+        assert!(snapshot.codex_image_generation_enabled);
+        assert!(!snapshot.codex_image_direct_generation_enabled);
     }
 
     #[test]
@@ -819,6 +823,7 @@ mod tests {
             codex_fast_enabled: false,
             codex_strict_session_rejection_enabled: true,
             codex_image_generation_enabled: false,
+            codex_image_direct_generation_enabled: false,
             codex_weight_free: 1,
             codex_weight_plus: 2,
             codex_weight_pro5x: 3,

@@ -506,6 +506,8 @@ impl ProviderRouteStore for PostgresControlRepository {
                 codex_strict_session_rejection_enabled: snapshot
                     .codex_strict_session_rejection_enabled,
                 codex_image_generation_enabled: snapshot.codex_image_generation_enabled,
+                codex_image_direct_generation_enabled: snapshot
+                    .codex_image_direct_generation_enabled,
                 request_max_concurrency: snapshot.request_max_concurrency,
                 request_min_start_interval_ms: snapshot.request_min_start_interval_ms,
                 account_request_max_concurrency: view.request_max_concurrency,
@@ -583,6 +585,7 @@ impl ProviderRouteStore for PostgresControlRepository {
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
             codex_image_generation_enabled: true,
+            codex_image_direct_generation_enabled: false,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             account_request_max_concurrency: view.request_max_concurrency,

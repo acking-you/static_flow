@@ -153,6 +153,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "codex_image_key_usage_rollup",
         sql: include_str!("../migrations/postgres/0031_codex_image_key_usage_rollup.sql"),
     },
+    SqlMigration {
+        version: 32,
+        name: "codex_image_direct_toggle",
+        sql: include_str!("../migrations/postgres/0032_codex_image_direct_toggle.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.
@@ -525,5 +530,21 @@ mod tests {
         assert!(migration.sql.contains("codex_image_usage_tokens"));
         assert!(migration.sql.contains("codex_image_usage_missing_events"));
         assert!(migration.sql.contains("codex_image_last_used_at_ms"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_codex_image_direct_toggle() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "codex_image_direct_toggle")
+            .expect("codex image direct toggle migration exists");
+
+        assert_eq!(migration.version, 32);
+        assert!(migration
+            .sql
+            .contains("codex_image_direct_generation_enabled"));
+        assert!(migration.sql.contains("DEFAULT TRUE"));
+        assert!(migration.sql.contains("DEFAULT FALSE"));
     }
 }

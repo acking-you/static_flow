@@ -1,6 +1,16 @@
 use axum::http::StatusCode;
 use llm_access_core::store::ProviderCodexRoute;
 
+/// Runtime entrypoint used for one Codex image request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageGatewayMode {
+    /// Request entered through the standalone `llm-access-codex-image` binary.
+    StandaloneBinary,
+    /// Request entered directly through the main `llm-access` Codex API
+    /// service.
+    IntegratedCodexApi,
+}
+
 /// Error produced before attempting any upstream image request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageDispatchError {
@@ -21,12 +31,14 @@ impl ImageDispatchError {
 
 /// Filters resolved Codex routes to accounts allowed to serve image requests.
 pub fn eligible_image_routes(
+    mode: ImageGatewayMode,
     routes: Vec<ProviderCodexRoute>,
 ) -> Result<Vec<ProviderCodexRoute>, ImageDispatchError> {
-    if routes
-        .iter()
-        .any(|route| !route.codex_image_generation_enabled)
-    {
+    let disabled = routes.iter().any(|route| match mode {
+        ImageGatewayMode::StandaloneBinary => !route.codex_image_generation_enabled,
+        ImageGatewayMode::IntegratedCodexApi => !route.codex_image_direct_generation_enabled,
+    });
+    if disabled {
         return Err(ImageDispatchError::new(
             StatusCode::FORBIDDEN,
             "codex image generation is disabled for this key",

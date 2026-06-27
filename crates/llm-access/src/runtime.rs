@@ -18,7 +18,7 @@ use llm_access_core::store::{
     EmptyAdminReviewQueueStore, EmptyProviderRouteStore, EmptyPublicAccessStore,
     EmptyPublicCommunityStore, EmptyPublicStatusStore, EmptyPublicSubmissionStore,
     EmptyPublicUsageStore, ProviderRouteStore, PublicAccessStore, PublicCommunityStore,
-    PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
+    PublicStatusStore, PublicSubmissionStore, PublicUsageStore, DEFAULT_CODEX_CLIENT_VERSION,
 };
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 use llm_access_core::store::{
@@ -80,6 +80,8 @@ pub struct LlmAccessRuntime {
     public_status_store: Arc<dyn PublicStatusStore>,
     email_notifier: Option<Arc<crate::email::EmailNotifier>>,
     kiro_latency_ranker: Arc<KiroLatencyRanker>,
+    codex_image_log_config: llm_access_codex_image::logging::ImageLogConfig,
+    codex_client_version: String,
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     usage_journal_sink: Option<Arc<JournalUsageEventSink>>,
     usage_journal_dir: Option<PathBuf>,
@@ -108,6 +110,8 @@ struct LlmAccessStores {
     public_status_store: Arc<dyn PublicStatusStore>,
     email_notifier: Option<Arc<crate::email::EmailNotifier>>,
     kiro_latency_ranker: Arc<KiroLatencyRanker>,
+    codex_image_log_config: llm_access_codex_image::logging::ImageLogConfig,
+    codex_client_version: String,
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     usage_journal_sink: Option<Arc<JournalUsageEventSink>>,
     usage_journal_dir: Option<PathBuf>,
@@ -201,6 +205,31 @@ impl<T> RuntimeRepository for T where
 {
 }
 
+fn default_codex_image_log_config(
+    log_dir: PathBuf,
+) -> llm_access_codex_image::logging::ImageLogConfig {
+    llm_access_codex_image::logging::ImageLogConfig {
+        log_dir,
+        max_file_bytes: llm_access_core::store::DEFAULT_USAGE_JOURNAL_MAX_FILE_BYTES,
+        max_file_age_ms: llm_access_core::store::DEFAULT_USAGE_JOURNAL_MAX_FILE_AGE_MS,
+        max_files: usize::try_from(llm_access_core::store::DEFAULT_USAGE_JOURNAL_MAX_FILES)
+            .unwrap_or(usize::MAX),
+    }
+}
+
+fn image_log_config_from_runtime(
+    log_dir: PathBuf,
+    runtime_config: &llm_access_core::store::AdminRuntimeConfig,
+) -> llm_access_codex_image::logging::ImageLogConfig {
+    llm_access_codex_image::logging::ImageLogConfig {
+        log_dir,
+        max_file_bytes: runtime_config.usage_journal_max_file_bytes,
+        max_file_age_ms: runtime_config.usage_journal_max_file_age_ms,
+        max_files: usize::try_from(runtime_config.usage_journal_max_files.max(1))
+            .unwrap_or(usize::MAX),
+    }
+}
+
 impl LlmAccessRuntime {
     /// Create runtime dependencies from explicit storage adapters.
     pub fn new(control_store: Arc<dyn ControlStore>) -> Self {
@@ -223,6 +252,10 @@ impl LlmAccessRuntime {
             public_status_store: Arc::new(EmptyPublicStatusStore),
             email_notifier: None,
             kiro_latency_ranker: Arc::new(KiroLatencyRanker::default()),
+            codex_image_log_config: default_codex_image_log_config(
+                std::env::temp_dir().join("llm-access-codex-image-logs"),
+            ),
+            codex_client_version: DEFAULT_CODEX_CLIENT_VERSION.to_string(),
             #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
             usage_journal_sink: None,
             usage_journal_dir: None,
@@ -252,6 +285,8 @@ impl LlmAccessRuntime {
             public_status_store: stores.public_status_store,
             email_notifier: stores.email_notifier,
             kiro_latency_ranker: stores.kiro_latency_ranker,
+            codex_image_log_config: stores.codex_image_log_config,
+            codex_client_version: stores.codex_client_version,
             #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
             usage_journal_sink: stores.usage_journal_sink,
             usage_journal_dir: stores.usage_journal_dir,
@@ -295,8 +330,15 @@ impl LlmAccessRuntime {
     where
         R: RuntimeRepository + 'static,
     {
-        #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let initial_runtime_config = repository.get_admin_runtime_config().await?;
+        let codex_image_log_config = image_log_config_from_runtime(
+            config.state_root.join("codex-image-logs"),
+            &initial_runtime_config,
+        );
+        let codex_client_version = llm_access_codex::request::normalize_codex_client_version(
+            &initial_runtime_config.codex_client_version,
+        )
+        .unwrap_or_else(|| DEFAULT_CODEX_CLIENT_VERSION.to_string());
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let runtime_config = Arc::new(RwLock::new(initial_runtime_config.clone()));
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -407,6 +449,8 @@ impl LlmAccessRuntime {
             public_status_store,
             email_notifier,
             kiro_latency_ranker: Arc::new(KiroLatencyRanker::default()),
+            codex_image_log_config,
+            codex_client_version,
             #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
             usage_journal_sink: Some(journal_usage_for_status),
             usage_journal_dir: Some(config.usage_journal_dir.clone()),
@@ -443,6 +487,16 @@ impl LlmAccessRuntime {
     /// In-memory Kiro latency ranking cache used by provider dispatch.
     pub(crate) fn kiro_latency_ranker(&self) -> Arc<KiroLatencyRanker> {
         Arc::clone(&self.kiro_latency_ranker)
+    }
+
+    /// Image request log config used by the integrated Codex image gateway.
+    pub(crate) fn codex_image_log_config(&self) -> llm_access_codex_image::logging::ImageLogConfig {
+        self.codex_image_log_config.clone()
+    }
+
+    /// Codex client version used by provider-side Codex requests.
+    pub(crate) fn codex_client_version(&self) -> String {
+        self.codex_client_version.clone()
     }
 
     /// Admin key store used by local admin endpoints.
@@ -1879,6 +1933,17 @@ impl ControlStore for UsageAccountingControlStore {
     async fn apply_usage_rollup_owned(&self, event: UsageEvent) -> anyhow::Result<()> {
         self.usage_accounting
             .append_usage_events_owned(vec![event])
+            .await
+    }
+
+    async fn record_codex_image_key_usage(
+        &self,
+        key_id: &str,
+        usage_tokens: Option<u64>,
+        used_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        self.control_store
+            .record_codex_image_key_usage(key_id, usage_tokens, used_at_ms)
             .await
     }
 }

@@ -91,6 +91,7 @@ impl PostgresControlRepository {
                     r.request_max_concurrency, r.request_min_start_interval_ms,
                     r.codex_fast_enabled, r.codex_strict_session_rejection_enabled,
                     r.codex_image_generation_enabled,
+                    r.codex_image_direct_generation_enabled,
                     r.kiro_request_validation_enabled,
                     r.kiro_cache_estimation_enabled,
                     r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
@@ -139,6 +140,7 @@ impl PostgresControlRepository {
                     r.request_max_concurrency, r.request_min_start_interval_ms,
                     r.codex_fast_enabled, r.codex_strict_session_rejection_enabled,
                     r.codex_image_generation_enabled,
+                    r.codex_image_direct_generation_enabled,
                     r.kiro_request_validation_enabled,
                     r.kiro_cache_estimation_enabled,
                     r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
@@ -263,6 +265,7 @@ impl PostgresControlRepository {
                     r.request_max_concurrency, r.request_min_start_interval_ms,
                     r.codex_fast_enabled, r.codex_strict_session_rejection_enabled,
                     r.codex_image_generation_enabled,
+                    r.codex_image_direct_generation_enabled,
                     r.kiro_request_validation_enabled,
                     r.kiro_cache_estimation_enabled,
                     r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
@@ -337,6 +340,7 @@ impl PostgresControlRepository {
                         r.request_max_concurrency, r.request_min_start_interval_ms,
                         r.codex_fast_enabled, r.codex_strict_session_rejection_enabled,
                         r.codex_image_generation_enabled,
+                        r.codex_image_direct_generation_enabled,
                         r.kiro_request_validation_enabled,
                         r.kiro_cache_estimation_enabled,
                         r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
@@ -521,6 +525,7 @@ impl PostgresControlRepository {
                     page_keys.codex_fast_enabled,
                     page_keys.codex_strict_session_rejection_enabled,
                     page_keys.codex_image_generation_enabled,
+                    page_keys.codex_image_direct_generation_enabled,
                     page_keys.kiro_request_validation_enabled,
                     page_keys.kiro_cache_estimation_enabled,
                     page_keys.kiro_zero_cache_debug_enabled,
@@ -591,6 +596,7 @@ impl PostgresControlRepository {
                     r.request_max_concurrency, r.request_min_start_interval_ms,
                     r.codex_fast_enabled, r.codex_strict_session_rejection_enabled,
                     r.codex_image_generation_enabled,
+                    r.codex_image_direct_generation_enabled,
                     r.kiro_request_validation_enabled,
                     r.kiro_cache_estimation_enabled,
                     r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
@@ -677,6 +683,7 @@ impl PostgresControlRepository {
                     request_min_start_interval_ms, codex_fast_enabled,
                     codex_strict_session_rejection_enabled,
                     codex_image_generation_enabled,
+                    codex_image_direct_generation_enabled,
                     kiro_request_validation_enabled, kiro_cache_estimation_enabled,
                     kiro_zero_cache_debug_enabled, kiro_full_request_logging_enabled,
                     kiro_remote_media_resolution_enabled, kiro_latency_routing_enabled,
@@ -686,7 +693,7 @@ impl PostgresControlRepository {
                     kiro_billable_model_multipliers_override_json
                  ) VALUES (
                     $1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10, $11, $12,
-                    $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22::jsonb
+                    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23::jsonb
                  )
                  ON CONFLICT(key_id) DO UPDATE SET
                     route_strategy = EXCLUDED.route_strategy,
@@ -702,6 +709,8 @@ impl PostgresControlRepository {
                         EXCLUDED.codex_strict_session_rejection_enabled,
                     codex_image_generation_enabled =
                         EXCLUDED.codex_image_generation_enabled,
+                    codex_image_direct_generation_enabled =
+                        EXCLUDED.codex_image_direct_generation_enabled,
                     kiro_request_validation_enabled = EXCLUDED.kiro_request_validation_enabled,
                     kiro_cache_estimation_enabled = EXCLUDED.kiro_cache_estimation_enabled,
                     kiro_zero_cache_debug_enabled = EXCLUDED.kiro_zero_cache_debug_enabled,
@@ -732,6 +741,7 @@ impl PostgresControlRepository {
                     &route.codex_fast_enabled,
                     &route.codex_strict_session_rejection_enabled,
                     &route.codex_image_generation_enabled,
+                    &route.codex_image_direct_generation_enabled,
                     &route.kiro_request_validation_enabled,
                     &route.kiro_cache_estimation_enabled,
                     &route.kiro_zero_cache_debug_enabled,
@@ -894,9 +904,10 @@ impl AdminKeyStore for PostgresControlRepository {
                 r.route_strategy, r.fixed_account_name, r.auto_account_names_json::text,
                 r.account_group_id, r.model_name_map_json::text,
                 r.request_max_concurrency, r.request_min_start_interval_ms,
-                r.codex_fast_enabled, r.codex_strict_session_rejection_enabled,
-                r.codex_image_generation_enabled,
-                r.kiro_request_validation_enabled,
+                    r.codex_fast_enabled, r.codex_strict_session_rejection_enabled,
+                    r.codex_image_generation_enabled,
+                    r.codex_image_direct_generation_enabled,
+                    r.kiro_request_validation_enabled,
                 r.kiro_cache_estimation_enabled,
                 r.kiro_zero_cache_debug_enabled, r.kiro_full_request_logging_enabled,
                 r.kiro_remote_media_resolution_enabled,
@@ -996,7 +1007,8 @@ impl AdminKeyStore for PostgresControlRepository {
                 .map(|value| value as i64),
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
-            codex_image_generation_enabled: false,
+            codex_image_generation_enabled: true,
+            codex_image_direct_generation_enabled: false,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,
@@ -1088,8 +1100,14 @@ impl AdminKeyStore for PostgresControlRepository {
         if let Some(value) = patch.codex_strict_session_rejection_enabled {
             bundle.route.codex_strict_session_rejection_enabled = value;
         }
-        if let Some(value) = patch.codex_image_generation_enabled {
+        if let Some(value) = patch
+            .codex_image_standalone_generation_enabled
+            .or(patch.codex_image_generation_enabled)
+        {
             bundle.route.codex_image_generation_enabled = value;
+        }
+        if let Some(value) = patch.codex_image_direct_generation_enabled {
+            bundle.route.codex_image_direct_generation_enabled = value;
         }
         if let Some(value) = patch.kiro_request_validation_enabled {
             bundle.route.kiro_request_validation_enabled = value;

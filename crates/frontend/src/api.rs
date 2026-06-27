@@ -5972,7 +5972,8 @@ pub struct PublicLlmGatewayUsageEventView {
     pub credit_usage_missing: bool,
     pub client_ip: String,
     pub ip_region: String,
-    /// Inline error message surfaced directly in the list (no detail view needed).
+    /// Inline error message surfaced directly in the list (no detail view
+    /// needed).
     #[serde(default)]
     pub error_message: Option<String>,
     /// Stable upstream error class for failed requests, when classified.
@@ -6122,8 +6123,12 @@ pub struct AdminLlmGatewayKeyView {
     pub codex_fast_enabled: bool,
     #[serde(default)]
     pub codex_strict_session_rejection_enabled: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub codex_image_generation_enabled: bool,
+    #[serde(default = "default_true")]
+    pub codex_image_standalone_generation_enabled: bool,
+    #[serde(default)]
+    pub codex_image_direct_generation_enabled: bool,
     #[serde(default = "default_true")]
     pub kiro_request_validation_enabled: bool,
     #[serde(default = "default_true")]
@@ -6340,7 +6345,8 @@ pub struct AdminLlmGatewayUsageEventView {
     pub client_ip: String,
     pub ip_region: String,
     pub last_message_content: Option<String>,
-    /// Inline error message surfaced directly in the list (no detail view needed).
+    /// Inline error message surfaced directly in the list (no detail view
+    /// needed).
     #[serde(default)]
     pub error_message: Option<String>,
     /// Stable upstream error class for failed requests, when classified.
@@ -9004,7 +9010,9 @@ pub async fn create_admin_llm_gateway_key(
             uses_global_kiro_billable_model_multipliers: true,
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
-            codex_image_generation_enabled: false,
+            codex_image_generation_enabled: true,
+            codex_image_standalone_generation_enabled: true,
+            codex_image_direct_generation_enabled: false,
             kiro_candidate_credit_summary: None,
         })
     }
@@ -9053,6 +9061,8 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub codex_fast_enabled: Option<bool>,
     pub codex_strict_session_rejection_enabled: Option<bool>,
     pub codex_image_generation_enabled: Option<bool>,
+    pub codex_image_standalone_generation_enabled: Option<bool>,
+    pub codex_image_direct_generation_enabled: Option<bool>,
     pub kiro_request_validation_enabled: Option<bool>,
     pub kiro_cache_estimation_enabled: Option<bool>,
     pub kiro_zero_cache_debug_enabled: Option<bool>,
@@ -9090,6 +9100,8 @@ pub async fn patch_admin_llm_gateway_key(
             request.codex_fast_enabled,
             request.codex_strict_session_rejection_enabled,
             request.codex_image_generation_enabled,
+            request.codex_image_standalone_generation_enabled,
+            request.codex_image_direct_generation_enabled,
             request.kiro_request_validation_enabled,
             request.kiro_cache_estimation_enabled,
             request.kiro_zero_cache_debug_enabled,
@@ -9204,6 +9216,18 @@ pub async fn patch_admin_llm_gateway_key(
         if let Some(enabled) = request.codex_image_generation_enabled {
             body.insert(
                 "codex_image_generation_enabled".to_string(),
+                serde_json::Value::Bool(enabled),
+            );
+        }
+        if let Some(enabled) = request.codex_image_standalone_generation_enabled {
+            body.insert(
+                "codex_image_standalone_generation_enabled".to_string(),
+                serde_json::Value::Bool(enabled),
+            );
+        }
+        if let Some(enabled) = request.codex_image_direct_generation_enabled {
+            body.insert(
+                "codex_image_direct_generation_enabled".to_string(),
                 serde_json::Value::Bool(enabled),
             );
         }
@@ -11282,6 +11306,8 @@ pub async fn create_admin_kiro_key(
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
             codex_image_generation_enabled: false,
+            codex_image_standalone_generation_enabled: false,
+            codex_image_direct_generation_enabled: false,
             kiro_candidate_credit_summary: None,
         })
     }
@@ -12017,7 +12043,9 @@ mod tests {
 
         assert!(!key.kiro_full_request_logging_enabled);
         assert!(!key.kiro_remote_media_resolution_enabled);
-        assert!(!key.codex_image_generation_enabled);
+        assert!(key.codex_image_generation_enabled);
+        assert!(key.codex_image_standalone_generation_enabled);
+        assert!(!key.codex_image_direct_generation_enabled);
     }
 
     #[test]

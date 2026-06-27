@@ -570,6 +570,10 @@ pub(crate) struct PatchLlmGatewayKeyRequest {
     #[serde(default)]
     codex_image_generation_enabled: Option<bool>,
     #[serde(default)]
+    codex_image_standalone_generation_enabled: Option<bool>,
+    #[serde(default)]
+    codex_image_direct_generation_enabled: Option<bool>,
+    #[serde(default)]
     kiro_request_validation_enabled: Option<bool>,
     #[serde(default)]
     kiro_cache_estimation_enabled: Option<bool>,
@@ -5373,6 +5377,7 @@ fn codex_validation_route(
         codex_fast_enabled: true,
         codex_strict_session_rejection_enabled: false,
         codex_image_generation_enabled: true,
+        codex_image_direct_generation_enabled: false,
         request_max_concurrency: None,
         request_min_start_interval_ms: None,
         account_request_max_concurrency: None,
@@ -6209,6 +6214,9 @@ fn normalize_key_patch(
             Some(None) => Some(None),
             None => None,
         };
+    let codex_image_standalone_generation_enabled = request
+        .codex_image_standalone_generation_enabled
+        .or(request.codex_image_generation_enabled);
     Ok(AdminKeyPatch {
         name,
         status,
@@ -6225,6 +6233,8 @@ fn normalize_key_patch(
         codex_fast_enabled: request.codex_fast_enabled,
         codex_strict_session_rejection_enabled: request.codex_strict_session_rejection_enabled,
         codex_image_generation_enabled: request.codex_image_generation_enabled,
+        codex_image_standalone_generation_enabled,
+        codex_image_direct_generation_enabled: request.codex_image_direct_generation_enabled,
         kiro_request_validation_enabled: request.kiro_request_validation_enabled,
         kiro_cache_estimation_enabled: request.kiro_cache_estimation_enabled,
         kiro_zero_cache_debug_enabled: request.kiro_zero_cache_debug_enabled,
@@ -7343,6 +7353,8 @@ mod tests {
             codex_fast_enabled: None,
             codex_strict_session_rejection_enabled: None,
             codex_image_generation_enabled: None,
+            codex_image_standalone_generation_enabled: None,
+            codex_image_direct_generation_enabled: None,
             kiro_request_validation_enabled: None,
             kiro_cache_estimation_enabled: None,
             kiro_zero_cache_debug_enabled: None,
@@ -7389,6 +7401,8 @@ mod tests {
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
             codex_image_generation_enabled: false,
+            codex_image_standalone_generation_enabled: false,
+            codex_image_direct_generation_enabled: false,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,

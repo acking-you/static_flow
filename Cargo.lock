@@ -5698,6 +5698,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "llm-access-codex",
+ "llm-access-codex-image",
  "llm-access-core",
  "llm-access-kiro",
  "llm-access-store",

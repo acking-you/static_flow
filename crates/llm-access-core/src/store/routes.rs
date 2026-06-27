@@ -57,8 +57,12 @@ pub struct ProviderCodexRoute {
     /// Whether fatal Codex session errors reject repeated requests for the same
     /// key/session before selecting another account.
     pub codex_strict_session_rejection_enabled: bool,
-    /// Whether this key is allowed to dispatch Codex image requests.
+    /// Whether this key is allowed to dispatch Codex image requests through
+    /// the standalone image gateway binary.
     pub codex_image_generation_enabled: bool,
+    /// Whether this key is allowed to dispatch Codex image requests directly
+    /// through the main Codex API service.
+    pub codex_image_direct_generation_enabled: bool,
     /// Request concurrency cap configured on this key route.
     pub request_max_concurrency: Option<u64>,
     /// Minimum interval between request starts configured on this key route.

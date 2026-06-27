@@ -65,6 +65,16 @@ pub trait ControlStore: Send + Sync {
     async fn apply_usage_rollup_owned(&self, event: UsageEvent) -> anyhow::Result<()> {
         self.apply_usage_rollup(&event).await
     }
+
+    /// Record Codex image usage observed outside the normal usage journal.
+    async fn record_codex_image_key_usage(
+        &self,
+        _key_id: &str,
+        _usage_tokens: Option<u64>,
+        _used_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 /// Provider route/account resolution used by data-plane dispatch.

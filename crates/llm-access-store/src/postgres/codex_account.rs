@@ -1018,6 +1018,7 @@ impl AdminCodexAccountStore for PostgresControlRepository {
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
             codex_image_generation_enabled: true,
+            codex_image_direct_generation_enabled: false,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             account_request_max_concurrency: settings.request_max_concurrency,

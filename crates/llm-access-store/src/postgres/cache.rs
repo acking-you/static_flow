@@ -447,6 +447,9 @@ impl PostgresControlRepository {
                 .route
                 .codex_strict_session_rejection_enabled,
             codex_image_generation_enabled: bundle.route.codex_image_generation_enabled,
+            codex_image_direct_generation_enabled: bundle
+                .route
+                .codex_image_direct_generation_enabled,
             codex_weight_free: runtime_config.codex_weight_free,
             codex_weight_plus: runtime_config.codex_weight_plus,
             codex_weight_pro5x: runtime_config.codex_weight_pro5x,
