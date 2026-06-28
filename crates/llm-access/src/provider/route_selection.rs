@@ -23,10 +23,14 @@ use llm_access_core::{
 use llm_access_kiro::scheduler::{KiroRequestLease, KiroRequestScheduler};
 
 use super::{
-    codex_dispatch::dispatch_codex_proxy, errors::proxy_cooldown_key_for_route,
-    kiro_dispatch::dispatch_kiro_proxy, kiro_error::kiro_json_error, limiter::wait_for_limit,
-    util::now_millis, CodexAccountCooldowns, DefaultProviderDispatcher, LimitPermit,
-    LimitRejection, ProviderDispatchDeps, ProviderDispatcher, RequestLimiter,
+    codex_dispatch::dispatch_codex_proxy,
+    errors::proxy_cooldown_key_for_route,
+    kiro_dispatch::dispatch_kiro_proxy,
+    kiro_error::{kiro_json_error, AWS_BEDROCK_ALL_ACCOUNTS_COOLING_DOWN_MESSAGE},
+    limiter::wait_for_limit,
+    util::now_millis,
+    CodexAccountCooldowns, DefaultProviderDispatcher, LimitPermit, LimitRejection,
+    ProviderDispatchDeps, ProviderDispatcher, RequestLimiter,
 };
 use crate::kiro_latency::KiroLatencyRanker;
 
@@ -40,13 +44,13 @@ fn kiro_all_accounts_cooling_down_response(shortest_wait: Option<Duration>) -> R
         .header(header::RETRY_AFTER, retry_after)
         .body(Body::from(super::errors::anthropic_json_error_body(
             "rate_limit_error",
-            "all eligible kiro accounts are cooling down",
+            AWS_BEDROCK_ALL_ACCOUNTS_COOLING_DOWN_MESSAGE,
         )))
         .unwrap_or_else(|_| {
             kiro_json_error(
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate_limit_error",
-                "all eligible kiro accounts are cooling down",
+                AWS_BEDROCK_ALL_ACCOUNTS_COOLING_DOWN_MESSAGE,
             )
         })
 }

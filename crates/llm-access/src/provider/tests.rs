@@ -1903,6 +1903,12 @@ async fn kiro_selection_returns_rate_limit_when_all_accounts_are_upstream_cooled
         (1..=60).contains(&retry_after),
         "retry-after should reflect the shortest remaining cooldown, got {retry_after}"
     );
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let raw = String::from_utf8(body.to_vec()).expect("utf8 response");
+    assert!(raw.contains("AWS Bedrock"));
+    assert!(!raw.to_ascii_lowercase().contains("kiro"));
 }
 
 #[tokio::test]
@@ -9568,6 +9574,51 @@ async fn kiro_dispatch_returns_json_service_unavailable_when_no_route_exists() {
         "Service unavailable.",
     )
     .await;
+}
+
+#[tokio::test]
+async fn kiro_dispatch_records_route_cooldown_usage_with_aws_bedrock_label() {
+    let store = Arc::new(RecordingControlStore::default());
+    let state = super::ProviderState::new(store.clone(), static_kiro_route_store());
+    state.kiro_request_scheduler.mark_account_cooldown(
+        "kiro-a",
+        Duration::from_secs(30),
+        "upstream rate limited",
+    );
+    let response = super::provider_entry(
+        state,
+        Request::builder()
+            .method("POST")
+            .uri("/api/kiro-gateway/v1/messages")
+            .header("x-api-key", "valid-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                    "model": "claude-sonnet-4-6",
+                    "max_tokens": 128,
+                    "messages": [{"role": "user", "content": "hello"}]
+                }"#,
+            ))
+            .expect("request"),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let raw = String::from_utf8(body.to_vec()).expect("utf8 response");
+    assert!(raw.contains("AWS Bedrock"));
+    assert!(!raw.to_ascii_lowercase().contains("kiro"));
+
+    wait_for_usage_event_count(&store, 1).await;
+    let events = store.usage_events.lock().expect("usage events");
+    assert_eq!(events[0].status_code, 429);
+    assert_eq!(
+        events[0].error_message.as_deref(),
+        Some("all eligible AWS Bedrock accounts are cooling down")
+    );
+    assert_eq!(events[0].error_class.as_deref(), Some("aws_bedrock_all_accounts_cooling_down"));
 }
 
 #[tokio::test]

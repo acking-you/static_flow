@@ -6,6 +6,10 @@ use llm_access_kiro::anthropic::converter::ConversionError;
 use super::errors::anthropic_json_error_body;
 
 const USER_VISIBLE_UPSTREAM_NAME: &str = "AWS Bedrock";
+pub(super) const AWS_BEDROCK_ALL_ACCOUNTS_COOLING_DOWN_MESSAGE: &str =
+    "all eligible AWS Bedrock accounts are cooling down";
+pub(super) const AWS_BEDROCK_ROUTE_SELECTION_FAILED_MESSAGE: &str =
+    "AWS Bedrock route selection failed";
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum KiroRouteFailureKind {

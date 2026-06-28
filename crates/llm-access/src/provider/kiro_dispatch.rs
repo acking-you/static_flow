@@ -51,7 +51,8 @@ use super::{
     kiro_error::{
         kiro_bedrock_anthropic_error, kiro_bedrock_anthropic_error_body,
         kiro_conversion_error_response, kiro_json_error, kiro_upstream_error_response,
-        KiroRouteFailure, KiroRouteFailureKind,
+        KiroRouteFailure, KiroRouteFailureKind, AWS_BEDROCK_ALL_ACCOUNTS_COOLING_DOWN_MESSAGE,
+        AWS_BEDROCK_ROUTE_SELECTION_FAILED_MESSAGE,
     },
     kiro_media::{resolve_kiro_remote_media_sources, strip_kiro_remote_media_sources},
     kiro_model::{
@@ -1185,9 +1186,9 @@ async fn record_kiro_route_selection_failure_response(
     status: StatusCode,
 ) {
     let (class, message) = if status == StatusCode::TOO_MANY_REQUESTS {
-        ("kiro_all_accounts_cooling_down", "all eligible kiro accounts are cooling down")
+        ("aws_bedrock_all_accounts_cooling_down", AWS_BEDROCK_ALL_ACCOUNTS_COOLING_DOWN_MESSAGE)
     } else {
-        ("kiro_route_selection_failed", "kiro route selection failed")
+        ("aws_bedrock_route_selection_failed", AWS_BEDROCK_ROUTE_SELECTION_FAILED_MESSAGE)
     };
     capture_error_message(usage_meta, message);
     capture_error_body(usage_meta, &anthropic_json_error_body("api_error", message));
