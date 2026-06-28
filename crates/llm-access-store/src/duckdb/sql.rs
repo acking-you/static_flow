@@ -406,7 +406,7 @@ fn usage_event_base_select_exprs(
                 "CAST(NULL AS VARCHAR)",
             )
         } else {
-            "CAST(NULL AS VARCHAR) AS routing_diagnostics_json".to_string()
+            usage_event_column_expr(columns, "routing_diagnostics_json", "CAST(NULL AS VARCHAR)")
         },
         usage_event_required_expr("input_uncached_tokens"),
         usage_event_required_expr("input_cached_tokens"),

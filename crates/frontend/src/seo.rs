@@ -294,6 +294,9 @@ fn route_path_for(route: &Route) -> String {
         Route::AdminLlmGatewayMonitor => config::route_path("/admin/llm-gateway/monitor"),
         Route::AdminKiroGateway => config::route_path("/admin/kiro-gateway"),
         Route::AdminKiroAccountStatus => config::route_path("/admin/kiro-gateway/accounts"),
+        Route::AdminKiroAnthropicUpstreams => {
+            config::route_path("/admin/kiro-gateway/anthropic-upstreams")
+        },
         Route::AdminGpt2ApiRs => config::route_path("/admin/gpt2api-rs"),
         Route::AdminCommentRuns {
             task_id,
@@ -510,6 +513,7 @@ pub fn apply_route_seo(route: Option<&Route>) {
         | Route::AdminLlmGatewayMonitor
         | Route::AdminKiroGateway
         | Route::AdminKiroAccountStatus
+        | Route::AdminKiroAnthropicUpstreams
         | Route::AdminGpt2ApiRs
         | Route::AdminCommentRuns {
             ..

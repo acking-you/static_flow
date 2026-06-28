@@ -43,6 +43,7 @@ use axum::{
     http::{Request, StatusCode},
     response::Response,
 };
+pub(crate) use client::provider_client;
 use client::{
     build_provider_client, provider_client_cache_capacity, provider_client_pool_idle_timeout,
     provider_client_pool_max_idle_per_host,

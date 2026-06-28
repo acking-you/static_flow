@@ -4,6 +4,7 @@ mod activity;
 mod admin;
 /// Process allocator tuning.
 pub mod allocator;
+mod anthropic_upstream_probe;
 pub mod cluster;
 mod codex_refresh;
 mod codex_status;
@@ -423,6 +424,14 @@ pub fn router_with_simulator(
             "/admin/kiro-gateway/anthropic-upstreams/:name",
             axum::routing::patch(admin::patch_admin_anthropic_upstream_channel)
                 .delete(admin::delete_admin_anthropic_upstream_channel),
+        )
+        .route(
+            "/admin/kiro-gateway/anthropic-upstreams/:name/refresh-models",
+            post(admin::refresh_admin_anthropic_upstream_models),
+        )
+        .route(
+            "/admin/kiro-gateway/anthropic-upstreams/:name/test",
+            post(admin::test_admin_anthropic_upstream_model),
         )
         .route(
             "/admin/kiro-gateway/accounts",

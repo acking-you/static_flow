@@ -7,9 +7,10 @@ use async_trait::async_trait;
 use super::{
     anthropic_upstream::{
         AdminAnthropicUpstreamChannel, AdminAnthropicUpstreamChannelPatch,
-        AdminAnthropicUpstreamChannelsPage, AnthropicUpstreamChannelUsageDelta,
-        NewAdminAnthropicUpstreamChannel, ProviderAnthropicUpstreamResolution,
-        ProviderAnthropicUpstreamRoute,
+        AdminAnthropicUpstreamChannelsPage, AdminAnthropicUpstreamModelsStatusUpdate,
+        AdminAnthropicUpstreamProbeTarget, AdminAnthropicUpstreamTestStatusUpdate,
+        AnthropicUpstreamChannelUsageDelta, NewAdminAnthropicUpstreamChannel,
+        ProviderAnthropicUpstreamResolution, ProviderAnthropicUpstreamRoute,
     },
     codex_account::{
         apply_admin_codex_account_query, summarize_admin_accounts, AdminCodexAccount,
@@ -252,6 +253,33 @@ pub trait AdminAnthropicUpstreamStore: Send + Sync {
         &self,
         name: &str,
     ) -> anyhow::Result<Option<AdminAnthropicUpstreamChannel>>;
+
+    /// Load a direct Anthropic channel for an admin probe, including secret
+    /// material. This must never be returned directly to frontend callers.
+    async fn load_admin_anthropic_upstream_probe_target(
+        &self,
+        _name: &str,
+    ) -> anyhow::Result<Option<AdminAnthropicUpstreamProbeTarget>> {
+        Ok(None)
+    }
+
+    /// Persist latest `/models` refresh state.
+    async fn save_admin_anthropic_upstream_models_status(
+        &self,
+        _name: &str,
+        _update: AdminAnthropicUpstreamModelsStatusUpdate,
+    ) -> anyhow::Result<Option<AdminAnthropicUpstreamChannel>> {
+        Ok(None)
+    }
+
+    /// Persist latest `/messages` test state.
+    async fn save_admin_anthropic_upstream_test_status(
+        &self,
+        _name: &str,
+        _update: AdminAnthropicUpstreamTestStatusUpdate,
+    ) -> anyhow::Result<Option<AdminAnthropicUpstreamChannel>> {
+        Ok(None)
+    }
 }
 
 /// Public read-only queries used by unauthenticated public endpoints.

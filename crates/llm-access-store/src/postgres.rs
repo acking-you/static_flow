@@ -143,6 +143,16 @@ pub(crate) struct AnthropicUpstreamChannelRow {
     proxy_mode: String,
     proxy_config_id: Option<String>,
     last_error: Option<String>,
+    model_ids: Vec<String>,
+    last_models_status: Option<String>,
+    last_models_latency_ms: Option<i64>,
+    last_models_checked_at_ms: Option<i64>,
+    last_models_error: Option<String>,
+    last_test_model: Option<String>,
+    last_test_status: Option<String>,
+    last_test_latency_ms: Option<i64>,
+    last_test_at_ms: Option<i64>,
+    last_test_error: Option<String>,
     created_at_ms: i64,
     updated_at_ms: i64,
     input_uncached_tokens: i64,
@@ -771,13 +781,15 @@ mod tests {
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType, RouteStrategy},
         store::{
-            AdminAnthropicUpstreamStore, AdminCodexAccountPageQuery, AdminCodexAccountSortMode,
-            AdminCodexAccountStore, AdminConfigStore, AdminKeyStore, AdminKiroAccountStore,
-            AdminPageRequest, AdminProxyConfigPatch, AdminProxyStore, AdminProxyTrafficSnapshot,
-            AdminReviewQueueStore, AnthropicUpstreamChannelUsageDelta, ControlStore,
-            KeyUsageRollupDelta, NewAdminAnthropicUpstreamChannel, NewAdminProxyConfig,
-            NewPublicAccountContributionRequest, ProxyTrafficTotals, PublicSubmissionStore,
-            PublicUsageStore, UsageEventSink, UsageRollupBatch, UsageRollupBatchSink,
+            AdminAnthropicUpstreamModelsStatusUpdate, AdminAnthropicUpstreamStore,
+            AdminAnthropicUpstreamTestStatusUpdate, AdminCodexAccountPageQuery,
+            AdminCodexAccountSortMode, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,
+            AdminKiroAccountStore, AdminPageRequest, AdminProxyConfigPatch, AdminProxyStore,
+            AdminProxyTrafficSnapshot, AdminReviewQueueStore, AnthropicUpstreamChannelUsageDelta,
+            ControlStore, KeyUsageRollupDelta, NewAdminAnthropicUpstreamChannel,
+            NewAdminProxyConfig, NewPublicAccountContributionRequest, ProxyTrafficTotals,
+            PublicSubmissionStore, PublicUsageStore, UsageEventSink, UsageRollupBatch,
+            UsageRollupBatchSink,
         },
     };
     use serde::Serialize;
@@ -1170,6 +1182,60 @@ mod tests {
             .expect("create anthropic upstream channel");
         assert!(created.has_api_key);
         assert_eq!(created.weight, 7);
+        assert!(created.models.is_empty());
+        assert_eq!(created.last_models_status, None);
+        assert_eq!(created.last_test_status, None);
+
+        let probe_target = repo
+            .load_admin_anthropic_upstream_probe_target("anthropic-a")
+            .await
+            .expect("load probe target")
+            .expect("probe target exists");
+        assert_eq!(probe_target.name, "anthropic-a");
+        assert_eq!(probe_target.base_url, "https://api.anthropic.com/v1");
+        assert_eq!(probe_target.api_key, "sk-ant-test");
+        assert_eq!(probe_target.proxy, None);
+        assert_eq!(probe_target.proxy_error, None);
+
+        let updated = repo
+            .save_admin_anthropic_upstream_models_status(
+                "anthropic-a",
+                AdminAnthropicUpstreamModelsStatusUpdate {
+                    model_ids: vec!["claude-sonnet-4-6".to_string()],
+                    status: "ok".to_string(),
+                    latency_ms: Some(25),
+                    checked_at_ms: 1_700_000_000_030,
+                    error: None,
+                },
+            )
+            .await
+            .expect("save models status")
+            .expect("updated channel exists");
+        assert_eq!(updated.models, vec!["claude-sonnet-4-6"]);
+        assert_eq!(updated.last_models_status.as_deref(), Some("ok"));
+        assert_eq!(updated.last_models_latency_ms, Some(25));
+        assert_eq!(updated.last_models_checked_at, Some(1_700_000_000_030));
+        assert_eq!(updated.last_models_error, None);
+
+        let updated = repo
+            .save_admin_anthropic_upstream_test_status(
+                "anthropic-a",
+                AdminAnthropicUpstreamTestStatusUpdate {
+                    model: "claude-sonnet-4-6".to_string(),
+                    status: "http_401".to_string(),
+                    latency_ms: Some(31),
+                    checked_at_ms: 1_700_000_000_040,
+                    error: Some("upstream returned HTTP 401".to_string()),
+                },
+            )
+            .await
+            .expect("save test status")
+            .expect("updated channel exists");
+        assert_eq!(updated.last_test_model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(updated.last_test_status.as_deref(), Some("http_401"));
+        assert_eq!(updated.last_test_latency_ms, Some(31));
+        assert_eq!(updated.last_test_at, Some(1_700_000_000_040));
+        assert_eq!(updated.last_test_error.as_deref(), Some("upstream returned HTTP 401"));
 
         repo.record_anthropic_upstream_channel_usage(
             "anthropic-a",
@@ -1214,6 +1280,17 @@ mod tests {
         assert_eq!(channel.usage.billable_tokens, 44);
         assert_eq!(channel.usage.usage_missing_events, 1);
         assert_eq!(channel.usage.last_used_at, Some(1_700_000_000_020));
+        assert_eq!(channel.models, vec!["claude-sonnet-4-6"]);
+        assert_eq!(channel.last_test_status.as_deref(), Some("http_401"));
+
+        let probe_target = repo
+            .load_admin_anthropic_upstream_probe_target("anthropic-a")
+            .await
+            .expect("reload probe target")
+            .expect("probe target exists");
+        assert_eq!(probe_target.api_key, "sk-ant-test");
+        assert_eq!(probe_target.proxy, None);
+        assert_eq!(probe_target.proxy_error, None);
     }
 
     #[tokio::test]

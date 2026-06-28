@@ -173,6 +173,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "anthropic_upstream_pool",
         sql: include_str!("../migrations/postgres/0033_anthropic_upstream_pool.sql"),
     },
+    SqlMigration {
+        version: 34,
+        name: "anthropic_upstream_probe_state",
+        sql: include_str!("../migrations/postgres/0034_anthropic_upstream_probe_state.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.
@@ -590,5 +595,19 @@ mod tests {
             .sql
             .contains("llm_anthropic_upstream_channel_usage_rollups"));
         assert!(migration.sql.contains("DEFAULT 'disabled'"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_anthropic_upstream_probe_state() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "anthropic_upstream_probe_state")
+            .expect("anthropic upstream probe state migration exists");
+
+        assert_eq!(migration.version, 34);
+        assert!(migration.sql.contains("model_ids JSONB"));
+        assert!(migration.sql.contains("last_models_checked_at_ms"));
+        assert!(migration.sql.contains("last_test_model"));
     }
 }

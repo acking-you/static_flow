@@ -151,6 +151,13 @@ pub enum Route {
     AdminKiroGateway,
 
     #[cfg(not(feature = "mock"))]
+    #[at("/admin/kiro-gateway/anthropic-upstreams")]
+    AdminKiroAnthropicUpstreams,
+    #[cfg(feature = "mock")]
+    #[at("/static_flow/admin/kiro-gateway/anthropic-upstreams")]
+    AdminKiroAnthropicUpstreams,
+
+    #[cfg(not(feature = "mock"))]
     #[at("/admin/kiro-gateway/accounts")]
     AdminKiroAccountStatus,
     #[cfg(feature = "mock")]
@@ -284,6 +291,9 @@ fn switch(route: Route) -> Html {
             html! { <pages::admin_llm_gateway_monitor::AdminLlmGatewayMonitorPage /> }
         },
         Route::AdminKiroGateway => html! { <pages::admin_kiro_gateway::AdminKiroGatewayPage /> },
+        Route::AdminKiroAnthropicUpstreams => {
+            html! { <pages::admin_kiro_anthropic_upstreams::AdminKiroAnthropicUpstreamsPage /> }
+        },
         Route::AdminKiroAccountStatus => {
             html! { <pages::admin_kiro_account_status::AdminKiroAccountStatusPage /> }
         },
