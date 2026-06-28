@@ -54,7 +54,7 @@ pub struct UsageRetryDetails {
 }
 
 /// One normalized usage event before persistence.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UsageEvent {
     /// Stable event id.
     pub event_id: String,

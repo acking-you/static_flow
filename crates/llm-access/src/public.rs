@@ -147,6 +147,8 @@ struct PublicLlmGatewayUsageEventView {
     same_account_retry_count: u64,
     same_account_retry_delay_ms: i64,
     same_account_retry_reasons: Vec<String>,
+    stream_completed_cleanly: Option<bool>,
+    downstream_disconnect: Option<bool>,
     endpoint: String,
     model: Option<String>,
     status_code: i32,
@@ -781,6 +783,8 @@ impl From<&AdminUsageEventView> for PublicLlmGatewayUsageEventView {
             same_account_retry_count: value.same_account_retry_count,
             same_account_retry_delay_ms: value.same_account_retry_delay_ms,
             same_account_retry_reasons: value.same_account_retry_reasons.clone(),
+            stream_completed_cleanly: value.stream_completed_cleanly,
+            downstream_disconnect: value.downstream_disconnect,
             endpoint: value.endpoint.clone(),
             model: value.model.clone(),
             status_code: value.status_code,
@@ -870,6 +874,65 @@ mod tests {
             last_usage_success_at: Some(100),
             usage_error_message: usage_error_message.map(str::to_string),
         }
+    }
+
+    fn sample_admin_usage_event() -> AdminUsageEventView {
+        AdminUsageEventView {
+            id: "evt-public-stream".to_string(),
+            key_id: "key-public".to_string(),
+            key_name: "Public key".to_string(),
+            account_name: Some("kiro-a".to_string()),
+            request_method: "POST".to_string(),
+            request_url: "/api/kiro-gateway/v1/messages".to_string(),
+            latency_ms: 123,
+            routing_wait_ms: Some(1),
+            upstream_headers_ms: Some(2),
+            post_headers_body_ms: Some(3),
+            request_body_bytes: Some(128),
+            request_body_read_ms: Some(4),
+            request_json_parse_ms: Some(5),
+            pre_handler_ms: Some(6),
+            first_sse_write_ms: Some(7),
+            stream_finish_ms: Some(8),
+            stream_completed_cleanly: Some(false),
+            downstream_disconnect: Some(true),
+            final_event_type: Some("disconnect".to_string()),
+            bytes_streamed: Some(512),
+            other_latency_ms: Some(9),
+            quota_failover_count: 1,
+            same_account_retry_count: 2,
+            same_account_retry_delay_ms: 300,
+            same_account_retry_reasons: vec!["transport".to_string()],
+            routing_diagnostics_json: None,
+            endpoint: "/v1/messages".to_string(),
+            model: Some("claude-sonnet-4-6".to_string()),
+            status_code: 499,
+            input_uncached_tokens: 10,
+            input_cached_tokens: 0,
+            output_tokens: 0,
+            billable_tokens: 10,
+            usage_missing: false,
+            credit_usage: None,
+            credit_usage_missing: true,
+            client_ip: "127.0.0.1".to_string(),
+            ip_region: "local".to_string(),
+            last_message_content: Some("hello".to_string()),
+            error_message: Some("client disconnected".to_string()),
+            error_class: Some("downstream_disconnect".to_string()),
+            session_blocked: false,
+            response_image_count: None,
+            created_at: 1_700_000_000_000,
+        }
+    }
+
+    #[test]
+    fn public_usage_event_includes_stream_disconnect_state() {
+        let admin = sample_admin_usage_event();
+
+        let public = PublicLlmGatewayUsageEventView::from(&admin);
+
+        assert_eq!(public.stream_completed_cleanly, Some(false));
+        assert_eq!(public.downstream_disconnect, Some(true));
     }
 
     #[test]

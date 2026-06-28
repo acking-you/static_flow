@@ -3,10 +3,11 @@
 use serde::{Deserialize, Serialize};
 
 /// LLM provider family used by keys, accounts, usage events, and routing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderType {
     /// Codex/OpenAI-compatible provider path.
+    #[default]
     Codex,
     /// Kiro/Claude-compatible provider path.
     Kiro,
@@ -32,10 +33,11 @@ impl ProviderType {
 }
 
 /// Client-facing protocol family.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProtocolFamily {
     /// OpenAI-compatible API surface.
+    #[default]
     OpenAi,
     /// Anthropic/Claude-compatible API surface.
     Anthropic,

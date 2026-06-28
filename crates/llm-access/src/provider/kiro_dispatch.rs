@@ -1,6 +1,10 @@
 //! Kiro proxy dispatch, websearch, generate/MCP calls, and failover.
 
-use std::{collections::HashSet, sync::Arc, time::Instant};
+use std::{
+    collections::HashSet,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{bail, Context};
 use axum::{
@@ -42,7 +46,7 @@ use super::{
         kiro_proactive_compact_response, kiro_prompt_too_long_message,
         kiro_prompt_too_long_response_for_body, kiro_rate_limit_cooldown,
         proxy_cooldown_key_for_route, randomized_same_account_retry_delay,
-        transient_invalid_model_cooldown,
+        retry_after_header_duration, transient_invalid_model_cooldown, SameAccountRetryReason,
     },
     kiro_error::{
         kiro_bedrock_anthropic_error, kiro_bedrock_anthropic_error_body,
@@ -80,6 +84,7 @@ use super::{
 use crate::kiro_refresh;
 
 const INCONSISTENT_ROUTE_CONFIGURATION_MESSAGE: &str = "Route configuration is inconsistent.";
+const KIRO_SAME_ACCOUNT_MAX_ATTEMPTS: usize = 3;
 
 fn route_private_prompt_safety(
     route: &ProviderKiroRoute,
@@ -1358,6 +1363,7 @@ async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
                 )
                 .await
                 {
+                    usage_meta.merge_retry_from(&route_usage_meta.retry);
                     usage_meta.mark_failover();
                     continue;
                 }
@@ -1553,9 +1559,10 @@ async fn prepare_kiro_stream_response_for_route(
                     attempt = retry + 1,
                     "Kiro returned an empty generateAssistantResponse stream; retrying"
                 );
-                let delay = randomized_same_account_retry_delay(None);
+                let delay =
+                    randomized_same_account_retry_delay(SameAccountRetryReason::EmptyStream, None);
                 ctx.usage_meta
-                    .record_same_account_retry("empty_stream", delay);
+                    .record_same_account_retry(SameAccountRetryReason::EmptyStream, delay);
                 tokio::time::sleep(delay).await;
                 response = call_kiro_generate_for_route_with_usage(
                     route,
@@ -1618,13 +1625,82 @@ async fn prepare_kiro_stream_response_for_route(
     }
     unreachable!("bounded kiro empty stream retry loop should return")
 }
+
+#[derive(Debug, Clone, Copy)]
+enum KiroUpstreamFailureAction {
+    QuotaExhausted,
+    RateLimited { cooldown: Duration, mark_proxy: bool },
+    Fatal,
+    AuthRefresh,
+    RetryNext,
+    RetryableStatus { retry_after: Option<Duration> },
+}
+
+fn classify_kiro_upstream_failure(
+    status: StatusCode,
+    headers: &HeaderMap,
+    body: &str,
+    force_refresh: bool,
+) -> KiroUpstreamFailureAction {
+    if status.as_u16() == 402 && is_monthly_request_limit(body) {
+        return KiroUpstreamFailureAction::QuotaExhausted;
+    }
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        if let Some(cooldown) = kiro_rate_limit_cooldown(headers, body) {
+            return KiroUpstreamFailureAction::RateLimited {
+                cooldown,
+                mark_proxy: false,
+            };
+        }
+    }
+    if status == StatusCode::BAD_REQUEST {
+        return transient_invalid_model_cooldown(body)
+            .map(|cooldown| KiroUpstreamFailureAction::RateLimited {
+                cooldown,
+                mark_proxy: true,
+            })
+            .unwrap_or(KiroUpstreamFailureAction::Fatal);
+    }
+    if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+        return if force_refresh {
+            KiroUpstreamFailureAction::RetryNext
+        } else {
+            KiroUpstreamFailureAction::AuthRefresh
+        };
+    }
+    if status == StatusCode::REQUEST_TIMEOUT || status.is_server_error() {
+        return KiroUpstreamFailureAction::RetryableStatus {
+            retry_after: retry_after_header_duration(headers),
+        };
+    }
+    KiroUpstreamFailureAction::Fatal
+}
+
+async fn record_same_account_retry_and_sleep(
+    usage_meta: &mut ProviderUsageMetadata,
+    reason: SameAccountRetryReason,
+    retry_after: Option<Duration>,
+) {
+    let delay = randomized_same_account_retry_delay(reason, retry_after);
+    usage_meta.record_same_account_retry(reason, delay);
+    tokio::time::sleep(delay).await;
+}
+
 pub(crate) async fn call_kiro_generate_for_route(
     route: &ProviderKiroRoute,
     route_store: &dyn ProviderRouteStore,
     upstream_url: String,
     request_body: &[u8],
 ) -> Result<reqwest::Response, KiroRouteFailure> {
-    call_kiro_generate_for_route_inner(route, route_store, upstream_url, request_body, None).await
+    let mut usage_meta = ProviderUsageMetadata::synthetic_request("POST", upstream_url.clone());
+    call_kiro_generate_for_route_inner(
+        route,
+        route_store,
+        upstream_url,
+        request_body,
+        &mut usage_meta,
+    )
+    .await
 }
 
 async fn call_kiro_generate_for_route_with_usage(
@@ -1634,14 +1710,8 @@ async fn call_kiro_generate_for_route_with_usage(
     request_body: &[u8],
     usage_meta: &mut ProviderUsageMetadata,
 ) -> Result<reqwest::Response, KiroRouteFailure> {
-    call_kiro_generate_for_route_inner(
-        route,
-        route_store,
-        upstream_url,
-        request_body,
-        Some(usage_meta),
-    )
-    .await
+    call_kiro_generate_for_route_inner(route, route_store, upstream_url, request_body, usage_meta)
+        .await
 }
 
 async fn call_kiro_generate_for_route_inner(
@@ -1649,11 +1719,11 @@ async fn call_kiro_generate_for_route_inner(
     route_store: &dyn ProviderRouteStore,
     upstream_url: String,
     request_body: &[u8],
-    mut usage_meta: Option<&mut ProviderUsageMetadata>,
+    usage_meta: &mut ProviderUsageMetadata,
 ) -> Result<reqwest::Response, KiroRouteFailure> {
     let mut force_refresh = false;
     let mut last_failure: Option<KiroRouteFailure> = None;
-    for attempt in 0..3 {
+    for attempt in 0..KIRO_SAME_ACCOUNT_MAX_ATTEMPTS {
         let call_ctx =
             match kiro_refresh::ensure_context_for_route(route, route_store, force_refresh).await {
                 Ok(ctx) => ctx,
@@ -1680,12 +1750,13 @@ async fn call_kiro_generate_for_route_inner(
                     format!("kiro upstream transport failure: {err}"),
                     KiroRouteFailureKind::RetryNext,
                 ));
-                if attempt < 2 {
-                    let delay = randomized_same_account_retry_delay(None);
-                    if let Some(meta) = usage_meta.as_deref_mut() {
-                        meta.record_same_account_retry("transport", delay);
-                    }
-                    tokio::time::sleep(delay).await;
+                if attempt + 1 < KIRO_SAME_ACCOUNT_MAX_ATTEMPTS {
+                    record_same_account_retry_and_sleep(
+                        usage_meta,
+                        SameAccountRetryReason::Transport,
+                        None,
+                    )
+                    .await;
                     continue;
                 }
                 return Err(last_failure.expect("kiro transport failure should be captured"));
@@ -1698,54 +1769,52 @@ async fn call_kiro_generate_for_route_inner(
         let headers = response.headers().clone();
         let failure = KiroRouteFailure::from_response(response, KiroRouteFailureKind::Fatal).await;
         let body = failure.body_text();
-        if status.as_u16() == 402 && is_monthly_request_limit(&body) {
-            return Err(failure.with_kind(KiroRouteFailureKind::QuotaExhausted));
-        }
-        if status.as_u16() == 429 {
-            if let Some(cooldown) = kiro_rate_limit_cooldown(&headers, &body) {
+        match classify_kiro_upstream_failure(status, &headers, &body, force_refresh) {
+            KiroUpstreamFailureAction::QuotaExhausted => {
+                return Err(failure.with_kind(KiroRouteFailureKind::QuotaExhausted));
+            },
+            KiroUpstreamFailureAction::RateLimited {
+                cooldown,
+                mark_proxy,
+            } => {
                 return Err(failure.with_kind(KiroRouteFailureKind::RateLimited {
                     cooldown,
-                    mark_proxy: false,
+                    mark_proxy,
                 }));
-            }
-        }
-        if status.as_u16() == 400 {
-            if let Some(cooldown) = transient_invalid_model_cooldown(&body) {
-                return Err(failure.with_kind(KiroRouteFailureKind::RateLimited {
-                    cooldown,
-                    mark_proxy: true,
-                }));
-            }
-            return Err(failure.with_kind(KiroRouteFailureKind::Fatal));
-        }
-        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) && !force_refresh {
-            force_refresh = true;
-            last_failure = Some(failure.with_kind(KiroRouteFailureKind::RetryNext));
-            let delay = randomized_same_account_retry_delay(None);
-            if let Some(meta) = usage_meta.as_deref_mut() {
-                meta.record_same_account_retry("auth_refresh", delay);
-            }
-            tokio::time::sleep(delay).await;
-            continue;
-        }
-        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
-            return Err(failure.with_kind(KiroRouteFailureKind::RetryNext));
-        }
-        if matches!(status, StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS)
-            || status.is_server_error()
-        {
-            last_failure = Some(failure.with_kind(KiroRouteFailureKind::RetryNext));
-            if attempt < 2 {
-                let delay = randomized_same_account_retry_delay(None);
-                if let Some(meta) = usage_meta.as_deref_mut() {
-                    meta.record_same_account_retry("retryable_status", delay);
-                }
-                tokio::time::sleep(delay).await;
+            },
+            KiroUpstreamFailureAction::Fatal => {
+                return Err(failure.with_kind(KiroRouteFailureKind::Fatal));
+            },
+            KiroUpstreamFailureAction::AuthRefresh => {
+                force_refresh = true;
+                last_failure = Some(failure.with_kind(KiroRouteFailureKind::RetryNext));
+                record_same_account_retry_and_sleep(
+                    usage_meta,
+                    SameAccountRetryReason::AuthRefresh,
+                    None,
+                )
+                .await;
                 continue;
-            }
-            return Err(last_failure.expect("retryable kiro failure should be captured"));
+            },
+            KiroUpstreamFailureAction::RetryNext => {
+                return Err(failure.with_kind(KiroRouteFailureKind::RetryNext));
+            },
+            KiroUpstreamFailureAction::RetryableStatus {
+                retry_after,
+            } => {
+                last_failure = Some(failure.with_kind(KiroRouteFailureKind::RetryNext));
+                if attempt + 1 < KIRO_SAME_ACCOUNT_MAX_ATTEMPTS {
+                    record_same_account_retry_and_sleep(
+                        usage_meta,
+                        SameAccountRetryReason::RetryableStatus,
+                        retry_after,
+                    )
+                    .await;
+                    continue;
+                }
+                return Err(last_failure.expect("retryable kiro failure should be captured"));
+            },
         }
-        return Err(failure.with_kind(KiroRouteFailureKind::Fatal));
     }
     Err(last_failure.unwrap_or_else(|| {
         KiroRouteFailure::synthetic(
@@ -1767,7 +1836,15 @@ pub async fn call_kiro_mcp_for_route(
     let mut last_failure: Option<KiroRouteFailure> = None;
     let mut attempt = 0usize;
     let response = loop {
-        attempt += 1;
+        if attempt >= KIRO_SAME_ACCOUNT_MAX_ATTEMPTS {
+            break Err(last_failure.unwrap_or_else(|| {
+                KiroRouteFailure::synthetic(
+                    StatusCode::BAD_GATEWAY,
+                    "kiro mcp upstream request failed".to_string(),
+                    KiroRouteFailureKind::RetryNext,
+                )
+            }));
+        }
         let call_ctx = match kiro_refresh::ensure_context_for_route_requiring_profile(
             route,
             route_store,
@@ -1784,6 +1861,7 @@ pub async fn call_kiro_mcp_for_route(
                 ));
             },
         };
+        attempt += 1;
         let response = match send_kiro_mcp_request(
             route,
             &call_ctx,
@@ -1799,10 +1877,13 @@ pub async fn call_kiro_mcp_for_route(
                     format!("kiro mcp transport failure: {err}"),
                     KiroRouteFailureKind::RetryNext,
                 ));
-                if attempt < 3 {
-                    let delay = randomized_same_account_retry_delay(None);
-                    usage_meta.record_same_account_retry("transport", delay);
-                    tokio::time::sleep(delay).await;
+                if attempt < KIRO_SAME_ACCOUNT_MAX_ATTEMPTS {
+                    record_same_account_retry_and_sleep(
+                        usage_meta,
+                        SameAccountRetryReason::Transport,
+                        None,
+                    )
+                    .await;
                     continue;
                 }
                 break Err(last_failure.expect("mcp transport failure should be captured"));
@@ -1815,50 +1896,52 @@ pub async fn call_kiro_mcp_for_route(
         let headers = response.headers().clone();
         let failure = KiroRouteFailure::from_response(response, KiroRouteFailureKind::Fatal).await;
         let body = failure.body_text();
-        if status.as_u16() == 402 && is_monthly_request_limit(&body) {
-            break Err(failure.with_kind(KiroRouteFailureKind::QuotaExhausted));
-        }
-        if status.as_u16() == 429 {
-            if let Some(cooldown) = kiro_rate_limit_cooldown(&headers, &body) {
+        match classify_kiro_upstream_failure(status, &headers, &body, force_refresh) {
+            KiroUpstreamFailureAction::QuotaExhausted => {
+                break Err(failure.with_kind(KiroRouteFailureKind::QuotaExhausted));
+            },
+            KiroUpstreamFailureAction::RateLimited {
+                cooldown,
+                mark_proxy,
+            } => {
                 break Err(failure.with_kind(KiroRouteFailureKind::RateLimited {
                     cooldown,
-                    mark_proxy: false,
+                    mark_proxy,
                 }));
-            }
-        }
-        if status.as_u16() == 400 {
-            if let Some(cooldown) = transient_invalid_model_cooldown(&body) {
-                break Err(failure.with_kind(KiroRouteFailureKind::RateLimited {
-                    cooldown,
-                    mark_proxy: true,
-                }));
-            }
-            break Err(failure.with_kind(KiroRouteFailureKind::Fatal));
-        }
-        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) && !force_refresh {
-            force_refresh = true;
-            last_failure = Some(failure.with_kind(KiroRouteFailureKind::RetryNext));
-            let delay = randomized_same_account_retry_delay(None);
-            usage_meta.record_same_account_retry("auth_refresh", delay);
-            tokio::time::sleep(delay).await;
-            continue;
-        }
-        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
-            break Err(failure.with_kind(KiroRouteFailureKind::RetryNext));
-        }
-        if matches!(status, StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS)
-            || status.is_server_error()
-        {
-            last_failure = Some(failure.with_kind(KiroRouteFailureKind::RetryNext));
-            if attempt < 3 {
-                let delay = randomized_same_account_retry_delay(None);
-                usage_meta.record_same_account_retry("retryable_status", delay);
-                tokio::time::sleep(delay).await;
+            },
+            KiroUpstreamFailureAction::Fatal => {
+                break Err(failure.with_kind(KiroRouteFailureKind::Fatal));
+            },
+            KiroUpstreamFailureAction::AuthRefresh => {
+                force_refresh = true;
+                last_failure = Some(failure.with_kind(KiroRouteFailureKind::RetryNext));
+                record_same_account_retry_and_sleep(
+                    usage_meta,
+                    SameAccountRetryReason::AuthRefresh,
+                    None,
+                )
+                .await;
                 continue;
-            }
-            break Err(last_failure.expect("retryable mcp failure should be captured"));
+            },
+            KiroUpstreamFailureAction::RetryNext => {
+                break Err(failure.with_kind(KiroRouteFailureKind::RetryNext));
+            },
+            KiroUpstreamFailureAction::RetryableStatus {
+                retry_after,
+            } => {
+                last_failure = Some(failure.with_kind(KiroRouteFailureKind::RetryNext));
+                if attempt < KIRO_SAME_ACCOUNT_MAX_ATTEMPTS {
+                    record_same_account_retry_and_sleep(
+                        usage_meta,
+                        SameAccountRetryReason::RetryableStatus,
+                        retry_after,
+                    )
+                    .await;
+                    continue;
+                }
+                break Err(last_failure.expect("retryable mcp failure should be captured"));
+            },
         }
-        break Err(failure.with_kind(KiroRouteFailureKind::Fatal));
     }?;
     let body = response.text().await.map_err(|err| {
         KiroRouteFailure::synthetic(

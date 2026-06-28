@@ -120,6 +120,11 @@ pub struct JournalUsageEventV1 {
     /// Number of upstream route failovers.
     pub quota_failover_count: u64,
     /// Same-account upstream retry details.
+    ///
+    /// Journal payloads use postcard, so this default is not the compatibility
+    /// mechanism for old payloads when fields are inserted before later data.
+    /// Backward compatibility is provided by the explicit legacy decode chain
+    /// in `decode_journal_usage_batch`, whose conversions fill this default.
     #[serde(default)]
     pub retry: UsageRetryDetails,
     /// Provider routing diagnostics JSON.
@@ -716,7 +721,7 @@ mod tests {
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType},
         store::{KeyUsageRollupDelta, KeyUsageRollupLastUsedCount, UsageRollupBatch},
-        usage::{UsageEvent, UsageStreamDetails, UsageTiming},
+        usage::{UsageEvent, UsageRetryDetails, UsageStreamDetails, UsageTiming},
     };
     use serde::{Deserialize, Serialize};
 
@@ -905,6 +910,7 @@ mod tests {
         assert_eq!(decoded.events[0].error_class, None);
         assert!(!decoded.events[0].session_blocked);
         assert_eq!(decoded.events[0].response_image_count, None);
+        assert_eq!(decoded.events[0].retry, UsageRetryDetails::default());
         assert_eq!(decoded.events[0].timing, event.timing);
         assert_eq!(decoded.events[0].stream, event.stream);
     }

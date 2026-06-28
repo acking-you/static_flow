@@ -60,7 +60,7 @@ use super::{
         codex_error_type_for_status, codex_surface_error_body, codex_surface_error_body_with_code,
         codex_surface_error_response, codex_surface_error_response_with_code,
         extract_error_message_from_json_value, randomized_same_account_retry_delay,
-        summarize_error_bytes,
+        summarize_error_bytes, SameAccountRetryReason,
     },
     limiter::{codex_key_limit_response, try_acquire_key_permit},
     route_selection::{hydrate_codex_route_for_dispatch, select_codex_route_with_account_permit},
@@ -457,8 +457,12 @@ pub async fn dispatch_codex_proxy(
                         account_id: ctx.account_id,
                         is_fedramp_account: ctx.is_fedramp_account,
                     };
-                    let delay = randomized_same_account_retry_delay(None);
-                    usage_meta.record_same_account_retry("auth_refresh", delay);
+                    let delay = randomized_same_account_retry_delay(
+                        SameAccountRetryReason::AuthRefresh,
+                        None,
+                    );
+                    usage_meta
+                        .record_same_account_retry(SameAccountRetryReason::AuthRefresh, delay);
                     tokio::time::sleep(delay).await;
                     let retry = add_codex_upstream_headers(
                         client.request(method.clone(), upstream_url.clone()),
@@ -753,8 +757,11 @@ pub async fn dispatch_codex_proxy(
             retry_after,
         } = disposition
         {
-            let delay = randomized_same_account_retry_delay(retry_after);
-            usage_meta.record_same_account_retry("retry_same_account", delay);
+            let delay = randomized_same_account_retry_delay(
+                SameAccountRetryReason::RetrySameAccount,
+                retry_after,
+            );
+            usage_meta.record_same_account_retry(SameAccountRetryReason::RetrySameAccount, delay);
             tokio::time::sleep(delay).await;
             let retry = add_codex_upstream_headers(
                 client.request(method.clone(), upstream_url.clone()),

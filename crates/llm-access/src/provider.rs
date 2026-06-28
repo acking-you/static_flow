@@ -70,7 +70,7 @@ use errors::{anthropic_json_error, summarize_error_bytes};
 use errors::{
     daily_request_limit_cooldown, is_monthly_request_limit, kiro_rate_limit_cooldown,
     kiro_text_is_content_length_exceeded, randomized_same_account_retry_delay,
-    transient_invalid_model_cooldown,
+    transient_invalid_model_cooldown, SameAccountRetryReason,
 };
 pub(crate) use kiro_dispatch::call_kiro_generate_for_route;
 #[cfg(test)]

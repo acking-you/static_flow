@@ -51,6 +51,13 @@ fn kiro_all_accounts_cooling_down_response(shortest_wait: Option<Duration>) -> R
         })
 }
 
+fn shortest_wait(current: Option<Duration>, next: Duration) -> Option<Duration> {
+    Some(match current {
+        Some(current) => current.min(next),
+        None => next,
+    })
+}
+
 pub async fn select_codex_route_with_account_permit(
     limiter: &Arc<RequestLimiter>,
     codex_account_cooldowns: &Arc<CodexAccountCooldowns>,
@@ -223,24 +230,22 @@ pub async fn select_kiro_route_with_account_permit(
             })
         {
             saw_candidate = true;
-            if scheduler
-                .cooldown_for_account(&preferred_route.routing_identity)
-                .is_none()
+            if let Some(cooldown) =
+                scheduler.cooldown_for_account(&preferred_route.routing_identity)
             {
-                if let Ok(permit) = scheduler.try_acquire(
-                    &preferred_route.routing_identity,
-                    preferred_route
-                        .account_request_max_concurrency
-                        .unwrap_or(llm_access_core::store::DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY),
-                    preferred_route
-                        .account_request_min_start_interval_ms
-                        .unwrap_or(
-                            llm_access_core::store::DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS,
-                        ),
-                    queued_at,
-                ) {
-                    return Ok((preferred_route.clone(), permit));
-                }
+                saw_upstream_cooldown = true;
+                shortest_upstream_wait = shortest_wait(shortest_upstream_wait, cooldown.remaining);
+            } else if let Ok(permit) = scheduler.try_acquire(
+                &preferred_route.routing_identity,
+                preferred_route
+                    .account_request_max_concurrency
+                    .unwrap_or(llm_access_core::store::DEFAULT_KIRO_CHANNEL_MAX_CONCURRENCY),
+                preferred_route
+                    .account_request_min_start_interval_ms
+                    .unwrap_or(llm_access_core::store::DEFAULT_KIRO_CHANNEL_MIN_START_INTERVAL_MS),
+                queued_at,
+            ) {
+                return Ok((preferred_route.clone(), permit));
             }
         }
         for route in selection_ordered_kiro_routes(
@@ -256,10 +261,7 @@ pub async fn select_kiro_route_with_account_permit(
             saw_candidate = true;
             if let Some(cooldown) = scheduler.cooldown_for_account(&route.routing_identity) {
                 saw_upstream_cooldown = true;
-                shortest_upstream_wait = Some(match shortest_upstream_wait {
-                    Some(current) => current.min(cooldown.remaining),
-                    None => cooldown.remaining,
-                });
+                shortest_upstream_wait = shortest_wait(shortest_upstream_wait, cooldown.remaining);
                 continue;
             }
             match scheduler.try_acquire(
@@ -276,10 +278,7 @@ pub async fn select_kiro_route_with_account_permit(
                 Err(rejection) => {
                     saw_local_limit = true;
                     if let Some(wait) = rejection.wait {
-                        shortest_local_wait = Some(match shortest_local_wait {
-                            Some(current) => current.min(wait),
-                            None => wait,
-                        });
+                        shortest_local_wait = shortest_wait(shortest_local_wait, wait);
                     }
                 },
             }
@@ -296,7 +295,13 @@ pub async fn select_kiro_route_with_account_permit(
             ));
         }
         if saw_local_limit {
-            scheduler.wait_for_available(shortest_local_wait).await;
+            let wait = match (shortest_local_wait, shortest_upstream_wait) {
+                (Some(local), Some(upstream)) => Some(local.min(upstream)),
+                (Some(local), None) => Some(local),
+                (None, Some(upstream)) if saw_upstream_cooldown => Some(upstream),
+                (None, _) => None,
+            };
+            scheduler.wait_for_available(wait).await;
             continue;
         }
         if saw_candidate && saw_upstream_cooldown {
