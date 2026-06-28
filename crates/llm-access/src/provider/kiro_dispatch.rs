@@ -1000,11 +1000,11 @@ async fn handle_cctest_text_probe(input: CctestTextProbeDispatch) -> Response {
             },
             (None, _) => cctest_proxy_config_error(
                 &mut usage_meta,
-                "Bedrock error message: cctest signature proxy base URL is not configured",
+                "AWS Bedrock error message: cctest signature proxy base URL is not configured",
             ),
             (_, None) => cctest_proxy_config_error(
                 &mut usage_meta,
-                "Bedrock error message: cctest signature proxy API key is not configured",
+                "AWS Bedrock error message: cctest signature proxy API key is not configured",
             ),
         }
     } else {
@@ -1112,7 +1112,7 @@ async fn forward_cctest_signature_probe(
         },
         Err(err) => {
             let message =
-                format!("Bedrock error message: cctest signature proxy request failed: {err}");
+                format!("AWS Bedrock error message: cctest signature proxy request failed: {err}");
             let body = anthropic_json_error_body("api_error", &message);
             capture_error_message(usage_meta, &message);
             capture_error_body(usage_meta, &body);

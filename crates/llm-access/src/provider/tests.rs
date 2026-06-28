@@ -10283,7 +10283,7 @@ async fn kiro_websearch_usage_omits_heavy_payload_on_success() {
         upstream_request_body_json: Some(captured_json_bytes(r#"{"mcp":true}"#)),
         full_request_json: Some(captured_json_bytes(r#"{"full":true}"#)),
         error_message: Some(
-            "400 Bedrock error message: A text block must be included when using documents."
+            "400 AWS Bedrock error message: A text block must be included when using documents."
                 .to_string(),
         ),
         error_body: Some(
@@ -10364,7 +10364,7 @@ async fn kiro_websearch_usage_captures_heavy_payload_on_error_by_default() {
         upstream_request_body_json: Some(captured_json_bytes(r#"{"mcp":true}"#)),
         full_request_json: Some(captured_json_bytes(r#"{"full":true}"#)),
         error_message: Some(
-            "400 Bedrock error message: A text block must be included when using documents."
+            "400 AWS Bedrock error message: A text block must be included when using documents."
                 .to_string(),
         ),
         error_body: Some(
@@ -10405,7 +10405,7 @@ async fn kiro_websearch_usage_captures_heavy_payload_on_error_by_default() {
     assert_eq!(events[0].full_request_json.as_deref(), Some(r#"{"full":true}"#));
     assert_eq!(
         events[0].error_message.as_deref(),
-        Some("400 Bedrock error message: A text block must be included when using documents.")
+        Some("400 AWS Bedrock error message: A text block must be included when using documents.")
     );
     assert_eq!(
         events[0].error_body.as_deref(),

@@ -318,31 +318,30 @@ pub(crate) fn proxy_target_url(base_url: &str, public_path: &str) -> String {
 
 pub(crate) fn validate_proxy_target_url(target_url: &str) -> Result<(), &'static str> {
     let url = url::Url::parse(target_url)
-        .map_err(|_| "Bedrock error message: cctest signature proxy URL is invalid")?;
+        .map_err(|_| "AWS Bedrock error message: cctest signature proxy URL is invalid")?;
     if !matches!(url.scheme(), "http" | "https") {
-        return Err("Bedrock error message: cctest signature proxy URL is invalid");
+        return Err("AWS Bedrock error message: cctest signature proxy URL is invalid");
     }
     let host = url
         .host()
-        .ok_or("Bedrock error message: cctest signature proxy URL is invalid")?;
+        .ok_or("AWS Bedrock error message: cctest signature proxy URL is invalid")?;
     match host {
         url::Host::Domain(domain) => {
             if domain.eq_ignore_ascii_case("localhost") || domain.ends_with(".localhost") {
-                return Err(
-                    "Bedrock error message: cctest signature proxy URL must not target localhost"
-                );
+                return Err("AWS Bedrock error message: cctest signature proxy URL must not \
+                            target localhost");
             }
         },
         url::Host::Ipv4(ip) => {
             if super::kiro_media::is_private_kiro_remote_media_ip(IpAddr::V4(ip)) {
-                return Err("Bedrock error message: cctest signature proxy URL must not target \
-                            private or local addresses");
+                return Err("AWS Bedrock error message: cctest signature proxy URL must not \
+                            target private or local addresses");
             }
         },
         url::Host::Ipv6(ip) => {
             if super::kiro_media::is_private_kiro_remote_media_ip(IpAddr::V6(ip)) {
-                return Err("Bedrock error message: cctest signature proxy URL must not target \
-                            private or local addresses");
+                return Err("AWS Bedrock error message: cctest signature proxy URL must not \
+                            target private or local addresses");
             }
         },
     }

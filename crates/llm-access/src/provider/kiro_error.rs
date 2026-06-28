@@ -5,6 +5,8 @@ use llm_access_kiro::anthropic::converter::ConversionError;
 
 use super::errors::anthropic_json_error_body;
 
+const USER_VISIBLE_UPSTREAM_NAME: &str = "AWS Bedrock";
+
 #[derive(Debug, Clone, Copy)]
 pub(super) enum KiroRouteFailureKind {
     RetryNext,
@@ -121,10 +123,31 @@ fn kiro_user_visible_message(status: StatusCode, message: &str) -> String {
     if status.is_server_error() {
         return fallback.to_string();
     }
-    if trimmed.to_ascii_lowercase().contains("kiro") {
-        return fallback.to_string();
+    rebrand_kiro_for_user(trimmed)
+}
+
+fn rebrand_kiro_for_user(message: &str) -> String {
+    let lower = message.to_ascii_lowercase();
+    if !lower.contains("kiro") {
+        return message.to_string();
     }
-    trimmed.to_string()
+
+    let mut output = String::with_capacity(message.len() + USER_VISIBLE_UPSTREAM_NAME.len());
+    let mut index = 0;
+    while index < message.len() {
+        if lower[index..].starts_with("kiro") {
+            output.push_str(USER_VISIBLE_UPSTREAM_NAME);
+            index += "kiro".len();
+            continue;
+        }
+        let ch = message[index..]
+            .chars()
+            .next()
+            .expect("index always points to a char boundary");
+        output.push(ch);
+        index += ch.len_utf8();
+    }
+    output
 }
 
 pub(super) fn kiro_json_error(status: StatusCode, error_type: &str, message: &str) -> Response {
@@ -140,9 +163,9 @@ fn kiro_bedrock_exception_message(exception_type: &str, message: &str) -> String
     let exception_type = exception_type.trim();
     let message = message.trim();
     if message.is_empty() {
-        return format!("Bedrock {exception_type}");
+        return format!("{USER_VISIBLE_UPSTREAM_NAME} {exception_type}");
     }
-    format!("Bedrock {exception_type}: {message}")
+    format!("{USER_VISIBLE_UPSTREAM_NAME} {exception_type}: {message}")
 }
 
 pub(super) fn kiro_bedrock_anthropic_error_body(
@@ -188,5 +211,21 @@ pub(super) fn kiro_conversion_error_response(err: ConversionError) -> Response {
         ConversionError::InvalidRequest(message) => {
             kiro_json_error(StatusCode::BAD_REQUEST, "invalid_request_error", &message)
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_visible_message_rebrands_kiro_as_aws_bedrock() {
+        let message = kiro_user_visible_message(
+            StatusCode::BAD_REQUEST,
+            "Kiro model mapping configuration is invalid: missing route",
+        );
+
+        assert_eq!(message, "AWS Bedrock model mapping configuration is invalid: missing route");
+        assert!(!message.to_ascii_lowercase().contains("kiro"));
     }
 }
