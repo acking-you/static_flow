@@ -68,8 +68,9 @@ pub use entry::{provider_entry, provider_entry_handler};
 use errors::{anthropic_json_error, summarize_error_bytes};
 #[cfg(test)]
 use errors::{
-    daily_request_limit_cooldown, is_monthly_request_limit, kiro_text_is_content_length_exceeded,
-    transient_invalid_model_cooldown,
+    daily_request_limit_cooldown, is_monthly_request_limit, kiro_rate_limit_cooldown,
+    kiro_text_is_content_length_exceeded, randomized_same_account_retry_delay,
+    transient_invalid_model_cooldown, SameAccountRetryReason,
 };
 pub(crate) use kiro_dispatch::call_kiro_generate_for_route;
 #[cfg(test)]
@@ -90,9 +91,12 @@ use llm_access_codex::{
     response::SseUsageCollector,
     types::{PreparedGatewayRequest, UsageBreakdown},
 };
-use llm_access_core::store::{
-    AdminConfigStore, AuthenticatedKey, ControlStore, ProviderCodexRoute, ProviderKiroRoute,
-    ProviderProxyConfig, ProviderRouteStore,
+use llm_access_core::{
+    store::{
+        AdminConfigStore, AuthenticatedKey, ControlStore, ProviderCodexRoute, ProviderKiroRoute,
+        ProviderProxyConfig, ProviderRouteStore,
+    },
+    usage::UsageRetryDetails,
 };
 use llm_access_kiro::{
     anthropic::{
@@ -164,6 +168,7 @@ struct ProviderUsageMetadata {
     final_event_type: Option<String>,
     bytes_streamed: Option<i64>,
     quota_failover_count: u64,
+    retry: UsageRetryDetails,
     routing_diagnostics_json: Option<String>,
     client_ip: String,
     ip_region: String,
@@ -579,6 +584,15 @@ struct KiroPreflightFailureRecord<'a> {
     status: StatusCode,
     meta: &'a mut ProviderUsageMetadata,
     cache_simulator: &'a KiroCacheSimulator,
+}
+
+struct KiroSelectionFailureRecord<'a> {
+    control_store: &'a dyn ControlStore,
+    key: &'a AuthenticatedKey,
+    endpoint: &'a str,
+    model: Option<&'a str>,
+    status: StatusCode,
+    meta: &'a ProviderUsageMetadata,
 }
 
 struct KiroWebsearchUsageRecord<'a> {

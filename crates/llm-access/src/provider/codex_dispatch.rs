@@ -59,7 +59,8 @@ use super::{
     errors::{
         codex_error_type_for_status, codex_surface_error_body, codex_surface_error_body_with_code,
         codex_surface_error_response, codex_surface_error_response_with_code,
-        extract_error_message_from_json_value, summarize_error_bytes,
+        extract_error_message_from_json_value, randomized_same_account_retry_delay,
+        summarize_error_bytes, SameAccountRetryReason,
     },
     limiter::{codex_key_limit_response, try_acquire_key_permit},
     route_selection::{hydrate_codex_route_for_dispatch, select_codex_route_with_account_permit},
@@ -456,6 +457,13 @@ pub async fn dispatch_codex_proxy(
                         account_id: ctx.account_id,
                         is_fedramp_account: ctx.is_fedramp_account,
                     };
+                    let delay = randomized_same_account_retry_delay(
+                        SameAccountRetryReason::AuthRefresh,
+                        None,
+                    );
+                    usage_meta
+                        .record_same_account_retry(SameAccountRetryReason::AuthRefresh, delay);
+                    tokio::time::sleep(delay).await;
                     let retry = add_codex_upstream_headers(
                         client.request(method.clone(), upstream_url.clone()),
                         &request_headers,
@@ -749,9 +757,12 @@ pub async fn dispatch_codex_proxy(
             retry_after,
         } = disposition
         {
-            if let Some(delay) = retry_after {
-                tokio::time::sleep(delay).await;
-            }
+            let delay = randomized_same_account_retry_delay(
+                SameAccountRetryReason::RetrySameAccount,
+                retry_after,
+            );
+            usage_meta.record_same_account_retry(SameAccountRetryReason::RetrySameAccount, delay);
+            tokio::time::sleep(delay).await;
             let retry = add_codex_upstream_headers(
                 client.request(method.clone(), upstream_url.clone()),
                 &request_headers,
@@ -1257,12 +1268,9 @@ fn capture_codex_error_classification(
     error: &CodexClassifiedUpstreamError,
 ) {
     meta.capture_error_class(error.class.as_str());
-    if matches!(
-        codex_error_disposition(error),
-        CodexErrorDisposition::ReturnToClient {
-            strict_session_block: true,
-        }
-    ) {
+    if matches!(codex_error_disposition(error), CodexErrorDisposition::ReturnToClient {
+        strict_session_block: true,
+    }) {
         meta.mark_session_blocked();
     }
 }
@@ -1913,7 +1921,8 @@ pub fn codex_status_from_error_json_value(value: &Value) -> Option<StatusCode> {
 const CODEX_STREAM_PREFLIGHT_MAX_EVENTS: usize = 16;
 /// Companion byte cap for [`CODEX_STREAM_PREFLIGHT_MAX_EVENTS`]: stop buffering
 /// preflight events once their combined wire + encoded size reaches this, so a
-/// burst of large lifecycle payloads cannot grow the preflight buffer unbounded.
+/// burst of large lifecycle payloads cannot grow the preflight buffer
+/// unbounded.
 const CODEX_STREAM_PREFLIGHT_MAX_BYTES: usize = 64 * 1024;
 
 /// Adapt one upstream Codex SSE event into the client-visible byte chunks for
@@ -1947,13 +1956,15 @@ fn adapt_codex_event_to_client_chunks(
         )
         .map(|chunk| vec![encode_json_sse_chunk(&chunk)])
         .unwrap_or_default(),
-        GatewayResponseAdapter::AnthropicMessages => convert_response_event_to_anthropic_sse_chunks(
-            event,
-            Some(&prepared.tool_name_restore_map),
-            anthropic_metadata,
-            prepared.model.as_deref(),
-            prepared.client_visible_model.as_deref(),
-        ),
+        GatewayResponseAdapter::AnthropicMessages => {
+            convert_response_event_to_anthropic_sse_chunks(
+                event,
+                Some(&prepared.tool_name_restore_map),
+                anthropic_metadata,
+                prepared.model.as_deref(),
+                prepared.client_visible_model.as_deref(),
+            )
+        },
     }
 }
 

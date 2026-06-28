@@ -12,13 +12,53 @@ use llm_access_codex::{
     },
     types::PreparedGatewayRequest,
 };
-use llm_access_core::usage::{UsageStreamDetails, UsageTiming};
+use llm_access_core::usage::{UsageRetryDetails, UsageStreamDetails, UsageTiming};
 use serde_json::Value;
 
-use super::{errors::summarize_error_bytes, util::clamp_usize_to_i64, ProviderUsageMetadata};
+use super::{
+    errors::{summarize_error_bytes, SameAccountRetryReason},
+    util::clamp_usize_to_i64,
+    ProviderUsageMetadata,
+};
 use crate::geoip::GeoIpResolver;
 
 impl ProviderUsageMetadata {
+    pub(super) fn synthetic_request(method: &str, request_url: impl Into<String>) -> Self {
+        Self {
+            started_at: Instant::now(),
+            request_method: method.to_string(),
+            request_url: request_url.into(),
+            request_body_bytes: None,
+            request_body_read_ms: None,
+            request_json_parse_ms: None,
+            pre_handler_ms: None,
+            routing_wait_ms: None,
+            upstream_headers_ms: None,
+            post_headers_body_ms: None,
+            first_sse_write_ms: None,
+            stream_finish_ms: None,
+            stream_completed_cleanly: None,
+            downstream_disconnect: None,
+            final_event_type: None,
+            bytes_streamed: None,
+            quota_failover_count: 0,
+            retry: UsageRetryDetails::default(),
+            routing_diagnostics_json: None,
+            client_ip: "internal".to_string(),
+            ip_region: "internal".to_string(),
+            request_headers_json: "{}".to_string(),
+            last_message_content: None,
+            client_request_body_json: None,
+            upstream_request_body_json: None,
+            full_request_json: None,
+            error_message: None,
+            error_class: None,
+            session_blocked: false,
+            error_body: None,
+            response_body: None,
+        }
+    }
+
     pub(super) async fn from_request_parts(
         method: &Method,
         uri: &axum::http::Uri,
@@ -45,6 +85,7 @@ impl ProviderUsageMetadata {
             final_event_type: None,
             bytes_streamed: None,
             quota_failover_count: 0,
+            retry: UsageRetryDetails::default(),
             routing_diagnostics_json: None,
             client_ip,
             ip_region,
@@ -62,7 +103,8 @@ impl ProviderUsageMetadata {
     }
 
     /// Record the stable upstream error class for a failed request. First
-    /// non-empty classification wins, mirroring [`Self::error_message`] capture.
+    /// non-empty classification wins, mirroring [`Self::error_message`]
+    /// capture.
     pub(super) fn capture_error_class(&mut self, class: &str) {
         if self.error_class.is_some() {
             return;
@@ -100,6 +142,57 @@ impl ProviderUsageMetadata {
 
     pub(super) fn mark_failover(&mut self) {
         self.quota_failover_count = self.quota_failover_count.saturating_add(1);
+    }
+
+    pub(super) fn record_same_account_retry(
+        &mut self,
+        reason: SameAccountRetryReason,
+        delay: std::time::Duration,
+    ) {
+        self.retry.same_account_retry_count = self.retry.same_account_retry_count.saturating_add(1);
+        self.retry.same_account_retry_delay_ms = self
+            .retry
+            .same_account_retry_delay_ms
+            .saturating_add(delay.as_millis().min(i64::MAX as u128) as i64);
+        let reason = reason.as_str();
+        // Reason labels are a unique set; the retry count above carries the
+        // total number of attempts.
+        if !reason.is_empty()
+            && !self
+                .retry
+                .same_account_retry_reasons
+                .iter()
+                .any(|existing| existing == reason)
+        {
+            self.retry
+                .same_account_retry_reasons
+                .push(reason.to_string());
+        }
+    }
+
+    pub(super) fn merge_retry_from(&mut self, other: &UsageRetryDetails) {
+        self.retry.same_account_retry_count = self
+            .retry
+            .same_account_retry_count
+            .saturating_add(other.same_account_retry_count);
+        self.retry.same_account_retry_delay_ms = self
+            .retry
+            .same_account_retry_delay_ms
+            .saturating_add(other.same_account_retry_delay_ms.max(0));
+        for reason in &other.same_account_retry_reasons {
+            let reason = reason.trim();
+            if !reason.is_empty()
+                && !self
+                    .retry
+                    .same_account_retry_reasons
+                    .iter()
+                    .any(|existing| existing == reason)
+            {
+                self.retry
+                    .same_account_retry_reasons
+                    .push(reason.to_string());
+            }
+        }
     }
 
     pub(super) fn add_routing_wait(&mut self, elapsed_ms: i64) {

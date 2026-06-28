@@ -3,7 +3,7 @@
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType, RouteStrategy},
     store::{KeyUsageRollupDelta, KeyUsageRollupLastUsedCount, UsageRollupBatch},
-    usage::{UsageEvent, UsageStreamDetails, UsageTiming},
+    usage::{UsageEvent, UsageRetryDetails, UsageStreamDetails, UsageTiming},
 };
 use serde::{Deserialize, Serialize};
 
@@ -119,6 +119,14 @@ pub struct JournalUsageEventV1 {
     pub request_body_bytes: Option<i64>,
     /// Number of upstream route failovers.
     pub quota_failover_count: u64,
+    /// Same-account upstream retry details.
+    ///
+    /// Journal payloads use postcard, so this default is not the compatibility
+    /// mechanism for old payloads when fields are inserted before later data.
+    /// Backward compatibility is provided by the explicit legacy decode chain
+    /// in `decode_journal_usage_batch`, whose conversions fill this default.
+    #[serde(default)]
+    pub retry: UsageRetryDetails,
     /// Provider routing diagnostics JSON.
     pub routing_diagnostics_json: Option<String>,
     /// Uncached input tokens.
@@ -286,6 +294,7 @@ impl JournalUsageEventV1 {
             status_code: event.status_code,
             request_body_bytes: event.request_body_bytes,
             quota_failover_count: event.quota_failover_count,
+            retry: event.retry.clone(),
             routing_diagnostics_json: event.routing_diagnostics_json.clone(),
             input_uncached_tokens: event.input_uncached_tokens,
             input_cached_tokens: event.input_cached_tokens,
@@ -332,6 +341,7 @@ impl JournalUsageEventV1 {
             status_code: self.status_code,
             request_body_bytes: self.request_body_bytes,
             quota_failover_count: self.quota_failover_count,
+            retry: self.retry,
             routing_diagnostics_json: self.routing_diagnostics_json,
             input_uncached_tokens: self.input_uncached_tokens,
             input_cached_tokens: self.input_cached_tokens,
@@ -380,6 +390,7 @@ impl LegacyJournalUsageEventV1 {
             status_code: self.status_code,
             request_body_bytes: self.request_body_bytes,
             quota_failover_count: self.quota_failover_count,
+            retry: Default::default(),
             routing_diagnostics_json: self.routing_diagnostics_json,
             input_uncached_tokens: self.input_uncached_tokens,
             input_cached_tokens: self.input_cached_tokens,
@@ -428,6 +439,7 @@ impl LegacyJournalUsageEventWithErrorPayloadsV1 {
             status_code: self.status_code,
             request_body_bytes: self.request_body_bytes,
             quota_failover_count: self.quota_failover_count,
+            retry: Default::default(),
             routing_diagnostics_json: self.routing_diagnostics_json,
             input_uncached_tokens: self.input_uncached_tokens,
             input_cached_tokens: self.input_cached_tokens,
@@ -709,7 +721,7 @@ mod tests {
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType},
         store::{KeyUsageRollupDelta, KeyUsageRollupLastUsedCount, UsageRollupBatch},
-        usage::{UsageEvent, UsageStreamDetails, UsageTiming},
+        usage::{UsageEvent, UsageRetryDetails, UsageStreamDetails, UsageTiming},
     };
     use serde::{Deserialize, Serialize};
 
@@ -898,6 +910,7 @@ mod tests {
         assert_eq!(decoded.events[0].error_class, None);
         assert!(!decoded.events[0].session_blocked);
         assert_eq!(decoded.events[0].response_image_count, None);
+        assert_eq!(decoded.events[0].retry, UsageRetryDetails::default());
         assert_eq!(decoded.events[0].timing, event.timing);
         assert_eq!(decoded.events[0].stream, event.stream);
     }
@@ -1003,6 +1016,7 @@ mod tests {
             status_code: 200,
             request_body_bytes: Some(17),
             quota_failover_count: 0,
+            retry: Default::default(),
             routing_diagnostics_json: Some("{\"route\":\"fixed\"}".to_string()),
             input_uncached_tokens: 10,
             input_cached_tokens: 20,

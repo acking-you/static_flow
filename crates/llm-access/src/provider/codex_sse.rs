@@ -249,6 +249,7 @@ pub async fn record_codex_preflight_failure(record: CodexPreflightFailureRecord<
         status_code: i64::from(record.status.as_u16()),
         request_body_bytes: record.meta.request_body_bytes,
         quota_failover_count: record.meta.quota_failover_count,
+        retry: record.meta.retry.clone(),
         routing_diagnostics_json: record.meta.routing_diagnostics_json.clone(),
         input_uncached_tokens: 0,
         input_cached_tokens: 0,
@@ -316,6 +317,7 @@ pub async fn record_codex_usage(
             .request_body_bytes
             .or(Some(clamp_usize_to_i64(prepared.request_body.len()))),
         quota_failover_count: meta.quota_failover_count,
+        retry: meta.retry.clone(),
         routing_diagnostics_json: meta.routing_diagnostics_json.clone(),
         input_uncached_tokens: clamp_u64_to_i64(usage.input_uncached_tokens),
         input_cached_tokens: clamp_u64_to_i64(usage.input_cached_tokens),

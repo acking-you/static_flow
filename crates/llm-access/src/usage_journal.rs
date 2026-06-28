@@ -419,6 +419,7 @@ mod tests {
             status_code: 200,
             request_body_bytes: Some(17),
             quota_failover_count: 0,
+            retry: Default::default(),
             routing_diagnostics_json: Some("{\"route\":\"fixed\"}".to_string()),
             input_uncached_tokens: 10,
             input_cached_tokens: 20,

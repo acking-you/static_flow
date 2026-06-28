@@ -40,6 +40,11 @@ const DUCKDB_MIGRATIONS: &[SqlMigration] = &[
         name: "usage_image_metrics",
         sql: include_str!("../migrations/duckdb/0005_usage_image_metrics.sql"),
     },
+    SqlMigration {
+        version: 6,
+        name: "usage_retry_details",
+        sql: include_str!("../migrations/duckdb/0006_usage_retry_details.sql"),
+    },
 ];
 
 const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
@@ -247,7 +252,7 @@ mod tests {
     fn duckdb_migrations_drop_legacy_explicit_art_indexes() {
         let migrations = super::duckdb_migrations();
 
-        assert_eq!(migrations.len(), 5);
+        assert_eq!(migrations.len(), 6);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(migrations[0].name, "init");
         assert!(!migrations[0]
@@ -279,6 +284,11 @@ mod tests {
         assert!(migrations[4]
             .sql
             .contains("ADD COLUMN IF NOT EXISTS response_image_count"));
+        assert_eq!(migrations[5].version, 6);
+        assert_eq!(migrations[5].name, "usage_retry_details");
+        assert!(migrations[5]
+            .sql
+            .contains("ADD COLUMN IF NOT EXISTS same_account_retry_count"));
         assert!(!super::duckdb_schema_sql().contains("cdc_"));
     }
 

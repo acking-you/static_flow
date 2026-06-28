@@ -646,6 +646,18 @@ fn usage_worker_state_tone(state: &str) -> &'static str {
     }
 }
 
+fn usage_retry_title(count: u64, delay_ms: i64, reasons: &[String]) -> String {
+    let mut title = format!(
+        "same-account retry {count} · total sleep {}",
+        format_latency_ms(delay_ms.clamp(0, i64::from(i32::MAX)) as i32)
+    );
+    if !reasons.is_empty() {
+        title.push_str(" · ");
+        title.push_str(&reasons.join(", "));
+    }
+    title
+}
+
 fn usage_stream_state_label(
     stream_completed_cleanly: Option<bool>,
     downstream_disconnect: Option<bool>,
@@ -9825,6 +9837,17 @@ pub fn admin_llm_gateway_page() -> Html {
                                             event.error_class.as_deref(),
                                             event.session_blocked,
                                         );
+                                        let same_account_retry_tooltip = (event.same_account_retry_count > 0)
+                                            .then(|| {
+                                                usage_retry_title(
+                                                    event.same_account_retry_count,
+                                                    event.same_account_retry_delay_ms,
+                                                    &event.same_account_retry_reasons,
+                                                )
+                                            });
+                                        let downstream_disconnect = event.downstream_disconnect == Some(true);
+                                        let stream_incomplete =
+                                            event.stream_completed_cleanly == Some(false) && !downstream_disconnect;
                                         html! {
                                             <tr class={classes!("border-t", "border-[var(--border)]", "align-top")}>
                                                 <td class={classes!("py-2.5", "pl-3", "pr-3", "whitespace-nowrap")}>
@@ -9874,6 +9897,25 @@ pub fn admin_llm_gateway_page() -> Html {
                                                         if event.session_blocked {
                                                             <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-red-600/25", "bg-red-600/10", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", "text-red-800", "dark:text-red-200")}>
                                                                 { "session blocked" }
+                                                            </span>
+                                                        }
+                                                        if let Some(title) = same_account_retry_tooltip {
+                                                            <span title={title} class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-indigo-500/20", "bg-indigo-500/10", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", "text-indigo-700", "dark:text-indigo-200")}>
+                                                                { format!("retry ×{}", event.same_account_retry_count) }
+                                                            </span>
+                                                        }
+                                                        if event.quota_failover_count > 0 {
+                                                            <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-amber-500/20", "bg-amber-500/10", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", "text-amber-700", "dark:text-amber-200")}>
+                                                                { format!("switch ×{}", event.quota_failover_count) }
+                                                            </span>
+                                                        }
+                                                        if downstream_disconnect {
+                                                            <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-red-500/20", "bg-red-500/10", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", "text-red-700", "dark:text-red-200")}>
+                                                                { "disconnect" }
+                                                            </span>
+                                                        } else if stream_incomplete {
+                                                            <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-orange-500/20", "bg-orange-500/10", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", "text-orange-700", "dark:text-orange-200")}>
+                                                                { "incomplete" }
                                                             </span>
                                                         }
                                                     </div>

@@ -4,15 +4,48 @@ use std::time::Duration;
 
 use axum::{
     body::{Body, Bytes},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use llm_access_core::store::ProviderKiroRoute;
 use llm_access_kiro::{
     anthropic::converter::get_context_window_size, parser::decoder::EventStreamDecoder, wire::Event,
 };
+use rand::Rng;
 use serde_json::{json, Value};
 
+const KIRO_DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+const KIRO_MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(15 * 60);
+const SAME_ACCOUNT_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+const TRANSPORT_RETRY_MIN_DELAY_MS: u64 = 200;
+const TRANSPORT_RETRY_MAX_DELAY_MS: u64 = 2_000;
+const EMPTY_STREAM_RETRY_MIN_DELAY_MS: u64 = 100;
+const EMPTY_STREAM_RETRY_MAX_DELAY_MS: u64 = 1_000;
+const AUTH_REFRESH_RETRY_MIN_DELAY_MS: u64 = 200;
+const AUTH_REFRESH_RETRY_MAX_DELAY_MS: u64 = 2_000;
+const RETRYABLE_STATUS_MIN_DELAY_MS: u64 = 500;
+const RETRYABLE_STATUS_MAX_DELAY_MS: u64 = 3_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SameAccountRetryReason {
+    Transport,
+    AuthRefresh,
+    RetryableStatus,
+    EmptyStream,
+    RetrySameAccount,
+}
+
+impl SameAccountRetryReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Transport => "transport",
+            Self::AuthRefresh => "auth_refresh",
+            Self::RetryableStatus => "retryable_status",
+            Self::EmptyStream => "empty_stream",
+            Self::RetrySameAccount => "retry_same_account",
+        }
+    }
+}
 
 pub fn proxy_cooldown_key_for_route(route: &ProviderKiroRoute) -> Option<String> {
     route
@@ -32,6 +65,52 @@ pub fn daily_request_limit_cooldown(body: &str) -> Option<Duration> {
         return Some(Duration::from_secs(5 * 60));
     }
     None
+}
+pub fn kiro_rate_limit_cooldown(headers: &HeaderMap, body: &str) -> Option<Duration> {
+    retry_after_header_duration(headers)
+        .map(|duration| duration.min(KIRO_MAX_RATE_LIMIT_COOLDOWN))
+        .or_else(|| daily_request_limit_cooldown(body))
+        .or(Some(KIRO_DEFAULT_RATE_LIMIT_COOLDOWN))
+}
+pub fn retry_after_header_duration(headers: &HeaderMap) -> Option<Duration> {
+    let seconds = headers
+        .get(header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    Some(Duration::from_secs(seconds))
+}
+pub fn randomized_same_account_retry_delay(
+    reason: SameAccountRetryReason,
+    retry_after: Option<Duration>,
+) -> Duration {
+    if let Some(retry_after) = retry_after {
+        let max_seconds = retry_after
+            .min(SAME_ACCOUNT_RETRY_MAX_DELAY)
+            .as_secs()
+            .max(1);
+        return Duration::from_secs(rand::thread_rng().gen_range(1..=max_seconds));
+    }
+    let (min_ms, max_ms) = match reason {
+        SameAccountRetryReason::Transport => {
+            (TRANSPORT_RETRY_MIN_DELAY_MS, TRANSPORT_RETRY_MAX_DELAY_MS)
+        },
+        SameAccountRetryReason::AuthRefresh => {
+            (AUTH_REFRESH_RETRY_MIN_DELAY_MS, AUTH_REFRESH_RETRY_MAX_DELAY_MS)
+        },
+        SameAccountRetryReason::RetryableStatus => {
+            (RETRYABLE_STATUS_MIN_DELAY_MS, RETRYABLE_STATUS_MAX_DELAY_MS)
+        },
+        SameAccountRetryReason::EmptyStream => {
+            (EMPTY_STREAM_RETRY_MIN_DELAY_MS, EMPTY_STREAM_RETRY_MAX_DELAY_MS)
+        },
+        SameAccountRetryReason::RetrySameAccount => {
+            (1_000, SAME_ACCOUNT_RETRY_MAX_DELAY.as_millis() as u64)
+        },
+    };
+    Duration::from_millis(rand::thread_rng().gen_range(min_ms..=max_ms))
 }
 pub fn transient_invalid_model_cooldown(body: &str) -> Option<Duration> {
     if !body.contains("Invalid model") {

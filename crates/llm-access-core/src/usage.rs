@@ -41,8 +41,20 @@ pub struct UsageStreamDetails {
     pub bytes_streamed: Option<i64>,
 }
 
+/// Same-account upstream retry details captured before the final route result.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageRetryDetails {
+    /// Number of upstream attempts retried against the same account.
+    pub same_account_retry_count: u64,
+    /// Total time intentionally slept before same-account retries.
+    pub same_account_retry_delay_ms: i64,
+    /// Stable, compact reason labels for same-account retries.
+    #[serde(default)]
+    pub same_account_retry_reasons: Vec<String>,
+}
+
 /// One normalized usage event before persistence.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UsageEvent {
     /// Stable event id.
     pub event_id: String,
@@ -78,6 +90,9 @@ pub struct UsageEvent {
     pub request_body_bytes: Option<i64>,
     /// Number of upstream route failovers.
     pub quota_failover_count: u64,
+    /// Same-account upstream retry details.
+    #[serde(default)]
+    pub retry: UsageRetryDetails,
     /// Provider routing diagnostics JSON.
     pub routing_diagnostics_json: Option<String>,
     /// Uncached input tokens.
@@ -111,7 +126,8 @@ pub struct UsageEvent {
     /// Best-effort error message surfaced for failed requests.
     pub error_message: Option<String>,
     /// Stable upstream error class for failed requests (e.g. `cyber_policy`,
-    /// `server_overloaded`, `invalid_request`), when the failure was classified.
+    /// `server_overloaded`, `invalid_request`), when the failure was
+    /// classified.
     #[serde(default)]
     pub error_class: Option<String>,
     /// Whether this event belongs to a Codex session that is now permanently

@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use axum::http::StatusCode;
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType},
     store::compute_kiro_billable_tokens,
@@ -21,9 +22,52 @@ use super::{
     kiro_model::{build_kiro_cache_context, parse_kiro_billable_model_multipliers_json},
     usage_meta::captured_body_json,
     util::{clamp_u64_to_i64, now_millis},
-    KiroCacheContext, KiroCctestUsageRecord, KiroPreflightFailureRecord, KiroUsageInputs,
-    KiroUsageRecord, KiroUsageSummary, KiroWebsearchUsageRecord,
+    KiroCacheContext, KiroCctestUsageRecord, KiroPreflightFailureRecord,
+    KiroSelectionFailureRecord, KiroUsageInputs, KiroUsageRecord, KiroUsageSummary,
+    KiroWebsearchUsageRecord,
 };
+
+fn kiro_usage_event_from_meta(
+    key: &llm_access_core::store::AuthenticatedKey,
+    route: Option<&llm_access_core::store::ProviderKiroRoute>,
+    endpoint: impl Into<String>,
+    model: Option<String>,
+    status: StatusCode,
+    meta: &super::ProviderUsageMetadata,
+) -> UsageEvent {
+    UsageEvent {
+        event_id: format!("llm-usage-{}", uuid::Uuid::new_v4()),
+        created_at_ms: now_millis(),
+        provider_type: ProviderType::Kiro,
+        protocol_family: ProtocolFamily::Anthropic,
+        key_id: key.key_id.clone(),
+        key_name: key.key_name.clone(),
+        account_name: route.map(|route| route.account_name.clone()),
+        account_group_id_at_event: route.and_then(|route| route.account_group_id_at_event.clone()),
+        route_strategy_at_event: route.map(|route| route.route_strategy_at_event),
+        request_method: meta.request_method.clone(),
+        request_url: meta.request_url.clone(),
+        endpoint: endpoint.into(),
+        model,
+        status_code: status.as_u16() as i64,
+        request_body_bytes: meta.request_body_bytes,
+        quota_failover_count: meta.quota_failover_count,
+        retry: meta.retry.clone(),
+        routing_diagnostics_json: meta.routing_diagnostics_json.clone(),
+        client_ip: meta.client_ip.clone(),
+        ip_region: meta.ip_region.clone(),
+        request_headers_json: meta.request_headers_json.clone(),
+        last_message_content: meta.last_message_content.clone(),
+        error_message: meta.error_message.clone(),
+        error_class: meta.error_class.clone(),
+        session_blocked: meta.session_blocked,
+        error_body: meta.error_body.clone(),
+        response_body: meta.response_body.clone(),
+        timing: meta.to_timing(),
+        stream: meta.to_stream_details(),
+        ..UsageEvent::default()
+    }
+}
 
 pub fn build_kiro_usage_summary(
     model: &str,
@@ -241,24 +285,6 @@ pub async fn record_kiro_usage(record: KiroUsageRecord<'_>) -> anyhow::Result<()
         })
         .flatten();
     let event = UsageEvent {
-        event_id: format!("llm-usage-{}", uuid::Uuid::new_v4()),
-        created_at_ms: now_millis(),
-        provider_type: ProviderType::Kiro,
-        protocol_family: ProtocolFamily::Anthropic,
-        key_id: record.key.key_id.clone(),
-        key_name: record.key.key_name.clone(),
-        account_name: Some(record.route.account_name.clone()),
-        account_group_id_at_event: record.route.account_group_id_at_event.clone(),
-        route_strategy_at_event: Some(record.route.route_strategy_at_event),
-        request_method: record.meta.request_method.clone(),
-        request_url: record.meta.request_url.clone(),
-        endpoint: record.endpoint.to_string(),
-        model: Some(record.model.to_string()),
-        mapped_model: None,
-        status_code: record.status.as_u16() as i64,
-        request_body_bytes: record.meta.request_body_bytes,
-        quota_failover_count: record.meta.quota_failover_count,
-        routing_diagnostics_json: record.meta.routing_diagnostics_json.clone(),
         input_uncached_tokens: i64::from(record.usage.input_uncached_tokens.max(0)),
         input_cached_tokens: i64::from(record.usage.input_cached_tokens.max(0)),
         output_tokens: i64::from(record.usage.output_tokens.max(0)),
@@ -269,21 +295,37 @@ pub async fn record_kiro_usage(record: KiroUsageRecord<'_>) -> anyhow::Result<()
             .map(|value| value.max(0.0).to_string()),
         usage_missing: false,
         credit_usage_missing: record.usage.credit_usage_missing,
-        client_ip: record.meta.client_ip.clone(),
-        ip_region: record.meta.ip_region.clone(),
-        request_headers_json: record.meta.request_headers_json.clone(),
-        last_message_content: record.meta.last_message_content.clone(),
         client_request_body_json,
         upstream_request_body_json,
         full_request_json,
-        error_message: record.meta.error_message.clone(),
-        error_class: record.meta.error_class.clone(),
-        session_blocked: record.meta.session_blocked,
-        response_image_count: None,
-        error_body: record.meta.error_body.clone(),
-        response_body: record.meta.response_body.clone(),
-        timing: record.meta.to_timing(),
-        stream: record.meta.to_stream_details(),
+        ..kiro_usage_event_from_meta(
+            record.key,
+            Some(record.route),
+            record.endpoint,
+            Some(record.model.to_string()),
+            record.status,
+            record.meta,
+        )
+    };
+    record.control_store.apply_usage_rollup_owned(event).await
+}
+pub async fn record_kiro_selection_failure(
+    record: KiroSelectionFailureRecord<'_>,
+) -> anyhow::Result<()> {
+    let event = UsageEvent {
+        usage_missing: true,
+        credit_usage_missing: true,
+        client_request_body_json: captured_body_json(&record.meta.client_request_body_json),
+        upstream_request_body_json: captured_body_json(&record.meta.upstream_request_body_json),
+        full_request_json: captured_body_json(&record.meta.full_request_json),
+        ..kiro_usage_event_from_meta(
+            record.key,
+            None,
+            record.endpoint,
+            record.model.map(ToString::to_string),
+            record.status,
+            record.meta,
+        )
     };
     record.control_store.apply_usage_rollup_owned(event).await
 }
@@ -294,24 +336,6 @@ pub async fn record_kiro_websearch_usage(
         parse_kiro_billable_model_multipliers_json(&record.route.billable_model_multipliers_json)?;
     let capture_request_details = record.capture_request_details || !record.status.is_success();
     let event = UsageEvent {
-        event_id: format!("llm-usage-{}", uuid::Uuid::new_v4()),
-        created_at_ms: now_millis(),
-        provider_type: ProviderType::Kiro,
-        protocol_family: ProtocolFamily::Anthropic,
-        key_id: record.key.key_id.clone(),
-        key_name: record.key.key_name.clone(),
-        account_name: Some(record.route.account_name.clone()),
-        account_group_id_at_event: record.route.account_group_id_at_event.clone(),
-        route_strategy_at_event: Some(record.route.route_strategy_at_event),
-        request_method: record.meta.request_method.clone(),
-        request_url: record.meta.request_url.clone(),
-        endpoint: "/mcp".to_string(),
-        model: Some(record.model.to_string()),
-        mapped_model: None,
-        status_code: record.status.as_u16() as i64,
-        request_body_bytes: record.meta.request_body_bytes,
-        quota_failover_count: record.meta.quota_failover_count,
-        routing_diagnostics_json: record.meta.routing_diagnostics_json.clone(),
         input_uncached_tokens: i64::from(record.usage.input_uncached_tokens.max(0)),
         input_cached_tokens: i64::from(record.usage.input_cached_tokens.max(0)),
         output_tokens: i64::from(record.usage.output_tokens.max(0)),
@@ -323,10 +347,6 @@ pub async fn record_kiro_websearch_usage(
         credit_usage: None,
         usage_missing: false,
         credit_usage_missing: true,
-        client_ip: record.meta.client_ip.clone(),
-        ip_region: record.meta.ip_region.clone(),
-        request_headers_json: record.meta.request_headers_json.clone(),
-        last_message_content: record.meta.last_message_content.clone(),
         client_request_body_json: capture_request_details
             .then(|| captured_body_json(&record.meta.client_request_body_json))
             .flatten(),
@@ -339,14 +359,14 @@ pub async fn record_kiro_websearch_usage(
                     .or_else(|| captured_body_json(&record.meta.client_request_body_json))
             })
             .flatten(),
-        error_message: record.meta.error_message.clone(),
-        error_class: record.meta.error_class.clone(),
-        session_blocked: record.meta.session_blocked,
-        response_image_count: None,
-        error_body: record.meta.error_body.clone(),
-        response_body: record.meta.response_body.clone(),
-        timing: record.meta.to_timing(),
-        stream: record.meta.to_stream_details(),
+        ..kiro_usage_event_from_meta(
+            record.key,
+            Some(record.route),
+            "/mcp",
+            Some(record.model.to_string()),
+            record.status,
+            record.meta,
+        )
     };
     record.control_store.apply_usage_rollup_owned(event).await
 }
@@ -361,47 +381,21 @@ pub async fn record_kiro_cctest_usage(record: KiroCctestUsageRecord<'_>) -> anyh
     })
     .to_string();
     let event = UsageEvent {
-        event_id: format!("llm-usage-{}", uuid::Uuid::new_v4()),
-        created_at_ms: now_millis(),
-        provider_type: ProviderType::Kiro,
-        protocol_family: ProtocolFamily::Anthropic,
-        key_id: record.key.key_id.clone(),
-        key_name: record.key.key_name.clone(),
-        account_name: Some(record.route.account_name.clone()),
-        account_group_id_at_event: record.route.account_group_id_at_event.clone(),
-        route_strategy_at_event: Some(record.route.route_strategy_at_event),
-        request_method: record.meta.request_method.clone(),
-        request_url: record.meta.request_url.clone(),
-        endpoint: record.endpoint.to_string(),
-        model: record.model.map(ToString::to_string),
-        mapped_model: None,
-        status_code: record.status.as_u16() as i64,
-        request_body_bytes: record.meta.request_body_bytes,
-        quota_failover_count: record.meta.quota_failover_count,
         routing_diagnostics_json: Some(diagnostics),
-        input_uncached_tokens: 0,
-        input_cached_tokens: 0,
-        output_tokens: 0,
-        billable_tokens: 0,
-        credit_usage: None,
         usage_missing: false,
         credit_usage_missing: false,
-        client_ip: record.meta.client_ip.clone(),
-        ip_region: record.meta.ip_region.clone(),
-        request_headers_json: record.meta.request_headers_json.clone(),
-        last_message_content: record.meta.last_message_content.clone(),
         client_request_body_json: captured_body_json(&record.meta.client_request_body_json),
         upstream_request_body_json: captured_body_json(&record.meta.upstream_request_body_json),
         full_request_json: captured_body_json(&record.meta.full_request_json)
             .or_else(|| captured_body_json(&record.meta.client_request_body_json)),
-        error_message: record.meta.error_message.clone(),
-        error_class: record.meta.error_class.clone(),
-        session_blocked: record.meta.session_blocked,
-        response_image_count: None,
-        error_body: record.meta.error_body.clone(),
-        response_body: record.meta.response_body.clone(),
-        timing: record.meta.to_timing(),
-        stream: record.meta.to_stream_details(),
+        ..kiro_usage_event_from_meta(
+            record.key,
+            Some(record.route),
+            record.endpoint,
+            record.model.map(ToString::to_string),
+            record.status,
+            record.meta,
+        )
     };
     record.control_store.apply_usage_rollup_owned(event).await
 }

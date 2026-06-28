@@ -99,6 +99,9 @@ mod tests {
         assert!(schema.contains("downstream_disconnect BOOLEAN"));
         assert!(schema.contains("final_event_type VARCHAR"));
         assert!(schema.contains("bytes_streamed BIGINT"));
+        assert!(schema.contains("same_account_retry_count BIGINT"));
+        assert!(schema.contains("same_account_retry_delay_ms BIGINT"));
+        assert!(schema.contains("same_account_retry_reasons_json VARCHAR"));
         assert!(schema.contains("proxy_source_at_event VARCHAR"));
         assert!(schema.contains("proxy_config_id_at_event VARCHAR"));
         assert!(schema.contains("proxy_config_name_at_event VARCHAR"));
