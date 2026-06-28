@@ -2575,11 +2575,11 @@ fn provider_usage_metadata_merges_retry_details_from_failed_attempts() {
         super::SameAccountRetryReason::Transport,
         Duration::from_millis(100),
     );
-    let mut attempt = UsageRetryDetails::default();
-    attempt.same_account_retry_count = 2;
-    attempt.same_account_retry_delay_ms = 700;
-    attempt.same_account_retry_reasons =
-        vec!["transport".to_string(), "retryable_status".to_string()];
+    let attempt = UsageRetryDetails {
+        same_account_retry_count: 2,
+        same_account_retry_delay_ms: 700,
+        same_account_retry_reasons: vec!["transport".to_string(), "retryable_status".to_string()],
+    };
 
     parent.merge_retry_from(&attempt);
 
