@@ -131,8 +131,8 @@ struct KiroRouteCandidateRow {
     auth_proxy_config_id: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-struct AnthropicUpstreamChannelRow {
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct AnthropicUpstreamChannelRow {
     channel_name: String,
     status: String,
     base_url: String,
@@ -771,10 +771,11 @@ mod tests {
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType, RouteStrategy},
         store::{
-            AdminCodexAccountPageQuery, AdminCodexAccountSortMode, AdminCodexAccountStore,
-            AdminConfigStore, AdminKeyStore, AdminKiroAccountStore, AdminPageRequest,
-            AdminProxyConfigPatch, AdminProxyStore, AdminProxyTrafficSnapshot,
-            AdminReviewQueueStore, ControlStore, KeyUsageRollupDelta, NewAdminProxyConfig,
+            AdminAnthropicUpstreamStore, AdminCodexAccountPageQuery, AdminCodexAccountSortMode,
+            AdminCodexAccountStore, AdminConfigStore, AdminKeyStore, AdminKiroAccountStore,
+            AdminPageRequest, AdminProxyConfigPatch, AdminProxyStore, AdminProxyTrafficSnapshot,
+            AdminReviewQueueStore, AnthropicUpstreamChannelUsageDelta, ControlStore,
+            KeyUsageRollupDelta, NewAdminAnthropicUpstreamChannel, NewAdminProxyConfig,
             NewPublicAccountContributionRequest, ProxyTrafficTotals, PublicSubmissionStore,
             PublicUsageStore, UsageEventSink, UsageRollupBatch, UsageRollupBatchSink,
         },
@@ -813,6 +814,8 @@ mod tests {
                     llm_kiro_status_cache,
                     llm_kiro_accounts,
                     llm_codex_accounts,
+                    llm_anthropic_upstream_channel_usage_rollups,
+                    llm_anthropic_upstream_channels,
                     llm_proxy_config_endpoint_checks,
                     llm_proxy_config_node_overrides,
                     llm_proxy_bindings,
@@ -1134,6 +1137,83 @@ mod tests {
             .expect("lookup result")
             .expect("key must exist");
         assert_eq!(key.key_name, "external");
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_manages_anthropic_upstream_channels_and_usage_rollups() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        let repo = super::PostgresControlRepository::connect(&database_url, None)
+            .await
+            .expect("connect postgres repository");
+
+        let created = repo
+            .create_admin_anthropic_upstream_channel(NewAdminAnthropicUpstreamChannel {
+                name: "anthropic-a".to_string(),
+                status: llm_access_core::store::KEY_STATUS_ACTIVE.to_string(),
+                base_url: "https://api.anthropic.com/v1".to_string(),
+                api_key: "sk-ant-test".to_string(),
+                weight: 7,
+                max_concurrency: 2,
+                min_start_interval_ms: 25,
+                proxy_mode: "direct".to_string(),
+                proxy_config_id: None,
+                created_at_ms: 1_700_000_000_000,
+            })
+            .await
+            .expect("create anthropic upstream channel");
+        assert!(created.has_api_key);
+        assert_eq!(created.weight, 7);
+
+        repo.record_anthropic_upstream_channel_usage(
+            "anthropic-a",
+            AnthropicUpstreamChannelUsageDelta {
+                input_uncached_tokens: 10,
+                input_cached_tokens: 20,
+                output_tokens: 30,
+                billable_tokens: 40,
+                usage_missing: false,
+                used_at_ms: 1_700_000_000_010,
+            },
+        )
+        .await
+        .expect("record first channel usage");
+        repo.record_anthropic_upstream_channel_usage(
+            "anthropic-a",
+            AnthropicUpstreamChannelUsageDelta {
+                input_uncached_tokens: 1,
+                input_cached_tokens: 2,
+                output_tokens: 3,
+                billable_tokens: 4,
+                usage_missing: true,
+                used_at_ms: 1_700_000_000_020,
+            },
+        )
+        .await
+        .expect("record second channel usage");
+
+        let page = repo
+            .list_admin_anthropic_upstream_channels_page(AdminPageRequest {
+                limit: 10,
+                offset: 0,
+            })
+            .await
+            .expect("list anthropic upstream channels");
+        assert_eq!(page.total, 1);
+        let channel = &page.channels[0];
+        assert_eq!(channel.name, "anthropic-a");
+        assert_eq!(channel.usage.input_uncached_tokens, 11);
+        assert_eq!(channel.usage.input_cached_tokens, 22);
+        assert_eq!(channel.usage.output_tokens, 33);
+        assert_eq!(channel.usage.billable_tokens, 44);
+        assert_eq!(channel.usage.usage_missing_events, 1);
+        assert_eq!(channel.usage.last_used_at, Some(1_700_000_000_020));
     }
 
     #[tokio::test]

@@ -2821,6 +2821,23 @@ pub(crate) async fn create_admin_anthropic_upstream_channel(
     };
     match state
         .admin_anthropic_upstream_store
+        .list_admin_anthropic_upstream_channels()
+        .await
+    {
+        Ok(channels)
+            if channels
+                .iter()
+                .any(|existing| existing.name == channel.name) =>
+        {
+            return conflict("Anthropic upstream channel already exists").into_response()
+        },
+        Ok(_) => {},
+        Err(_) => {
+            return internal_error("Failed to inspect Anthropic upstream channels").into_response()
+        },
+    }
+    match state
+        .admin_anthropic_upstream_store
         .create_admin_anthropic_upstream_channel(channel)
         .await
     {
@@ -6455,8 +6472,27 @@ fn normalize_anthropic_upstream_base_url(raw: &str) -> Result<String, AdminHttpE
     let trimmed = raw.trim().trim_end_matches('/');
     let parsed =
         url::Url::parse(trimmed).map_err(|_| bad_request("base_url must be a valid URL"))?;
-    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
-        return Err(bad_request("base_url must be an http(s) URL"));
+    if parsed.scheme() != "https" {
+        return Err(bad_request("base_url must be an https URL"));
+    }
+    let Some(host) = parsed.host_str() else {
+        return Err(bad_request("base_url must include a host"));
+    };
+    let normalized_host = host.trim_end_matches('.').to_ascii_lowercase();
+    if normalized_host == "localhost"
+        || normalized_host.ends_with(".localhost")
+        || normalized_host == "metadata.google.internal"
+    {
+        return Err(bad_request("base_url host is not allowed"));
+    }
+    let ip_host = normalized_host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(&normalized_host);
+    if let Ok(ip) = ip_host.parse::<IpAddr>() {
+        if is_private_or_loopback_ip(ip) {
+            return Err(bad_request("base_url host is not allowed"));
+        }
     }
     Ok(trimmed.to_string())
 }
@@ -6488,7 +6524,7 @@ fn normalize_new_anthropic_upstream_channel(
     let weight = request
         .weight
         .unwrap_or(core_store::DEFAULT_ANTHROPIC_UPSTREAM_WEIGHT);
-    validate_max("weight", weight, MAX_ANTHROPIC_UPSTREAM_WEIGHT)?;
+    validate_range("weight", weight, 1, MAX_ANTHROPIC_UPSTREAM_WEIGHT)?;
     let max_concurrency = request
         .max_concurrency
         .unwrap_or(core_store::DEFAULT_ANTHROPIC_UPSTREAM_MAX_CONCURRENCY);
@@ -6546,7 +6582,7 @@ fn normalize_anthropic_upstream_channel_patch(
         None => None,
     };
     if let Some(weight) = request.weight {
-        validate_max("weight", weight, MAX_ANTHROPIC_UPSTREAM_WEIGHT)?;
+        validate_range("weight", weight, 1, MAX_ANTHROPIC_UPSTREAM_WEIGHT)?;
     }
     if let Some(max_concurrency) = request.max_concurrency {
         validate_range(
@@ -8838,19 +8874,63 @@ mod tests {
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
     }
 
+    fn sample_create_anthropic_upstream_channel_request(
+    ) -> CreateAdminAnthropicUpstreamChannelRequest {
+        CreateAdminAnthropicUpstreamChannelRequest {
+            name: "anthropic-a".to_string(),
+            base_url: "https://api.anthropic.com/v1".to_string(),
+            api_key: "sk-ant-test".to_string(),
+            status: None,
+            weight: None,
+            max_concurrency: None,
+            min_start_interval_ms: None,
+            proxy_mode: None,
+            proxy_config_id: None,
+        }
+    }
+
+    #[test]
+    fn normalize_anthropic_upstream_channel_rejects_plaintext_and_local_base_urls() {
+        for base_url in [
+            "http://api.anthropic.com/v1",
+            "https://localhost/v1",
+            "https://metadata.google.internal/v1",
+            "https://127.0.0.1/v1",
+            "https://10.0.0.1/v1",
+            "https://[::1]/v1",
+            "https://[fd00::1]/v1",
+        ] {
+            let error = normalize_new_anthropic_upstream_channel(
+                CreateAdminAnthropicUpstreamChannelRequest {
+                    base_url: base_url.to_string(),
+                    ..sample_create_anthropic_upstream_channel_request()
+                },
+            )
+            .expect_err("local or plaintext base_url should fail");
+
+            assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[test]
+    fn normalize_anthropic_upstream_channel_rejects_zero_weight() {
+        let error =
+            normalize_new_anthropic_upstream_channel(CreateAdminAnthropicUpstreamChannelRequest {
+                weight: Some(0),
+                ..sample_create_anthropic_upstream_channel_request()
+            })
+            .expect_err("zero weight should fail");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    }
+
     #[test]
     fn normalize_anthropic_upstream_channel_requires_proxy_id_for_fixed_mode() {
         let error =
             normalize_new_anthropic_upstream_channel(CreateAdminAnthropicUpstreamChannelRequest {
-                name: "anthropic-a".to_string(),
-                base_url: "https://api.anthropic.com/v1".to_string(),
-                api_key: "sk-ant-test".to_string(),
-                status: None,
-                weight: None,
-                max_concurrency: None,
-                min_start_interval_ms: None,
                 proxy_mode: Some("fixed".to_string()),
                 proxy_config_id: None,
+                ..sample_create_anthropic_upstream_channel_request()
             })
             .expect_err("fixed proxy mode should require proxy_config_id");
 

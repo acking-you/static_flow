@@ -34,11 +34,11 @@ CREATE TABLE IF NOT EXISTS llm_anthropic_upstream_channels (
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
     base_url TEXT NOT NULL,
     auth_json JSONB NOT NULL,
-    weight BIGINT NOT NULL DEFAULT 100 CHECK (weight >= 0),
+    weight BIGINT NOT NULL DEFAULT 100 CHECK (weight >= 1),
     max_concurrency BIGINT NOT NULL DEFAULT 3 CHECK (max_concurrency >= 1),
     min_start_interval_ms BIGINT NOT NULL DEFAULT 0 CHECK (min_start_interval_ms >= 0),
     proxy_mode TEXT NOT NULL DEFAULT 'inherit' CHECK (proxy_mode IN ('inherit', 'direct', 'fixed')),
-    proxy_config_id TEXT REFERENCES llm_proxy_configs(proxy_config_id) ON DELETE SET NULL,
+    proxy_config_id TEXT REFERENCES llm_proxy_configs(proxy_config_id) ON DELETE RESTRICT,
     last_error TEXT,
     created_at_ms BIGINT NOT NULL CHECK (created_at_ms >= 0),
     updated_at_ms BIGINT NOT NULL CHECK (updated_at_ms >= 0)

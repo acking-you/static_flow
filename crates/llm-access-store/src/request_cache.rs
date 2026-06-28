@@ -22,6 +22,7 @@ const ACCOUNT_AUTH_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const ACCOUNT_PRINCIPAL_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const CODEX_STATUS_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const PROXY_METADATA_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+const ANTHROPIC_UPSTREAM_CHANNELS_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const USAGE_PROXY_ATTRIBUTION_TTL: Duration = Duration::from_secs(30 * 60);
 #[cfg(feature = "duckdb-runtime")]
 const USAGE_CATALOG_LOOKUP_TTL: Duration = Duration::from_secs(15 * 60);
@@ -454,6 +455,10 @@ impl RequestCache {
         format!("{}:gen:dispatch:{provider}", self.key_prefix)
     }
 
+    pub(crate) fn anthropic_upstream_channels_key(&self, scope: &str) -> String {
+        format!("{}:anthropic-upstream:scope:{scope}:channels", self.key_prefix)
+    }
+
     pub(crate) fn usage_proxy_attribution_key(
         &self,
         provider: &str,
@@ -461,6 +466,10 @@ impl RequestCache {
         scope: &str,
     ) -> String {
         format!("{}:usage:proxy:scope:{scope}:{provider}:{account_name}", self.key_prefix)
+    }
+
+    pub(crate) fn anthropic_upstream_channels_ttl(&self, _scope: &str) -> Duration {
+        ANTHROPIC_UPSTREAM_CHANNELS_TTL
     }
 
     #[cfg(feature = "duckdb-runtime")]
@@ -952,6 +961,10 @@ mod tests {
         assert_eq!(
             cache.dispatch_generation_key("kiro"),
             "llma:test:gen:dispatch:kiro".to_string()
+        );
+        assert_eq!(
+            cache.anthropic_upstream_channels_key("edge-a"),
+            "llma:test:anthropic-upstream:scope:edge-a:channels".to_string()
         );
         assert_eq!(
             cache.usage_proxy_attribution_key("codex", "acct-1", "edge-a"),

@@ -8,7 +8,8 @@ use super::{
     anthropic_upstream::{
         AdminAnthropicUpstreamChannel, AdminAnthropicUpstreamChannelPatch,
         AdminAnthropicUpstreamChannelsPage, AnthropicUpstreamChannelUsageDelta,
-        NewAdminAnthropicUpstreamChannel, ProviderAnthropicUpstreamRoute,
+        NewAdminAnthropicUpstreamChannel, ProviderAnthropicUpstreamResolution,
+        ProviderAnthropicUpstreamRoute,
     },
     codex_account::{
         apply_admin_codex_account_query, summarize_admin_accounts, AdminCodexAccount,
@@ -135,6 +136,22 @@ pub trait ProviderRouteStore: Send + Sync {
         _key: &AuthenticatedKey,
     ) -> anyhow::Result<Vec<ProviderAnthropicUpstreamRoute>> {
         Ok(Vec::new())
+    }
+
+    /// Resolve the key-level direct Anthropic pool mode and candidates from a
+    /// single consistent request snapshot.
+    async fn resolve_anthropic_upstream_resolution(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<ProviderAnthropicUpstreamResolution> {
+        let pool_mode = self.resolve_anthropic_upstream_pool_mode(key).await?;
+        let routes = self
+            .resolve_anthropic_upstream_route_candidates(key)
+            .await?;
+        Ok(ProviderAnthropicUpstreamResolution {
+            pool_mode,
+            routes,
+        })
     }
 
     /// Resolve only the per-key direct Anthropic pool mode. This lets the

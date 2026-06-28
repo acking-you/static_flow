@@ -4931,6 +4931,42 @@ pub fn admin_kiro_gateway_page() -> Html {
                                 });
                             })
                         };
+                        let on_rotate_key = {
+                            let notify = notify.clone();
+                            let on_reload = on_reload.clone();
+                            let channel_name = channel_name.clone();
+                            Callback::from(move |_| {
+                                let Some(window) = web_sys::window() else {
+                                    notify.emit(("Browser window is unavailable.".to_string(), true));
+                                    return;
+                                };
+                                let prompt = format!("New API key for Anthropic upstream `{channel_name}`");
+                                let Ok(Some(api_key)) = window.prompt_with_message(&prompt) else {
+                                    return;
+                                };
+                                let api_key = api_key.trim().to_string();
+                                if api_key.is_empty() {
+                                    notify.emit(("API key must not be empty.".to_string(), true));
+                                    return;
+                                }
+                                let notify = notify.clone();
+                                let on_reload = on_reload.clone();
+                                let channel_name = channel_name.clone();
+                                wasm_bindgen_futures::spawn_local(async move {
+                                    let input = PatchAdminAnthropicUpstreamChannelInput {
+                                        api_key: Some(api_key),
+                                        ..PatchAdminAnthropicUpstreamChannelInput::default()
+                                    };
+                                    match patch_admin_anthropic_upstream_channel(&channel_name, &input).await {
+                                        Ok(_) => {
+                                            notify.emit((format!("Rotated API key for Anthropic upstream `{channel_name}`."), false));
+                                            on_reload.emit(());
+                                        },
+                                        Err(err) => notify.emit((format!("Failed to rotate API key for Anthropic upstream `{channel_name}`.\n{err}"), true)),
+                                    }
+                                });
+                            })
+                        };
                         html! {
                             <article class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3")}>
                                 <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
@@ -4946,6 +4982,9 @@ pub fn admin_kiro_gateway_page() -> Html {
                                         </span>
                                         <button type="button" class={classes!("btn-terminal", "text-xs")} onclick={on_toggle}>
                                             { toggle_label }
+                                        </button>
+                                        <button type="button" class={classes!("btn-terminal", "text-xs")} onclick={on_rotate_key}>
+                                            { "Rotate Key" }
                                         </button>
                                         <button type="button" class={classes!("btn-terminal", "text-xs")} onclick={on_delete}>
                                             { "Delete" }

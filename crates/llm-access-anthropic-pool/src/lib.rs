@@ -1,6 +1,9 @@
 //! Standard Anthropic upstream channel-pool routing and usage parsing.
 
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet},
+    net::IpAddr,
+};
 
 /// Candidate channel with an admin-controlled routing weight.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,18 +42,31 @@ impl SmoothWeightedRoundRobin {
             return None;
         }
 
+        let active_names = channels
+            .iter()
+            .filter(|channel| channel.weight > 0)
+            .map(|channel| channel.name.as_str())
+            .collect::<HashSet<_>>();
+        self.current_weights
+            .retain(|name, _| active_names.contains(name.as_str()));
+
         let mut selected_index: Option<usize> = None;
         let mut selected_weight = i128::MIN;
         for (index, channel) in channels.iter().enumerate() {
             if channel.weight == 0 {
                 continue;
             }
-            let current = self
-                .current_weights
-                .entry(channel.name.clone())
-                .or_insert(0);
+            let current = match self.current_weights.get_mut(&channel.name) {
+                Some(current) => current,
+                None => {
+                    self.current_weights.insert(channel.name.clone(), 0);
+                    self.current_weights
+                        .get_mut(&channel.name)
+                        .expect("inserted current weight should exist")
+                },
+            };
             *current = current.saturating_add(i128::from(channel.weight));
-            if *current >= selected_weight {
+            if *current > selected_weight {
                 selected_weight = *current;
                 selected_index = Some(index);
             }
@@ -156,7 +172,41 @@ pub fn build_messages_url(base_url: &str) -> anyhow::Result<String> {
         anyhow::bail!("anthropic upstream base_url is empty");
     }
     let url = reqwest::Url::parse(&format!("{trimmed}/messages"))?;
+    if url.scheme() != "https" {
+        anyhow::bail!("anthropic upstream base_url must use https");
+    }
+    let Some(host) = url.host_str() else {
+        anyhow::bail!("anthropic upstream base_url must include a host");
+    };
+    let normalized_host = host.trim_end_matches('.').to_ascii_lowercase();
+    if normalized_host == "localhost"
+        || normalized_host.ends_with(".localhost")
+        || normalized_host == "metadata.google.internal"
+    {
+        anyhow::bail!("anthropic upstream base_url host is not allowed");
+    }
+    let ip_host = normalized_host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(&normalized_host);
+    if let Ok(ip) = ip_host.parse::<IpAddr>() {
+        if is_private_or_loopback_ip(ip) {
+            anyhow::bail!("anthropic upstream base_url host is not allowed");
+        }
+    }
     Ok(url.to_string())
+}
+
+fn is_private_or_loopback_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.octets()[0] == 169 && v4.octets()[1] == 254
+        },
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
+    }
 }
 
 fn usage_i64(usage: &serde_json::Value, key: &str) -> Option<i64> {
@@ -184,8 +234,26 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(selected, vec![
-            "alpha", "beta", "alpha", "alpha", "alpha", "beta", "alpha", "alpha"
+            "alpha", "alpha", "beta", "alpha", "alpha", "alpha", "beta", "alpha"
         ]);
+    }
+
+    #[test]
+    fn smooth_weighted_round_robin_drops_stale_channels_and_keeps_stable_ties() {
+        let mut scheduler = SmoothWeightedRoundRobin::default();
+        let initial = vec![WeightedChannel::new("alpha", 1), WeightedChannel::new("beta", 1)];
+
+        assert_eq!(scheduler.select(&initial), Some("alpha"));
+        assert_eq!(scheduler.select(&initial), Some("beta"));
+
+        let remaining = vec![WeightedChannel::new("beta", 1)];
+        assert_eq!(scheduler.select(&remaining), Some("beta"));
+        assert_eq!(scheduler.current_weights.len(), 1);
+        assert!(scheduler.current_weights.contains_key("beta"));
+
+        let tied = vec![WeightedChannel::new("alpha", 1), WeightedChannel::new("beta", 1)];
+        let mut fresh_scheduler = SmoothWeightedRoundRobin::default();
+        assert_eq!(fresh_scheduler.select(&tied), Some("alpha"));
     }
 
     #[test]
@@ -222,5 +290,23 @@ mod tests {
             build_messages_url("https://example.com/root/").expect("url"),
             "https://example.com/root/messages"
         );
+    }
+
+    #[test]
+    fn upstream_url_rejects_plaintext_and_local_targets() {
+        for base_url in [
+            "http://api.anthropic.com/v1",
+            "https://localhost/v1",
+            "https://metadata.google.internal/v1",
+            "https://127.0.0.1/v1",
+            "https://10.0.0.1/v1",
+            "https://[::1]/v1",
+            "https://[fd00::1]/v1",
+        ] {
+            assert!(
+                build_messages_url(base_url).is_err(),
+                "base_url should be rejected: {base_url}"
+            );
+        }
     }
 }

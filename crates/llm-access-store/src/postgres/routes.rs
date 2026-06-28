@@ -10,8 +10,9 @@ use llm_access_core::{
     store::{
         self as core_store, AdminCodexAccountStore, AdminKiroAccountStore, AdminKiroBalanceView,
         AdminKiroCacheView, AdminKiroStatusCacheUpdate, AuthenticatedKey,
-        ProviderAnthropicUpstreamRoute, ProviderCodexAuthUpdate, ProviderCodexRoute,
-        ProviderKiroAuthUpdate, ProviderKiroRoute, ProviderRouteStore,
+        ProviderAnthropicUpstreamResolution, ProviderAnthropicUpstreamRoute,
+        ProviderCodexAuthUpdate, ProviderCodexRoute, ProviderKiroAuthUpdate, ProviderKiroRoute,
+        ProviderRouteStore,
     },
 };
 
@@ -707,17 +708,30 @@ impl ProviderRouteStore for PostgresControlRepository {
         &self,
         key: &AuthenticatedKey,
     ) -> anyhow::Result<Vec<ProviderAnthropicUpstreamRoute>> {
+        Ok(self
+            .resolve_anthropic_upstream_resolution(key)
+            .await?
+            .routes)
+    }
+
+    async fn resolve_anthropic_upstream_resolution(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<ProviderAnthropicUpstreamResolution> {
         let Some(snapshot) = self.load_kiro_request_snapshot_cached(&key.key_id).await? else {
-            return Ok(Vec::new());
+            return Ok(ProviderAnthropicUpstreamResolution::disabled());
         };
         if snapshot.key.provider_type != core_store::PROVIDER_KIRO {
-            return Ok(Vec::new());
+            return Ok(ProviderAnthropicUpstreamResolution::disabled());
         }
         let pool_mode = core_store::canonical_anthropic_upstream_pool_mode(Some(
             &snapshot.anthropic_upstream_pool_mode,
         ));
         if pool_mode == core_store::ANTHROPIC_UPSTREAM_POOL_MODE_DISABLED {
-            return Ok(Vec::new());
+            return Ok(ProviderAnthropicUpstreamResolution {
+                pool_mode,
+                routes: Vec::new(),
+            });
         }
         let route_strategy_at_event = match snapshot.route_strategy.as_str() {
             "fixed" => RouteStrategy::Fixed,
@@ -738,7 +752,7 @@ impl ProviderRouteStore for PostgresControlRepository {
         };
         let mut routes = Vec::new();
         for row in self
-            .list_anthropic_upstream_channel_rows(true)
+            .load_active_anthropic_upstream_channel_rows_cached()
             .await?
             .into_iter()
         {
@@ -780,7 +794,10 @@ impl ProviderRouteStore for PostgresControlRepository {
                 proxy,
             });
         }
-        Ok(routes)
+        Ok(ProviderAnthropicUpstreamResolution {
+            pool_mode,
+            routes,
+        })
     }
 
     async fn resolve_anthropic_upstream_pool_mode(

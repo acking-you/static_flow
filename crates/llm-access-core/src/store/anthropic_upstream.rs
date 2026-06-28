@@ -210,3 +210,22 @@ pub struct ProviderAnthropicUpstreamRoute {
     /// Resolved proxy settings for this upstream request.
     pub proxy: Option<ProviderProxyConfig>,
 }
+
+/// Per-request direct Anthropic routing plan for a Kiro key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderAnthropicUpstreamResolution {
+    /// Canonical key-level pool mode.
+    pub pool_mode: String,
+    /// Eligible direct upstream candidates for this request.
+    pub routes: Vec<ProviderAnthropicUpstreamRoute>,
+}
+
+impl ProviderAnthropicUpstreamResolution {
+    /// Build the default disabled routing plan.
+    pub fn disabled() -> Self {
+        Self {
+            pool_mode: default_anthropic_upstream_pool_mode(),
+            routes: Vec::new(),
+        }
+    }
+}

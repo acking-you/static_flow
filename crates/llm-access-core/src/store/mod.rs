@@ -25,11 +25,11 @@ pub use anthropic_upstream::{
     normalize_anthropic_upstream_pool_mode, AdminAnthropicUpstreamChannel,
     AdminAnthropicUpstreamChannelPatch, AdminAnthropicUpstreamChannelsPage,
     AdminAnthropicUpstreamUsageRollup, AnthropicUpstreamChannelUsageDelta,
-    NewAdminAnthropicUpstreamChannel, ProviderAnthropicUpstreamRoute,
-    ANTHROPIC_UPSTREAM_POOL_MODE_DISABLED, ANTHROPIC_UPSTREAM_POOL_MODE_ONLY,
-    ANTHROPIC_UPSTREAM_POOL_MODE_PREFERRED_BEFORE_KIRO, DEFAULT_ANTHROPIC_UPSTREAM_BASE_URL,
-    DEFAULT_ANTHROPIC_UPSTREAM_MAX_CONCURRENCY, DEFAULT_ANTHROPIC_UPSTREAM_MIN_START_INTERVAL_MS,
-    DEFAULT_ANTHROPIC_UPSTREAM_WEIGHT,
+    NewAdminAnthropicUpstreamChannel, ProviderAnthropicUpstreamResolution,
+    ProviderAnthropicUpstreamRoute, ANTHROPIC_UPSTREAM_POOL_MODE_DISABLED,
+    ANTHROPIC_UPSTREAM_POOL_MODE_ONLY, ANTHROPIC_UPSTREAM_POOL_MODE_PREFERRED_BEFORE_KIRO,
+    DEFAULT_ANTHROPIC_UPSTREAM_BASE_URL, DEFAULT_ANTHROPIC_UPSTREAM_MAX_CONCURRENCY,
+    DEFAULT_ANTHROPIC_UPSTREAM_MIN_START_INTERVAL_MS, DEFAULT_ANTHROPIC_UPSTREAM_WEIGHT,
 };
 pub use codex_account::{
     AdminAccountsSummary, AdminCodexAccount, AdminCodexAccountPageQuery, AdminCodexAccountPatch,

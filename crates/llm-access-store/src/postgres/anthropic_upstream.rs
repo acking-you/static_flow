@@ -8,8 +8,15 @@ use llm_access_core::store::{
     AdminAnthropicUpstreamUsageRollup, AdminPageRequest, AnthropicUpstreamChannelUsageDelta,
     NewAdminAnthropicUpstreamChannel,
 };
+use serde::{Deserialize, Serialize};
 
 use super::{now_ms, AnthropicUpstreamChannelRow, PostgresControlRepository};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedAnthropicUpstreamChannelsLookup {
+    generation: i64,
+    rows: Vec<AnthropicUpstreamChannelRow>,
+}
 
 fn non_negative_i64_to_u64(value: i64) -> u64 {
     value.max(0) as u64
@@ -113,6 +120,50 @@ impl PostgresControlRepository {
             .into_iter()
             .map(Self::decode_anthropic_upstream_channel_row)
             .collect())
+    }
+
+    pub(super) async fn load_active_anthropic_upstream_channel_rows_cached(
+        &self,
+    ) -> anyhow::Result<Vec<AnthropicUpstreamChannelRow>> {
+        let Some(cache) = self.request_cache.as_ref() else {
+            return self.list_anthropic_upstream_channel_rows(true).await;
+        };
+        let generation = self
+            .current_dispatch_generation(core_store::PROVIDER_KIRO)
+            .await;
+        let scope = self.proxy_scope.cache_key_segment();
+        let cache_key = cache.anthropic_upstream_channels_key(scope);
+        match cache
+            .get_json::<CachedAnthropicUpstreamChannelsLookup>(&cache_key)
+            .await
+        {
+            Ok(Some(lookup)) if lookup.generation == generation => return Ok(lookup.rows),
+            Ok(Some(_)) => {},
+            Ok(None) => {},
+            Err(err) => {
+                tracing::warn!(
+                    key = %cache_key,
+                    error = %err,
+                    "request cache direct anthropic upstream channel read failed; falling back to postgres"
+                );
+            },
+        }
+        let rows = self.list_anthropic_upstream_channel_rows(true).await?;
+        let lookup = CachedAnthropicUpstreamChannelsLookup {
+            generation,
+            rows: rows.clone(),
+        };
+        if let Err(err) = cache
+            .set_json(&cache_key, &lookup, cache.anthropic_upstream_channels_ttl(scope))
+            .await
+        {
+            tracing::warn!(
+                key = %cache_key,
+                error = %err,
+                "request cache direct anthropic upstream channel write failed"
+            );
+        }
+        Ok(rows)
     }
 
     async fn load_anthropic_upstream_channel_row(

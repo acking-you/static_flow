@@ -2,15 +2,18 @@
 
 use std::{
     collections::BTreeMap,
+    io,
     sync::{LazyLock, Mutex},
     time::Instant,
 };
 
+use async_stream::stream;
 use axum::{
     body::{to_bytes, Body, Bytes},
     http::{header, HeaderMap, Method, Request, Response, StatusCode, Uri, Version},
     response::IntoResponse,
 };
+use futures_util::StreamExt;
 use llm_access_anthropic_pool::{
     build_messages_url, merge_usage, parse_usage_from_value, AnthropicUsageSummary,
     SmoothWeightedRoundRobin, WeightedChannel,
@@ -32,7 +35,7 @@ use super::{
     limiter::{kiro_key_limit_response, try_acquire_key_permit},
     usage_meta::{
         capture_client_request_body_json, capture_error_bytes, capture_error_message,
-        capture_upstream_request_body_json,
+        capture_upstream_request_body_json, captured_body_json,
     },
     util::{clamp_duration_ms, clamp_u64_to_i64, now_millis},
     ProviderDispatchDeps, ProviderUsageMetadata, MAX_PROVIDER_PROXY_BODY_BYTES,
@@ -40,6 +43,7 @@ use super::{
 
 static DIRECT_ANTHROPIC_SCHEDULER: LazyLock<Mutex<SmoothWeightedRoundRobin>> =
     LazyLock::new(|| Mutex::new(SmoothWeightedRoundRobin::default()));
+const MAX_DIRECT_ANTHROPIC_RESPONSE_BYTES: usize = MAX_PROVIDER_PROXY_BODY_BYTES;
 
 pub(super) enum AnthropicUpstreamDispatchOutcome {
     Handled(axum::response::Response),
@@ -72,9 +76,32 @@ struct DirectAnthropicDispatchContext<'a> {
     key: &'a AuthenticatedKey,
     endpoint: &'a str,
     model: &'a str,
-    mapped_model: Option<&'a str>,
     request_headers: &'a HeaderMap,
     deps: &'a ProviderDispatchDeps,
+}
+
+#[derive(Clone)]
+struct DirectAnthropicUsageContext {
+    key: AuthenticatedKey,
+    endpoint: String,
+    model: String,
+    mapped_model: Option<String>,
+    deps: ProviderDispatchDeps,
+}
+
+impl DirectAnthropicUsageContext {
+    fn from_dispatch(
+        context: &DirectAnthropicDispatchContext<'_>,
+        mapped_model: Option<String>,
+    ) -> Self {
+        Self {
+            key: context.key.clone(),
+            endpoint: context.endpoint.to_string(),
+            model: context.model.to_string(),
+            mapped_model,
+            deps: context.deps.clone(),
+        }
+    }
 }
 
 pub(super) async fn maybe_dispatch_anthropic_upstream_pool(
@@ -82,48 +109,30 @@ pub(super) async fn maybe_dispatch_anthropic_upstream_pool(
     request: Request<Body>,
     deps: ProviderDispatchDeps,
 ) -> AnthropicUpstreamDispatchOutcome {
-    let mode = match deps
+    let resolution = match deps
         .route_store
-        .resolve_anthropic_upstream_pool_mode(&key)
+        .resolve_anthropic_upstream_resolution(&key)
         .await
     {
-        Ok(mode) => mode,
-        Err(err) => {
-            tracing::warn!(
-                key_id = %key.key_id,
-                error = %err,
-                "direct anthropic upstream pool mode resolution failed"
-            );
-            return AnthropicUpstreamDispatchOutcome::Fallback(request);
-        },
-    };
-    if mode == core_store::ANTHROPIC_UPSTREAM_POOL_MODE_DISABLED {
-        return AnthropicUpstreamDispatchOutcome::Fallback(request);
-    }
-
-    let routes = match deps
-        .route_store
-        .resolve_anthropic_upstream_route_candidates(&key)
-        .await
-    {
-        Ok(routes) => routes,
+        Ok(resolution) => resolution,
         Err(err) => {
             tracing::warn!(
                 key_id = %key.key_id,
                 error = %err,
                 "direct anthropic upstream route resolution failed"
             );
-            return if mode == core_store::ANTHROPIC_UPSTREAM_POOL_MODE_ONLY {
-                AnthropicUpstreamDispatchOutcome::Handled(kiro_json_error(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "api_error",
-                    "direct Anthropic upstream route resolution failed",
-                ))
-            } else {
-                AnthropicUpstreamDispatchOutcome::Fallback(request)
-            };
+            return AnthropicUpstreamDispatchOutcome::Handled(kiro_json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "api_error",
+                "direct Anthropic upstream route resolution failed",
+            ));
         },
     };
+    let mode = resolution.pool_mode;
+    if mode == core_store::ANTHROPIC_UPSTREAM_POOL_MODE_DISABLED {
+        return AnthropicUpstreamDispatchOutcome::Fallback(request);
+    }
+    let routes = resolution.routes;
     if routes.is_empty() {
         return if mode == core_store::ANTHROPIC_UPSTREAM_POOL_MODE_ONLY {
             AnthropicUpstreamDispatchOutcome::Handled(kiro_json_error(
@@ -184,7 +193,7 @@ pub(super) async fn maybe_dispatch_anthropic_upstream_pool(
     capture_client_request_body_json(&mut usage_meta, &replay.body);
 
     let parse_started = Instant::now();
-    let mut payload = match serde_json::from_slice::<Value>(&replay.body) {
+    let payload = match serde_json::from_slice::<Value>(&replay.body) {
         Ok(payload) => payload,
         Err(_) => {
             return AnthropicUpstreamDispatchOutcome::Handled(kiro_json_error(
@@ -209,56 +218,20 @@ pub(super) async fn maybe_dispatch_anthropic_upstream_pool(
             ))
         },
     };
-    let mapped_model =
-        match apply_model_mapping_to_json(&routes[0].model_name_map_json, &mut payload) {
-            Ok(mapping) => mapping,
-            Err(err) => {
-                tracing::warn!(
-                    key_id = %key.key_id,
-                    error = %err,
-                    "direct anthropic model mapping failed"
-                );
-                return AnthropicUpstreamDispatchOutcome::Handled(kiro_json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "api_error",
-                    "model mapping failed",
-                ));
-            },
-        };
     usage_meta.mark_pre_handler_done(clamp_duration_ms(parse_started.elapsed()));
-    let upstream_body = match serde_json::to_vec(&payload) {
-        Ok(body) => Bytes::from(body),
-        Err(err) => {
-            tracing::warn!(
-                key_id = %key.key_id,
-                error = %err,
-                "direct anthropic upstream body serialization failed"
-            );
-            return AnthropicUpstreamDispatchOutcome::Handled(kiro_json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "api_error",
-                "request serialization failed",
-            ));
-        },
-    };
-    capture_upstream_request_body_json(&mut usage_meta, &upstream_body);
 
     let context = DirectAnthropicDispatchContext {
         key: &key,
         endpoint: public_path,
         model: &original_model,
-        mapped_model: mapped_model.as_deref(),
         request_headers: &replay.headers,
         deps: &deps,
     };
-    let mut remaining_routes = routes;
+    let route_queue = order_routes_for_request(routes);
     let mut last_failure: Option<axum::response::Response> = None;
-    while let Some(route) = select_weighted_route(&mut remaining_routes) {
-        let response =
-            dispatch_one_route(&context, &route, upstream_body.clone(), &mut usage_meta).await;
-        let retryable = response.status().is_server_error()
-            || response.status() == StatusCode::TOO_MANY_REQUESTS
-            || response.status().as_u16() == 529;
+    for route in route_queue {
+        let response = dispatch_one_route(&context, &route, &payload, &mut usage_meta).await;
+        let retryable = is_retryable_direct_status(response.status());
         if !retryable {
             return AnthropicUpstreamDispatchOutcome::Handled(response);
         }
@@ -283,7 +256,31 @@ pub(super) async fn maybe_dispatch_anthropic_upstream_pool(
     }
 }
 
+fn order_routes_for_request(
+    mut routes: Vec<ProviderAnthropicUpstreamRoute>,
+) -> Vec<ProviderAnthropicUpstreamRoute> {
+    let mut ordered = Vec::with_capacity(routes.len());
+    if let Some(route) = select_weighted_route_global(&mut routes) {
+        ordered.push(route);
+    }
+    let mut local_scheduler = SmoothWeightedRoundRobin::default();
+    while let Some(route) = select_weighted_route(&mut local_scheduler, &mut routes) {
+        ordered.push(route);
+    }
+    ordered
+}
+
+fn select_weighted_route_global(
+    routes: &mut Vec<ProviderAnthropicUpstreamRoute>,
+) -> Option<ProviderAnthropicUpstreamRoute> {
+    let mut scheduler = DIRECT_ANTHROPIC_SCHEDULER
+        .lock()
+        .expect("direct anthropic scheduler lock");
+    select_weighted_route(&mut scheduler, routes)
+}
+
 fn select_weighted_route(
+    scheduler: &mut SmoothWeightedRoundRobin,
     routes: &mut Vec<ProviderAnthropicUpstreamRoute>,
 ) -> Option<ProviderAnthropicUpstreamRoute> {
     if routes.is_empty() {
@@ -296,11 +293,7 @@ fn select_weighted_route(
             weight: route.weight,
         })
         .collect::<Vec<_>>();
-    let selected_name = DIRECT_ANTHROPIC_SCHEDULER
-        .lock()
-        .expect("direct anthropic scheduler lock")
-        .select(&weighted)
-        .map(str::to_string);
+    let selected_name = scheduler.select(&weighted).map(str::to_string);
     let index = selected_name
         .and_then(|name| routes.iter().position(|route| route.channel_name == name))
         .unwrap_or(0);
@@ -316,14 +309,10 @@ fn apply_model_mapping_to_json(
         return Ok(None);
     }
     let map = serde_json::from_str::<BTreeMap<String, String>>(trimmed)?;
-    let Some(model) = payload
-        .get("model")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-    else {
+    let Some(model) = payload.get("model").and_then(Value::as_str) else {
         return Ok(None);
     };
-    let Some(target) = map.get(&model).cloned() else {
+    let Some(target) = map.get(model).cloned() else {
         return Ok(None);
     };
     if target == model {
@@ -336,10 +325,19 @@ fn apply_model_mapping_to_json(
     Ok(Some(target))
 }
 
+fn build_route_payload(
+    model_name_map_json: &str,
+    payload: &Value,
+) -> anyhow::Result<(Value, Option<String>)> {
+    let mut route_payload = payload.clone();
+    let mapped_model = apply_model_mapping_to_json(model_name_map_json, &mut route_payload)?;
+    Ok((route_payload, mapped_model))
+}
+
 async fn dispatch_one_route(
     context: &DirectAnthropicDispatchContext<'_>,
     route: &ProviderAnthropicUpstreamRoute,
-    upstream_body: Bytes,
+    payload: &Value,
     usage_meta: &mut ProviderUsageMetadata,
 ) -> axum::response::Response {
     let _key_permit = match try_acquire_key_permit(
@@ -390,11 +388,46 @@ async fn dispatch_one_route(
             );
         },
     };
+    let (route_payload, mapped_model) =
+        match build_route_payload(&route.model_name_map_json, payload) {
+            Ok(output) => output,
+            Err(err) => {
+                tracing::warn!(
+                    key_id = %context.key.key_id,
+                    channel = %route.channel_name,
+                    error = %err,
+                    "direct anthropic model mapping failed"
+                );
+                return kiro_json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "api_error",
+                    "model mapping failed",
+                );
+            },
+        };
+    let upstream_body = match serde_json::to_vec(&route_payload) {
+        Ok(body) => Bytes::from(body),
+        Err(err) => {
+            tracing::warn!(
+                key_id = %context.key.key_id,
+                channel = %route.channel_name,
+                error = %err,
+                "direct anthropic upstream body serialization failed"
+            );
+            return kiro_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "api_error",
+                "request serialization failed",
+            );
+        },
+    };
+    capture_upstream_request_body_json(usage_meta, &upstream_body);
     let mut request = client
         .post(upstream_url)
         .header(header::CONTENT_TYPE, "application/json")
         .header("x-api-key", &route.api_key)
-        .body(upstream_body);
+        .body(upstream_body.clone());
+    let usage_context = DirectAnthropicUsageContext::from_dispatch(context, mapped_model.clone());
     let anthropic_version = context
         .request_headers
         .get("anthropic-version")
@@ -415,11 +448,12 @@ async fn dispatch_one_route(
             usage_meta.capture_error_class("upstream_transport_error");
             let status = StatusCode::BAD_GATEWAY;
             record_direct_usage(
-                context,
+                &usage_context,
                 route,
                 status,
                 AnthropicUsageSummary::missing(),
                 usage_meta,
+                Some(upstream_body.clone()),
             )
             .await;
             return kiro_json_error(
@@ -432,18 +466,32 @@ async fn dispatch_one_route(
     usage_meta.mark_upstream_headers();
     let status = response.status();
     let headers = response.headers().clone();
-    let body = match response.bytes().await {
+    if status.is_success() && is_anthropic_event_stream(&headers) {
+        return build_streaming_downstream_response(
+            status,
+            &headers,
+            response,
+            usage_context,
+            route.clone(),
+            usage_meta.clone(),
+            upstream_body,
+        );
+    }
+
+    let body = match read_limited_response_body(response, MAX_DIRECT_ANTHROPIC_RESPONSE_BYTES).await
+    {
         Ok(body) => body,
         Err(err) => {
-            capture_error_message(usage_meta, &err.to_string());
+            capture_error_message(usage_meta, &err);
             usage_meta.capture_error_class("upstream_body_error");
             let status = StatusCode::BAD_GATEWAY;
             record_direct_usage(
-                context,
+                &usage_context,
                 route,
                 status,
                 AnthropicUsageSummary::missing(),
                 usage_meta,
+                Some(upstream_body),
             )
             .await;
             return kiro_json_error(
@@ -460,16 +508,158 @@ async fn dispatch_one_route(
         usage_meta.capture_error_class("upstream_error");
     }
     let usage = parse_anthropic_response_usage(&headers, &body);
-    record_direct_usage(context, route, status, usage, usage_meta).await;
+    let usage = if !status.is_success() && is_retryable_direct_status(status) {
+        AnthropicUsageSummary::missing()
+    } else {
+        usage
+    };
+    record_direct_usage(&usage_context, route, status, usage, usage_meta, Some(upstream_body))
+        .await;
     build_downstream_response(status, &headers, body)
 }
 
-fn parse_anthropic_response_usage(headers: &HeaderMap, body: &Bytes) -> AnthropicUsageSummary {
-    let content_type = headers
+async fn read_limited_response_body(
+    response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Bytes, String> {
+    if response
+        .content_length()
+        .is_some_and(|len| len > max_bytes as u64)
+    {
+        return Err("direct Anthropic upstream response is too large".to_string());
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk =
+            chunk.map_err(|err| format!("failed to read direct Anthropic upstream body: {err}"))?;
+        if body.len().saturating_add(chunk.len()) > max_bytes {
+            return Err("direct Anthropic upstream response is too large".to_string());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(Bytes::from(body))
+}
+
+fn is_anthropic_event_stream(headers: &HeaderMap) -> bool {
+    headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    if content_type.contains("text/event-stream") {
+        .is_some_and(|value| {
+            value
+                .split(';')
+                .any(|part| part.trim().eq_ignore_ascii_case("text/event-stream"))
+        })
+}
+
+fn is_retryable_direct_status(status: StatusCode) -> bool {
+    status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS || status.as_u16() == 529
+}
+
+fn build_streaming_downstream_response(
+    status: StatusCode,
+    headers: &HeaderMap,
+    response: reqwest::Response,
+    usage_context: DirectAnthropicUsageContext,
+    route: ProviderAnthropicUpstreamRoute,
+    mut usage_meta: ProviderUsageMetadata,
+    upstream_body: Bytes,
+) -> axum::response::Response {
+    let mut body_stream = response.bytes_stream();
+    let body = stream! {
+        let mut usage = AnthropicUsageSummary::missing();
+        let mut pending_line = String::new();
+        while let Some(chunk_result) = body_stream.next().await {
+            let chunk = match chunk_result {
+                Ok(chunk) => chunk,
+                Err(err) => {
+                    capture_error_message(&mut usage_meta, &err.to_string());
+                    usage_meta.capture_error_class("upstream_body_error");
+                    usage_meta.mark_stream_internal_incomplete();
+                    record_direct_usage(
+                        &usage_context,
+                        &route,
+                        StatusCode::BAD_GATEWAY,
+                        AnthropicUsageSummary::missing(),
+                        &usage_meta,
+                        Some(upstream_body.clone()),
+                    )
+                    .await;
+                    yield Err(io::Error::other(format!(
+                        "failed to read direct Anthropic upstream stream: {err}"
+                    )));
+                    return;
+                },
+            };
+            usage_meta.observe_stream_write(chunk.len(), None);
+            observe_anthropic_sse_chunk(&chunk, &mut pending_line, &mut usage);
+            yield Ok::<Bytes, io::Error>(chunk);
+        }
+        observe_anthropic_sse_tail(&mut pending_line, &mut usage);
+        usage_meta.mark_post_headers_body();
+        usage_meta.mark_stream_completed_cleanly();
+        record_direct_usage(
+            &usage_context,
+            &route,
+            status,
+            usage,
+            &usage_meta,
+            Some(upstream_body),
+        )
+        .await;
+    };
+    let mut builder = Response::builder().status(status);
+    for (name, value) in headers {
+        if is_hop_by_hop_header(name.as_str()) || *name == header::CONTENT_LENGTH {
+            continue;
+        }
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(Body::from_stream(body))
+        .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
+}
+
+fn observe_anthropic_sse_chunk(
+    chunk: &Bytes,
+    pending_line: &mut String,
+    usage: &mut AnthropicUsageSummary,
+) {
+    pending_line.push_str(&String::from_utf8_lossy(chunk));
+    while let Some(line_end) = pending_line.find('\n') {
+        let mut line = pending_line[..line_end].to_string();
+        if line.ends_with('\r') {
+            line.pop();
+        }
+        observe_anthropic_sse_line(&line, usage);
+        pending_line.drain(..=line_end);
+    }
+}
+
+fn observe_anthropic_sse_tail(pending_line: &mut String, usage: &mut AnthropicUsageSummary) {
+    if pending_line.is_empty() {
+        return;
+    }
+    let line = std::mem::take(pending_line);
+    observe_anthropic_sse_line(&line, usage);
+}
+
+fn observe_anthropic_sse_line(line: &str, usage: &mut AnthropicUsageSummary) {
+    let Some(data) = line.trim_start().strip_prefix("data:") else {
+        return;
+    };
+    let data = data.trim();
+    if data.is_empty() || data == "[DONE]" {
+        return;
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+        return;
+    };
+    *usage = merge_usage(*usage, parse_usage_from_value(&value));
+}
+
+fn parse_anthropic_response_usage(headers: &HeaderMap, body: &Bytes) -> AnthropicUsageSummary {
+    if is_anthropic_event_stream(headers) {
         return parse_anthropic_sse_usage(body);
     }
     serde_json::from_slice::<serde_json::Value>(body)
@@ -478,36 +668,26 @@ fn parse_anthropic_response_usage(headers: &HeaderMap, body: &Bytes) -> Anthropi
 }
 
 fn parse_anthropic_sse_usage(body: &Bytes) -> AnthropicUsageSummary {
-    let text = String::from_utf8_lossy(body);
     let mut usage = AnthropicUsageSummary::missing();
-    for line in text.lines() {
-        let Some(data) = line.trim_start().strip_prefix("data:") else {
-            continue;
-        };
-        let data = data.trim();
-        if data.is_empty() || data == "[DONE]" {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
-            continue;
-        };
-        usage = merge_usage(usage, parse_usage_from_value(&value));
-    }
+    let mut pending_line = String::new();
+    observe_anthropic_sse_chunk(body, &mut pending_line, &mut usage);
+    observe_anthropic_sse_tail(&mut pending_line, &mut usage);
     usage
 }
 
 async fn record_direct_usage(
-    context: &DirectAnthropicDispatchContext<'_>,
+    context: &DirectAnthropicUsageContext,
     route: &ProviderAnthropicUpstreamRoute,
     status: StatusCode,
     usage: AnthropicUsageSummary,
     meta: &ProviderUsageMetadata,
+    upstream_request_body_json: Option<Bytes>,
 ) {
     let billable_tokens = if usage.usage_missing {
         0
     } else {
         core_store::compute_kiro_billable_tokens(
-            Some(context.mapped_model.unwrap_or(context.model)),
+            Some(context.mapped_model.as_deref().unwrap_or(&context.model)),
             usage.input_uncached_tokens.max(0) as u64,
             usage.input_cached_tokens.max(0) as u64,
             usage.output_tokens.max(0) as u64,
@@ -527,9 +707,9 @@ async fn record_direct_usage(
         route_strategy_at_event: Some(route.route_strategy_at_event),
         request_method: meta.request_method.clone(),
         request_url: meta.request_url.clone(),
-        endpoint: context.endpoint.to_string(),
-        model: Some(context.model.to_string()),
-        mapped_model: context.mapped_model.map(ToString::to_string),
+        endpoint: context.endpoint.clone(),
+        model: Some(context.model.clone()),
+        mapped_model: context.mapped_model.clone(),
         status_code: status.as_u16() as i64,
         request_body_bytes: meta.request_body_bytes,
         quota_failover_count: meta.quota_failover_count,
@@ -552,8 +732,8 @@ async fn record_direct_usage(
         ip_region: meta.ip_region.clone(),
         request_headers_json: meta.request_headers_json.clone(),
         last_message_content: meta.last_message_content.clone(),
-        client_request_body_json: None,
-        upstream_request_body_json: None,
+        client_request_body_json: captured_body_json(&meta.client_request_body_json),
+        upstream_request_body_json: captured_body_json(&upstream_request_body_json),
         full_request_json: None,
         error_message: meta.error_message.clone(),
         error_class: meta.error_class.clone(),
@@ -623,7 +803,7 @@ fn build_downstream_response(
 
 fn is_hop_by_hop_header(name: &str) -> bool {
     matches!(
-        name.to_ascii_lowercase().as_str(),
+        name,
         "connection"
             | "keep-alive"
             | "proxy-authenticate"
@@ -637,9 +817,15 @@ fn is_hop_by_hop_header(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use axum::body::Bytes;
+    use axum::{
+        body::Bytes,
+        http::{header, HeaderMap, HeaderValue, StatusCode},
+    };
 
-    use super::parse_anthropic_sse_usage;
+    use super::{
+        build_route_payload, is_anthropic_event_stream, is_retryable_direct_status,
+        observe_anthropic_sse_chunk, observe_anthropic_sse_tail, parse_anthropic_sse_usage,
+    };
 
     #[test]
     fn parses_anthropic_sse_usage_without_double_counting_cache() {
@@ -660,5 +846,72 @@ data: [DONE]
         assert_eq!(usage.input_uncached_tokens, 14);
         assert_eq!(usage.input_cached_tokens, 20);
         assert_eq!(usage.output_tokens, 9);
+    }
+
+    #[test]
+    fn parses_anthropic_sse_usage_across_chunk_boundaries() {
+        let mut usage = llm_access_anthropic_pool::AnthropicUsageSummary::missing();
+        let mut pending_line = String::new();
+
+        observe_anthropic_sse_chunk(
+            &Bytes::from_static(br#"data: {"usage":{"input_tokens":7,"#),
+            &mut pending_line,
+            &mut usage,
+        );
+        observe_anthropic_sse_chunk(
+            &Bytes::from_static(
+                br#""cache_read_input_tokens":2,"output_tokens":4}}
+data: [DONE]
+"#,
+            ),
+            &mut pending_line,
+            &mut usage,
+        );
+        observe_anthropic_sse_tail(&mut pending_line, &mut usage);
+
+        assert!(!usage.usage_missing);
+        assert_eq!(usage.input_uncached_tokens, 7);
+        assert_eq!(usage.input_cached_tokens, 2);
+        assert_eq!(usage.output_tokens, 4);
+    }
+
+    #[test]
+    fn detects_event_stream_content_type_without_allocating_header_name() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("Text/Event-Stream; charset=utf-8"),
+        );
+
+        assert!(is_anthropic_event_stream(&headers));
+    }
+
+    #[test]
+    fn classifies_direct_upstream_retryable_statuses() {
+        assert!(is_retryable_direct_status(StatusCode::TOO_MANY_REQUESTS));
+        assert!(is_retryable_direct_status(StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(is_retryable_direct_status(StatusCode::from_u16(529).expect("status")));
+        assert!(!is_retryable_direct_status(StatusCode::BAD_REQUEST));
+    }
+
+    #[test]
+    fn builds_route_payload_with_route_specific_model_mapping() {
+        let payload = serde_json::json!({
+            "model": "public-model",
+            "messages": []
+        });
+
+        let (route_a_payload, route_a_model) =
+            build_route_payload(r#"{"public-model":"upstream-a"}"#, &payload)
+                .expect("route a payload");
+        let (route_b_payload, route_b_model) =
+            build_route_payload(r#"{"public-model":"upstream-b"}"#, &payload)
+                .expect("route b payload");
+
+        assert_eq!(route_a_model.as_deref(), Some("upstream-a"));
+        assert_eq!(route_b_model.as_deref(), Some("upstream-b"));
+        assert_eq!(route_a_payload["model"], "upstream-a");
+        assert_eq!(route_b_payload["model"], "upstream-b");
+        assert_eq!(payload["model"], "public-model");
     }
 }
