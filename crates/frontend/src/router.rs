@@ -151,10 +151,10 @@ pub enum Route {
     AdminKiroGateway,
 
     #[cfg(not(feature = "mock"))]
-    #[at("/admin/kiro-gateway/anthropic-upstreams")]
+    #[at("/admin/kiro-gateway/upstream-channels")]
     AdminKiroAnthropicUpstreams,
     #[cfg(feature = "mock")]
-    #[at("/static_flow/admin/kiro-gateway/anthropic-upstreams")]
+    #[at("/static_flow/admin/kiro-gateway/upstream-channels")]
     AdminKiroAnthropicUpstreams,
 
     #[cfg(not(feature = "mock"))]

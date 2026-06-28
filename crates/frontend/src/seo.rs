@@ -295,7 +295,7 @@ fn route_path_for(route: &Route) -> String {
         Route::AdminKiroGateway => config::route_path("/admin/kiro-gateway"),
         Route::AdminKiroAccountStatus => config::route_path("/admin/kiro-gateway/accounts"),
         Route::AdminKiroAnthropicUpstreams => {
-            config::route_path("/admin/kiro-gateway/anthropic-upstreams")
+            config::route_path("/admin/kiro-gateway/upstream-channels")
         },
         Route::AdminGpt2ApiRs => config::route_path("/admin/gpt2api-rs"),
         Route::AdminCommentRuns {
