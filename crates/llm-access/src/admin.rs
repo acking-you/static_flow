@@ -107,6 +107,7 @@ const MAX_RUNTIME_KIRO_CACHE_SNAPSHOT_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
 const MAX_RUNTIME_KIRO_CACHE_SNAPSHOT_CAP: u64 = i64::MAX as u64;
 const MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY: u64 = 1_024;
 const MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS: u64 = 300_000;
+const MAX_ANTHROPIC_UPSTREAM_WEIGHT: u64 = 1_000_000;
 const DEFAULT_ADMIN_REVIEW_QUEUE_LIMIT: usize = 50;
 const MAX_ADMIN_REVIEW_QUEUE_LIMIT: usize = 200;
 const DEFAULT_ADMIN_LIST_LIMIT: usize = 50;
@@ -227,6 +228,16 @@ struct AdminCodexImportJobsResponse {
 struct AdminKiroAccountsResponse {
     accounts: Vec<core_store::AdminKiroAccount>,
     summary: core_store::AdminAccountsSummary,
+    total: usize,
+    limit: usize,
+    offset: usize,
+    has_more: bool,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminAnthropicUpstreamChannelsResponse {
+    channels: Vec<core_store::AdminAnthropicUpstreamChannel>,
     total: usize,
     limit: usize,
     offset: usize,
@@ -554,6 +565,8 @@ pub(crate) struct PatchLlmGatewayKeyRequest {
     #[serde(default)]
     preferred_pool_strategy: Option<String>,
     #[serde(default)]
+    kiro_anthropic_upstream_pool_mode: Option<String>,
+    #[serde(default)]
     model_name_map: Option<BTreeMap<String, String>>,
     #[serde(default)]
     request_max_concurrency: Option<u64>,
@@ -593,6 +606,47 @@ pub(crate) struct PatchLlmGatewayKeyRequest {
     kiro_cache_policy_override_json: Option<Option<String>>,
     #[serde(default)]
     kiro_billable_model_multipliers_override_json: Option<Option<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateAdminAnthropicUpstreamChannelRequest {
+    name: String,
+    base_url: String,
+    api_key: String,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    weight: Option<u64>,
+    #[serde(default)]
+    max_concurrency: Option<u64>,
+    #[serde(default)]
+    min_start_interval_ms: Option<u64>,
+    #[serde(default)]
+    proxy_mode: Option<String>,
+    #[serde(default)]
+    proxy_config_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PatchAdminAnthropicUpstreamChannelRequest {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    weight: Option<u64>,
+    #[serde(default)]
+    max_concurrency: Option<u64>,
+    #[serde(default)]
+    min_start_interval_ms: Option<u64>,
+    #[serde(default)]
+    proxy_mode: Option<String>,
+    #[serde(default)]
+    proxy_config_id: Option<Option<String>>,
+    #[serde(default)]
+    clear_last_error: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2724,6 +2778,110 @@ pub(crate) async fn get_admin_kiro_cache_stats(
         generated_at: now_ms(),
     })
     .into_response()
+}
+
+pub(crate) async fn list_admin_anthropic_upstream_channels(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminListQuery>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let page_request = admin_page_request(query);
+    match state
+        .admin_anthropic_upstream_store
+        .list_admin_anthropic_upstream_channels_page(page_request)
+        .await
+    {
+        Ok(page) => Json(AdminAnthropicUpstreamChannelsResponse {
+            channels: page.channels,
+            total: page.total,
+            limit: page.limit,
+            offset: page.offset,
+            has_more: page.has_more,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to list Anthropic upstream channels").into_response(),
+    }
+}
+
+pub(crate) async fn create_admin_anthropic_upstream_channel(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateAdminAnthropicUpstreamChannelRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let channel = match normalize_new_anthropic_upstream_channel(request) {
+        Ok(channel) => channel,
+        Err(response) => return response.into_response(),
+    };
+    match state
+        .admin_anthropic_upstream_store
+        .create_admin_anthropic_upstream_channel(channel)
+        .await
+    {
+        Ok(channel) => Json(channel).into_response(),
+        Err(_) => internal_error("Failed to create Anthropic upstream channel").into_response(),
+    }
+}
+
+pub(crate) async fn patch_admin_anthropic_upstream_channel(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(request): Json<PatchAdminAnthropicUpstreamChannelRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_name(&name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    let patch = match normalize_anthropic_upstream_channel_patch(request) {
+        Ok(patch) => patch,
+        Err(response) => return response.into_response(),
+    };
+    match state
+        .admin_anthropic_upstream_store
+        .patch_admin_anthropic_upstream_channel(&name, patch)
+        .await
+    {
+        Ok(Some(channel)) => Json(channel).into_response(),
+        Ok(None) => not_found("Anthropic upstream channel not found").into_response(),
+        Err(_) => internal_error("Failed to update Anthropic upstream channel").into_response(),
+    }
+}
+
+pub(crate) async fn delete_admin_anthropic_upstream_channel(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_name(&name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    match state
+        .admin_anthropic_upstream_store
+        .delete_admin_anthropic_upstream_channel(&name)
+        .await
+    {
+        Ok(Some(channel)) => Json(DeleteResponse {
+            deleted: true,
+            id: channel.name,
+        })
+        .into_response(),
+        Ok(None) => not_found("Anthropic upstream channel not found").into_response(),
+        Err(_) => internal_error("Failed to delete Anthropic upstream channel").into_response(),
+    }
 }
 
 pub(crate) fn kiro_cache_simulation_config_from_admin_config(
@@ -6183,6 +6341,11 @@ fn normalize_key_patch(
         .as_deref()
         .map(normalize_kiro_pool_strategy_input)
         .transpose()?;
+    let kiro_anthropic_upstream_pool_mode = request
+        .kiro_anthropic_upstream_pool_mode
+        .as_deref()
+        .map(normalize_anthropic_upstream_pool_mode_input)
+        .transpose()?;
     let request_max_concurrency = if request.request_max_concurrency_unlimited {
         Some(None)
     } else {
@@ -6227,6 +6390,7 @@ fn normalize_key_patch(
         fixed_account_name,
         auto_account_names,
         preferred_pool_strategy,
+        kiro_anthropic_upstream_pool_mode,
         model_name_map: request.model_name_map.map(Some),
         request_max_concurrency,
         request_min_start_interval_ms,
@@ -6287,6 +6451,147 @@ fn normalize_status(raw: &str) -> Result<String, AdminHttpError> {
     }
 }
 
+fn normalize_anthropic_upstream_base_url(raw: &str) -> Result<String, AdminHttpError> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    let parsed =
+        url::Url::parse(trimmed).map_err(|_| bad_request("base_url must be a valid URL"))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(bad_request("base_url must be an http(s) URL"));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn normalize_anthropic_upstream_proxy_mode(raw: Option<&str>) -> Result<String, AdminHttpError> {
+    let mode = raw
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("inherit");
+    match mode {
+        "inherit" | "direct" | "fixed" => Ok(mode.to_string()),
+        _ => Err(bad_request("proxy_mode must be `inherit`, `direct`, or `fixed`")),
+    }
+}
+
+fn normalize_new_anthropic_upstream_channel(
+    request: CreateAdminAnthropicUpstreamChannelRequest,
+) -> Result<core_store::NewAdminAnthropicUpstreamChannel, AdminHttpError> {
+    let name = normalize_name(&request.name)?;
+    let status = match request.status.as_deref() {
+        Some(raw) => normalize_status(raw)?,
+        None => KEY_STATUS_ACTIVE.to_string(),
+    };
+    let base_url = normalize_anthropic_upstream_base_url(&request.base_url)?;
+    let api_key = request.api_key.trim().to_string();
+    if api_key.is_empty() {
+        return Err(bad_request("api_key is required"));
+    }
+    let weight = request
+        .weight
+        .unwrap_or(core_store::DEFAULT_ANTHROPIC_UPSTREAM_WEIGHT);
+    validate_max("weight", weight, MAX_ANTHROPIC_UPSTREAM_WEIGHT)?;
+    let max_concurrency = request
+        .max_concurrency
+        .unwrap_or(core_store::DEFAULT_ANTHROPIC_UPSTREAM_MAX_CONCURRENCY);
+    validate_range("max_concurrency", max_concurrency, 1, MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY)?;
+    let min_start_interval_ms = request
+        .min_start_interval_ms
+        .unwrap_or(core_store::DEFAULT_ANTHROPIC_UPSTREAM_MIN_START_INTERVAL_MS);
+    validate_max(
+        "min_start_interval_ms",
+        min_start_interval_ms,
+        MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS,
+    )?;
+    let proxy_mode = normalize_anthropic_upstream_proxy_mode(request.proxy_mode.as_deref())?;
+    let proxy_config_id = request
+        .proxy_config_id
+        .as_deref()
+        .and_then(normalize_optional_string);
+    if proxy_mode == "fixed" && proxy_config_id.is_none() {
+        return Err(bad_request("proxy_config_id is required when proxy_mode is `fixed`"));
+    }
+    Ok(core_store::NewAdminAnthropicUpstreamChannel {
+        name,
+        status,
+        base_url,
+        api_key,
+        weight,
+        max_concurrency,
+        min_start_interval_ms,
+        proxy_mode,
+        proxy_config_id,
+        created_at_ms: now_ms(),
+    })
+}
+
+fn normalize_anthropic_upstream_channel_patch(
+    request: PatchAdminAnthropicUpstreamChannelRequest,
+) -> Result<core_store::AdminAnthropicUpstreamChannelPatch, AdminHttpError> {
+    let status = match request.status.as_deref() {
+        Some(raw) => Some(normalize_status(raw)?),
+        None => None,
+    };
+    let base_url = request
+        .base_url
+        .as_deref()
+        .map(normalize_anthropic_upstream_base_url)
+        .transpose()?;
+    let api_key = match request.api_key {
+        Some(raw) => {
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() {
+                return Err(bad_request("api_key must not be empty"));
+            }
+            Some(trimmed)
+        },
+        None => None,
+    };
+    if let Some(weight) = request.weight {
+        validate_max("weight", weight, MAX_ANTHROPIC_UPSTREAM_WEIGHT)?;
+    }
+    if let Some(max_concurrency) = request.max_concurrency {
+        validate_range(
+            "max_concurrency",
+            max_concurrency,
+            1,
+            MAX_CODEX_KEY_REQUEST_MAX_CONCURRENCY,
+        )?;
+    }
+    if let Some(min_start_interval_ms) = request.min_start_interval_ms {
+        validate_max(
+            "min_start_interval_ms",
+            min_start_interval_ms,
+            MAX_CODEX_KEY_REQUEST_MIN_START_INTERVAL_MS,
+        )?;
+    }
+    let proxy_mode = request
+        .proxy_mode
+        .as_deref()
+        .map(|raw| normalize_anthropic_upstream_proxy_mode(Some(raw)))
+        .transpose()?;
+    let proxy_config_id = request
+        .proxy_config_id
+        .map(|value| value.as_deref().and_then(normalize_optional_string));
+    if proxy_mode.as_deref() == Some("fixed")
+        && !proxy_config_id
+            .as_ref()
+            .is_some_and(|value| value.is_some())
+    {
+        return Err(bad_request("proxy_config_id is required when proxy_mode is `fixed`"));
+    }
+    Ok(core_store::AdminAnthropicUpstreamChannelPatch {
+        status,
+        base_url,
+        api_key,
+        weight: request.weight,
+        max_concurrency: request.max_concurrency,
+        min_start_interval_ms: request.min_start_interval_ms,
+        proxy_mode,
+        proxy_config_id,
+        clear_last_error: request.clear_last_error,
+        updated_at_ms: now_ms(),
+    })
+}
+
 fn normalize_route_strategy_input(raw: &str) -> Result<Option<String>, AdminHttpError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -6302,6 +6607,17 @@ fn normalize_kiro_pool_strategy_input(raw: &str) -> Result<String, AdminHttpErro
     core_store::normalize_kiro_pool_strategy(raw)
         .map(str::to_string)
         .ok_or_else(|| bad_request("pool strategy must be `balanced` or `credit_first`"))
+}
+
+fn normalize_anthropic_upstream_pool_mode_input(raw: &str) -> Result<String, AdminHttpError> {
+    core_store::normalize_anthropic_upstream_pool_mode(raw)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            bad_request(
+                "kiro_anthropic_upstream_pool_mode must be `disabled`, `preferred_before_kiro`, \
+                 or `only`",
+            )
+        })
 }
 
 fn validate_provider_type(provider_type: &str) -> Result<(), AdminHttpError> {
@@ -7350,6 +7666,7 @@ mod tests {
             fixed_account_name: None,
             auto_account_names: None,
             preferred_pool_strategy: None,
+            kiro_anthropic_upstream_pool_mode: None,
             model_name_map: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
@@ -7418,6 +7735,7 @@ mod tests {
             kiro_cctest_text_handling_enabled: false,
             kiro_cache_policy_override_json: policy_override_json,
             kiro_billable_model_multipliers_override_json: None,
+            kiro_anthropic_upstream_pool_mode: core_store::default_anthropic_upstream_pool_mode(),
             effective_kiro_cache_policy_json: "{}".to_string(),
             uses_global_kiro_cache_policy: true,
             effective_kiro_billable_model_multipliers_json:
@@ -8493,6 +8811,50 @@ mod tests {
             patch.preferred_pool_strategy.as_deref(),
             Some(core_store::KIRO_POOL_STRATEGY_CREDIT_FIRST)
         );
+    }
+
+    #[test]
+    fn normalize_kiro_key_patch_accepts_direct_anthropic_pool_mode() {
+        let patch = normalize_kiro_key_patch(PatchLlmGatewayKeyRequest {
+            kiro_anthropic_upstream_pool_mode: Some("preferred_before_kiro".to_string()),
+            ..empty_key_patch_request()
+        })
+        .expect("kiro key patch should normalize");
+
+        assert_eq!(
+            patch.kiro_anthropic_upstream_pool_mode.as_deref(),
+            Some(core_store::ANTHROPIC_UPSTREAM_POOL_MODE_PREFERRED_BEFORE_KIRO)
+        );
+    }
+
+    #[test]
+    fn normalize_kiro_key_patch_rejects_invalid_direct_anthropic_pool_mode() {
+        let error = normalize_kiro_key_patch(PatchLlmGatewayKeyRequest {
+            kiro_anthropic_upstream_pool_mode: Some("always".to_string()),
+            ..empty_key_patch_request()
+        })
+        .expect_err("invalid direct pool mode should fail");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn normalize_anthropic_upstream_channel_requires_proxy_id_for_fixed_mode() {
+        let error =
+            normalize_new_anthropic_upstream_channel(CreateAdminAnthropicUpstreamChannelRequest {
+                name: "anthropic-a".to_string(),
+                base_url: "https://api.anthropic.com/v1".to_string(),
+                api_key: "sk-ant-test".to_string(),
+                status: None,
+                weight: None,
+                max_concurrency: None,
+                min_start_interval_ms: None,
+                proxy_mode: Some("fixed".to_string()),
+                proxy_config_id: None,
+            })
+            .expect_err("fixed proxy mode should require proxy_config_id");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
     }
 
     #[test]

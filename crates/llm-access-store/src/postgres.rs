@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use llm_access_core::{
     store::{
         self as core_store, AdminKiroBalanceView, AdminKiroCacheView, AdminProxyBinding,
-        AdminProxyConfig, AdminProxyEndpointCheck, AuthenticatedKey, CodexRateLimitStatus,
-        ControlStore, KeyUsageRollupDelta,
+        AdminProxyConfig, AdminProxyEndpointCheck, AnthropicUpstreamChannelUsageDelta,
+        AuthenticatedKey, CodexRateLimitStatus, ControlStore, KeyUsageRollupDelta,
     },
     usage::UsageEvent,
 };
@@ -27,6 +27,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::request_cache::{RequestCache, RequestCacheConfig};
 
+mod anthropic_upstream;
 mod cache;
 mod cache_convert;
 mod codex_account;
@@ -128,6 +129,28 @@ struct KiroRouteCandidateRow {
     pool_strategy: String,
     proxy_mode: Option<String>,
     auth_proxy_config_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct AnthropicUpstreamChannelRow {
+    channel_name: String,
+    status: String,
+    base_url: String,
+    api_key: Option<String>,
+    weight: i64,
+    max_concurrency: i64,
+    min_start_interval_ms: i64,
+    proxy_mode: String,
+    proxy_config_id: Option<String>,
+    last_error: Option<String>,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+    input_uncached_tokens: i64,
+    input_cached_tokens: i64,
+    output_tokens: i64,
+    billable_tokens: i64,
+    usage_missing_events: i64,
+    last_used_at_ms: Option<i64>,
 }
 
 fn normalize_manual_usage_limit(value: f64) -> Option<f64> {
@@ -722,6 +745,19 @@ impl ControlStore for PostgresControlRepository {
             key_id,
             usage_tokens,
             used_at_ms,
+        )
+        .await
+    }
+
+    async fn record_anthropic_upstream_channel_usage(
+        &self,
+        channel_name: &str,
+        delta: AnthropicUpstreamChannelUsageDelta,
+    ) -> anyhow::Result<()> {
+        PostgresControlRepository::record_anthropic_upstream_channel_usage(
+            self,
+            channel_name,
+            delta,
         )
         .await
     }

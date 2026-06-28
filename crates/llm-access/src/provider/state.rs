@@ -10,8 +10,9 @@ use axum::{
 };
 use llm_access_core::store::{
     AdminConfigStore, AdminKiroStatusCacheUpdate, AuthenticatedKey, ControlStore,
-    EmptyAdminConfigStore, ProviderCodexAuthUpdate, ProviderCodexRoute, ProviderKiroAuthUpdate,
-    ProviderKiroRoute, ProviderProxyConfig, ProviderRouteStore,
+    EmptyAdminConfigStore, ProviderAnthropicUpstreamRoute, ProviderCodexAuthUpdate,
+    ProviderCodexRoute, ProviderKiroAuthUpdate, ProviderKiroRoute, ProviderProxyConfig,
+    ProviderRouteStore,
 };
 use llm_access_kiro::{
     cache_sim::{KiroCacheRuntimeStats, KiroCacheSimulationConfig, KiroCacheSimulator},
@@ -226,6 +227,14 @@ impl ForcedProxyRouteStore {
         route.proxy = Some(self.proxy.clone());
         route
     }
+
+    fn force_anthropic_upstream_proxy(
+        &self,
+        mut route: ProviderAnthropicUpstreamRoute,
+    ) -> ProviderAnthropicUpstreamRoute {
+        route.proxy = Some(self.proxy.clone());
+        route
+    }
 }
 #[async_trait]
 impl ProviderRouteStore for ForcedProxyRouteStore {
@@ -286,6 +295,26 @@ impl ProviderRouteStore for ForcedProxyRouteStore {
             .into_iter()
             .map(|route| self.force_kiro_proxy(route))
             .collect())
+    }
+
+    async fn resolve_anthropic_upstream_route_candidates(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<Vec<ProviderAnthropicUpstreamRoute>> {
+        Ok(self
+            .inner
+            .resolve_anthropic_upstream_route_candidates(key)
+            .await?
+            .into_iter()
+            .map(|route| self.force_anthropic_upstream_proxy(route))
+            .collect())
+    }
+
+    async fn resolve_anthropic_upstream_pool_mode(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<String> {
+        self.inner.resolve_anthropic_upstream_pool_mode(key).await
     }
 
     async fn resolve_kiro_account_route(

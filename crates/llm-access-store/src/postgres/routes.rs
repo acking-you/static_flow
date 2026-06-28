@@ -9,8 +9,9 @@ use llm_access_core::{
     provider::RouteStrategy,
     store::{
         self as core_store, AdminCodexAccountStore, AdminKiroAccountStore, AdminKiroBalanceView,
-        AdminKiroCacheView, AdminKiroStatusCacheUpdate, AuthenticatedKey, ProviderCodexAuthUpdate,
-        ProviderCodexRoute, ProviderKiroAuthUpdate, ProviderKiroRoute, ProviderRouteStore,
+        AdminKiroCacheView, AdminKiroStatusCacheUpdate, AuthenticatedKey,
+        ProviderAnthropicUpstreamRoute, ProviderCodexAuthUpdate, ProviderCodexRoute,
+        ProviderKiroAuthUpdate, ProviderKiroRoute, ProviderRouteStore,
     },
 };
 
@@ -22,8 +23,10 @@ use super::{
     },
     decode::decode_codex_account_settings,
     json::decode_optional_json,
-    normalize_manual_usage_limit, CodexRouteCandidateRow, KiroCachedStatusParts,
-    KiroRouteCandidateRow, PostgresControlRepository,
+    normalize_manual_usage_limit,
+    proxy_support::resolve_provider_proxy_config_from_context,
+    CodexRouteCandidateRow, KiroCachedStatusParts, KiroRouteCandidateRow,
+    PostgresControlRepository, ProviderProxyResolutionContext,
 };
 use crate::records::{KeyRouteConfig, RuntimeConfigRecord};
 
@@ -698,6 +701,101 @@ impl ProviderRouteStore for PostgresControlRepository {
             });
         }
         Ok(routes)
+    }
+
+    async fn resolve_anthropic_upstream_route_candidates(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<Vec<ProviderAnthropicUpstreamRoute>> {
+        let Some(snapshot) = self.load_kiro_request_snapshot_cached(&key.key_id).await? else {
+            return Ok(Vec::new());
+        };
+        if snapshot.key.provider_type != core_store::PROVIDER_KIRO {
+            return Ok(Vec::new());
+        }
+        let pool_mode = core_store::canonical_anthropic_upstream_pool_mode(Some(
+            &snapshot.anthropic_upstream_pool_mode,
+        ));
+        if pool_mode == core_store::ANTHROPIC_UPSTREAM_POOL_MODE_DISABLED {
+            return Ok(Vec::new());
+        }
+        let route_strategy_at_event = match snapshot.route_strategy.as_str() {
+            "fixed" => RouteStrategy::Fixed,
+            _ => RouteStrategy::Auto,
+        };
+        let proxy_configs_by_id = self
+            .load_admin_proxy_configs_cached()
+            .await?
+            .into_iter()
+            .map(|proxy| (proxy.id.clone(), proxy))
+            .collect::<BTreeMap<_, _>>();
+        let binding = self
+            .load_admin_proxy_binding_from_configs(core_store::PROVIDER_KIRO, &proxy_configs_by_id)
+            .await?;
+        let proxy_context = ProviderProxyResolutionContext {
+            proxy_configs_by_id,
+            binding,
+        };
+        let mut routes = Vec::new();
+        for row in self
+            .list_anthropic_upstream_channel_rows(true)
+            .await?
+            .into_iter()
+        {
+            if row.status != core_store::KEY_STATUS_ACTIVE || row.weight <= 0 {
+                continue;
+            }
+            let Some(api_key) = row.api_key.filter(|value| !value.is_empty()) else {
+                continue;
+            };
+            let proxy = match resolve_provider_proxy_config_from_context(
+                &row.proxy_mode,
+                row.proxy_config_id.as_deref(),
+                &proxy_context,
+            ) {
+                Ok(proxy) => proxy,
+                Err(err) => {
+                    tracing::warn!(
+                        channel = %row.channel_name,
+                        error = %err,
+                        "anthropic upstream channel proxy resolution failed; skipping channel"
+                    );
+                    continue;
+                },
+            };
+            routes.push(ProviderAnthropicUpstreamRoute {
+                channel_name: row.channel_name,
+                pool_mode_at_event: pool_mode.clone(),
+                account_group_id_at_event: snapshot.account_group_id_at_event.clone(),
+                route_strategy_at_event,
+                base_url: row.base_url,
+                api_key,
+                weight: row.weight.max(0) as u64,
+                request_max_concurrency: snapshot.request_max_concurrency,
+                request_min_start_interval_ms: snapshot.request_min_start_interval_ms,
+                channel_max_concurrency: row.max_concurrency.max(1) as u64,
+                channel_min_start_interval_ms: row.min_start_interval_ms.max(0) as u64,
+                model_name_map_json: snapshot.model_name_map_json.clone(),
+                billable_model_multipliers_json: snapshot.billable_model_multipliers_json.clone(),
+                proxy,
+            });
+        }
+        Ok(routes)
+    }
+
+    async fn resolve_anthropic_upstream_pool_mode(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<String> {
+        let Some(snapshot) = self.load_kiro_request_snapshot_cached(&key.key_id).await? else {
+            return Ok(core_store::default_anthropic_upstream_pool_mode());
+        };
+        if snapshot.key.provider_type != core_store::PROVIDER_KIRO {
+            return Ok(core_store::default_anthropic_upstream_pool_mode());
+        }
+        Ok(core_store::canonical_anthropic_upstream_pool_mode(Some(
+            &snapshot.anthropic_upstream_pool_mode,
+        )))
     }
 
     async fn resolve_kiro_account_route(

@@ -45,6 +45,10 @@ fn default_kiro_pool_strategy() -> String {
     llm_access_core::store::default_kiro_pool_strategy()
 }
 
+fn default_anthropic_upstream_pool_mode() -> String {
+    llm_access_core::store::default_anthropic_upstream_pool_mode()
+}
+
 const fn default_codex_image_generation_max_concurrency() -> u64 {
     llm_access_core::store::DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY
 }
@@ -156,6 +160,10 @@ pub(crate) struct CachedKiroRequestSnapshot {
     /// Defaulted so Valkey payloads written before pool routing still decode.
     #[serde(default = "default_kiro_pool_strategy")]
     pub preferred_pool_strategy: String,
+    /// Defaulted so Valkey payloads written before direct Anthropic routing
+    /// still decode and keep old Kiro behavior.
+    #[serde(default = "default_anthropic_upstream_pool_mode")]
+    pub anthropic_upstream_pool_mode: String,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
     pub request_validation_enabled: bool,
@@ -278,7 +286,7 @@ pub(crate) struct CachedAccountAuth {
 mod codex_image_cache_tests {
     use serde_json::json;
 
-    use super::{CachedCodexAccountView, CachedCodexRequestSnapshot};
+    use super::{CachedCodexAccountView, CachedCodexRequestSnapshot, CachedKiroRequestSnapshot};
 
     #[test]
     fn legacy_codex_request_snapshot_defaults_standalone_image_generation_enabled_and_direct_disabled(
@@ -333,6 +341,53 @@ mod codex_image_cache_tests {
 
         assert!(!view.codex_image_generation_enabled);
         assert_eq!(view.codex_image_generation_max_concurrency, 3);
+    }
+
+    #[test]
+    fn legacy_kiro_request_snapshot_defaults_direct_anthropic_pool_disabled() {
+        let snapshot: CachedKiroRequestSnapshot = serde_json::from_value(json!({
+            "key": {
+                "key_id": "key-1",
+                "key_name": "Kiro",
+                "provider_type": "kiro",
+                "protocol_family": "anthropic",
+                "status": "active",
+                "quota_billable_limit": 1000,
+                "billable_tokens_used": 0
+            },
+            "generation": 7,
+            "route_strategy": "auto",
+            "account_group_id_at_event": null,
+            "selected_account_names": ["acc-a"],
+            "use_all_active_accounts": false,
+            "preferred_pool_strategy": "balanced",
+            "request_max_concurrency": null,
+            "request_min_start_interval_ms": null,
+            "request_validation_enabled": true,
+            "cache_estimation_enabled": true,
+            "zero_cache_debug_enabled": false,
+            "full_request_logging_enabled": false,
+            "remote_media_resolution_enabled": false,
+            "latency_routing_enabled": true,
+            "protected_content_validation_enabled": false,
+            "cctest_text_handling_enabled": false,
+            "model_name_map_json": "{}",
+            "cache_kmodels_json": "{}",
+            "cache_policy_json": "{}",
+            "prefix_cache_mode": "formula",
+            "prefix_cache_max_tokens": 100,
+            "prefix_cache_entry_ttl_seconds": 60,
+            "conversation_anchor_max_entries": 10,
+            "conversation_anchor_ttl_seconds": 60,
+            "billable_model_multipliers_json": "{}",
+            "status_refresh_interval_seconds": 300
+        }))
+        .expect("legacy kiro snapshot must decode");
+
+        assert_eq!(
+            snapshot.anthropic_upstream_pool_mode,
+            llm_access_core::store::ANTHROPIC_UPSTREAM_POOL_MODE_DISABLED
+        );
     }
 }
 

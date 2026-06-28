@@ -163,6 +163,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "codex_image_direct_toggle",
         sql: include_str!("../migrations/postgres/0032_codex_image_direct_toggle.sql"),
     },
+    SqlMigration {
+        version: 33,
+        name: "anthropic_upstream_pool",
+        sql: include_str!("../migrations/postgres/0033_anthropic_upstream_pool.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.
@@ -556,5 +561,24 @@ mod tests {
             .contains("codex_image_direct_generation_enabled"));
         assert!(migration.sql.contains("DEFAULT TRUE"));
         assert!(migration.sql.contains("DEFAULT FALSE"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_anthropic_upstream_pool() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "anthropic_upstream_pool")
+            .expect("anthropic upstream pool migration exists");
+
+        assert_eq!(migration.version, 33);
+        assert!(migration.sql.contains("kiro_anthropic_upstream_pool_mode"));
+        assert!(migration
+            .sql
+            .contains("CREATE TABLE IF NOT EXISTS llm_anthropic_upstream_channels"));
+        assert!(migration
+            .sql
+            .contains("llm_anthropic_upstream_channel_usage_rollups"));
+        assert!(migration.sql.contains("DEFAULT 'disabled'"));
     }
 }

@@ -35,6 +35,9 @@ use llm_access_kiro::{
 };
 
 use super::{
+    anthropic_upstream_dispatch::{
+        maybe_dispatch_anthropic_upstream_pool, AnthropicUpstreamDispatchOutcome,
+    },
     cctest::{self, build_direct_replay_body, bytes_to_string, CctestProbeMatch},
     client::{cctest_proxy_client, provider_client},
     errors::{
@@ -95,6 +98,21 @@ pub async fn dispatch_kiro_proxy(
     request: Request<Body>,
     deps: ProviderDispatchDeps,
 ) -> Response {
+    if request.uri().path() == "/v1/models" {
+        if request.method() == Method::GET {
+            return axum::Json(supported_models_response()).into_response();
+        }
+        return kiro_json_error(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "invalid_request_error",
+            "unsupported method",
+        );
+    }
+    let request =
+        match maybe_dispatch_anthropic_upstream_pool(key.clone(), request, deps.clone()).await {
+            AnthropicUpstreamDispatchOutcome::Handled(response) => return response,
+            AnthropicUpstreamDispatchOutcome::Fallback(request) => request,
+        };
     let ProviderDispatchDeps {
         route_store,
         control_store,
@@ -107,16 +125,6 @@ pub async fn dispatch_kiro_proxy(
         protected_thinking_signature_secret,
         ..
     } = deps;
-    if request.uri().path() == "/v1/models" {
-        if request.method() == Method::GET {
-            return axum::Json(supported_models_response()).into_response();
-        }
-        return kiro_json_error(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "invalid_request_error",
-            "unsupported method",
-        );
-    }
     let mut usage_meta = ProviderUsageMetadata::from_request_parts(
         request.method(),
         request.uri(),

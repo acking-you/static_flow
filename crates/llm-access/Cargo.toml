@@ -27,6 +27,7 @@ flate2 = "1.1"
 futures-util = "0.3"
 llm-access-codex = { path = "../llm-access-codex" }
 llm-access-codex-image = { path = "../llm-access-codex-image" }
+llm-access-anthropic-pool = { path = "../llm-access-anthropic-pool" }
 llm-access-core = { path = "../llm-access-core" }
 llm-access-kiro = { path = "../llm-access-kiro" }
 llm-access-store = { path = "../llm-access-store" }

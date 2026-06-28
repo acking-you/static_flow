@@ -6,6 +6,7 @@
 //! splits the data model + `*Store` trait interfaces + their `Empty*`
 //! no-op impls into focused submodules, re-exported by name.
 
+mod anthropic_upstream;
 mod codex_account;
 mod codex_status;
 mod config;
@@ -19,6 +20,17 @@ mod routes;
 mod traits;
 mod usage;
 
+pub use anthropic_upstream::{
+    canonical_anthropic_upstream_pool_mode, default_anthropic_upstream_pool_mode,
+    normalize_anthropic_upstream_pool_mode, AdminAnthropicUpstreamChannel,
+    AdminAnthropicUpstreamChannelPatch, AdminAnthropicUpstreamChannelsPage,
+    AdminAnthropicUpstreamUsageRollup, AnthropicUpstreamChannelUsageDelta,
+    NewAdminAnthropicUpstreamChannel, ProviderAnthropicUpstreamRoute,
+    ANTHROPIC_UPSTREAM_POOL_MODE_DISABLED, ANTHROPIC_UPSTREAM_POOL_MODE_ONLY,
+    ANTHROPIC_UPSTREAM_POOL_MODE_PREFERRED_BEFORE_KIRO, DEFAULT_ANTHROPIC_UPSTREAM_BASE_URL,
+    DEFAULT_ANTHROPIC_UPSTREAM_MAX_CONCURRENCY, DEFAULT_ANTHROPIC_UPSTREAM_MIN_START_INTERVAL_MS,
+    DEFAULT_ANTHROPIC_UPSTREAM_WEIGHT,
+};
 pub use codex_account::{
     AdminAccountsSummary, AdminCodexAccount, AdminCodexAccountPageQuery, AdminCodexAccountPatch,
     AdminCodexAccountSortMode, AdminCodexAccountsPage, AdminCodexImportJobDetail,
@@ -36,8 +48,8 @@ pub use config::{
     default_kiro_cache_policy_json, AdminRuntimeConfig, UpdateAdminRuntimeConfig,
 };
 pub use empty::{
-    EmptyAdminAccountGroupStore, EmptyAdminCodexAccountStore, EmptyAdminConfigStore,
-    EmptyAdminKeyStore, EmptyAdminKiroAccountStore, EmptyAdminProxyStore,
+    EmptyAdminAccountGroupStore, EmptyAdminAnthropicUpstreamStore, EmptyAdminCodexAccountStore,
+    EmptyAdminConfigStore, EmptyAdminKeyStore, EmptyAdminKiroAccountStore, EmptyAdminProxyStore,
     EmptyAdminReviewQueueStore, EmptyProviderRouteStore, EmptyPublicAccessStore,
     EmptyPublicCommunityStore, EmptyPublicStatusStore, EmptyPublicSubmissionStore,
     EmptyPublicUsageStore, EmptyUsageAnalyticsStore, NoopUsageEventSink, NoopUsageRollupBatchSink,
@@ -73,8 +85,8 @@ pub use routes::{
     ProviderProxyConfig,
 };
 pub use traits::{
-    AdminAccountGroupStore, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,
-    AdminKiroAccountStore, AdminProxyStore, AdminReviewQueueStore, ControlStore,
+    AdminAccountGroupStore, AdminAnthropicUpstreamStore, AdminCodexAccountStore, AdminConfigStore,
+    AdminKeyStore, AdminKiroAccountStore, AdminProxyStore, AdminReviewQueueStore, ControlStore,
     ProviderRouteStore, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
     PublicSubmissionStore, PublicUsageStore, UsageAnalyticsStore, UsageEventSink,
     UsageRollupBatchSink,

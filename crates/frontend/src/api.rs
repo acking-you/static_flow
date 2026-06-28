@@ -6078,6 +6078,10 @@ fn default_kiro_pool_strategy() -> String {
     llm_store::default_kiro_pool_strategy()
 }
 
+fn default_anthropic_upstream_pool_mode() -> String {
+    llm_store::default_anthropic_upstream_pool_mode()
+}
+
 fn default_kiro_cache_policy_json() -> String {
     r#"{"small_input_high_credit_boost":{"target_input_tokens":100000,"credit_start":1.0,"credit_end":1.8},"prefix_tree_credit_ratio_bands":[{"credit_start":0.3,"credit_end":1.0,"cache_ratio_start":0.7,"cache_ratio_end":0.2},{"credit_start":1.0,"credit_end":2.5,"cache_ratio_start":0.2,"cache_ratio_end":0.0}],"high_credit_diagnostic_threshold":2.0}"#.to_string()
 }
@@ -6119,6 +6123,8 @@ pub struct AdminLlmGatewayKeyView {
     pub auto_account_names: Option<Vec<String>>,
     #[serde(default = "default_kiro_pool_strategy")]
     pub preferred_pool_strategy: String,
+    #[serde(default = "default_anthropic_upstream_pool_mode")]
+    pub kiro_anthropic_upstream_pool_mode: String,
     pub model_name_map: Option<BTreeMap<String, String>>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
@@ -8998,6 +9004,7 @@ pub async fn create_admin_llm_gateway_key(
             fixed_account_name: None,
             auto_account_names: None,
             preferred_pool_strategy: default_kiro_pool_strategy(),
+            kiro_anthropic_upstream_pool_mode: default_anthropic_upstream_pool_mode(),
             model_name_map: None,
             request_max_concurrency,
             request_min_start_interval_ms,
@@ -9063,6 +9070,7 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub fixed_account_name: Option<&'a str>,
     pub auto_account_names: Option<&'a [String]>,
     pub preferred_pool_strategy: Option<&'a str>,
+    pub kiro_anthropic_upstream_pool_mode: Option<&'a str>,
     pub model_name_map: Option<&'a BTreeMap<String, String>>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
@@ -9102,6 +9110,7 @@ pub async fn patch_admin_llm_gateway_key(
             request.fixed_account_name,
             request.auto_account_names,
             request.preferred_pool_strategy,
+            request.kiro_anthropic_upstream_pool_mode,
             request.model_name_map,
             request.request_max_concurrency,
             request.request_min_start_interval_ms,
@@ -9190,6 +9199,12 @@ pub async fn patch_admin_llm_gateway_key(
             body.insert(
                 "preferred_pool_strategy".to_string(),
                 serde_json::Value::String(preferred_pool_strategy.to_string()),
+            );
+        }
+        if let Some(mode) = request.kiro_anthropic_upstream_pool_mode {
+            body.insert(
+                "kiro_anthropic_upstream_pool_mode".to_string(),
+                serde_json::Value::String(mode.to_string()),
             );
         }
         if let Some(model_name_map) = request.model_name_map {
@@ -10826,6 +10841,72 @@ pub struct AdminKiroCacheStatsResponse {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(default)]
+pub struct AdminAnthropicUpstreamUsageRollupView {
+    pub input_uncached_tokens: u64,
+    pub input_cached_tokens: u64,
+    pub output_tokens: u64,
+    pub billable_tokens: u64,
+    pub usage_missing_events: u64,
+    pub last_used_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminAnthropicUpstreamChannelView {
+    pub name: String,
+    pub status: String,
+    pub base_url: String,
+    pub has_api_key: bool,
+    pub weight: u64,
+    pub max_concurrency: u64,
+    pub min_start_interval_ms: u64,
+    pub proxy_mode: String,
+    pub proxy_config_id: Option<String>,
+    pub last_error: Option<String>,
+    pub usage: AdminAnthropicUpstreamUsageRollupView,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminAnthropicUpstreamChannelsResponse {
+    pub channels: Vec<AdminAnthropicUpstreamChannelView>,
+    pub total: usize,
+    pub limit: usize,
+    pub offset: usize,
+    pub has_more: bool,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Default)]
+pub struct CreateAdminAnthropicUpstreamChannelInput {
+    pub name: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub status: Option<String>,
+    pub weight: Option<u64>,
+    pub max_concurrency: Option<u64>,
+    pub min_start_interval_ms: Option<u64>,
+    pub proxy_mode: Option<String>,
+    pub proxy_config_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Default)]
+pub struct PatchAdminAnthropicUpstreamChannelInput {
+    pub status: Option<String>,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub weight: Option<u64>,
+    pub max_concurrency: Option<u64>,
+    pub min_start_interval_ms: Option<u64>,
+    pub proxy_mode: Option<String>,
+    pub proxy_config_id: Option<Option<String>>,
+    pub clear_last_error: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
 pub struct KiroAccountView {
     pub name: String,
     pub auth_method: String,
@@ -11300,6 +11381,7 @@ pub async fn create_admin_kiro_key(
             fixed_account_name: None,
             auto_account_names: None,
             preferred_pool_strategy: default_kiro_pool_strategy(),
+            kiro_anthropic_upstream_pool_mode: default_anthropic_upstream_pool_mode(),
             model_name_map: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
@@ -11367,6 +11449,7 @@ pub async fn patch_admin_kiro_key(
             request.fixed_account_name,
             request.auto_account_names,
             request.preferred_pool_strategy,
+            request.kiro_anthropic_upstream_pool_mode,
             request.model_name_map,
             request.request_max_concurrency,
             request.request_min_start_interval_ms,
@@ -11450,6 +11533,12 @@ pub async fn patch_admin_kiro_key(
             body.insert(
                 "preferred_pool_strategy".to_string(),
                 serde_json::Value::String(preferred_pool_strategy.to_string()),
+            );
+        }
+        if let Some(mode) = request.kiro_anthropic_upstream_pool_mode {
+            body.insert(
+                "kiro_anthropic_upstream_pool_mode".to_string(),
+                serde_json::Value::String(mode.to_string()),
             );
         }
         if let Some(model_name_map) = request.model_name_map {
@@ -11700,6 +11789,120 @@ pub async fn fetch_admin_kiro_usage_event_detail(
             .json()
             .await
             .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_anthropic_upstream_channels(
+) -> Result<AdminAnthropicUpstreamChannelsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminAnthropicUpstreamChannelsResponse::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/kiro-gateway/anthropic-upstreams", llm_access_admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn create_admin_anthropic_upstream_channel(
+    input: &CreateAdminAnthropicUpstreamChannelInput,
+) -> Result<AdminAnthropicUpstreamChannelView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = input;
+        Ok(AdminAnthropicUpstreamChannelView::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/kiro-gateway/anthropic-upstreams", llm_access_admin_base());
+        let response = api_post(&url)
+            .json(input)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn patch_admin_anthropic_upstream_channel(
+    name: &str,
+    input: &PatchAdminAnthropicUpstreamChannelInput,
+) -> Result<AdminAnthropicUpstreamChannelView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (name, input);
+        Ok(AdminAnthropicUpstreamChannelView::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/kiro-gateway/anthropic-upstreams/{}",
+            llm_access_admin_base(),
+            urlencoding::encode(name)
+        );
+        let response = api_patch(&url)
+            .json(input)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn delete_admin_anthropic_upstream_channel(name: &str) -> Result<(), String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = name;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/kiro-gateway/anthropic-upstreams/{}",
+            llm_access_admin_base(),
+            urlencoding::encode(name)
+        );
+        let response = api_delete(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        Ok(())
     }
 }
 

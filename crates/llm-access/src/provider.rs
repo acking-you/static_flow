@@ -1,5 +1,6 @@
 //! Provider-facing HTTP entrypoints for `llm-access`.
 
+mod anthropic_upstream_dispatch;
 mod cctest;
 mod client;
 mod codex_auth;

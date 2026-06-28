@@ -114,7 +114,9 @@ impl PostgresControlRepository {
                     r.kiro_protected_content_validation_enabled
                         AS kiro_protected_content_validation_enabled,
                     r.kiro_cctest_text_handling_enabled
-                        AS kiro_cctest_text_handling_enabled
+                        AS kiro_cctest_text_handling_enabled,
+                    r.kiro_anthropic_upstream_pool_mode
+                        AS kiro_anthropic_upstream_pool_mode
                  FROM llm_keys k
                  LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
                  LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -163,7 +165,9 @@ impl PostgresControlRepository {
                     r.kiro_protected_content_validation_enabled
                         AS kiro_protected_content_validation_enabled,
                     r.kiro_cctest_text_handling_enabled
-                        AS kiro_cctest_text_handling_enabled
+                        AS kiro_cctest_text_handling_enabled,
+                    r.kiro_anthropic_upstream_pool_mode
+                        AS kiro_anthropic_upstream_pool_mode
                  FROM llm_keys k
                  LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
                  LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -288,7 +292,9 @@ impl PostgresControlRepository {
                     r.kiro_protected_content_validation_enabled
                         AS kiro_protected_content_validation_enabled,
                     r.kiro_cctest_text_handling_enabled
-                        AS kiro_cctest_text_handling_enabled
+                        AS kiro_cctest_text_handling_enabled,
+                    r.kiro_anthropic_upstream_pool_mode
+                        AS kiro_anthropic_upstream_pool_mode
                  FROM llm_keys k
                  LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
                  LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -366,6 +372,10 @@ impl PostgresControlRepository {
                             WHEN 'credit_first' THEN 'credit_first'
                             ELSE 'balanced'
                         END AS preferred_pool_strategy,
+                        COALESCE(
+                            NULLIF(r.kiro_anthropic_upstream_pool_mode, ''),
+                            'disabled'
+                        ) AS kiro_anthropic_upstream_pool_mode,
                         g.account_names_json AS group_account_names_json,
                         COALESCE(NULLIF(r.route_strategy, ''), 'auto') AS route_strategy_norm
                     FROM llm_keys k
@@ -555,7 +565,9 @@ impl PostgresControlRepository {
                     page_keys.kiro_protected_content_validation_enabled
                         AS kiro_protected_content_validation_enabled,
                     page_keys.kiro_cctest_text_handling_enabled
-                        AS kiro_cctest_text_handling_enabled
+                        AS kiro_cctest_text_handling_enabled,
+                    page_keys.kiro_anthropic_upstream_pool_mode
+                        AS kiro_anthropic_upstream_pool_mode
                  FROM page_keys
                  LEFT JOIN key_candidate_summary summary
                    ON summary.key_id = page_keys.key_id
@@ -619,7 +631,9 @@ impl PostgresControlRepository {
                     r.kiro_protected_content_validation_enabled
                         AS kiro_protected_content_validation_enabled,
                     r.kiro_cctest_text_handling_enabled
-                        AS kiro_cctest_text_handling_enabled
+                        AS kiro_cctest_text_handling_enabled,
+                    r.kiro_anthropic_upstream_pool_mode
+                        AS kiro_anthropic_upstream_pool_mode
                  FROM llm_keys k
                  JOIN llm_key_route_config r ON r.key_id = k.key_id
                  LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -690,10 +704,12 @@ impl PostgresControlRepository {
                     kiro_protected_content_validation_enabled,
                     kiro_cctest_text_handling_enabled,
                     kiro_cache_policy_override_json,
-                    kiro_billable_model_multipliers_override_json
+                    kiro_billable_model_multipliers_override_json,
+                    kiro_anthropic_upstream_pool_mode
                  ) VALUES (
                     $1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10, $11, $12,
-                    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23::jsonb
+                    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23::jsonb,
+                    $24
                  )
                  ON CONFLICT(key_id) DO UPDATE SET
                     route_strategy = EXCLUDED.route_strategy,
@@ -727,7 +743,9 @@ impl PostgresControlRepository {
                     kiro_cache_policy_override_json =
                         EXCLUDED.kiro_cache_policy_override_json,
                     kiro_billable_model_multipliers_override_json =
-                        EXCLUDED.kiro_billable_model_multipliers_override_json",
+                        EXCLUDED.kiro_billable_model_multipliers_override_json,
+                    kiro_anthropic_upstream_pool_mode =
+                        EXCLUDED.kiro_anthropic_upstream_pool_mode",
                 &[
                     &route.key_id,
                     &route.route_strategy,
@@ -752,6 +770,7 @@ impl PostgresControlRepository {
                     &route.kiro_cctest_text_handling_enabled,
                     &route.kiro_cache_policy_override_json,
                     &route.kiro_billable_model_multipliers_override_json,
+                    &route.kiro_anthropic_upstream_pool_mode,
                 ],
             )
             .await
@@ -929,7 +948,9 @@ impl AdminKeyStore for PostgresControlRepository {
                 r.kiro_protected_content_validation_enabled
                     AS kiro_protected_content_validation_enabled,
                 r.kiro_cctest_text_handling_enabled
-                    AS kiro_cctest_text_handling_enabled
+                    AS kiro_cctest_text_handling_enabled,
+                r.kiro_anthropic_upstream_pool_mode
+                    AS kiro_anthropic_upstream_pool_mode
              FROM llm_keys k
              LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
              LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -1019,6 +1040,7 @@ impl AdminKeyStore for PostgresControlRepository {
             kiro_cctest_text_handling_enabled: false,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
+            kiro_anthropic_upstream_pool_mode: core_store::default_anthropic_upstream_pool_mode(),
         };
         let rollup = KeyUsageRollup {
             key_id: key.id.clone(),
@@ -1132,6 +1154,9 @@ impl AdminKeyStore for PostgresControlRepository {
         }
         if let Some(value) = patch.kiro_cctest_text_handling_enabled {
             bundle.route.kiro_cctest_text_handling_enabled = value;
+        }
+        if let Some(value) = patch.kiro_anthropic_upstream_pool_mode.as_ref() {
+            bundle.route.kiro_anthropic_upstream_pool_mode = value.clone();
         }
         if let Some(value) = patch.kiro_cache_policy_override_json.as_ref() {
             bundle.route.kiro_cache_policy_override_json = value.clone();
