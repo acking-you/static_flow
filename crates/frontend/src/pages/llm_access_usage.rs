@@ -40,6 +40,19 @@ fn usage_status_color(
     }
 }
 
+fn retry_delay_label(delay_ms: i64) -> String {
+    format_latency_ms(delay_ms.clamp(0, i64::from(i32::MAX)) as i32)
+}
+
+fn same_account_retry_title(count: u64, delay_ms: i64, reasons: &[String]) -> String {
+    let mut title = format!("同账号重试 {count} 次，累计等待 {}", retry_delay_label(delay_ms));
+    if !reasons.is_empty() {
+        title.push_str("，原因：");
+        title.push_str(&reasons.join(", "));
+    }
+    title
+}
+
 const PUBLIC_USAGE_TIME_RANGE_ALL: &str = "all";
 const PUBLIC_USAGE_TIME_RANGE_24H: &str = "24h";
 const PUBLIC_USAGE_TIME_RANGE_7D: &str = "7d";
@@ -450,6 +463,17 @@ pub fn llm_access_usage_page() -> Html {
                                             session_blocked,
                                         )
                                         .map(AttrValue::from);
+                                        let same_account_retry_tooltip = (event.same_account_retry_count > 0)
+                                            .then(|| {
+                                                AttrValue::from(same_account_retry_title(
+                                                    event.same_account_retry_count,
+                                                    event.same_account_retry_delay_ms,
+                                                    &event.same_account_retry_reasons,
+                                                ))
+                                            });
+                                        let downstream_disconnect = event.downstream_disconnect == Some(true);
+                                        let stream_incomplete =
+                                            event.stream_completed_cleanly == Some(false) && !downstream_disconnect;
                                         let row_class = if session_blocked {
                                             classes!("border-b", "border-red-500/30", "align-top", "bg-red-500/5")
                                         } else {
@@ -492,9 +516,23 @@ pub fn llm_access_usage_page() -> Html {
                                                                 }
                                                             }
                                                         </span>
+                                                        if let Some(title) = same_account_retry_tooltip {
+                                                            <span title={title} class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-indigo-500/20", "bg-indigo-500/10", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", "text-indigo-700", "dark:text-indigo-200")}>
+                                                                { format!("同账号重试 ×{}", event.same_account_retry_count) }
+                                                            </span>
+                                                        }
                                                         if event.quota_failover_count > 0 {
                                                             <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-amber-500/20", "bg-amber-500/10", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", "text-amber-700", "dark:text-amber-200")}>
-                                                                { format!("故障转移 ×{}", event.quota_failover_count) }
+                                                                { format!("切号 ×{}", event.quota_failover_count) }
+                                                            </span>
+                                                        }
+                                                        if downstream_disconnect {
+                                                            <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-red-500/20", "bg-red-500/10", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", "text-red-700", "dark:text-red-200")}>
+                                                                { "用户断开" }
+                                                            </span>
+                                                        } else if stream_incomplete {
+                                                            <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-orange-500/20", "bg-orange-500/10", "px-2", "py-0.5", "font-mono", "text-[11px]", "font-semibold", "text-orange-700", "dark:text-orange-200")}>
+                                                                { "流未完成" }
                                                             </span>
                                                         }
                                                         if is_image_event {

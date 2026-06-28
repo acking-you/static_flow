@@ -12,7 +12,7 @@ use llm_access_codex::{
     },
     types::PreparedGatewayRequest,
 };
-use llm_access_core::usage::{UsageStreamDetails, UsageTiming};
+use llm_access_core::usage::{UsageRetryDetails, UsageStreamDetails, UsageTiming};
 use serde_json::Value;
 
 use super::{errors::summarize_error_bytes, util::clamp_usize_to_i64, ProviderUsageMetadata};
@@ -45,6 +45,7 @@ impl ProviderUsageMetadata {
             final_event_type: None,
             bytes_streamed: None,
             quota_failover_count: 0,
+            retry: UsageRetryDetails::default(),
             routing_diagnostics_json: None,
             client_ip,
             ip_region,
@@ -62,7 +63,8 @@ impl ProviderUsageMetadata {
     }
 
     /// Record the stable upstream error class for a failed request. First
-    /// non-empty classification wins, mirroring [`Self::error_message`] capture.
+    /// non-empty classification wins, mirroring [`Self::error_message`]
+    /// capture.
     pub(super) fn capture_error_class(&mut self, class: &str) {
         if self.error_class.is_some() {
             return;
@@ -100,6 +102,26 @@ impl ProviderUsageMetadata {
 
     pub(super) fn mark_failover(&mut self) {
         self.quota_failover_count = self.quota_failover_count.saturating_add(1);
+    }
+
+    pub(super) fn record_same_account_retry(&mut self, reason: &str, delay: std::time::Duration) {
+        self.retry.same_account_retry_count = self.retry.same_account_retry_count.saturating_add(1);
+        self.retry.same_account_retry_delay_ms = self
+            .retry
+            .same_account_retry_delay_ms
+            .saturating_add(delay.as_millis().min(i64::MAX as u128) as i64);
+        let reason = reason.trim();
+        if !reason.is_empty()
+            && !self
+                .retry
+                .same_account_retry_reasons
+                .iter()
+                .any(|existing| existing == reason)
+        {
+            self.retry
+                .same_account_retry_reasons
+                .push(reason.to_string());
+        }
     }
 
     pub(super) fn add_routing_wait(&mut self, elapsed_ms: i64) {

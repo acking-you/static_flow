@@ -3,7 +3,7 @@
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType, RouteStrategy},
     store::{KeyUsageRollupDelta, KeyUsageRollupLastUsedCount, UsageRollupBatch},
-    usage::{UsageEvent, UsageStreamDetails, UsageTiming},
+    usage::{UsageEvent, UsageRetryDetails, UsageStreamDetails, UsageTiming},
 };
 use serde::{Deserialize, Serialize};
 
@@ -119,6 +119,9 @@ pub struct JournalUsageEventV1 {
     pub request_body_bytes: Option<i64>,
     /// Number of upstream route failovers.
     pub quota_failover_count: u64,
+    /// Same-account upstream retry details.
+    #[serde(default)]
+    pub retry: UsageRetryDetails,
     /// Provider routing diagnostics JSON.
     pub routing_diagnostics_json: Option<String>,
     /// Uncached input tokens.
@@ -286,6 +289,7 @@ impl JournalUsageEventV1 {
             status_code: event.status_code,
             request_body_bytes: event.request_body_bytes,
             quota_failover_count: event.quota_failover_count,
+            retry: event.retry.clone(),
             routing_diagnostics_json: event.routing_diagnostics_json.clone(),
             input_uncached_tokens: event.input_uncached_tokens,
             input_cached_tokens: event.input_cached_tokens,
@@ -332,6 +336,7 @@ impl JournalUsageEventV1 {
             status_code: self.status_code,
             request_body_bytes: self.request_body_bytes,
             quota_failover_count: self.quota_failover_count,
+            retry: self.retry,
             routing_diagnostics_json: self.routing_diagnostics_json,
             input_uncached_tokens: self.input_uncached_tokens,
             input_cached_tokens: self.input_cached_tokens,
@@ -380,6 +385,7 @@ impl LegacyJournalUsageEventV1 {
             status_code: self.status_code,
             request_body_bytes: self.request_body_bytes,
             quota_failover_count: self.quota_failover_count,
+            retry: Default::default(),
             routing_diagnostics_json: self.routing_diagnostics_json,
             input_uncached_tokens: self.input_uncached_tokens,
             input_cached_tokens: self.input_cached_tokens,
@@ -428,6 +434,7 @@ impl LegacyJournalUsageEventWithErrorPayloadsV1 {
             status_code: self.status_code,
             request_body_bytes: self.request_body_bytes,
             quota_failover_count: self.quota_failover_count,
+            retry: Default::default(),
             routing_diagnostics_json: self.routing_diagnostics_json,
             input_uncached_tokens: self.input_uncached_tokens,
             input_cached_tokens: self.input_cached_tokens,
@@ -1003,6 +1010,7 @@ mod tests {
             status_code: 200,
             request_body_bytes: Some(17),
             quota_failover_count: 0,
+            retry: Default::default(),
             routing_diagnostics_json: Some("{\"route\":\"fixed\"}".to_string()),
             input_uncached_tokens: 10,
             input_cached_tokens: 20,

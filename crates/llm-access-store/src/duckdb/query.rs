@@ -11,7 +11,7 @@ use llm_access_core::{
         UsageChartPoint, UsageEventPage, UsageEventQuery, UsageEventSource, UsageEventStatusKind,
         UsageEventTotals, UsageFilterOptions,
     },
-    usage::{UsageEvent, UsageStreamDetails, UsageTiming},
+    usage::{UsageEvent, UsageRetryDetails, UsageStreamDetails, UsageTiming},
 };
 
 use super::{
@@ -703,52 +703,72 @@ fn decode_usage_event_row(
         status_code: row.get(14)?,
         request_body_bytes: row.get(15)?,
         quota_failover_count: u64::try_from(row.get::<_, i64>(16)?.max(0)).unwrap_or(u64::MAX),
-        routing_diagnostics_json: row.get(17)?,
-        input_uncached_tokens: row.get(18)?,
-        input_cached_tokens: row.get(19)?,
-        output_tokens: row.get(20)?,
-        billable_tokens: row.get(21)?,
-        credit_usage: row.get(22)?,
-        usage_missing: row.get(23)?,
-        credit_usage_missing: row.get(24)?,
+        retry: decode_usage_retry_details(row, 17, 18, 19)?,
+        routing_diagnostics_json: row.get(20)?,
+        input_uncached_tokens: row.get(21)?,
+        input_cached_tokens: row.get(22)?,
+        output_tokens: row.get(23)?,
+        billable_tokens: row.get(24)?,
+        credit_usage: row.get(25)?,
+        usage_missing: row.get(26)?,
+        credit_usage_missing: row.get(27)?,
         stream: UsageStreamDetails {
-            stream_completed_cleanly: row.get(34)?,
-            downstream_disconnect: row.get(35)?,
-            final_event_type: row.get(36)?,
-            bytes_streamed: row.get(37)?,
+            stream_completed_cleanly: row.get(37)?,
+            downstream_disconnect: row.get(38)?,
+            final_event_type: row.get(39)?,
+            bytes_streamed: row.get(40)?,
         },
         client_ip: row
-            .get::<_, Option<String>>(38)?
+            .get::<_, Option<String>>(41)?
             .unwrap_or_else(|| "unknown".to_string()),
         ip_region: row
-            .get::<_, Option<String>>(39)?
+            .get::<_, Option<String>>(42)?
             .unwrap_or_else(|| "unknown".to_string()),
-        error_class: row.get(40)?,
-        session_blocked: row.get::<_, Option<bool>>(41)?.unwrap_or(false),
-        response_image_count: if include_detail_payload { row.get(54)? } else { row.get(44)? },
+        error_class: row.get(43)?,
+        session_blocked: row.get::<_, Option<bool>>(44)?.unwrap_or(false),
+        response_image_count: if include_detail_payload { row.get(57)? } else { row.get(47)? },
         request_headers_json: if include_detail_payload {
-            row.get::<_, Option<String>>(43)?
+            row.get::<_, Option<String>>(46)?
                 .unwrap_or_else(|| "{}".to_string())
         } else {
             "{}".to_string()
         },
-        last_message_content: row.get(42)?,
-        client_request_body_json: if include_detail_payload { row.get(44)? } else { None },
-        upstream_request_body_json: if include_detail_payload { row.get(45)? } else { None },
-        full_request_json: if include_detail_payload { row.get(46)? } else { None },
-        error_message: if include_detail_payload { row.get(47)? } else { row.get(43)? },
-        error_body: if include_detail_payload { row.get(48)? } else { None },
-        response_body: if include_detail_payload { row.get(49)? } else { None },
+        last_message_content: row.get(45)?,
+        client_request_body_json: if include_detail_payload { row.get(47)? } else { None },
+        upstream_request_body_json: if include_detail_payload { row.get(48)? } else { None },
+        full_request_json: if include_detail_payload { row.get(49)? } else { None },
+        error_message: if include_detail_payload { row.get(50)? } else { row.get(46)? },
+        error_body: if include_detail_payload { row.get(51)? } else { None },
+        response_body: if include_detail_payload { row.get(52)? } else { None },
         timing: UsageTiming {
-            latency_ms: row.get(25)?,
-            routing_wait_ms: row.get(26)?,
-            upstream_headers_ms: row.get(27)?,
-            post_headers_body_ms: row.get(28)?,
-            request_body_read_ms: row.get(29)?,
-            request_json_parse_ms: row.get(30)?,
-            pre_handler_ms: row.get(31)?,
-            first_sse_write_ms: row.get(32)?,
-            stream_finish_ms: row.get(33)?,
+            latency_ms: row.get(28)?,
+            routing_wait_ms: row.get(29)?,
+            upstream_headers_ms: row.get(30)?,
+            post_headers_body_ms: row.get(31)?,
+            request_body_read_ms: row.get(32)?,
+            request_json_parse_ms: row.get(33)?,
+            pre_handler_ms: row.get(34)?,
+            first_sse_write_ms: row.get(35)?,
+            stream_finish_ms: row.get(36)?,
         },
+    })
+}
+
+#[cfg(feature = "duckdb-runtime")]
+fn decode_usage_retry_details(
+    row: &duckdb::Row<'_>,
+    count_index: usize,
+    delay_index: usize,
+    reasons_index: usize,
+) -> duckdb::Result<UsageRetryDetails> {
+    let reasons_json = row
+        .get::<_, Option<String>>(reasons_index)?
+        .unwrap_or_else(|| "[]".to_string());
+    let reasons = serde_json::from_str::<Vec<String>>(&reasons_json).unwrap_or_default();
+    Ok(UsageRetryDetails {
+        same_account_retry_count: u64::try_from(row.get::<_, i64>(count_index)?.max(0))
+            .unwrap_or(u64::MAX),
+        same_account_retry_delay_ms: row.get::<_, i64>(delay_index)?.max(0),
+        same_account_retry_reasons: reasons,
     })
 }

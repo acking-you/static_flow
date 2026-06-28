@@ -10,7 +10,7 @@ use std::{
 use async_trait::async_trait;
 use axum::{
     body::Body,
-    http::{Request, StatusCode},
+    http::{header, Request, StatusCode},
     response::{IntoResponse, Response},
 };
 use llm_access_core::{
@@ -29,6 +29,27 @@ use super::{
     LimitRejection, ProviderDispatchDeps, ProviderDispatcher, RequestLimiter,
 };
 use crate::kiro_latency::KiroLatencyRanker;
+
+fn kiro_all_accounts_cooling_down_response(shortest_wait: Option<Duration>) -> Response {
+    let retry_after = shortest_wait
+        .map(|wait| wait.as_secs().max(1).to_string())
+        .unwrap_or_else(|| "1".to_string());
+    Response::builder()
+        .status(StatusCode::TOO_MANY_REQUESTS)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::RETRY_AFTER, retry_after)
+        .body(Body::from(super::errors::anthropic_json_error_body(
+            "rate_limit_error",
+            "all eligible kiro accounts are cooling down",
+        )))
+        .unwrap_or_else(|_| {
+            kiro_json_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limit_error",
+                "all eligible kiro accounts are cooling down",
+            )
+        })
+}
 
 pub async fn select_codex_route_with_account_permit(
     limiter: &Arc<RequestLimiter>,
@@ -183,8 +204,11 @@ pub async fn select_kiro_route_with_account_permit(
     }
     let queued_at = Instant::now();
     loop {
-        let mut saw_limit = false;
-        let mut shortest_wait: Option<Duration> = None;
+        let mut saw_local_limit = false;
+        let mut shortest_local_wait: Option<Duration> = None;
+        let mut saw_upstream_cooldown = false;
+        let mut shortest_upstream_wait: Option<Duration> = None;
+        let mut saw_candidate = false;
         let proxy_cooldowns = scheduler.proxy_cooldown_snapshot();
         if let Some(preferred_route) = preferred_account_name
             .and_then(|account_name| {
@@ -198,6 +222,7 @@ pub async fn select_kiro_route_with_account_permit(
                     .is_none_or(|key| !proxy_cooldowns.contains_key(&key))
             })
         {
+            saw_candidate = true;
             if scheduler
                 .cooldown_for_account(&preferred_route.routing_identity)
                 .is_none()
@@ -228,9 +253,10 @@ pub async fn select_kiro_route_with_account_permit(
             if failed_accounts.contains(&route.account_name) {
                 continue;
             }
+            saw_candidate = true;
             if let Some(cooldown) = scheduler.cooldown_for_account(&route.routing_identity) {
-                saw_limit = true;
-                shortest_wait = Some(match shortest_wait {
+                saw_upstream_cooldown = true;
+                shortest_upstream_wait = Some(match shortest_upstream_wait {
                     Some(current) => current.min(cooldown.remaining),
                     None => cooldown.remaining,
                 });
@@ -248,9 +274,9 @@ pub async fn select_kiro_route_with_account_permit(
             ) {
                 Ok(permit) => return Ok((route.clone(), permit)),
                 Err(rejection) => {
-                    saw_limit = true;
+                    saw_local_limit = true;
                     if let Some(wait) = rejection.wait {
-                        shortest_wait = Some(match shortest_wait {
+                        shortest_local_wait = Some(match shortest_local_wait {
                             Some(current) => current.min(wait),
                             None => wait,
                         });
@@ -269,9 +295,12 @@ pub async fn select_kiro_route_with_account_permit(
                 "all eligible kiro accounts failed for this request",
             ));
         }
-        if saw_limit {
-            scheduler.wait_for_available(shortest_wait).await;
+        if saw_local_limit {
+            scheduler.wait_for_available(shortest_local_wait).await;
             continue;
+        }
+        if saw_candidate && saw_upstream_cooldown {
+            return Err(kiro_all_accounts_cooling_down_response(shortest_upstream_wait));
         }
         return Err(kiro_json_error(
             StatusCode::SERVICE_UNAVAILABLE,

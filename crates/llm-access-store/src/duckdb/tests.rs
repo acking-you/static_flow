@@ -6,7 +6,7 @@ use llm_access_core::{
         UsageEventSink, UsageEventSource, UsageEventStatusKind, UsageFilterOptions,
         UsageMetricsQuery,
     },
-    usage::{UsageEvent, UsageStreamDetails, UsageTiming},
+    usage::{UsageEvent, UsageRetryDetails, UsageStreamDetails, UsageTiming},
 };
 
 #[cfg(feature = "duckdb-runtime")]
@@ -29,6 +29,11 @@ fn test_usage_event() -> UsageEvent {
         status_code: 200,
         request_body_bytes: Some(1234),
         quota_failover_count: 2,
+        retry: UsageRetryDetails {
+            same_account_retry_count: 2,
+            same_account_retry_delay_ms: 12_345,
+            same_account_retry_reasons: vec!["transport".to_string(), "server_error".to_string()],
+        },
         routing_diagnostics_json: Some(r#"{"route":"auto"}"#.to_string()),
         input_uncached_tokens: 10,
         input_cached_tokens: 20,
@@ -280,6 +285,10 @@ fn usage_insert_sql_targets_all_fact_columns_without_runtime_joins() {
         "downstream_disconnect",
         "final_event_type",
         "bytes_streamed",
+        "quota_failover_count",
+        "same_account_retry_count",
+        "same_account_retry_delay_ms",
+        "same_account_retry_reasons_json",
         "input_uncached_tokens",
         "input_cached_tokens",
         "output_tokens",

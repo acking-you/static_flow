@@ -142,6 +142,12 @@ pub struct UsageEventRow {
     pub request_body_bytes: Option<i64>,
     /// Number of route failovers.
     pub quota_failover_count: i64,
+    /// Number of same-account upstream retries.
+    pub same_account_retry_count: i64,
+    /// Total same-account retry sleep time in milliseconds.
+    pub same_account_retry_delay_ms: i64,
+    /// JSON array of same-account retry reason labels.
+    pub same_account_retry_reasons_json: String,
     /// Routing diagnostics JSON.
     pub routing_diagnostics_json: Option<String>,
     /// Uncached input tokens.
@@ -251,6 +257,13 @@ impl UsageEventRow {
             bytes_streamed: event.stream.bytes_streamed,
             request_body_bytes: event.request_body_bytes,
             quota_failover_count: event.quota_failover_count.min(i64::MAX as u64) as i64,
+            same_account_retry_count: event.retry.same_account_retry_count.min(i64::MAX as u64)
+                as i64,
+            same_account_retry_delay_ms: event.retry.same_account_retry_delay_ms.max(0),
+            same_account_retry_reasons_json: serde_json::to_string(
+                &event.retry.same_account_retry_reasons,
+            )
+            .unwrap_or_else(|_| "[]".to_string()),
             routing_diagnostics_json: event.routing_diagnostics_json.clone(),
             input_uncached_tokens: event.input_uncached_tokens,
             input_cached_tokens: event.input_cached_tokens,
@@ -336,11 +349,13 @@ pub fn insert_usage_event_sql() -> &'static str {
         request_json_parse_ms, pre_handler_ms, first_sse_write_ms,
         stream_finish_ms, stream_completed_cleanly, downstream_disconnect,
         final_event_type, bytes_streamed, request_body_bytes,
-        quota_failover_count, input_uncached_tokens, input_cached_tokens,
-        output_tokens, billable_tokens, credit_usage, usage_missing,
-        credit_usage_missing, client_ip, ip_region, request_headers_json,
-        routing_diagnostics_json, last_message_content, detail_object_payload_present,
-        detail_object_path, detail_object_offset, detail_object_length, detail_object_sha256,
+        quota_failover_count, same_account_retry_count,
+        same_account_retry_delay_ms, same_account_retry_reasons_json,
+        input_uncached_tokens, input_cached_tokens, output_tokens,
+        billable_tokens, credit_usage, usage_missing, credit_usage_missing,
+        client_ip, ip_region, request_headers_json, routing_diagnostics_json,
+        last_message_content, detail_object_payload_present, detail_object_path,
+        detail_object_offset, detail_object_length, detail_object_sha256,
         proxy_source_at_event, proxy_config_id_at_event, proxy_config_name_at_event,
         proxy_url_at_event, error_class, session_blocked, error_message,
         response_image_count
@@ -351,7 +366,7 @@ pub fn insert_usage_event_sql() -> &'static str {
         ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
         ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31,
         ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46,
-        ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58
+        ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59, ?60, ?61
      )
      ON CONFLICT DO NOTHING"
 }

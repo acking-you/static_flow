@@ -713,6 +713,7 @@ async fn record_direct_usage(
         status_code: status.as_u16() as i64,
         request_body_bytes: meta.request_body_bytes,
         quota_failover_count: meta.quota_failover_count,
+        retry: meta.retry.clone(),
         routing_diagnostics_json: Some(
             serde_json::json!({
                 "upstream_pool": "direct_anthropic",

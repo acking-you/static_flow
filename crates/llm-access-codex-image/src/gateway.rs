@@ -499,6 +499,7 @@ impl CodexImageGateway {
             status_code: i64::from(outcome.status.as_u16()),
             request_body_bytes: None,
             quota_failover_count: outcome.failover_count,
+            retry: Default::default(),
             routing_diagnostics_json: None,
             input_uncached_tokens: 0,
             input_cached_tokens: 0,

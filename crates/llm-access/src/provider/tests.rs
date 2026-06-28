@@ -1822,6 +1822,53 @@ async fn kiro_selection_skips_sticky_account_when_locally_throttled() {
     assert_eq!(route.account_name, "alpha");
 }
 
+#[tokio::test]
+async fn kiro_selection_returns_rate_limit_when_all_accounts_are_upstream_cooled_down() {
+    let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
+    let routes = vec![
+        kiro_route_for_selection("alpha", "user-alpha", 90.0, None),
+        kiro_route_for_selection("beta", "user-beta", 10.0, None),
+    ];
+    scheduler.mark_account_cooldown(
+        "user-alpha",
+        Duration::from_secs(60),
+        "upstream rate limited alpha",
+    );
+    scheduler.mark_account_cooldown(
+        "user-beta",
+        Duration::from_secs(120),
+        "upstream rate limited beta",
+    );
+    let ranker = crate::kiro_latency::KiroLatencyRanker::default();
+
+    let result = tokio::time::timeout(
+        Duration::from_millis(100),
+        super::select_kiro_route_with_account_permit(
+            &scheduler,
+            &routes,
+            &HashSet::new(),
+            &ranker,
+            None,
+            None,
+        ),
+    )
+    .await
+    .expect("all-upstream-cooldown selection must not wait for cooldown expiry");
+    let response = result.expect_err("all routes are cooled down");
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let retry_after = response
+        .headers()
+        .get(header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .expect("retry-after seconds");
+    assert!(
+        (1..=60).contains(&retry_after),
+        "retry-after should reflect the shortest remaining cooldown, got {retry_after}"
+    );
+}
+
 #[test]
 fn kiro_selection_prefers_configured_pool_before_other_pools() {
     let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
@@ -2334,6 +2381,40 @@ fn kiro_upstream_error_classifiers_match_legacy_cooldowns() {
         Some(Duration::from_secs(60))
     );
     assert!(super::is_monthly_request_limit(r#"{"error":{"reason":"MONTHLY_REQUEST_COUNT"}}"#));
+}
+
+#[test]
+fn kiro_rate_limit_cooldown_defaults_unknown_429_and_respects_retry_after() {
+    let headers = HeaderMap::new();
+    assert_eq!(
+        super::kiro_rate_limit_cooldown(
+            &headers,
+            r#"{"detail":"Too many requests, please wait before trying again."}"#
+        ),
+        Some(Duration::from_secs(5 * 60))
+    );
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::RETRY_AFTER, header::HeaderValue::from_static("45"));
+    assert_eq!(
+        super::kiro_rate_limit_cooldown(&headers, r#"{"detail":"Too many requests"}"#),
+        Some(Duration::from_secs(45))
+    );
+}
+
+#[test]
+fn same_account_retry_delay_is_randomized_but_capped_at_thirty_seconds() {
+    for _ in 0..64 {
+        let delay = super::randomized_same_account_retry_delay(Some(Duration::from_secs(120)));
+        assert!(delay >= Duration::from_secs(1), "delay {delay:?} is too short");
+        assert!(delay <= Duration::from_secs(30), "delay {delay:?} is too long");
+    }
+
+    for _ in 0..64 {
+        let delay = super::randomized_same_account_retry_delay(None);
+        assert!(delay >= Duration::from_secs(1), "delay {delay:?} is too short");
+        assert!(delay <= Duration::from_secs(30), "delay {delay:?} is too long");
+    }
 }
 
 #[test]
@@ -8370,10 +8451,24 @@ async fn kiro_mcp_headers_match_streaming_client_middleware_without_chat_only_he
         "params": {}
     })
     .to_string();
-    let response =
-        super::call_kiro_mcp_for_route(&route, empty_route_store().as_ref(), &request_body)
-            .await
-            .expect("mcp response");
+    let resolver = crate::geoip::GeoIpResolver::fixed_for_tests("local");
+    let headers = HeaderMap::new();
+    let uri = "/mcp".parse().expect("mcp uri");
+    let mut usage_meta = super::ProviderUsageMetadata::from_request_parts(
+        &super::Method::POST,
+        &uri,
+        &headers,
+        &resolver,
+    )
+    .await;
+    let response = super::call_kiro_mcp_for_route(
+        &route,
+        empty_route_store().as_ref(),
+        &request_body,
+        &mut usage_meta,
+    )
+    .await
+    .expect("mcp response");
 
     std::env::remove_var("KIRO_UPSTREAM_BASE_URL");
 
@@ -9861,6 +9956,7 @@ async fn kiro_websearch_usage_omits_heavy_payload_on_success() {
         final_event_type: None,
         bytes_streamed: None,
         quota_failover_count: 0,
+        retry: Default::default(),
         routing_diagnostics_json: None,
         client_ip: "127.0.0.1".to_string(),
         ip_region: "local".to_string(),
@@ -9941,6 +10037,7 @@ async fn kiro_websearch_usage_captures_heavy_payload_on_error_by_default() {
         final_event_type: None,
         bytes_streamed: None,
         quota_failover_count: 0,
+        retry: Default::default(),
         routing_diagnostics_json: None,
         client_ip: "127.0.0.1".to_string(),
         ip_region: "local".to_string(),
@@ -10036,6 +10133,7 @@ async fn kiro_usage_captures_full_payload_when_key_full_request_logging_enabled(
         final_event_type: None,
         bytes_streamed: None,
         quota_failover_count: 0,
+        retry: Default::default(),
         routing_diagnostics_json: None,
         client_ip: "127.0.0.1".to_string(),
         ip_region: "local".to_string(),
@@ -10098,6 +10196,7 @@ fn provider_usage_metadata_tracks_stream_outcome_fields() {
         final_event_type: None,
         bytes_streamed: None,
         quota_failover_count: 0,
+        retry: Default::default(),
         routing_diagnostics_json: None,
         client_ip: "127.0.0.1".to_string(),
         ip_region: "local".to_string(),

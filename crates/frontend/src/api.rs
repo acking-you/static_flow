@@ -5960,6 +5960,12 @@ pub struct PublicLlmGatewayUsageEventView {
     pub bytes_streamed: Option<u64>,
     pub other_latency_ms: Option<i32>,
     pub quota_failover_count: u64,
+    #[serde(default)]
+    pub same_account_retry_count: u64,
+    #[serde(default)]
+    pub same_account_retry_delay_ms: i64,
+    #[serde(default)]
+    pub same_account_retry_reasons: Vec<String>,
     pub endpoint: String,
     pub model: Option<String>,
     pub status_code: i32,
@@ -6340,6 +6346,12 @@ pub struct AdminLlmGatewayUsageEventView {
     pub bytes_streamed: Option<u64>,
     pub other_latency_ms: Option<i32>,
     pub quota_failover_count: u64,
+    #[serde(default)]
+    pub same_account_retry_count: u64,
+    #[serde(default)]
+    pub same_account_retry_delay_ms: i64,
+    #[serde(default)]
+    pub same_account_retry_reasons: Vec<String>,
     pub routing_diagnostics_json: Option<String>,
     pub endpoint: String,
     pub model: Option<String>,
@@ -6395,6 +6407,12 @@ pub struct AdminLlmGatewayUsageEventDetailView {
     pub bytes_streamed: Option<u64>,
     pub other_latency_ms: Option<i32>,
     pub quota_failover_count: u64,
+    #[serde(default)]
+    pub same_account_retry_count: u64,
+    #[serde(default)]
+    pub same_account_retry_delay_ms: i64,
+    #[serde(default)]
+    pub same_account_retry_reasons: Vec<String>,
     pub routing_diagnostics_json: Option<String>,
     pub endpoint: String,
     pub model: Option<String>,
@@ -7465,6 +7483,9 @@ pub async fn fetch_public_llm_gateway_usage(
                     bytes_streamed: None,
                     other_latency_ms: None,
                     quota_failover_count: 0,
+                    same_account_retry_count: 0,
+                    same_account_retry_delay_ms: 0,
+                    same_account_retry_reasons: Vec::new(),
                     endpoint: "/responses".to_string(),
                     model: Some("gpt-5.3-codex".to_string()),
                     status_code: 200,
@@ -7501,6 +7522,9 @@ pub async fn fetch_public_llm_gateway_usage(
                     bytes_streamed: None,
                     other_latency_ms: None,
                     quota_failover_count: 0,
+                    same_account_retry_count: 0,
+                    same_account_retry_delay_ms: 0,
+                    same_account_retry_reasons: Vec::new(),
                     endpoint: "/responses".to_string(),
                     model: Some("gpt-5.3-codex".to_string()),
                     status_code: 200,

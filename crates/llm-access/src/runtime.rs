@@ -2440,6 +2440,7 @@ mod tests {
             status_code: 200,
             request_body_bytes: Some(128),
             quota_failover_count: 0,
+            retry: Default::default(),
             routing_diagnostics_json: None,
             input_uncached_tokens: 10,
             input_cached_tokens: 0,
