@@ -500,6 +500,9 @@ impl PostgresControlRepository {
             selected_account_names,
             use_all_active_accounts: false,
             preferred_pool_strategy: bundle.route.preferred_pool_strategy.clone(),
+            anthropic_upstream_pool_mode: core_store::canonical_anthropic_upstream_pool_mode(Some(
+                &bundle.route.kiro_anthropic_upstream_pool_mode,
+            )),
             request_max_concurrency: bundle
                 .route
                 .request_max_concurrency

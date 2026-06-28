@@ -5,6 +5,11 @@
 use async_trait::async_trait;
 
 use super::{
+    anthropic_upstream::{
+        AdminAnthropicUpstreamChannel, AdminAnthropicUpstreamChannelPatch,
+        AdminAnthropicUpstreamChannelsPage, NewAdminAnthropicUpstreamChannel,
+        ProviderAnthropicUpstreamRoute,
+    },
     codex_account::{
         AdminAccountsSummary, AdminCodexAccount, AdminCodexAccountPatch, AdminCodexAccountsPage,
         AdminCodexImportJobDetail, AdminCodexImportJobItem, AdminCodexImportJobItemResult,
@@ -42,10 +47,11 @@ use super::{
         ProviderCodexRoute, ProviderKiroAuthUpdate, ProviderKiroRoute,
     },
     traits::{
-        AdminAccountGroupStore, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,
-        AdminKiroAccountStore, AdminProxyStore, AdminReviewQueueStore, ProviderRouteStore,
-        PublicAccessStore, PublicCommunityStore, PublicStatusStore, PublicSubmissionStore,
-        PublicUsageStore, UsageAnalyticsStore, UsageEventSink, UsageRollupBatchSink,
+        AdminAccountGroupStore, AdminAnthropicUpstreamStore, AdminCodexAccountStore,
+        AdminConfigStore, AdminKeyStore, AdminKiroAccountStore, AdminProxyStore,
+        AdminReviewQueueStore, ProviderRouteStore, PublicAccessStore, PublicCommunityStore,
+        PublicStatusStore, PublicSubmissionStore, PublicUsageStore, UsageAnalyticsStore,
+        UsageEventSink, UsageRollupBatchSink,
     },
     usage::{
         AdminLegacyKiroProxyMigration, ProxyTrafficQuery, ProxyTrafficSnapshot, ProxyTrafficTotals,
@@ -62,6 +68,9 @@ pub struct EmptyPublicAccessStore;
 
 /// Empty provider route store used by isolated unit tests.
 pub struct EmptyProviderRouteStore;
+
+/// Empty direct Anthropic upstream store used by isolated unit tests.
+pub struct EmptyAdminAnthropicUpstreamStore;
 
 #[async_trait]
 impl ProviderRouteStore for EmptyProviderRouteStore {
@@ -86,6 +95,13 @@ impl ProviderRouteStore for EmptyProviderRouteStore {
         Ok(None)
     }
 
+    async fn resolve_anthropic_upstream_route_candidates(
+        &self,
+        _key: &AuthenticatedKey,
+    ) -> anyhow::Result<Vec<ProviderAnthropicUpstreamRoute>> {
+        Ok(Vec::new())
+    }
+
     async fn save_kiro_auth_update(&self, _update: ProviderKiroAuthUpdate) -> anyhow::Result<()> {
         Ok(())
     }
@@ -101,6 +117,50 @@ impl ProviderRouteStore for EmptyProviderRouteStore {
         _checked_at_ms: i64,
     ) -> anyhow::Result<()> {
         Ok(())
+    }
+}
+
+#[async_trait]
+impl AdminAnthropicUpstreamStore for EmptyAdminAnthropicUpstreamStore {
+    async fn list_admin_anthropic_upstream_channels(
+        &self,
+    ) -> anyhow::Result<Vec<AdminAnthropicUpstreamChannel>> {
+        Ok(Vec::new())
+    }
+
+    async fn list_admin_anthropic_upstream_channels_page(
+        &self,
+        page: AdminPageRequest,
+    ) -> anyhow::Result<AdminAnthropicUpstreamChannelsPage> {
+        Ok(AdminAnthropicUpstreamChannelsPage {
+            channels: Vec::new(),
+            total: 0,
+            limit: page.limit,
+            offset: page.offset,
+            has_more: false,
+        })
+    }
+
+    async fn create_admin_anthropic_upstream_channel(
+        &self,
+        _channel: NewAdminAnthropicUpstreamChannel,
+    ) -> anyhow::Result<AdminAnthropicUpstreamChannel> {
+        anyhow::bail!("anthropic upstream channel store is not configured")
+    }
+
+    async fn patch_admin_anthropic_upstream_channel(
+        &self,
+        _name: &str,
+        _patch: AdminAnthropicUpstreamChannelPatch,
+    ) -> anyhow::Result<Option<AdminAnthropicUpstreamChannel>> {
+        Ok(None)
+    }
+
+    async fn delete_admin_anthropic_upstream_channel(
+        &self,
+        _name: &str,
+    ) -> anyhow::Result<Option<AdminAnthropicUpstreamChannel>> {
+        Ok(None)
     }
 }
 
@@ -388,6 +448,7 @@ impl AdminKeyStore for EmptyAdminKeyStore {
             kiro_cctest_text_handling_enabled: false,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
+            kiro_anthropic_upstream_pool_mode: super::default_anthropic_upstream_pool_mode(),
             effective_kiro_cache_policy_json: default_kiro_cache_policy_json(),
             uses_global_kiro_cache_policy: true,
             effective_kiro_billable_model_multipliers_json:

@@ -11,10 +11,10 @@ use anyhow::{anyhow, Context};
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 use async_trait::async_trait;
 use llm_access_core::store::{
-    AdminAccountGroupStore, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,
-    AdminKiroAccountStore, AdminProxyStore, AdminReviewQueueStore, ControlStore,
-    EmptyAdminAccountGroupStore, EmptyAdminCodexAccountStore, EmptyAdminConfigStore,
-    EmptyAdminKeyStore, EmptyAdminKiroAccountStore, EmptyAdminProxyStore,
+    AdminAccountGroupStore, AdminAnthropicUpstreamStore, AdminCodexAccountStore, AdminConfigStore,
+    AdminKeyStore, AdminKiroAccountStore, AdminProxyStore, AdminReviewQueueStore, ControlStore,
+    EmptyAdminAccountGroupStore, EmptyAdminAnthropicUpstreamStore, EmptyAdminCodexAccountStore,
+    EmptyAdminConfigStore, EmptyAdminKeyStore, EmptyAdminKiroAccountStore, EmptyAdminProxyStore,
     EmptyAdminReviewQueueStore, EmptyProviderRouteStore, EmptyPublicAccessStore,
     EmptyPublicCommunityStore, EmptyPublicStatusStore, EmptyPublicSubmissionStore,
     EmptyPublicUsageStore, ProviderRouteStore, PublicAccessStore, PublicCommunityStore,
@@ -72,6 +72,7 @@ pub struct LlmAccessRuntime {
     admin_proxy_store: Arc<dyn AdminProxyStore>,
     admin_codex_account_store: Arc<dyn AdminCodexAccountStore>,
     admin_kiro_account_store: Arc<dyn AdminKiroAccountStore>,
+    admin_anthropic_upstream_store: Arc<dyn AdminAnthropicUpstreamStore>,
     admin_review_queue_store: Arc<dyn AdminReviewQueueStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
@@ -102,6 +103,7 @@ struct LlmAccessStores {
     admin_proxy_store: Arc<dyn AdminProxyStore>,
     admin_codex_account_store: Arc<dyn AdminCodexAccountStore>,
     admin_kiro_account_store: Arc<dyn AdminKiroAccountStore>,
+    admin_anthropic_upstream_store: Arc<dyn AdminAnthropicUpstreamStore>,
     admin_review_queue_store: Arc<dyn AdminReviewQueueStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
@@ -129,6 +131,7 @@ trait RuntimeRepository:
     + AdminProxyStore
     + AdminCodexAccountStore
     + AdminKiroAccountStore
+    + AdminAnthropicUpstreamStore
     + AdminReviewQueueStore
     + PublicAccessStore
     + PublicCommunityStore
@@ -151,6 +154,7 @@ impl<T> RuntimeRepository for T where
         + AdminProxyStore
         + AdminCodexAccountStore
         + AdminKiroAccountStore
+        + AdminAnthropicUpstreamStore
         + AdminReviewQueueStore
         + PublicAccessStore
         + PublicCommunityStore
@@ -173,6 +177,7 @@ trait RuntimeRepository:
     + AdminProxyStore
     + AdminCodexAccountStore
     + AdminKiroAccountStore
+    + AdminAnthropicUpstreamStore
     + AdminReviewQueueStore
     + PublicAccessStore
     + PublicCommunityStore
@@ -194,6 +199,7 @@ impl<T> RuntimeRepository for T where
         + AdminProxyStore
         + AdminCodexAccountStore
         + AdminKiroAccountStore
+        + AdminAnthropicUpstreamStore
         + AdminReviewQueueStore
         + PublicAccessStore
         + PublicCommunityStore
@@ -252,6 +258,7 @@ impl LlmAccessRuntime {
             admin_proxy_store: Arc::new(EmptyAdminProxyStore),
             admin_codex_account_store: Arc::new(EmptyAdminCodexAccountStore),
             admin_kiro_account_store: Arc::new(EmptyAdminKiroAccountStore),
+            admin_anthropic_upstream_store: Arc::new(EmptyAdminAnthropicUpstreamStore),
             admin_review_queue_store: Arc::new(EmptyAdminReviewQueueStore),
             public_access_store: Arc::new(EmptyPublicAccessStore),
             public_community_store: Arc::new(EmptyPublicCommunityStore),
@@ -285,6 +292,7 @@ impl LlmAccessRuntime {
             admin_proxy_store: stores.admin_proxy_store,
             admin_codex_account_store: stores.admin_codex_account_store,
             admin_kiro_account_store: stores.admin_kiro_account_store,
+            admin_anthropic_upstream_store: stores.admin_anthropic_upstream_store,
             admin_review_queue_store: stores.admin_review_queue_store,
             public_access_store: stores.public_access_store,
             public_community_store: stores.public_community_store,
@@ -418,6 +426,8 @@ impl LlmAccessRuntime {
         let admin_proxy_store: Arc<dyn AdminProxyStore> = repository.clone();
         let admin_codex_account_store: Arc<dyn AdminCodexAccountStore> = repository.clone();
         let admin_kiro_account_store: Arc<dyn AdminKiroAccountStore> = repository.clone();
+        let admin_anthropic_upstream_store: Arc<dyn AdminAnthropicUpstreamStore> =
+            repository.clone();
         let admin_review_queue_store: Arc<dyn AdminReviewQueueStore> = repository.clone();
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let public_access_store: Arc<dyn PublicAccessStore> =
@@ -449,6 +459,7 @@ impl LlmAccessRuntime {
             admin_proxy_store,
             admin_codex_account_store,
             admin_kiro_account_store,
+            admin_anthropic_upstream_store,
             admin_review_queue_store,
             public_access_store,
             public_community_store,
@@ -530,6 +541,11 @@ impl LlmAccessRuntime {
     /// Admin Kiro account store used by local admin endpoints.
     pub fn admin_kiro_account_store(&self) -> Arc<dyn AdminKiroAccountStore> {
         Arc::clone(&self.admin_kiro_account_store)
+    }
+
+    /// Admin direct Anthropic upstream store used by Kiro gateway endpoints.
+    pub fn admin_anthropic_upstream_store(&self) -> Arc<dyn AdminAnthropicUpstreamStore> {
+        Arc::clone(&self.admin_anthropic_upstream_store)
     }
 
     /// Admin review queue store used by local admin endpoints.

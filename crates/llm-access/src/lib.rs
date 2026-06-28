@@ -60,9 +60,10 @@ use llm_access_codex_image::{
     logging::ImageLogWriter,
 };
 use llm_access_core::store::{
-    AdminAccountGroupStore, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,
-    AdminKiroAccountStore, AdminProxyStore, AdminReviewQueueStore, PublicAccessStore,
-    PublicCommunityStore, PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
+    AdminAccountGroupStore, AdminAnthropicUpstreamStore, AdminCodexAccountStore, AdminConfigStore,
+    AdminKeyStore, AdminKiroAccountStore, AdminProxyStore, AdminReviewQueueStore,
+    PublicAccessStore, PublicCommunityStore, PublicStatusStore, PublicSubmissionStore,
+    PublicUsageStore,
 };
 use serde::Serialize;
 use tokio::sync::Semaphore;
@@ -87,6 +88,7 @@ struct HttpState {
     admin_proxy_store: Arc<dyn AdminProxyStore>,
     admin_codex_account_store: Arc<dyn AdminCodexAccountStore>,
     admin_kiro_account_store: Arc<dyn AdminKiroAccountStore>,
+    admin_anthropic_upstream_store: Arc<dyn AdminAnthropicUpstreamStore>,
     admin_review_queue_store: Arc<dyn AdminReviewQueueStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
@@ -225,6 +227,7 @@ pub fn router_with_simulator(
         admin_proxy_store: runtime.admin_proxy_store(),
         admin_codex_account_store: runtime.admin_codex_account_store(),
         admin_kiro_account_store: runtime.admin_kiro_account_store(),
+        admin_anthropic_upstream_store: runtime.admin_anthropic_upstream_store(),
         admin_review_queue_store: runtime.admin_review_queue_store(),
         public_access_store: runtime.public_access_store(),
         public_community_store: runtime.public_community_store(),
@@ -411,6 +414,16 @@ pub fn router_with_simulator(
             get(admin::list_admin_kiro_account_statuses),
         )
         .route("/admin/kiro-gateway/cache-stats", get(admin::get_admin_kiro_cache_stats))
+        .route(
+            "/admin/kiro-gateway/anthropic-upstreams",
+            get(admin::list_admin_anthropic_upstream_channels)
+                .post(admin::create_admin_anthropic_upstream_channel),
+        )
+        .route(
+            "/admin/kiro-gateway/anthropic-upstreams/:name",
+            axum::routing::patch(admin::patch_admin_anthropic_upstream_channel)
+                .delete(admin::delete_admin_anthropic_upstream_channel),
+        )
         .route(
             "/admin/kiro-gateway/accounts",
             get(admin::list_admin_kiro_accounts).post(admin::create_admin_kiro_manual_account),

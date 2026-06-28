@@ -114,6 +114,9 @@ pub struct AdminKey {
     pub kiro_cache_policy_override_json: Option<String>,
     /// Kiro billable multiplier override JSON.
     pub kiro_billable_model_multipliers_override_json: Option<String>,
+    /// Direct Anthropic upstream pool mode for Kiro keys.
+    #[serde(default = "super::default_anthropic_upstream_pool_mode")]
+    pub kiro_anthropic_upstream_pool_mode: String,
     /// Effective Kiro cache policy JSON.
     pub effective_kiro_cache_policy_json: String,
     /// Whether the effective Kiro cache policy is global.
@@ -414,6 +417,8 @@ pub struct AdminKeyPatch {
     pub kiro_cache_policy_override_json: Option<Option<String>>,
     /// New Kiro billable model multiplier override JSON.
     pub kiro_billable_model_multipliers_override_json: Option<Option<String>>,
+    /// New direct Anthropic upstream pool mode for Kiro keys.
+    pub kiro_anthropic_upstream_pool_mode: Option<String>,
     /// Update timestamp.
     pub updated_at_ms: i64,
 }
@@ -467,6 +472,7 @@ mod tests {
             kiro_cctest_text_handling_enabled: false,
             kiro_cache_policy_override_json: None,
             kiro_billable_model_multipliers_override_json: None,
+            kiro_anthropic_upstream_pool_mode: crate::store::default_anthropic_upstream_pool_mode(),
             effective_kiro_cache_policy_json: "{}".to_string(),
             uses_global_kiro_cache_policy: true,
             effective_kiro_billable_model_multipliers_json: "{}".to_string(),

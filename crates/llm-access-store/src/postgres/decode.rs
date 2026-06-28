@@ -139,6 +139,10 @@ fn decode_key_bundle(row: &PgRow) -> anyhow::Result<KeyBundle> {
                 .unwrap_or(false),
             kiro_cache_policy_override_json: row.get(27),
             kiro_billable_model_multipliers_override_json: row.get(28),
+            kiro_anthropic_upstream_pool_mode: core_store::canonical_anthropic_upstream_pool_mode(
+                row.try_get_optional_string("kiro_anthropic_upstream_pool_mode")?
+                    .as_deref(),
+            ),
         },
         rollup: KeyUsageRollup {
             key_id,
@@ -220,6 +224,7 @@ pub fn admin_key_from_bundle(bundle: &KeyBundle) -> AdminKey {
             .route
             .kiro_billable_model_multipliers_override_json
             .clone(),
+        kiro_anthropic_upstream_pool_mode: bundle.route.kiro_anthropic_upstream_pool_mode.clone(),
         effective_kiro_cache_policy_json: bundle
             .route
             .kiro_cache_policy_override_json

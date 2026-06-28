@@ -92,6 +92,8 @@ pub struct KeyRouteConfig {
     pub kiro_cache_policy_override_json: Option<String>,
     /// Optional Kiro billable multiplier override JSON.
     pub kiro_billable_model_multipliers_override_json: Option<String>,
+    /// Direct Anthropic upstream pool mode for Kiro keys.
+    pub kiro_anthropic_upstream_pool_mode: String,
 }
 
 /// API key accumulated usage rollup row.

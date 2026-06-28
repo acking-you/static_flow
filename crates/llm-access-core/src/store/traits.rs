@@ -5,6 +5,12 @@
 use async_trait::async_trait;
 
 use super::{
+    anthropic_upstream::{
+        AdminAnthropicUpstreamChannel, AdminAnthropicUpstreamChannelPatch,
+        AdminAnthropicUpstreamChannelsPage, AnthropicUpstreamChannelUsageDelta,
+        NewAdminAnthropicUpstreamChannel, ProviderAnthropicUpstreamResolution,
+        ProviderAnthropicUpstreamRoute,
+    },
     codex_account::{
         apply_admin_codex_account_query, summarize_admin_accounts, AdminCodexAccount,
         AdminCodexAccountPageQuery, AdminCodexAccountPatch, AdminCodexAccountsPage,
@@ -75,6 +81,16 @@ pub trait ControlStore: Send + Sync {
     ) -> anyhow::Result<()> {
         Ok(())
     }
+
+    /// Increment direct Anthropic upstream channel counters observed on the
+    /// hot path.
+    async fn record_anthropic_upstream_channel_usage(
+        &self,
+        _channel_name: &str,
+        _delta: AnthropicUpstreamChannelUsageDelta,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 /// Provider route/account resolution used by data-plane dispatch.
@@ -112,6 +128,39 @@ pub trait ProviderRouteStore: Send + Sync {
         key: &AuthenticatedKey,
     ) -> anyhow::Result<Vec<ProviderKiroRoute>> {
         Ok(self.resolve_kiro_route(key).await?.into_iter().collect())
+    }
+
+    /// Resolve all direct Anthropic upstream candidates for one Kiro key.
+    async fn resolve_anthropic_upstream_route_candidates(
+        &self,
+        _key: &AuthenticatedKey,
+    ) -> anyhow::Result<Vec<ProviderAnthropicUpstreamRoute>> {
+        Ok(Vec::new())
+    }
+
+    /// Resolve the key-level direct Anthropic pool mode and candidates from a
+    /// single consistent request snapshot.
+    async fn resolve_anthropic_upstream_resolution(
+        &self,
+        key: &AuthenticatedKey,
+    ) -> anyhow::Result<ProviderAnthropicUpstreamResolution> {
+        let pool_mode = self.resolve_anthropic_upstream_pool_mode(key).await?;
+        let routes = self
+            .resolve_anthropic_upstream_route_candidates(key)
+            .await?;
+        Ok(ProviderAnthropicUpstreamResolution {
+            pool_mode,
+            routes,
+        })
+    }
+
+    /// Resolve only the per-key direct Anthropic pool mode. This lets the
+    /// data plane distinguish `disabled` from `only` with no usable channels.
+    async fn resolve_anthropic_upstream_pool_mode(
+        &self,
+        _key: &AuthenticatedKey,
+    ) -> anyhow::Result<String> {
+        Ok(super::default_anthropic_upstream_pool_mode())
     }
 
     /// Reload one active Kiro account route by account name.
@@ -155,6 +204,54 @@ pub trait ProviderRouteStore: Send + Sync {
     ) -> anyhow::Result<()> {
         Ok(())
     }
+}
+
+/// Admin direct Anthropic upstream channel management queries used by the Kiro
+/// gateway surface.
+#[async_trait]
+pub trait AdminAnthropicUpstreamStore: Send + Sync {
+    /// List all direct Anthropic upstream channels.
+    async fn list_admin_anthropic_upstream_channels(
+        &self,
+    ) -> anyhow::Result<Vec<AdminAnthropicUpstreamChannel>>;
+
+    /// List one page of direct Anthropic upstream channels.
+    async fn list_admin_anthropic_upstream_channels_page(
+        &self,
+        page: AdminPageRequest,
+    ) -> anyhow::Result<AdminAnthropicUpstreamChannelsPage> {
+        let channels = self.list_admin_anthropic_upstream_channels().await?;
+        let total = channels.len();
+        let start = page.offset.min(total);
+        let end = page.offset.saturating_add(page.limit).min(total);
+        let rows = channels[start..end].to_vec();
+        Ok(AdminAnthropicUpstreamChannelsPage {
+            has_more: page.has_more(rows.len(), total),
+            channels: rows,
+            total,
+            limit: page.limit,
+            offset: page.offset,
+        })
+    }
+
+    /// Create or replace one direct Anthropic upstream channel.
+    async fn create_admin_anthropic_upstream_channel(
+        &self,
+        channel: NewAdminAnthropicUpstreamChannel,
+    ) -> anyhow::Result<AdminAnthropicUpstreamChannel>;
+
+    /// Patch one direct Anthropic upstream channel.
+    async fn patch_admin_anthropic_upstream_channel(
+        &self,
+        name: &str,
+        patch: AdminAnthropicUpstreamChannelPatch,
+    ) -> anyhow::Result<Option<AdminAnthropicUpstreamChannel>>;
+
+    /// Delete one direct Anthropic upstream channel.
+    async fn delete_admin_anthropic_upstream_channel(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<AdminAnthropicUpstreamChannel>>;
 }
 
 /// Public read-only queries used by unauthenticated public endpoints.
