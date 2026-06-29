@@ -29,7 +29,7 @@ use llm_access_core::{
 use serde_json::Value;
 
 use super::{
-    client::provider_client,
+    client::anthropic_upstream_client,
     kiro_error::kiro_json_error,
     kiro_protocol::normalized_kiro_messages_path,
     limiter::{kiro_key_limit_response, try_acquire_key_permit},
@@ -373,7 +373,7 @@ async fn dispatch_one_route(
             );
         },
     };
-    let client = match provider_client(route.proxy.as_ref()) {
+    let client = match anthropic_upstream_client(route.proxy.as_ref()) {
         Ok(client) => client,
         Err(err) => {
             tracing::warn!(

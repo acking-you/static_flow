@@ -73,7 +73,7 @@ pub(crate) async fn refresh_models(
             };
         },
     };
-    let client = match provider::provider_client(target.proxy.as_ref()) {
+    let client = match provider::anthropic_upstream_client(target.proxy.as_ref()) {
         Ok(client) => client,
         Err(err) => {
             return ModelsProbeOutput {
@@ -194,7 +194,7 @@ pub(crate) async fn test_messages_model(
             };
         },
     };
-    let client = match provider::provider_client(target.proxy.as_ref()) {
+    let client = match provider::anthropic_upstream_client(target.proxy.as_ref()) {
         Ok(client) => client,
         Err(err) => {
             return MessagesProbeOutput {
@@ -385,15 +385,18 @@ fn upstream_error_summary(status: StatusCode, body: &Bytes) -> String {
 
 fn sanitize_error(message: &str) -> String {
     const MAX_ERROR_CHARS: usize = 500;
-    let mut sanitized = message
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .to_string();
-    if sanitized.chars().count() > MAX_ERROR_CHARS {
-        sanitized = sanitized.chars().take(MAX_ERROR_CHARS).collect::<String>();
-        sanitized.push_str("...");
+    let mut sanitized = String::new();
+    for part in message.split_whitespace() {
+        if !sanitized.is_empty() {
+            sanitized.push(' ');
+        }
+        sanitized.push_str(part);
+    }
+    let mut chars = sanitized.chars();
+    let mut truncated = chars.by_ref().take(MAX_ERROR_CHARS).collect::<String>();
+    if chars.next().is_some() {
+        truncated.push_str("...");
+        sanitized = truncated;
     }
     if sanitized.is_empty() {
         "upstream probe failed".to_string()
