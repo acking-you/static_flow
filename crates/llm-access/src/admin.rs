@@ -17,6 +17,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use llm_access_anthropic_pool::is_private_or_loopback_ip;
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 use llm_access_core::store::UsageEventSink;
 use llm_access_core::{
@@ -75,6 +76,7 @@ const USAGE_WORKER_QUERY_TIMEOUT: Duration = Duration::from_secs(60);
 const PROXY_TRAFFIC_REFRESH_MAX_WINDOW_DAYS: u64 = 30;
 const PROXY_TRAFFIC_REFRESH_BUCKET_MS: i64 = 24 * 60 * 60 * 1000;
 const HOUR_MS: i64 = 60 * 60 * 1000;
+const ADMIN_ANTHROPIC_UPSTREAM_TEST_COOLDOWN_MS: i64 = 30_000;
 const MIN_RUNTIME_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 1;
 const MAX_RUNTIME_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 16_384;
 const MIN_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 1;
@@ -3015,9 +3017,13 @@ pub(crate) async fn test_admin_anthropic_upstream_model(
             return internal_error("Failed to load Anthropic upstream channel").into_response();
         },
     };
+    if let Err(response) = enforce_anthropic_upstream_test_cooldown(target.last_test_at, now_ms()) {
+        return response.into_response();
+    }
     let output = anthropic_upstream_probe::test_messages_model(&target, &model).await;
     let usage_event =
         anthropic_upstream_probe::usage_event_for_messages_test(&name, &model, &output);
+    let usage_event_id = usage_event.event_id.clone();
     append_admin_anthropic_probe_usage_event(&state, usage_event).await;
     let update = core_store::AdminAnthropicUpstreamTestStatusUpdate {
         model: model.clone(),
@@ -3041,7 +3047,15 @@ pub(crate) async fn test_admin_anthropic_upstream_model(
             generated_at: now_ms(),
         })
         .into_response(),
-        Ok(None) => not_found("Anthropic upstream channel not found").into_response(),
+        Ok(None) => {
+            tracing::warn!(
+                channel = %name,
+                model = %model,
+                event_id = %usage_event_id,
+                "admin Anthropic upstream model test completed but channel was deleted before status save"
+            );
+            not_found("Anthropic upstream channel not found").into_response()
+        },
         Err(err) => {
             tracing::warn!(
                 channel = %name,
@@ -6817,6 +6831,25 @@ fn normalize_anthropic_upstream_test_request(
     Ok(model)
 }
 
+fn enforce_anthropic_upstream_test_cooldown(
+    last_test_at_ms: Option<i64>,
+    now_ms: i64,
+) -> Result<(), AdminHttpError> {
+    let Some(last_test_at_ms) = last_test_at_ms else {
+        return Ok(());
+    };
+    let remaining_ms = last_test_at_ms
+        .saturating_add(ADMIN_ANTHROPIC_UPSTREAM_TEST_COOLDOWN_MS)
+        .saturating_sub(now_ms);
+    if remaining_ms <= 0 {
+        return Ok(());
+    }
+    let retry_after_seconds = ((remaining_ms as u64).saturating_add(999)) / 1_000;
+    Err(too_many_requests(&format!(
+        "Anthropic upstream model test is cooling down; retry after {retry_after_seconds}s"
+    )))
+}
+
 fn normalize_route_strategy_input(raw: &str) -> Result<Option<String>, AdminHttpError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -7732,18 +7765,6 @@ fn normalize_ip_token(token: &str) -> Option<String> {
         }
     }
     None
-}
-
-fn is_private_or_loopback_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.octets()[0] == 169 && v4.octets()[1] == 254
-        },
-        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
-    }
 }
 
 fn is_local_host_header(headers: &HeaderMap) -> bool {
@@ -9146,6 +9167,26 @@ mod tests {
             .expect_err("empty model should fail");
 
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn enforce_anthropic_upstream_test_cooldown_rejects_recent_probe() {
+        let error =
+            enforce_anthropic_upstream_test_cooldown(Some(1_700_000_000_000), 1_700_000_010_000)
+                .expect_err("recent probe should be rate limited");
+
+        assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn enforce_anthropic_upstream_test_cooldown_allows_expired_or_missing_probe() {
+        enforce_anthropic_upstream_test_cooldown(None, 1_700_000_000_000)
+            .expect("missing last test timestamp should pass");
+        enforce_anthropic_upstream_test_cooldown(
+            Some(1_700_000_000_000),
+            1_700_000_000_000 + ADMIN_ANTHROPIC_UPSTREAM_TEST_COOLDOWN_MS,
+        )
+        .expect("expired cooldown should pass");
     }
 
     #[test]

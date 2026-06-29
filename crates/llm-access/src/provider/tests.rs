@@ -916,6 +916,23 @@ impl ControlStore for TestStore {
     ) -> anyhow::Result<()> {
         Ok(())
     }
+
+    async fn record_codex_image_key_usage(
+        &self,
+        _key_id: &str,
+        _usage_tokens: Option<u64>,
+        _used_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn record_anthropic_upstream_channel_usage(
+        &self,
+        _channel_name: &str,
+        _delta: llm_access_core::store::AnthropicUpstreamChannelUsageDelta,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -933,6 +950,23 @@ impl ControlStore for FailingStore {
     async fn apply_usage_rollup(
         &self,
         _event: &llm_access_core::usage::UsageEvent,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn record_codex_image_key_usage(
+        &self,
+        _key_id: &str,
+        _usage_tokens: Option<u64>,
+        _used_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn record_anthropic_upstream_channel_usage(
+        &self,
+        _channel_name: &str,
+        _delta: llm_access_core::store::AnthropicUpstreamChannelUsageDelta,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -1339,6 +1373,23 @@ impl ControlStore for RecordingControlStore {
             .lock()
             .expect("usage events")
             .push(event.clone());
+        Ok(())
+    }
+
+    async fn record_codex_image_key_usage(
+        &self,
+        _key_id: &str,
+        _usage_tokens: Option<u64>,
+        _used_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn record_anthropic_upstream_channel_usage(
+        &self,
+        _channel_name: &str,
+        _delta: llm_access_core::store::AnthropicUpstreamChannelUsageDelta,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 }

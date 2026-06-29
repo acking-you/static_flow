@@ -30,8 +30,18 @@ fn optional_non_negative_i64_to_u64(value: Option<i64>) -> Option<u64> {
     value.map(non_negative_i64_to_u64)
 }
 
-fn model_ids_from_json_text(raw: &str) -> Vec<String> {
-    serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
+fn model_ids_from_json_text(channel_name: &str, raw: &str) -> Vec<String> {
+    match serde_json::from_str::<Vec<String>>(raw) {
+        Ok(model_ids) => model_ids,
+        Err(err) => {
+            tracing::warn!(
+                channel = %channel_name,
+                error = %err,
+                "stored Anthropic upstream model_ids JSON is not a string array"
+            );
+            Vec::new()
+        },
+    }
 }
 
 fn auth_json_for_api_key(api_key: &str) -> anyhow::Result<String> {
@@ -90,7 +100,10 @@ impl PostgresControlRepository {
             proxy_mode: row.get(7),
             proxy_config_id: row.get(8),
             last_error: row.get(9),
-            model_ids: model_ids_from_json_text(row.get::<_, String>(10).as_str()),
+            model_ids: model_ids_from_json_text(
+                row.get::<_, String>(0).as_str(),
+                row.get::<_, String>(10).as_str(),
+            ),
             last_models_status: row.get(11),
             last_models_latency_ms: row.get(12),
             last_models_checked_at_ms: row.get(13),
@@ -523,6 +536,7 @@ impl AdminAnthropicUpstreamStore for PostgresControlRepository {
             api_key,
             proxy,
             proxy_error,
+            last_test_at: row.last_test_at_ms,
         }))
     }
 
@@ -608,5 +622,18 @@ impl AdminAnthropicUpstreamStore for PostgresControlRepository {
         self.load_anthropic_upstream_channel_row(name)
             .await
             .map(|row| row.map(admin_channel_from_row))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_ids_from_json_text_falls_back_for_malformed_model_array() {
+        assert_eq!(model_ids_from_json_text("anthropic-a", r#"["claude-haiku-4-5"]"#), vec![
+            "claude-haiku-4-5".to_string()
+        ]);
+        assert!(model_ids_from_json_text("anthropic-a", r#"[{"id":"claude"}]"#).is_empty());
     }
 }

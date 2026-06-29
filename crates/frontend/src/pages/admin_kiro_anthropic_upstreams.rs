@@ -14,13 +14,9 @@ use crate::{
         AdminUpstreamProxyConfigView, CreateAdminAnthropicUpstreamChannelInput,
         PatchAdminAnthropicUpstreamChannelInput, TestAdminAnthropicUpstreamModelInput,
     },
-    pages::llm_access_shared::{confirm_destructive, format_ms, format_number_u64},
+    pages::llm_access_shared::{confirm_destructive, format_number_u64, format_timestamp_opt},
     router::Route,
 };
-
-fn format_timestamp_opt(ts: Option<i64>) -> String {
-    ts.map(format_ms).unwrap_or_else(|| "-".to_string())
-}
 
 fn status_classes(status: &str) -> Classes {
     if status == "ok" || status == "active" {
@@ -578,7 +574,7 @@ pub fn admin_kiro_anthropic_upstreams_page() -> Html {
                                 </div>
                                 <div class={classes!("space-y-2")}>
                                     <div class={classes!("flex", "gap-2", "flex-wrap")}>
-                                        <button type="button" class={classes!("btn-terminal", "text-xs")} disabled={is_refreshing} onclick={on_refresh_models}>{ if is_refreshing { "刷新中..." } else { "刷新状态" } }</button>
+                                        <button type="button" class={classes!("btn-terminal", "text-xs")} disabled={is_refreshing} onclick={on_refresh_models}>{ if is_refreshing { "Refreshing..." } else { "Refresh Status" } }</button>
                                         <button type="button" class={classes!("btn-terminal", "text-xs")} onclick={on_toggle}>{ if channel.status == "active" { "Disable" } else { "Enable" } }</button>
                                         <button type="button" class={classes!("btn-terminal", "text-xs")} onclick={on_rotate_key}>{ "Rotate" }</button>
                                         <button type="button" class={classes!("btn-terminal", "text-xs")} onclick={on_delete}>{ "Delete" }</button>
@@ -587,7 +583,7 @@ pub fn admin_kiro_anthropic_upstreams_page() -> Html {
                                         <select class={classes!("min-w-0", "flex-1", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-2", "py-2", "font-mono", "text-xs")} value={selected_model.clone()} disabled={channel.models.is_empty() || is_testing} onchange={on_select_model}>
                                             {
                                                 if channel.models.is_empty() {
-                                                    html! { <option value="">{ "刷新后选择模型" }</option> }
+                                                    html! { <option value="">{ "Refresh to select model" }</option> }
                                                 } else {
                                                     html! {
                                                         for channel.models.iter().map(|model| html! {
@@ -598,7 +594,7 @@ pub fn admin_kiro_anthropic_upstreams_page() -> Html {
                                             }
                                         </select>
                                         <button type="button" class={classes!("btn-terminal", "btn-terminal-primary", "text-xs")} disabled={channel.models.is_empty() || is_testing} onclick={on_test_model}>
-                                            { if is_testing { "测试中..." } else { "测试模型" } }
+                                            { if is_testing { "Testing..." } else { "Test Model" } }
                                         </button>
                                     </div>
                                     if let Some(error) = channel.last_error.as_deref() {

@@ -793,6 +793,23 @@ mod tests {
         ) -> anyhow::Result<()> {
             Ok(())
         }
+
+        async fn record_codex_image_key_usage(
+            &self,
+            _key_id: &str,
+            _usage_tokens: Option<u64>,
+            _used_at_ms: i64,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn record_anthropic_upstream_channel_usage(
+            &self,
+            _channel_name: &str,
+            _delta: llm_access_core::store::AnthropicUpstreamChannelUsageDelta,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
     }
 
     fn test_router() -> axum::Router {

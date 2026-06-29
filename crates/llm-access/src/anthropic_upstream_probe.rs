@@ -5,19 +5,19 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use axum::body::Bytes;
 use futures_util::StreamExt;
 use llm_access_anthropic_pool::{
-    build_messages_url, build_models_url, parse_model_ids_from_models_response,
-    parse_usage_from_value, AnthropicUsageSummary,
+    apply_anthropic_auth_headers, build_messages_url, build_models_url,
+    parse_model_ids_from_models_response, parse_usage_from_value, AnthropicUsageSummary,
+    ANTHROPIC_VERSION_2023_06_01,
 };
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType},
-    store::AdminAnthropicUpstreamProbeTarget,
+    store::{self as core_store, AdminAnthropicUpstreamProbeTarget},
     usage::{UsageEvent, UsageTiming},
 };
 use reqwest::StatusCode;
 
 use crate::provider;
 
-const ANTHROPIC_VERSION: &str = "2023-06-01";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_PROBE_RESPONSE_BYTES: usize = 1024 * 1024;
 const ADMIN_TEST_KEY_ID: &str = "admin-direct-anthropic-test";
@@ -33,6 +33,36 @@ pub(crate) struct ModelsProbeOutput {
     pub error: Option<String>,
 }
 
+impl ModelsProbeOutput {
+    fn ok(model_ids: Vec<String>, started: Instant, checked_at_ms: i64, status_code: u16) -> Self {
+        Self {
+            model_ids,
+            status: "ok".to_string(),
+            status_code: Some(status_code),
+            latency_ms: elapsed_ms(started),
+            checked_at_ms,
+            error: None,
+        }
+    }
+
+    fn failure(
+        started: Instant,
+        checked_at_ms: i64,
+        status: impl Into<String>,
+        status_code: Option<u16>,
+        error: impl Into<String>,
+    ) -> Self {
+        Self {
+            model_ids: Vec::new(),
+            status: status.into(),
+            status_code,
+            latency_ms: elapsed_ms(started),
+            checked_at_ms,
+            error: Some(error.into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct MessagesProbeOutput {
     pub status: String,
@@ -45,66 +75,103 @@ pub(crate) struct MessagesProbeOutput {
     pub upstream_request_body_json: String,
 }
 
+impl MessagesProbeOutput {
+    fn ok(
+        started: Instant,
+        checked_at_ms: i64,
+        status_code: u16,
+        usage: AnthropicUsageSummary,
+        upstream_request_body_json: String,
+    ) -> Self {
+        Self {
+            status: "ok".to_string(),
+            status_code: Some(status_code),
+            latency_ms: elapsed_ms(started),
+            checked_at_ms,
+            error: None,
+            error_class: None,
+            usage,
+            upstream_request_body_json,
+        }
+    }
+
+    fn failure(
+        started: Instant,
+        checked_at_ms: i64,
+        status: impl Into<String>,
+        status_code: Option<u16>,
+        error: impl Into<String>,
+        error_class: impl Into<String>,
+        upstream_request_body_json: String,
+    ) -> Self {
+        Self {
+            status: status.into(),
+            status_code,
+            latency_ms: elapsed_ms(started),
+            checked_at_ms,
+            error: Some(error.into()),
+            error_class: Some(error_class.into()),
+            usage: AnthropicUsageSummary::missing(),
+            upstream_request_body_json,
+        }
+    }
+}
+
 pub(crate) async fn refresh_models(
     target: &AdminAnthropicUpstreamProbeTarget,
 ) -> ModelsProbeOutput {
     let checked_at_ms = now_ms();
     let started = Instant::now();
     if let Some(error) = target.proxy_error.as_deref() {
-        return ModelsProbeOutput {
-            model_ids: Vec::new(),
-            status: "error".to_string(),
-            status_code: None,
-            latency_ms: elapsed_ms(started),
+        return ModelsProbeOutput::failure(
+            started,
             checked_at_ms,
-            error: Some(sanitize_error(error)),
-        };
+            "error",
+            None,
+            sanitize_error(error),
+        );
     }
     let url = match build_models_url(&target.base_url) {
         Ok(url) => url,
         Err(err) => {
-            return ModelsProbeOutput {
-                model_ids: Vec::new(),
-                status: "error".to_string(),
-                status_code: None,
-                latency_ms: elapsed_ms(started),
+            return ModelsProbeOutput::failure(
+                started,
                 checked_at_ms,
-                error: Some(sanitize_error(&err.to_string())),
-            };
+                "error",
+                None,
+                sanitize_error(&err.to_string()),
+            );
         },
     };
     let client = match provider::anthropic_upstream_client(target.proxy.as_ref()) {
         Ok(client) => client,
         Err(err) => {
-            return ModelsProbeOutput {
-                model_ids: Vec::new(),
-                status: "error".to_string(),
-                status_code: None,
-                latency_ms: elapsed_ms(started),
+            return ModelsProbeOutput::failure(
+                started,
                 checked_at_ms,
-                error: Some(sanitize_error(&err.to_string())),
-            };
+                "error",
+                None,
+                sanitize_error(&err.to_string()),
+            );
         },
     };
-    let response = match client
-        .get(url)
-        .header("x-api-key", &target.api_key)
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .header(reqwest::header::ACCEPT, "application/json")
-        .timeout(PROBE_TIMEOUT)
-        .send()
-        .await
-    {
+    let request = apply_anthropic_auth_headers(
+        client.get(url),
+        &target.api_key,
+        ANTHROPIC_VERSION_2023_06_01,
+    )
+    .header(reqwest::header::ACCEPT, "application/json")
+    .timeout(PROBE_TIMEOUT);
+    let response = match request.send().await {
         Ok(response) => response,
         Err(err) => {
-            return ModelsProbeOutput {
-                model_ids: Vec::new(),
-                status: "error".to_string(),
-                status_code: None,
-                latency_ms: elapsed_ms(started),
+            return ModelsProbeOutput::failure(
+                started,
                 checked_at_ms,
-                error: Some(sanitize_error(&err.to_string())),
-            };
+                "error",
+                None,
+                sanitize_error(&err.to_string()),
+            );
         },
     };
     let status = response.status();
@@ -112,44 +179,33 @@ pub(crate) async fn refresh_models(
     let body = match read_limited_response_body(response).await {
         Ok(body) => body,
         Err(err) => {
-            return ModelsProbeOutput {
-                model_ids: Vec::new(),
-                status: "error".to_string(),
-                status_code: Some(status_code),
-                latency_ms: elapsed_ms(started),
+            return ModelsProbeOutput::failure(
+                started,
                 checked_at_ms,
-                error: Some(err),
-            };
+                "error",
+                Some(status_code),
+                err,
+            );
         },
     };
-    let latency_ms = elapsed_ms(started);
     if !status.is_success() {
-        return ModelsProbeOutput {
-            model_ids: Vec::new(),
-            status: http_status_label(status),
-            status_code: Some(status_code),
-            latency_ms,
+        return ModelsProbeOutput::failure(
+            started,
             checked_at_ms,
-            error: Some(upstream_error_summary(status, &body)),
-        };
+            http_status_label(status),
+            Some(status_code),
+            upstream_error_summary(status, &body),
+        );
     }
     match parse_model_ids_from_models_response(&body) {
-        Ok(model_ids) => ModelsProbeOutput {
-            model_ids,
-            status: "ok".to_string(),
-            status_code: Some(status_code),
-            latency_ms,
+        Ok(model_ids) => ModelsProbeOutput::ok(model_ids, started, checked_at_ms, status_code),
+        Err(err) => ModelsProbeOutput::failure(
+            started,
             checked_at_ms,
-            error: None,
-        },
-        Err(err) => ModelsProbeOutput {
-            model_ids: Vec::new(),
-            status: "error".to_string(),
-            status_code: Some(status_code),
-            latency_ms,
-            checked_at_ms,
-            error: Some(sanitize_error(&format!("failed to parse models response: {err}"))),
-        },
+            "error",
+            Some(status_code),
+            sanitize_error(&format!("failed to parse models response: {err}")),
+        ),
     }
 }
 
@@ -168,70 +224,65 @@ pub(crate) async fn test_messages_model(
     });
     let upstream_request_body_json = payload.to_string();
     if let Some(error) = target.proxy_error.as_deref() {
-        return MessagesProbeOutput {
-            status: "error".to_string(),
-            status_code: None,
-            latency_ms: elapsed_ms(started),
+        return MessagesProbeOutput::failure(
+            started,
             checked_at_ms,
-            error: Some(sanitize_error(error)),
-            error_class: Some("probe_proxy_error".to_string()),
-            usage: AnthropicUsageSummary::missing(),
+            "error",
+            None,
+            sanitize_error(error),
+            "probe_proxy_error",
             upstream_request_body_json,
-        };
+        );
     }
     let url = match build_messages_url(&target.base_url) {
         Ok(url) => url,
         Err(err) => {
-            return MessagesProbeOutput {
-                status: "error".to_string(),
-                status_code: None,
-                latency_ms: elapsed_ms(started),
+            return MessagesProbeOutput::failure(
+                started,
                 checked_at_ms,
-                error: Some(sanitize_error(&err.to_string())),
-                error_class: Some("probe_config_error".to_string()),
-                usage: AnthropicUsageSummary::missing(),
+                "error",
+                None,
+                sanitize_error(&err.to_string()),
+                "probe_config_error",
                 upstream_request_body_json,
-            };
+            );
         },
     };
     let client = match provider::anthropic_upstream_client(target.proxy.as_ref()) {
         Ok(client) => client,
         Err(err) => {
-            return MessagesProbeOutput {
-                status: "error".to_string(),
-                status_code: None,
-                latency_ms: elapsed_ms(started),
+            return MessagesProbeOutput::failure(
+                started,
                 checked_at_ms,
-                error: Some(sanitize_error(&err.to_string())),
-                error_class: Some("probe_client_error".to_string()),
-                usage: AnthropicUsageSummary::missing(),
+                "error",
+                None,
+                sanitize_error(&err.to_string()),
+                "probe_client_error",
                 upstream_request_body_json,
-            };
+            );
         },
     };
-    let response = match client
-        .post(url)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header(reqwest::header::ACCEPT, "application/json")
-        .header("x-api-key", &target.api_key)
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .timeout(PROBE_TIMEOUT)
-        .body(upstream_request_body_json.clone())
-        .send()
-        .await
-    {
+    let request = apply_anthropic_auth_headers(
+        client.post(url),
+        &target.api_key,
+        ANTHROPIC_VERSION_2023_06_01,
+    )
+    .header(reqwest::header::CONTENT_TYPE, "application/json")
+    .header(reqwest::header::ACCEPT, "application/json")
+    .timeout(PROBE_TIMEOUT)
+    .body(upstream_request_body_json.clone());
+    let response = match request.send().await {
         Ok(response) => response,
         Err(err) => {
-            return MessagesProbeOutput {
-                status: "error".to_string(),
-                status_code: None,
-                latency_ms: elapsed_ms(started),
+            return MessagesProbeOutput::failure(
+                started,
                 checked_at_ms,
-                error: Some(sanitize_error(&err.to_string())),
-                error_class: Some("upstream_transport_error".to_string()),
-                usage: AnthropicUsageSummary::missing(),
+                "error",
+                None,
+                sanitize_error(&err.to_string()),
+                "upstream_transport_error",
                 upstream_request_body_json,
-            };
+            );
         },
     };
     let status = response.status();
@@ -239,44 +290,32 @@ pub(crate) async fn test_messages_model(
     let body = match read_limited_response_body(response).await {
         Ok(body) => body,
         Err(err) => {
-            return MessagesProbeOutput {
-                status: "error".to_string(),
-                status_code: Some(status_code),
-                latency_ms: elapsed_ms(started),
+            return MessagesProbeOutput::failure(
+                started,
                 checked_at_ms,
-                error: Some(err),
-                error_class: Some("upstream_body_error".to_string()),
-                usage: AnthropicUsageSummary::missing(),
+                "error",
+                Some(status_code),
+                err,
+                "upstream_body_error",
                 upstream_request_body_json,
-            };
+            );
         },
     };
-    let latency_ms = elapsed_ms(started);
     if !status.is_success() {
-        return MessagesProbeOutput {
-            status: http_status_label(status),
-            status_code: Some(status_code),
-            latency_ms,
+        return MessagesProbeOutput::failure(
+            started,
             checked_at_ms,
-            error: Some(upstream_error_summary(status, &body)),
-            error_class: Some("upstream_error".to_string()),
-            usage: AnthropicUsageSummary::missing(),
+            http_status_label(status),
+            Some(status_code),
+            upstream_error_summary(status, &body),
+            "upstream_error",
             upstream_request_body_json,
-        };
+        );
     }
     let usage = serde_json::from_slice::<serde_json::Value>(&body)
         .map(|value| parse_usage_from_value(&value))
         .unwrap_or_else(|_| AnthropicUsageSummary::missing());
-    MessagesProbeOutput {
-        status: "ok".to_string(),
-        status_code: Some(status_code),
-        latency_ms,
-        checked_at_ms,
-        error: None,
-        error_class: None,
-        usage,
-        upstream_request_body_json,
-    }
+    MessagesProbeOutput::ok(started, checked_at_ms, status_code, usage, upstream_request_body_json)
 }
 
 pub(crate) fn usage_event_for_messages_test(
@@ -309,6 +348,7 @@ pub(crate) fn usage_event_for_messages_test(
                 "channel_name": channel_name,
                 "admin_probe": true,
                 "probe_kind": "messages_model_test",
+                "admin_probe_billable_tokens": admin_probe_billable_tokens(output.usage),
             })
             .to_string(),
         ),
@@ -322,7 +362,7 @@ pub(crate) fn usage_event_for_messages_test(
         client_ip: "admin".to_string(),
         ip_region: "admin".to_string(),
         request_headers_json: serde_json::json!({
-            "anthropic-version": ANTHROPIC_VERSION,
+            "anthropic-version": ANTHROPIC_VERSION_2023_06_01,
         })
         .to_string(),
         last_message_content: Some("hi".to_string()),
@@ -342,6 +382,17 @@ pub(crate) fn usage_event_for_messages_test(
         },
         stream: Default::default(),
     }
+}
+
+fn admin_probe_billable_tokens(usage: AnthropicUsageSummary) -> u64 {
+    if usage.usage_missing {
+        return 0;
+    }
+    core_store::compute_billable_tokens(
+        usage.input_uncached_tokens.max(0) as u64,
+        usage.input_cached_tokens.max(0) as u64,
+        usage.output_tokens.max(0) as u64,
+    )
 }
 
 async fn read_limited_response_body(response: reqwest::Response) -> Result<Bytes, String> {
@@ -418,4 +469,109 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    use super::*;
+
+    #[test]
+    fn messages_test_usage_event_keeps_quota_zero_but_exposes_probe_cost() {
+        let output = MessagesProbeOutput::ok(
+            Instant::now(),
+            1_700_000_000_000,
+            200,
+            AnthropicUsageSummary {
+                input_uncached_tokens: 100,
+                input_cached_tokens: 20,
+                output_tokens: 3,
+                usage_missing: false,
+            },
+            "{}".to_string(),
+        );
+
+        let event = usage_event_for_messages_test("yl", "claude-haiku-4-5", &output);
+        let diagnostics: serde_json::Value = serde_json::from_str(
+            event
+                .routing_diagnostics_json
+                .as_deref()
+                .expect("diagnostics"),
+        )
+        .expect("diagnostics json");
+
+        assert_eq!(event.billable_tokens, 0);
+        assert_eq!(diagnostics["upstream_pool"], "direct_anthropic_test");
+        assert_eq!(diagnostics["admin_probe_billable_tokens"], 117);
+    }
+
+    #[test]
+    fn upstream_error_summary_prefers_anthropic_error_message() {
+        let summary = upstream_error_summary(
+            StatusCode::UNAUTHORIZED,
+            &Bytes::from_static(br#"{"error":{"message":"bad api key"}}"#),
+        );
+
+        assert_eq!(summary, "upstream returned HTTP 401: bad api key");
+    }
+
+    #[tokio::test]
+    async fn read_limited_response_body_rejects_large_content_length() {
+        let url = serve_one_http_response(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                MAX_PROBE_RESPONSE_BYTES + 1
+            )
+            .into_bytes(),
+        )
+        .await;
+        let response = reqwest::Client::new()
+            .get(url)
+            .send()
+            .await
+            .expect("response");
+
+        let err = read_limited_response_body(response)
+            .await
+            .expect_err("body cap");
+
+        assert_eq!(err, "upstream probe response is too large");
+    }
+
+    #[tokio::test]
+    async fn read_limited_response_body_rejects_stream_past_cap() {
+        let mut raw = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec();
+        raw.extend(vec![b'a'; MAX_PROBE_RESPONSE_BYTES + 1]);
+        let url = serve_one_http_response(raw).await;
+        let response = reqwest::Client::new()
+            .get(url)
+            .send()
+            .await
+            .expect("response");
+
+        let err = read_limited_response_body(response)
+            .await
+            .expect_err("body cap");
+
+        assert_eq!(err, "upstream probe response is too large");
+    }
+
+    async fn serve_one_http_response(raw_response: Vec<u8>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut request_buffer = [0u8; 1024];
+            let _ = stream.read(&mut request_buffer).await;
+            stream
+                .write_all(&raw_response)
+                .await
+                .expect("write response");
+        });
+        format!("http://{addr}/probe")
+    }
 }

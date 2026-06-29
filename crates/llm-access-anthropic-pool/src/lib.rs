@@ -5,6 +5,20 @@ use std::{
     net::IpAddr,
 };
 
+/// Default Anthropic API version used when a caller does not supply one.
+pub const ANTHROPIC_VERSION_2023_06_01: &str = "2023-06-01";
+
+/// Apply the standard direct Anthropic authentication/version headers.
+pub fn apply_anthropic_auth_headers(
+    request: reqwest::RequestBuilder,
+    api_key: &str,
+    anthropic_version: &str,
+) -> reqwest::RequestBuilder {
+    request
+        .header("x-api-key", api_key)
+        .header("anthropic-version", anthropic_version)
+}
+
 /// Candidate channel with an admin-controlled routing weight.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WeightedChannel {
@@ -227,7 +241,9 @@ pub fn parse_model_ids_from_models_response(body: &[u8]) -> anyhow::Result<Vec<S
     Ok(model_ids)
 }
 
-fn is_private_or_loopback_ip(ip: IpAddr) -> bool {
+/// Return whether an IP target is local/private and must not be used as a
+/// direct Anthropic upstream host.
+pub fn is_private_or_loopback_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             v4.is_loopback()

@@ -76,22 +76,18 @@ pub trait ControlStore: Send + Sync {
     /// Record Codex image usage observed outside the normal usage journal.
     async fn record_codex_image_key_usage(
         &self,
-        _key_id: &str,
-        _usage_tokens: Option<u64>,
-        _used_at_ms: i64,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
+        key_id: &str,
+        usage_tokens: Option<u64>,
+        used_at_ms: i64,
+    ) -> anyhow::Result<()>;
 
     /// Increment direct Anthropic upstream channel counters observed on the
     /// hot path.
     async fn record_anthropic_upstream_channel_usage(
         &self,
-        _channel_name: &str,
-        _delta: AnthropicUpstreamChannelUsageDelta,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
+        channel_name: &str,
+        delta: AnthropicUpstreamChannelUsageDelta,
+    ) -> anyhow::Result<()>;
 }
 
 /// Provider route/account resolution used by data-plane dispatch.

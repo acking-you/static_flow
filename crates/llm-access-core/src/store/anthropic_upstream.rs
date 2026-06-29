@@ -153,6 +153,8 @@ pub struct AdminAnthropicUpstreamProbeTarget {
     /// Proxy resolution error, when channel config exists but cannot produce a
     /// usable proxy.
     pub proxy_error: Option<String>,
+    /// Last model-test probe timestamp, used for admin-side cooldown.
+    pub last_test_at: Option<i64>,
 }
 
 /// Latest `/models` refresh state to persist for one upstream channel.

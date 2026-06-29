@@ -2430,6 +2430,15 @@ mod tests {
             anyhow::bail!("usage rollups must be persisted by the accounting flusher")
         }
 
+        async fn record_codex_image_key_usage(
+            &self,
+            _key_id: &str,
+            _usage_tokens: Option<u64>,
+            _used_at_ms: i64,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
         async fn record_anthropic_upstream_channel_usage(
             &self,
             channel_name: &str,

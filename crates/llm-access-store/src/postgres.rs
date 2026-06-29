@@ -1196,6 +1196,7 @@ mod tests {
         assert_eq!(probe_target.api_key, "sk-ant-test");
         assert_eq!(probe_target.proxy, None);
         assert_eq!(probe_target.proxy_error, None);
+        assert_eq!(probe_target.last_test_at, None);
 
         let updated = repo
             .save_admin_anthropic_upstream_models_status(
@@ -1291,6 +1292,7 @@ mod tests {
         assert_eq!(probe_target.api_key, "sk-ant-test");
         assert_eq!(probe_target.proxy, None);
         assert_eq!(probe_target.proxy_error, None);
+        assert_eq!(probe_target.last_test_at, Some(1_700_000_000_050));
     }
 
     #[tokio::test]

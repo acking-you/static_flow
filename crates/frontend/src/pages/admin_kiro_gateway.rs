@@ -37,8 +37,8 @@ use crate::{
     },
     pages::llm_access_shared::{
         confirm_destructive, format_float2, format_kiro_disabled_reason, format_ms,
-        format_number_i64, format_number_u64, format_reset_hint, kiro_credit_ratio,
-        kiro_key_usage_ratio, usage_error_summary, MaskedSecretCode,
+        format_number_i64, format_number_u64, format_reset_hint, format_timestamp_opt,
+        kiro_credit_ratio, kiro_key_usage_ratio, usage_error_summary, MaskedSecretCode,
     },
     router::Route,
 };
@@ -127,10 +127,6 @@ export function copy_text(text) {
 "#)]
 extern "C" {
     fn copy_text(text: &str);
-}
-
-fn format_timestamp_opt(ts: Option<i64>) -> String {
-    ts.map(format_ms).unwrap_or_else(|| "-".to_string())
 }
 
 fn format_float4(value: f64) -> String {

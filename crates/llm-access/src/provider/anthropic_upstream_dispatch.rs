@@ -15,8 +15,8 @@ use axum::{
 };
 use futures_util::StreamExt;
 use llm_access_anthropic_pool::{
-    build_messages_url, merge_usage, parse_usage_from_value, AnthropicUsageSummary,
-    SmoothWeightedRoundRobin, WeightedChannel,
+    apply_anthropic_auth_headers, build_messages_url, merge_usage, parse_usage_from_value,
+    AnthropicUsageSummary, SmoothWeightedRoundRobin, WeightedChannel, ANTHROPIC_VERSION_2023_06_01,
 };
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType},
@@ -422,20 +422,20 @@ async fn dispatch_one_route(
         },
     };
     capture_upstream_request_body_json(usage_meta, &upstream_body);
-    let mut request = client
-        .post(upstream_url)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header("x-api-key", &route.api_key)
-        .body(upstream_body.clone());
+    let mut request = apply_anthropic_auth_headers(
+        client.post(upstream_url),
+        &route.api_key,
+        context
+            .request_headers
+            .get("anthropic-version")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(ANTHROPIC_VERSION_2023_06_01),
+    )
+    .header(header::CONTENT_TYPE, "application/json")
+    .body(upstream_body.clone());
     let usage_context = DirectAnthropicUsageContext::from_dispatch(context, mapped_model.clone());
-    let anthropic_version = context
-        .request_headers
-        .get("anthropic-version")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("2023-06-01");
-    request = request.header("anthropic-version", anthropic_version);
     for header_name in ["anthropic-beta", "accept", "user-agent"] {
         if let Some(value) = context.request_headers.get(header_name) {
             request = request.header(header_name, value.clone());
