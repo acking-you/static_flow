@@ -1170,6 +1170,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prepare_gateway_request_chat_flattens_json_schema_response_format() {
+        let headers = axum::http::HeaderMap::new();
+        let body = Body::from(
+            r#"{
+                "model":"gpt-5.3-codex",
+                "response_format":{
+                    "type":"json_schema",
+                    "json_schema":{
+                        "name":"batch_product_result",
+                        "schema":{
+                            "type":"object",
+                            "properties":{
+                                "results":{
+                                    "type":"array",
+                                    "items":{
+                                        "type":"object",
+                                        "properties":{"item_id":{"type":"integer"}},
+                                        "required":["item_id"],
+                                        "additionalProperties":false
+                                    }
+                                }
+                            },
+                            "required":["results"],
+                            "additionalProperties":false
+                        },
+                        "strict":true
+                    }
+                },
+                "messages":[{"role":"user","content":"classify this batch"}]
+            }"#,
+        );
+
+        let prepared = prepare_gateway_request(
+            "/v1/chat/completions",
+            "",
+            axum::http::Method::POST,
+            &headers,
+            body,
+            1024 * 1024,
+        )
+        .await
+        .expect("chat request with json_schema response_format should normalize");
+
+        let upstream: serde_json::Value =
+            serde_json::from_slice(&prepared.request_body).expect("upstream body json");
+        let format = upstream["text"]["format"]
+            .as_object()
+            .expect("text.format object");
+
+        assert_eq!(format.get("type"), Some(&json!("json_schema")));
+        assert_eq!(format.get("name"), Some(&json!("batch_product_result")));
+        assert_eq!(format.get("strict"), Some(&json!(true)));
+        assert_eq!(
+            format
+                .get("schema")
+                .and_then(|schema| schema.get("properties"))
+                .and_then(|properties| properties.get("results"))
+                .and_then(|results| results.get("type")),
+            Some(&json!("array"))
+        );
+        assert!(format.get("json_schema").is_none());
+    }
+
+    #[tokio::test]
     async fn prepare_gateway_request_responses_maps_system_message_to_developer() {
         let headers = axum::http::HeaderMap::new();
         let body = Body::from(

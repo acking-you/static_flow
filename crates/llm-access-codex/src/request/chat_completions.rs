@@ -309,6 +309,24 @@ fn append_assistant_content_to_responses_input(
 fn chat_message_bad_request(index: usize, message: impl AsRef<str>) -> CodexGatewayError {
     bad_request(&format!("chat.completions message {index}: {}", message.as_ref()))
 }
+
+fn map_chat_response_format_to_responses_text_format(format: &Value) -> Value {
+    let Some(format_obj) = format.as_object() else {
+        return format.clone();
+    };
+    if format_obj.get("type").and_then(Value::as_str) != Some("json_schema") {
+        return format.clone();
+    }
+
+    let Some(json_schema) = format_obj.get("json_schema").and_then(Value::as_object) else {
+        return format.clone();
+    };
+
+    let mut mapped = json_schema.clone();
+    mapped.insert("type".to_string(), Value::String("json_schema".to_string()));
+    Value::Object(mapped)
+}
+
 /// Adapt an OpenAI chat/completions request into the upstream responses format.
 pub fn adapt_openai_chat_completions_request(
     obj: &Map<String, Value>,
@@ -663,7 +681,10 @@ pub fn adapt_openai_chat_completions_request(
         text.insert("verbosity".to_string(), Value::String(verbosity.to_string()));
     }
     if let Some(format) = obj.get("response_format").cloned() {
-        text.insert("format".to_string(), format);
+        text.insert(
+            "format".to_string(),
+            map_chat_response_format_to_responses_text_format(&format),
+        );
     }
     if !text.is_empty() {
         out.insert("text".to_string(), Value::Object(text));
