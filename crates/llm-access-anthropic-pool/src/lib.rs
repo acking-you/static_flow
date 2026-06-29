@@ -5,6 +5,20 @@ use std::{
     net::IpAddr,
 };
 
+/// Default Anthropic API version used when a caller does not supply one.
+pub const ANTHROPIC_VERSION_2023_06_01: &str = "2023-06-01";
+
+/// Apply the standard direct Anthropic authentication/version headers.
+pub fn apply_anthropic_auth_headers(
+    request: reqwest::RequestBuilder,
+    api_key: &str,
+    anthropic_version: &str,
+) -> reqwest::RequestBuilder {
+    request
+        .header("x-api-key", api_key)
+        .header("anthropic-version", anthropic_version)
+}
+
 /// Candidate channel with an admin-controlled routing weight.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WeightedChannel {
@@ -165,13 +179,12 @@ pub fn merge_usage(
     }
 }
 
-/// Build the standard Anthropic Messages endpoint from a versioned base URL.
-pub fn build_messages_url(base_url: &str) -> anyhow::Result<String> {
+fn build_anthropic_endpoint_url(base_url: &str, endpoint: &str) -> anyhow::Result<String> {
     let trimmed = base_url.trim().trim_end_matches('/');
     if trimmed.is_empty() {
         anyhow::bail!("anthropic upstream base_url is empty");
     }
-    let url = reqwest::Url::parse(&format!("{trimmed}/messages"))?;
+    let url = reqwest::Url::parse(&format!("{trimmed}/{endpoint}"))?;
     if url.scheme() != "https" {
         anyhow::bail!("anthropic upstream base_url must use https");
     }
@@ -197,7 +210,40 @@ pub fn build_messages_url(base_url: &str) -> anyhow::Result<String> {
     Ok(url.to_string())
 }
 
-fn is_private_or_loopback_ip(ip: IpAddr) -> bool {
+/// Build the standard Anthropic Messages endpoint from a versioned base URL.
+pub fn build_messages_url(base_url: &str) -> anyhow::Result<String> {
+    build_anthropic_endpoint_url(base_url, "messages")
+}
+
+/// Build the standard Anthropic Models endpoint from a versioned base URL.
+pub fn build_models_url(base_url: &str) -> anyhow::Result<String> {
+    build_anthropic_endpoint_url(base_url, "models")
+}
+
+/// Parse model ids from the standard Anthropic Models list response.
+pub fn parse_model_ids_from_models_response(body: &[u8]) -> anyhow::Result<Vec<String>> {
+    let value: serde_json::Value = serde_json::from_slice(body)?;
+    let Some(data) = value.get("data").and_then(serde_json::Value::as_array) else {
+        anyhow::bail!("anthropic models response must contain data array");
+    };
+    let mut model_ids = Vec::with_capacity(data.len());
+    for item in data {
+        let Some(model_id) = item
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            anyhow::bail!("anthropic models response contains model without id");
+        };
+        model_ids.push(model_id.to_string());
+    }
+    Ok(model_ids)
+}
+
+/// Return whether an IP target is local/private and must not be used as a
+/// direct Anthropic upstream host.
+pub fn is_private_or_loopback_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             v4.is_loopback()
@@ -293,6 +339,18 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_upstream_url_appends_models_to_versioned_base_url() {
+        assert_eq!(
+            build_models_url("https://api.anthropic.com/v1").expect("url"),
+            "https://api.anthropic.com/v1/models"
+        );
+        assert_eq!(
+            build_models_url("https://example.com/root/").expect("url"),
+            "https://example.com/root/models"
+        );
+    }
+
+    #[test]
     fn upstream_url_rejects_plaintext_and_local_targets() {
         for base_url in [
             "http://api.anthropic.com/v1",
@@ -306,6 +364,31 @@ mod tests {
             assert!(
                 build_messages_url(base_url).is_err(),
                 "base_url should be rejected: {base_url}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_anthropic_upstream_models_response_ids() {
+        let model_ids = parse_model_ids_from_models_response(
+            br#"{"type":"list","data":[{"type":"model","id":"claude-sonnet-4-6"},{"type":"model","id":"claude-haiku-4-5"}]}"#,
+        )
+        .expect("models response");
+
+        assert_eq!(model_ids, vec!["claude-sonnet-4-6", "claude-haiku-4-5"]);
+    }
+
+    #[test]
+    fn rejects_malformed_anthropic_upstream_models_response() {
+        for body in [
+            br#"not json"#.as_slice(),
+            br#"{}"#.as_slice(),
+            br#"{"data":[{"type":"model"}]}"#.as_slice(),
+            br#"{"data":[{"id":" "}]} "#.as_slice(),
+        ] {
+            assert!(
+                parse_model_ids_from_models_response(body).is_err(),
+                "malformed models response should be rejected"
             );
         }
     }

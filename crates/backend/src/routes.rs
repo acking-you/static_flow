@@ -520,8 +520,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/static_flow/admin/llm-gateway/monitor", get(seo::seo_spa_shell))
         .route("/admin/kiro-gateway", get(seo::seo_spa_shell))
         .route("/admin/kiro-gateway/accounts", any(admin_kiro_accounts_entry))
+        .route("/admin/kiro-gateway/upstream-channels", get(seo::seo_spa_shell))
         .route("/static_flow/admin/kiro-gateway", get(seo::seo_spa_shell))
         .route("/static_flow/admin/kiro-gateway/accounts", any(admin_kiro_accounts_entry))
+        .route("/static_flow/admin/kiro-gateway/upstream-channels", get(seo::seo_spa_shell))
         .route("/admin/llm-gateway/*path", any(crate::llm_access_admin_proxy::proxy_admin_request))
         .route(
             "/static_flow/admin/llm-gateway/*path",

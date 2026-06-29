@@ -96,7 +96,6 @@ fn assert_usage_event_round_trips(actual: &UsageEvent, expected: &UsageEvent) {
 fn assert_usage_event_summary_round_trips(actual: &UsageEvent, expected: &UsageEvent) {
     let mut expected_summary = expected.clone();
     expected_summary.request_headers_json = "{}".to_string();
-    expected_summary.routing_diagnostics_json = None;
     expected_summary.last_message_content = None;
     expected_summary.client_request_body_json = None;
     expected_summary.upstream_request_body_json = None;
@@ -340,7 +339,10 @@ async fn duckdb_repository_persists_usage_events_with_default_feature() {
     assert_eq!(page.events.len(), 1);
     assert_usage_event_summary_round_trips(&page.events[0], &event);
     assert_eq!(page.events[0].request_headers_json, "{}");
-    assert_eq!(page.events[0].routing_diagnostics_json, None);
+    assert_eq!(
+        page.events[0].routing_diagnostics_json,
+        Some(r#"{"route":"diagnostic"}"#.to_string())
+    );
     assert_eq!(page.events[0].last_message_content, None);
     assert_eq!(page.events[0].client_request_body_json, None);
     assert_eq!(page.events[0].upstream_request_body_json, None);

@@ -1970,6 +1970,16 @@ impl ControlStore for UsageAccountingControlStore {
             .record_codex_image_key_usage(key_id, usage_tokens, used_at_ms)
             .await
     }
+
+    async fn record_anthropic_upstream_channel_usage(
+        &self,
+        channel_name: &str,
+        delta: llm_access_core::store::AnthropicUpstreamChannelUsageDelta,
+    ) -> anyhow::Result<()> {
+        self.control_store
+            .record_anthropic_upstream_channel_usage(channel_name, delta)
+            .await
+    }
 }
 
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -2157,9 +2167,9 @@ mod tests {
     use llm_access_core::{
         provider::{ProtocolFamily, ProviderType},
         store::{
-            AdminRuntimeConfig, AuthenticatedKey, ControlStore, KeyUsageRollupDelta,
-            UsageEventSink, UsageRollupApplyReport, UsageRollupBatch, UsageRollupBatchSink,
-            UsageRollupDigestMismatch,
+            AdminRuntimeConfig, AnthropicUpstreamChannelUsageDelta, AuthenticatedKey, ControlStore,
+            KeyUsageRollupDelta, UsageEventSink, UsageRollupApplyReport, UsageRollupBatch,
+            UsageRollupBatchSink, UsageRollupDigestMismatch,
         },
         usage::UsageEvent,
     };
@@ -2403,6 +2413,7 @@ mod tests {
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
     struct StaticControlStore {
         key: AuthenticatedKey,
+        anthropic_channel_usage: Arc<Mutex<Vec<(String, AnthropicUpstreamChannelUsageDelta)>>>,
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -2417,6 +2428,27 @@ mod tests {
 
         async fn apply_usage_rollup(&self, _event: &UsageEvent) -> anyhow::Result<()> {
             anyhow::bail!("usage rollups must be persisted by the accounting flusher")
+        }
+
+        async fn record_codex_image_key_usage(
+            &self,
+            _key_id: &str,
+            _usage_tokens: Option<u64>,
+            _used_at_ms: i64,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn record_anthropic_upstream_channel_usage(
+            &self,
+            channel_name: &str,
+            delta: AnthropicUpstreamChannelUsageDelta,
+        ) -> anyhow::Result<()> {
+            self.anthropic_channel_usage
+                .lock()
+                .await
+                .push((channel_name.to_string(), delta));
+            Ok(())
         }
     }
 
@@ -3033,6 +3065,7 @@ mod tests {
         let control_store = super::UsageAccountingControlStore::new(
             Arc::new(StaticControlStore {
                 key: sample_authenticated_key(),
+                anthropic_channel_usage: Arc::new(Mutex::new(Vec::new())),
             }),
             accounting.clone(),
         );
@@ -3064,6 +3097,49 @@ mod tests {
             "evt-1".to_string(),
             "evt-2".to_string()
         ]]);
+    }
+
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    #[tokio::test]
+    async fn usage_accounting_control_store_forwards_anthropic_channel_usage() {
+        let rollup_sink = Arc::new(RecordingUsageRollupSink::default());
+        let analytics_sink = Arc::new(RecordingUsageEventSink::default());
+        let (_journal_root, journal_sink) = test_journal_sink();
+        let (_backlog_root, rollup_backlog) = test_rollup_backlog();
+        let runtime_config = Arc::new(RwLock::new(AdminRuntimeConfig::default()));
+        let (accounting, _handle) = super::UsageAccounting::new(
+            rollup_sink,
+            journal_sink,
+            analytics_sink,
+            runtime_config,
+            rollup_backlog,
+            super::PendingUsageRollups::default(),
+            Some("node-test".to_string()),
+        )
+        .expect("usage accounting");
+        let recorded_usage = Arc::new(Mutex::new(Vec::new()));
+        let control_store = super::UsageAccountingControlStore::new(
+            Arc::new(StaticControlStore {
+                key: sample_authenticated_key(),
+                anthropic_channel_usage: recorded_usage.clone(),
+            }),
+            accounting,
+        );
+        let delta = AnthropicUpstreamChannelUsageDelta {
+            input_uncached_tokens: 11,
+            input_cached_tokens: 3,
+            output_tokens: 5,
+            billable_tokens: 36,
+            usage_missing: false,
+            used_at_ms: 1_700_000_000_123,
+        };
+
+        control_store
+            .record_anthropic_upstream_channel_usage("yl", delta)
+            .await
+            .expect("forward channel usage");
+
+        assert_eq!(recorded_usage.lock().await.as_slice(), &[("yl".to_string(), delta)]);
     }
 
     #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
@@ -3108,6 +3184,7 @@ mod tests {
         let control_store = super::UsageAccountingControlStore::new(
             Arc::new(StaticControlStore {
                 key: sample_authenticated_key(),
+                anthropic_channel_usage: Arc::new(Mutex::new(Vec::new())),
             }),
             accounting,
         );

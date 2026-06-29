@@ -3,6 +3,7 @@ pub mod admin_ai_stream;
 pub mod admin_article_request_stream;
 pub mod admin_gpt2api_rs;
 pub mod admin_kiro_account_status;
+pub mod admin_kiro_anthropic_upstreams;
 pub mod admin_kiro_gateway;
 pub mod admin_llm_gateway;
 pub mod admin_llm_gateway_monitor;

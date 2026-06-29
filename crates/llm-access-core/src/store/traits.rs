@@ -7,9 +7,10 @@ use async_trait::async_trait;
 use super::{
     anthropic_upstream::{
         AdminAnthropicUpstreamChannel, AdminAnthropicUpstreamChannelPatch,
-        AdminAnthropicUpstreamChannelsPage, AnthropicUpstreamChannelUsageDelta,
-        NewAdminAnthropicUpstreamChannel, ProviderAnthropicUpstreamResolution,
-        ProviderAnthropicUpstreamRoute,
+        AdminAnthropicUpstreamChannelsPage, AdminAnthropicUpstreamModelsStatusUpdate,
+        AdminAnthropicUpstreamProbeTarget, AdminAnthropicUpstreamTestStatusUpdate,
+        AnthropicUpstreamChannelUsageDelta, NewAdminAnthropicUpstreamChannel,
+        ProviderAnthropicUpstreamResolution, ProviderAnthropicUpstreamRoute,
     },
     codex_account::{
         apply_admin_codex_account_query, summarize_admin_accounts, AdminCodexAccount,
@@ -75,22 +76,18 @@ pub trait ControlStore: Send + Sync {
     /// Record Codex image usage observed outside the normal usage journal.
     async fn record_codex_image_key_usage(
         &self,
-        _key_id: &str,
-        _usage_tokens: Option<u64>,
-        _used_at_ms: i64,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
+        key_id: &str,
+        usage_tokens: Option<u64>,
+        used_at_ms: i64,
+    ) -> anyhow::Result<()>;
 
     /// Increment direct Anthropic upstream channel counters observed on the
     /// hot path.
     async fn record_anthropic_upstream_channel_usage(
         &self,
-        _channel_name: &str,
-        _delta: AnthropicUpstreamChannelUsageDelta,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
+        channel_name: &str,
+        delta: AnthropicUpstreamChannelUsageDelta,
+    ) -> anyhow::Result<()>;
 }
 
 /// Provider route/account resolution used by data-plane dispatch.
@@ -252,6 +249,33 @@ pub trait AdminAnthropicUpstreamStore: Send + Sync {
         &self,
         name: &str,
     ) -> anyhow::Result<Option<AdminAnthropicUpstreamChannel>>;
+
+    /// Load a direct Anthropic channel for an admin probe, including secret
+    /// material. This must never be returned directly to frontend callers.
+    async fn load_admin_anthropic_upstream_probe_target(
+        &self,
+        _name: &str,
+    ) -> anyhow::Result<Option<AdminAnthropicUpstreamProbeTarget>> {
+        Ok(None)
+    }
+
+    /// Persist latest `/models` refresh state.
+    async fn save_admin_anthropic_upstream_models_status(
+        &self,
+        _name: &str,
+        _update: AdminAnthropicUpstreamModelsStatusUpdate,
+    ) -> anyhow::Result<Option<AdminAnthropicUpstreamChannel>> {
+        Ok(None)
+    }
+
+    /// Persist latest `/messages` test state.
+    async fn save_admin_anthropic_upstream_test_status(
+        &self,
+        _name: &str,
+        _update: AdminAnthropicUpstreamTestStatusUpdate,
+    ) -> anyhow::Result<Option<AdminAnthropicUpstreamChannel>> {
+        Ok(None)
+    }
 }
 
 /// Public read-only queries used by unauthenticated public endpoints.

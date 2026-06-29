@@ -86,6 +86,36 @@ pub struct AdminAnthropicUpstreamChannel {
     pub proxy_config_id: Option<String>,
     /// Last hot-path error, if any.
     pub last_error: Option<String>,
+    /// Latest upstream-visible model ids from an admin `/models` refresh.
+    #[serde(default)]
+    pub models: Vec<String>,
+    /// Latest `/models` refresh status.
+    #[serde(default)]
+    pub last_models_status: Option<String>,
+    /// Latest `/models` refresh latency.
+    #[serde(default)]
+    pub last_models_latency_ms: Option<u64>,
+    /// Latest `/models` refresh timestamp.
+    #[serde(default)]
+    pub last_models_checked_at: Option<i64>,
+    /// Latest `/models` refresh error summary.
+    #[serde(default)]
+    pub last_models_error: Option<String>,
+    /// Latest admin `/messages` test model.
+    #[serde(default)]
+    pub last_test_model: Option<String>,
+    /// Latest admin `/messages` test status.
+    #[serde(default)]
+    pub last_test_status: Option<String>,
+    /// Latest admin `/messages` test latency.
+    #[serde(default)]
+    pub last_test_latency_ms: Option<u64>,
+    /// Latest admin `/messages` test timestamp.
+    #[serde(default)]
+    pub last_test_at: Option<i64>,
+    /// Latest admin `/messages` test error summary.
+    #[serde(default)]
+    pub last_test_error: Option<String>,
     /// Token rollup for this channel.
     pub usage: AdminAnthropicUpstreamUsageRollup,
     /// Creation timestamp.
@@ -107,6 +137,54 @@ pub struct AdminAnthropicUpstreamChannelsPage {
     pub offset: usize,
     /// Whether another page is available.
     pub has_more: bool,
+}
+
+/// Internal admin probe target, including secret material and resolved proxy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminAnthropicUpstreamProbeTarget {
+    /// Stable channel name.
+    pub name: String,
+    /// Anthropic-compatible base URL.
+    pub base_url: String,
+    /// API key sent as `x-api-key`.
+    pub api_key: String,
+    /// Resolved proxy settings for this probe request.
+    pub proxy: Option<ProviderProxyConfig>,
+    /// Proxy resolution error, when channel config exists but cannot produce a
+    /// usable proxy.
+    pub proxy_error: Option<String>,
+    /// Last model-test probe timestamp, used for admin-side cooldown.
+    pub last_test_at: Option<i64>,
+}
+
+/// Latest `/models` refresh state to persist for one upstream channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminAnthropicUpstreamModelsStatusUpdate {
+    /// Model ids returned by the upstream key.
+    pub model_ids: Vec<String>,
+    /// Stable status label: `ok`, `http_<code>`, or `error`.
+    pub status: String,
+    /// Observed request latency.
+    pub latency_ms: Option<u64>,
+    /// Probe timestamp.
+    pub checked_at_ms: i64,
+    /// Sanitized error summary.
+    pub error: Option<String>,
+}
+
+/// Latest `/messages` model-test state to persist for one upstream channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminAnthropicUpstreamTestStatusUpdate {
+    /// Tested model id.
+    pub model: String,
+    /// Stable status label: `ok`, `http_<code>`, or `error`.
+    pub status: String,
+    /// Observed request latency.
+    pub latency_ms: Option<u64>,
+    /// Probe timestamp.
+    pub checked_at_ms: i64,
+    /// Sanitized error summary.
+    pub error: Option<String>,
 }
 
 /// New direct Anthropic channel after admin request normalization.

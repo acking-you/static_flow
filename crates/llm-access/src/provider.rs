@@ -43,9 +43,10 @@ use axum::{
     http::{Request, StatusCode},
     response::Response,
 };
+pub(crate) use client::anthropic_upstream_client;
 use client::{
-    build_provider_client, provider_client_cache_capacity, provider_client_pool_idle_timeout,
-    provider_client_pool_max_idle_per_host,
+    build_anthropic_upstream_client, build_provider_client, provider_client_cache_capacity,
+    provider_client_pool_idle_timeout, provider_client_pool_max_idle_per_host,
 };
 pub(crate) use codex_auth::{
     codex_upstream_base_url, compute_codex_upstream_url, resolve_codex_client_version,
@@ -538,6 +539,14 @@ static DEFAULT_PROVIDER_CLIENT: std::sync::LazyLock<reqwest::Client> =
         build_provider_client(None).expect("default provider client should build")
     });
 static PROVIDER_CLIENT_CACHE: std::sync::LazyLock<
+    Mutex<LruCache<ProviderClientCacheKey, reqwest::Client>>,
+> = std::sync::LazyLock::new(|| Mutex::new(LruCache::new(provider_client_cache_capacity())));
+static DEFAULT_ANTHROPIC_UPSTREAM_CLIENT: std::sync::LazyLock<reqwest::Client> =
+    std::sync::LazyLock::new(|| {
+        build_anthropic_upstream_client(None)
+            .expect("default anthropic upstream client should build")
+    });
+static ANTHROPIC_UPSTREAM_CLIENT_CACHE: std::sync::LazyLock<
     Mutex<LruCache<ProviderClientCacheKey, reqwest::Client>>,
 > = std::sync::LazyLock::new(|| Mutex::new(LruCache::new(provider_client_cache_capacity())));
 static KIRO_REMOTE_MEDIA_CLIENT: std::sync::LazyLock<reqwest::Client> =

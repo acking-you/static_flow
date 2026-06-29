@@ -4,6 +4,7 @@ mod activity;
 mod admin;
 /// Process allocator tuning.
 pub mod allocator;
+mod anthropic_upstream_probe;
 pub mod cluster;
 mod codex_refresh;
 mod codex_status;
@@ -425,6 +426,14 @@ pub fn router_with_simulator(
                 .delete(admin::delete_admin_anthropic_upstream_channel),
         )
         .route(
+            "/admin/kiro-gateway/anthropic-upstreams/:name/refresh-models",
+            post(admin::refresh_admin_anthropic_upstream_models),
+        )
+        .route(
+            "/admin/kiro-gateway/anthropic-upstreams/:name/test",
+            post(admin::test_admin_anthropic_upstream_model),
+        )
+        .route(
             "/admin/kiro-gateway/accounts",
             get(admin::list_admin_kiro_accounts).post(admin::create_admin_kiro_manual_account),
         )
@@ -781,6 +790,23 @@ mod tests {
         async fn apply_usage_rollup(
             &self,
             _event: &llm_access_core::usage::UsageEvent,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn record_codex_image_key_usage(
+            &self,
+            _key_id: &str,
+            _usage_tokens: Option<u64>,
+            _used_at_ms: i64,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn record_anthropic_upstream_channel_usage(
+            &self,
+            _channel_name: &str,
+            _delta: llm_access_core::store::AnthropicUpstreamChannelUsageDelta,
         ) -> anyhow::Result<()> {
             Ok(())
         }

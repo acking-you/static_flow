@@ -10887,9 +10887,31 @@ pub struct AdminAnthropicUpstreamChannelView {
     pub proxy_mode: String,
     pub proxy_config_id: Option<String>,
     pub last_error: Option<String>,
+    pub models: Vec<String>,
+    pub last_models_status: Option<String>,
+    pub last_models_latency_ms: Option<u64>,
+    pub last_models_checked_at: Option<i64>,
+    pub last_models_error: Option<String>,
+    pub last_test_model: Option<String>,
+    pub last_test_status: Option<String>,
+    pub last_test_latency_ms: Option<u64>,
+    pub last_test_at: Option<i64>,
+    pub last_test_error: Option<String>,
     pub usage: AdminAnthropicUpstreamUsageRollupView,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminAnthropicUpstreamProbeResponseView {
+    pub ok: bool,
+    pub status: String,
+    pub status_code: Option<u16>,
+    pub latency_ms: u64,
+    pub error: Option<String>,
+    pub channel: AdminAnthropicUpstreamChannelView,
+    pub generated_at: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -10927,6 +10949,11 @@ pub struct PatchAdminAnthropicUpstreamChannelInput {
     pub proxy_mode: Option<String>,
     pub proxy_config_id: Option<Option<String>>,
     pub clear_last_error: bool,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Default)]
+pub struct TestAdminAnthropicUpstreamModelInput {
+    pub model: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -11888,6 +11915,71 @@ pub async fn patch_admin_anthropic_upstream_channel(
             urlencoding::encode(name)
         );
         let response = api_patch(&url)
+            .json(input)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn refresh_admin_anthropic_upstream_models(
+    name: &str,
+) -> Result<AdminAnthropicUpstreamProbeResponseView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = name;
+        Ok(AdminAnthropicUpstreamProbeResponseView::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/kiro-gateway/anthropic-upstreams/{}/refresh-models",
+            llm_access_admin_base(),
+            urlencoding::encode(name)
+        );
+        let response = api_post(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn test_admin_anthropic_upstream_model(
+    name: &str,
+    input: &TestAdminAnthropicUpstreamModelInput,
+) -> Result<AdminAnthropicUpstreamProbeResponseView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (name, input);
+        Ok(AdminAnthropicUpstreamProbeResponseView::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/kiro-gateway/anthropic-upstreams/{}/test",
+            llm_access_admin_base(),
+            urlencoding::encode(name)
+        );
+        let response = api_post(&url)
             .json(input)
             .map_err(|e| format!("Serialize error: {:?}", e))?
             .send()

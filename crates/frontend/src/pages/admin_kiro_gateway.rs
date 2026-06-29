@@ -12,27 +12,23 @@ use yew_router::prelude::Link;
 
 use crate::{
     api::{
-        create_admin_anthropic_upstream_channel, create_admin_kiro_account_group,
-        create_admin_kiro_key, create_admin_kiro_manual_account,
-        delete_admin_anthropic_upstream_channel, delete_admin_kiro_account,
-        delete_admin_kiro_account_group, delete_admin_kiro_key,
-        fetch_admin_anthropic_upstream_channels, fetch_admin_kiro_account_group_options,
-        fetch_admin_kiro_account_groups_page, fetch_admin_kiro_accounts,
-        fetch_admin_kiro_accounts_page, fetch_admin_kiro_cache_stats, fetch_admin_kiro_keys_page,
-        fetch_admin_kiro_usage_event_detail, fetch_admin_kiro_usage_events,
-        fetch_admin_llm_gateway_config, fetch_admin_llm_gateway_proxy_bindings,
-        fetch_admin_llm_gateway_proxy_configs, fetch_kiro_models, import_admin_kiro_account,
-        patch_admin_anthropic_upstream_channel, patch_admin_kiro_account,
+        create_admin_kiro_account_group, create_admin_kiro_key, create_admin_kiro_manual_account,
+        delete_admin_kiro_account, delete_admin_kiro_account_group, delete_admin_kiro_key,
+        fetch_admin_kiro_account_group_options, fetch_admin_kiro_account_groups_page,
+        fetch_admin_kiro_accounts, fetch_admin_kiro_accounts_page, fetch_admin_kiro_cache_stats,
+        fetch_admin_kiro_keys_page, fetch_admin_kiro_usage_event_detail,
+        fetch_admin_kiro_usage_events, fetch_admin_llm_gateway_config,
+        fetch_admin_llm_gateway_proxy_bindings, fetch_admin_llm_gateway_proxy_configs,
+        fetch_kiro_models, import_admin_kiro_account, patch_admin_kiro_account,
         patch_admin_kiro_account_group, patch_admin_kiro_key, refresh_admin_kiro_account_balance,
         update_admin_llm_gateway_config, AdminAccountGroupOptionView, AdminAccountGroupView,
-        AdminAccountsSummaryView, AdminAnthropicUpstreamChannelView, AdminKiroCacheStatsResponse,
+        AdminAccountsSummaryView, AdminKiroCacheStatsResponse,
         AdminKiroKeyCandidateCreditSummaryView, AdminLlmGatewayKeyView,
         AdminLlmGatewayKeysSummaryView, AdminLlmGatewayUsageEventDetailView,
         AdminLlmGatewayUsageEventView, AdminLlmGatewayUsageEventsQuery,
         AdminUpstreamProxyBindingView, AdminUpstreamProxyConfigView, CreateAdminAccountGroupInput,
-        CreateAdminAnthropicUpstreamChannelInput, CreateManualKiroAccountInput, KiroAccountView,
-        KiroBalanceView, KiroModelView, LlmGatewayRuntimeConfig, PatchAdminAccountGroupInput,
-        PatchAdminAnthropicUpstreamChannelInput, PatchAdminLlmGatewayKeyRequest,
+        CreateManualKiroAccountInput, KiroAccountView, KiroBalanceView, KiroModelView,
+        LlmGatewayRuntimeConfig, PatchAdminAccountGroupInput, PatchAdminLlmGatewayKeyRequest,
         PatchKiroAccountInput,
     },
     components::{
@@ -41,8 +37,8 @@ use crate::{
     },
     pages::llm_access_shared::{
         confirm_destructive, format_float2, format_kiro_disabled_reason, format_ms,
-        format_number_i64, format_number_u64, format_reset_hint, kiro_credit_ratio,
-        kiro_key_usage_ratio, usage_error_summary, MaskedSecretCode,
+        format_number_i64, format_number_u64, format_reset_hint, format_timestamp_opt,
+        kiro_credit_ratio, kiro_key_usage_ratio, usage_error_summary, MaskedSecretCode,
     },
     router::Route,
 };
@@ -133,10 +129,6 @@ extern "C" {
     fn copy_text(text: &str);
 }
 
-fn format_timestamp_opt(ts: Option<i64>) -> String {
-    ts.map(format_ms).unwrap_or_else(|| "-".to_string())
-}
-
 fn format_float4(value: f64) -> String {
     format!("{value:.4}")
 }
@@ -219,6 +211,40 @@ fn format_json_for_textarea(raw: &str) -> String {
         .ok()
         .and_then(|value| serde_json::to_string_pretty(&value).ok())
         .unwrap_or_else(|| raw.to_string())
+}
+
+fn routing_diagnostic_string(raw: Option<&str>, key: &str) -> Option<String> {
+    raw.and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .and_then(|value| {
+            value
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        })
+}
+
+fn anthropic_routing_badge(raw: Option<&str>) -> Option<&'static str> {
+    match routing_diagnostic_string(raw, "upstream_pool").as_deref() {
+        Some("direct_anthropic_test") => Some("Anthropic 测试"),
+        Some("direct_anthropic") => Some("Anthropic 直连"),
+        _ => None,
+    }
+}
+
+fn anthropic_routing_summary(raw: Option<&str>) -> Option<String> {
+    let badge = anthropic_routing_badge(raw)?;
+    let channel = routing_diagnostic_string(raw, "channel_name");
+    let probe_kind = routing_diagnostic_string(raw, "probe_kind");
+    Some(match (channel, probe_kind) {
+        (Some(channel), Some(probe_kind)) => {
+            format!("{badge} · channel {channel} · {probe_kind}")
+        },
+        (Some(channel), None) => format!("{badge} · channel {channel}"),
+        (None, Some(probe_kind)) => format!("{badge} · {probe_kind}"),
+        (None, None) => badge.to_string(),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -3274,20 +3300,6 @@ pub fn admin_kiro_gateway_page() -> Html {
     let runtime_config = use_state(|| None::<LlmGatewayRuntimeConfig>);
     let kiro_cache_stats = use_state(|| None::<AdminKiroCacheStatsResponse>);
     let kiro_cache_stats_error = use_state(|| None::<String>);
-    let anthropic_upstream_channels = use_state(Vec::<AdminAnthropicUpstreamChannelView>::new);
-    let anthropic_upstream_error = use_state(|| None::<String>);
-    let anthropic_upstream_name = use_state(String::new);
-    let anthropic_upstream_base_url =
-        use_state(|| llm_store::DEFAULT_ANTHROPIC_UPSTREAM_BASE_URL.to_string());
-    let anthropic_upstream_api_key = use_state(String::new);
-    let anthropic_upstream_weight =
-        use_state(|| llm_store::DEFAULT_ANTHROPIC_UPSTREAM_WEIGHT.to_string());
-    let anthropic_upstream_max_concurrency =
-        use_state(|| llm_store::DEFAULT_ANTHROPIC_UPSTREAM_MAX_CONCURRENCY.to_string());
-    let anthropic_upstream_min_start_interval_ms =
-        use_state(|| llm_store::DEFAULT_ANTHROPIC_UPSTREAM_MIN_START_INTERVAL_MS.to_string());
-    let anthropic_upstream_proxy_mode = use_state(|| "inherit".to_string());
-    let saving_anthropic_upstream = use_state(|| false);
     let kiro_cache_policy_form = use_state(KiroCachePolicyForm::default);
     let persisted_kiro_cache_policy_form = use_state(KiroCachePolicyForm::default);
     let kiro_cache_kmodels_json = use_state(String::new);
@@ -3448,8 +3460,6 @@ pub fn admin_kiro_gateway_page() -> Html {
         let keys_summary = keys_summary.clone();
         let kiro_cache_stats = kiro_cache_stats.clone();
         let kiro_cache_stats_error = kiro_cache_stats_error.clone();
-        let anthropic_upstream_channels = anthropic_upstream_channels.clone();
-        let anthropic_upstream_error = anthropic_upstream_error.clone();
         let kiro_cache_policy_form = kiro_cache_policy_form.clone();
         let persisted_kiro_cache_policy_form = persisted_kiro_cache_policy_form.clone();
         let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
@@ -3478,8 +3488,6 @@ pub fn admin_kiro_gateway_page() -> Html {
             let keys_summary = keys_summary.clone();
             let kiro_cache_stats = kiro_cache_stats.clone();
             let kiro_cache_stats_error = kiro_cache_stats_error.clone();
-            let anthropic_upstream_channels = anthropic_upstream_channels.clone();
-            let anthropic_upstream_error = anthropic_upstream_error.clone();
             let kiro_cache_policy_form = kiro_cache_policy_form.clone();
             let persisted_kiro_cache_policy_form = persisted_kiro_cache_policy_form.clone();
             let kiro_cache_kmodels_json = kiro_cache_kmodels_json.clone();
@@ -3505,7 +3513,6 @@ pub fn admin_kiro_gateway_page() -> Html {
                     proxy_configs_result,
                     proxy_bindings_result,
                     cache_stats_result,
-                    anthropic_upstream_result,
                 ) = futures::join!(
                     fetch_admin_llm_gateway_config(),
                     fetch_admin_kiro_accounts_page(1, 0),
@@ -3513,7 +3520,6 @@ pub fn admin_kiro_gateway_page() -> Html {
                     fetch_admin_llm_gateway_proxy_configs(),
                     fetch_admin_llm_gateway_proxy_bindings(),
                     fetch_admin_kiro_cache_stats(),
-                    fetch_admin_anthropic_upstream_channels(),
                 );
                 match (
                     config_result,
@@ -3599,16 +3605,6 @@ pub fn admin_kiro_gateway_page() -> Html {
                             Err(err) => {
                                 kiro_cache_stats.set(None);
                                 kiro_cache_stats_error.set(Some(err));
-                            },
-                        }
-                        match anthropic_upstream_result {
-                            Ok(channels_resp) => {
-                                anthropic_upstream_channels.set(channels_resp.channels);
-                                anthropic_upstream_error.set(None);
-                            },
-                            Err(err) => {
-                                anthropic_upstream_channels.set(Vec::new());
-                                anthropic_upstream_error.set(Some(err));
                             },
                         }
                     },
@@ -4127,108 +4123,6 @@ pub fn admin_kiro_gateway_page() -> Html {
         })
     };
 
-    let on_create_anthropic_upstream = {
-        let name = anthropic_upstream_name.clone();
-        let base_url = anthropic_upstream_base_url.clone();
-        let api_key = anthropic_upstream_api_key.clone();
-        let weight = anthropic_upstream_weight.clone();
-        let max_concurrency = anthropic_upstream_max_concurrency.clone();
-        let min_start_interval_ms = anthropic_upstream_min_start_interval_ms.clone();
-        let proxy_mode = anthropic_upstream_proxy_mode.clone();
-        let saving = saving_anthropic_upstream.clone();
-        let panel_error = anthropic_upstream_error.clone();
-        let notify = notify.clone();
-        let on_reload = on_reload.clone();
-        Callback::from(move |_| {
-            if *saving {
-                return;
-            }
-            let name_value = (*name).clone();
-            let base_url_value = (*base_url).clone();
-            let api_key_value = (*api_key).clone();
-            let weight_value = (*weight).clone();
-            let max_concurrency_value = (*max_concurrency).clone();
-            let min_start_interval_ms_value = (*min_start_interval_ms).clone();
-            let selected_proxy_value = (*proxy_mode).clone();
-            let name = name.clone();
-            let api_key = api_key.clone();
-            let saving = saving.clone();
-            let panel_error = panel_error.clone();
-            let notify = notify.clone();
-            let on_reload = on_reload.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                let parsed_weight = match weight_value.trim().parse::<u64>() {
-                    Ok(value) => value,
-                    Err(_) => {
-                        let message = "Anthropic upstream weight must be an integer.".to_string();
-                        panel_error.set(Some(message.clone()));
-                        notify.emit((message, true));
-                        return;
-                    },
-                };
-                let parsed_max = match max_concurrency_value.trim().parse::<u64>() {
-                    Ok(value) => value,
-                    Err(_) => {
-                        let message =
-                            "Anthropic upstream max concurrency must be an integer.".to_string();
-                        panel_error.set(Some(message.clone()));
-                        notify.emit((message, true));
-                        return;
-                    },
-                };
-                let parsed_min = match min_start_interval_ms_value.trim().parse::<u64>() {
-                    Ok(value) => value,
-                    Err(_) => {
-                        let message =
-                            "Anthropic upstream min interval must be an integer.".to_string();
-                        panel_error.set(Some(message.clone()));
-                        notify.emit((message, true));
-                        return;
-                    },
-                };
-                let (proxy_mode_value, proxy_config_id) = if selected_proxy_value.trim() == "direct"
-                {
-                    ("direct".to_string(), None)
-                } else if let Some(proxy_config_id) =
-                    selected_proxy_value.trim().strip_prefix("fixed:")
-                {
-                    ("fixed".to_string(), Some(proxy_config_id.to_string()))
-                } else {
-                    ("inherit".to_string(), None)
-                };
-                saving.set(true);
-                panel_error.set(None);
-                let input = CreateAdminAnthropicUpstreamChannelInput {
-                    name: name_value.trim().to_string(),
-                    base_url: base_url_value.trim().to_string(),
-                    api_key: api_key_value.trim().to_string(),
-                    status: Some("active".to_string()),
-                    weight: Some(parsed_weight),
-                    max_concurrency: Some(parsed_max),
-                    min_start_interval_ms: Some(parsed_min),
-                    proxy_mode: Some(proxy_mode_value),
-                    proxy_config_id,
-                };
-                match create_admin_anthropic_upstream_channel(&input).await {
-                    Ok(channel) => {
-                        name.set(String::new());
-                        api_key.set(String::new());
-                        notify.emit((
-                            format!("Created Anthropic upstream `{}`.", channel.name),
-                            false,
-                        ));
-                        on_reload.emit(());
-                    },
-                    Err(err) => {
-                        panel_error.set(Some(err.clone()));
-                        notify.emit((format!("Failed to create Anthropic upstream.\n{err}"), true));
-                    },
-                }
-                saving.set(false);
-            });
-        })
-    };
-
     let on_import_local = {
         let import_name = import_name.clone();
         let import_sqlite_path = import_sqlite_path.clone();
@@ -4736,283 +4630,12 @@ pub fn admin_kiro_gateway_page() -> Html {
                             { "Anthropic Upstream Channels" }
                         </h2>
                         <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
-                            { "这些 channel 只服务显式打开 Anthropic 直连模式的 Kiro key；默认 key 仍完全走 Kiro 账号池。" }
+                            { "直连 channel 管理、模型刷新、模型测试和 channel token rollup 已移到独立页面，Overview 不再首屏加载完整 channel 列表。" }
                         </p>
                     </div>
-                    <button
-                        type="button"
-                        class={classes!("btn-terminal")}
-                        onclick={{
-                            let on_reload = on_reload.clone();
-                            Callback::from(move |_| on_reload.emit(()))
-                        }}
-                    >
-                        { "Refresh" }
-                    </button>
-                </div>
-                if let Some(err) = (*anthropic_upstream_error).clone() {
-                    <div class={classes!("mt-4", "rounded-lg", "border", "border-red-400/50", "bg-red-500/10", "px-3", "py-3", "font-mono", "text-xs", "text-red-700", "dark:text-red-200")}>
-                        { err }
-                    </div>
-                }
-                <div class={classes!("mt-4", "grid", "gap-3", "lg:grid-cols-6")}>
-                    <label class={classes!("block", "text-sm")}>
-                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Name" }</div>
-                        <input
-                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
-                            value={(*anthropic_upstream_name).clone()}
-                            oninput={{
-                                let anthropic_upstream_name = anthropic_upstream_name.clone();
-                                Callback::from(move |event: InputEvent| {
-                                    let input: HtmlInputElement = event.target_unchecked_into();
-                                    anthropic_upstream_name.set(input.value());
-                                })
-                            }}
-                        />
-                    </label>
-                    <label class={classes!("block", "text-sm", "lg:col-span-2")}>
-                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Base URL" }</div>
-                        <input
-                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
-                            value={(*anthropic_upstream_base_url).clone()}
-                            oninput={{
-                                let anthropic_upstream_base_url = anthropic_upstream_base_url.clone();
-                                Callback::from(move |event: InputEvent| {
-                                    let input: HtmlInputElement = event.target_unchecked_into();
-                                    anthropic_upstream_base_url.set(input.value());
-                                })
-                            }}
-                        />
-                    </label>
-                    <label class={classes!("block", "text-sm", "lg:col-span-2")}>
-                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "API Key" }</div>
-                        <input
-                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
-                            type="password"
-                            value={(*anthropic_upstream_api_key).clone()}
-                            oninput={{
-                                let anthropic_upstream_api_key = anthropic_upstream_api_key.clone();
-                                Callback::from(move |event: InputEvent| {
-                                    let input: HtmlInputElement = event.target_unchecked_into();
-                                    anthropic_upstream_api_key.set(input.value());
-                                })
-                            }}
-                        />
-                    </label>
-                    <label class={classes!("block", "text-sm")}>
-                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Proxy" }</div>
-                        <select
-                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm")}
-                            value={(*anthropic_upstream_proxy_mode).clone()}
-                            onchange={{
-                                let anthropic_upstream_proxy_mode = anthropic_upstream_proxy_mode.clone();
-                                Callback::from(move |event: Event| {
-                                    let input: HtmlSelectElement = event.target_unchecked_into();
-                                    anthropic_upstream_proxy_mode.set(input.value());
-                                })
-                            }}
-                        >
-                            <option value="inherit">{ "Inherit Provider Proxy" }</option>
-                            <option value="direct">{ "Direct / No Proxy" }</option>
-                            { for (*proxy_configs).iter().map(|proxy_config| {
-                                let option_value = format!("fixed:{}", proxy_config.id);
-                                html! {
-                                    <option value={option_value}>
-                                        { format!("Fixed · {} · {}", proxy_config.name, proxy_config.proxy_url) }
-                                    </option>
-                                }
-                            }) }
-                        </select>
-                    </label>
-                    <label class={classes!("block", "text-sm")}>
-                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Weight" }</div>
-                        <input
-                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
-                            value={(*anthropic_upstream_weight).clone()}
-                            oninput={{
-                                let anthropic_upstream_weight = anthropic_upstream_weight.clone();
-                                Callback::from(move |event: InputEvent| {
-                                    let input: HtmlInputElement = event.target_unchecked_into();
-                                    anthropic_upstream_weight.set(input.value());
-                                })
-                            }}
-                        />
-                    </label>
-                    <label class={classes!("block", "text-sm")}>
-                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Concurrency" }</div>
-                        <input
-                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
-                            value={(*anthropic_upstream_max_concurrency).clone()}
-                            oninput={{
-                                let anthropic_upstream_max_concurrency =
-                                    anthropic_upstream_max_concurrency.clone();
-                                Callback::from(move |event: InputEvent| {
-                                    let input: HtmlInputElement = event.target_unchecked_into();
-                                    anthropic_upstream_max_concurrency.set(input.value());
-                                })
-                            }}
-                        />
-                    </label>
-                    <label class={classes!("block", "text-sm")}>
-                        <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Min Interval ms" }</div>
-                        <input
-                            class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "font-mono", "text-sm")}
-                            value={(*anthropic_upstream_min_start_interval_ms).clone()}
-                            oninput={{
-                                let anthropic_upstream_min_start_interval_ms =
-                                    anthropic_upstream_min_start_interval_ms.clone();
-                                Callback::from(move |event: InputEvent| {
-                                    let input: HtmlInputElement = event.target_unchecked_into();
-                                    anthropic_upstream_min_start_interval_ms.set(input.value());
-                                })
-                            }}
-                        />
-                    </label>
-                    <div class={classes!("flex", "items-end")}>
-                        <button
-                            type="button"
-                            class={classes!("btn-terminal", "btn-terminal-primary", "w-full")}
-                            disabled={*saving_anthropic_upstream}
-                            onclick={on_create_anthropic_upstream}
-                        >
-                            { if *saving_anthropic_upstream { "Creating..." } else { "Create" } }
-                        </button>
-                    </div>
-                </div>
-                <div class={classes!("mt-4", "grid", "gap-3", "xl:grid-cols-2")}>
-                    { for (*anthropic_upstream_channels).iter().map(|channel| {
-                        let channel_name = channel.name.clone();
-                        let next_status = if channel.status == "active" { "disabled" } else { "active" }.to_string();
-                        let toggle_label = if channel.status == "active" { "Disable" } else { "Enable" };
-                        let on_toggle = {
-                            let notify = notify.clone();
-                            let on_reload = on_reload.clone();
-                            let channel_name = channel_name.clone();
-                            let next_status = next_status.clone();
-                            Callback::from(move |_| {
-                                let notify = notify.clone();
-                                let on_reload = on_reload.clone();
-                                let channel_name = channel_name.clone();
-                                let next_status = next_status.clone();
-                                wasm_bindgen_futures::spawn_local(async move {
-                                    let input = PatchAdminAnthropicUpstreamChannelInput {
-                                        status: Some(next_status.clone()),
-                                        ..PatchAdminAnthropicUpstreamChannelInput::default()
-                                    };
-                                    match patch_admin_anthropic_upstream_channel(&channel_name, &input).await {
-                                        Ok(_) => {
-                                            notify.emit((format!("Updated Anthropic upstream `{channel_name}`."), false));
-                                            on_reload.emit(());
-                                        },
-                                        Err(err) => notify.emit((format!("Failed to update Anthropic upstream `{channel_name}`.\n{err}"), true)),
-                                    }
-                                });
-                            })
-                        };
-                        let on_delete = {
-                            let notify = notify.clone();
-                            let on_reload = on_reload.clone();
-                            let channel_name = channel_name.clone();
-                            Callback::from(move |_| {
-                                if !confirm_destructive(&format!("Delete Anthropic upstream `{channel_name}`?")) {
-                                    return;
-                                }
-                                let notify = notify.clone();
-                                let on_reload = on_reload.clone();
-                                let channel_name = channel_name.clone();
-                                wasm_bindgen_futures::spawn_local(async move {
-                                    match delete_admin_anthropic_upstream_channel(&channel_name).await {
-                                        Ok(_) => {
-                                            notify.emit((format!("Deleted Anthropic upstream `{channel_name}`."), false));
-                                            on_reload.emit(());
-                                        },
-                                        Err(err) => notify.emit((format!("Failed to delete Anthropic upstream `{channel_name}`.\n{err}"), true)),
-                                    }
-                                });
-                            })
-                        };
-                        let on_rotate_key = {
-                            let notify = notify.clone();
-                            let on_reload = on_reload.clone();
-                            let channel_name = channel_name.clone();
-                            Callback::from(move |_| {
-                                let Some(window) = web_sys::window() else {
-                                    notify.emit(("Browser window is unavailable.".to_string(), true));
-                                    return;
-                                };
-                                let prompt = format!("New API key for Anthropic upstream `{channel_name}`");
-                                let Ok(Some(api_key)) = window.prompt_with_message(&prompt) else {
-                                    return;
-                                };
-                                let api_key = api_key.trim().to_string();
-                                if api_key.is_empty() {
-                                    notify.emit(("API key must not be empty.".to_string(), true));
-                                    return;
-                                }
-                                let notify = notify.clone();
-                                let on_reload = on_reload.clone();
-                                let channel_name = channel_name.clone();
-                                wasm_bindgen_futures::spawn_local(async move {
-                                    let input = PatchAdminAnthropicUpstreamChannelInput {
-                                        api_key: Some(api_key),
-                                        ..PatchAdminAnthropicUpstreamChannelInput::default()
-                                    };
-                                    match patch_admin_anthropic_upstream_channel(&channel_name, &input).await {
-                                        Ok(_) => {
-                                            notify.emit((format!("Rotated API key for Anthropic upstream `{channel_name}`."), false));
-                                            on_reload.emit(());
-                                        },
-                                        Err(err) => notify.emit((format!("Failed to rotate API key for Anthropic upstream `{channel_name}`.\n{err}"), true)),
-                                    }
-                                });
-                            })
-                        };
-                        html! {
-                            <article class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3")}>
-                                <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
-                                    <div>
-                                        <div class={classes!("font-mono", "text-sm", "font-semibold", "text-[var(--text)]")}>{ channel.name.clone() }</div>
-                                        <div class={classes!("mt-1", "font-mono", "text-xs", "text-[var(--muted)]", "break-all")}>
-                                            { channel.base_url.clone() }
-                                        </div>
-                                    </div>
-                                    <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
-                                        <span class={classes!("rounded-full", "border", "border-[var(--border)]", "px-2", "py-1", "font-mono", "text-xs")}>
-                                            { channel.status.clone() }
-                                        </span>
-                                        <button type="button" class={classes!("btn-terminal", "text-xs")} onclick={on_toggle}>
-                                            { toggle_label }
-                                        </button>
-                                        <button type="button" class={classes!("btn-terminal", "text-xs")} onclick={on_rotate_key}>
-                                            { "Rotate Key" }
-                                        </button>
-                                        <button type="button" class={classes!("btn-terminal", "text-xs")} onclick={on_delete}>
-                                            { "Delete" }
-                                        </button>
-                                    </div>
-                                </div>
-                                <div class={classes!("mt-3", "grid", "gap-2", "sm:grid-cols-3", "font-mono", "text-xs")}>
-                                    <div><span class={classes!("text-[var(--muted)]")}>{ "weight " }</span>{ channel.weight }</div>
-                                    <div><span class={classes!("text-[var(--muted)]")}>{ "concurrency " }</span>{ channel.max_concurrency }</div>
-                                    <div><span class={classes!("text-[var(--muted)]")}>{ "proxy " }</span>{ channel.proxy_mode.clone() }</div>
-                                    <div><span class={classes!("text-[var(--muted)]")}>{ "input " }</span>{ format_number_u64(channel.usage.input_uncached_tokens.saturating_add(channel.usage.input_cached_tokens)) }</div>
-                                    <div><span class={classes!("text-[var(--muted)]")}>{ "output " }</span>{ format_number_u64(channel.usage.output_tokens) }</div>
-                                    <div><span class={classes!("text-[var(--muted)]")}>{ "billable " }</span>{ format_number_u64(channel.usage.billable_tokens) }</div>
-                                </div>
-                                <div class={classes!("mt-2", "font-mono", "text-xs", "text-[var(--muted)]")}>
-                                    { format!("cached={} · missing={} · last_used={}", format_number_u64(channel.usage.input_cached_tokens), channel.usage.usage_missing_events, format_timestamp_opt(channel.usage.last_used_at)) }
-                                </div>
-                                if let Some(error) = channel.last_error.as_deref() {
-                                    <div class={classes!("mt-2", "font-mono", "text-xs", "text-red-700", "dark:text-red-200")}>{ error }</div>
-                                }
-                            </article>
-                        }
-                    }) }
-                    if (*anthropic_upstream_channels).is_empty() {
-                        <div class={classes!("rounded-lg", "border", "border-dashed", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "text-sm", "text-[var(--muted)]")}>
-                            { "No Anthropic upstream channels configured." }
-                        </div>
-                    }
+                    <Link<Route> to={Route::AdminKiroAnthropicUpstreams} classes={classes!("btn-terminal", "btn-terminal-primary")}>
+                        { "Open Channels" }
+                    </Link<Route>>
                 </div>
             </section>
             <section class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
@@ -6001,6 +5624,8 @@ pub fn admin_kiro_gateway_page() -> Html {
                                 event.error_class.as_deref(),
                                 event.session_blocked,
                             );
+                            let anthropic_badge =
+                                anthropic_routing_badge(event.routing_diagnostics_json.as_deref());
                             let event_id = event.id.clone();
                             let on_detail = {
                                 let open_usage_detail = open_usage_detail.clone();
@@ -6028,6 +5653,11 @@ pub fn admin_kiro_gateway_page() -> Html {
                                     if let Some(class_label) = error_class_label.clone() {
                                         <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-red-500/20", "bg-red-500/10", "px-2", "py-0.5", "text-[11px]", "font-semibold", "text-red-700", "dark:text-red-200")}>
                                             { class_label }
+                                        </span>
+                                    }
+                                    if let Some(badge) = anthropic_badge {
+                                        <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-sky-500/20", "bg-sky-500/10", "px-2", "py-0.5", "text-[11px]", "font-semibold", "text-sky-700", "dark:text-sky-200")}>
+                                            { badge }
                                         </span>
                                     }
                                     if let Some(summary) = status_error_summary.clone() {
@@ -6063,6 +5693,8 @@ pub fn admin_kiro_gateway_page() -> Html {
                     }
                 } else if let Some(detail) = (*selected_usage_event).clone() {
                     let close_usage_detail = close_usage_detail.clone();
+                    let anthropic_summary =
+                        anthropic_routing_summary(detail.routing_diagnostics_json.as_deref());
                     html! {
                         <div class={classes!("fixed", "inset-0", "z-[95]", "flex", "items-center", "justify-center", "bg-black/45", "px-4")}>
                             <div class={classes!("max-h-[86vh]", "w-[min(64rem,100%)]", "overflow-hidden", "rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "shadow-xl")}>
@@ -6094,7 +5726,15 @@ pub fn admin_kiro_gateway_page() -> Html {
                                         { usage_detail_kv("cached", format_number_u64(detail.input_cached_tokens)) }
                                         { usage_detail_kv("output", format_number_u64(detail.output_tokens)) }
                                         { usage_detail_kv("billable", format_number_u64(detail.billable_tokens)) }
+                                        {
+                                            if let Some(summary) = anthropic_summary.clone() {
+                                                usage_detail_kv("routing", summary)
+                                            } else {
+                                                Html::default()
+                                            }
+                                        }
                                     </div>
+                                    { usage_detail_pre("routing diagnostics", detail.routing_diagnostics_json.clone().unwrap_or_else(|| "-".to_string())) }
                                     { usage_detail_pre("request headers", detail.request_headers_json.clone()) }
                                     { usage_detail_pre("client request", detail.client_request_body_json.clone().unwrap_or_else(|| "-".to_string())) }
                                     { usage_detail_pre("upstream request", detail.upstream_request_body_json.clone().unwrap_or_else(|| "-".to_string())) }

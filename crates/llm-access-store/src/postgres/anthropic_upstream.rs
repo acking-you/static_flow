@@ -4,13 +4,17 @@ use anyhow::Context;
 use async_trait::async_trait;
 use llm_access_core::store::{
     self as core_store, AdminAnthropicUpstreamChannel, AdminAnthropicUpstreamChannelPatch,
-    AdminAnthropicUpstreamChannelsPage, AdminAnthropicUpstreamStore,
-    AdminAnthropicUpstreamUsageRollup, AdminPageRequest, AnthropicUpstreamChannelUsageDelta,
-    NewAdminAnthropicUpstreamChannel,
+    AdminAnthropicUpstreamChannelsPage, AdminAnthropicUpstreamModelsStatusUpdate,
+    AdminAnthropicUpstreamProbeTarget, AdminAnthropicUpstreamStore,
+    AdminAnthropicUpstreamTestStatusUpdate, AdminAnthropicUpstreamUsageRollup, AdminPageRequest,
+    AnthropicUpstreamChannelUsageDelta, NewAdminAnthropicUpstreamChannel,
 };
 use serde::{Deserialize, Serialize};
 
-use super::{now_ms, AnthropicUpstreamChannelRow, PostgresControlRepository};
+use super::{
+    now_ms, proxy_support::resolve_provider_proxy_config_from_context, AnthropicUpstreamChannelRow,
+    PostgresControlRepository,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedAnthropicUpstreamChannelsLookup {
@@ -20,6 +24,24 @@ struct CachedAnthropicUpstreamChannelsLookup {
 
 fn non_negative_i64_to_u64(value: i64) -> u64 {
     value.max(0) as u64
+}
+
+fn optional_non_negative_i64_to_u64(value: Option<i64>) -> Option<u64> {
+    value.map(non_negative_i64_to_u64)
+}
+
+fn model_ids_from_json_text(channel_name: &str, raw: &str) -> Vec<String> {
+    match serde_json::from_str::<Vec<String>>(raw) {
+        Ok(model_ids) => model_ids,
+        Err(err) => {
+            tracing::warn!(
+                channel = %channel_name,
+                error = %err,
+                "stored Anthropic upstream model_ids JSON is not a string array"
+            );
+            Vec::new()
+        },
+    }
 }
 
 fn auth_json_for_api_key(api_key: &str) -> anyhow::Result<String> {
@@ -42,6 +64,16 @@ fn admin_channel_from_row(row: AnthropicUpstreamChannelRow) -> AdminAnthropicUps
         proxy_mode: row.proxy_mode,
         proxy_config_id: row.proxy_config_id,
         last_error: row.last_error,
+        models: row.model_ids,
+        last_models_status: row.last_models_status,
+        last_models_latency_ms: optional_non_negative_i64_to_u64(row.last_models_latency_ms),
+        last_models_checked_at: row.last_models_checked_at_ms,
+        last_models_error: row.last_models_error,
+        last_test_model: row.last_test_model,
+        last_test_status: row.last_test_status,
+        last_test_latency_ms: optional_non_negative_i64_to_u64(row.last_test_latency_ms),
+        last_test_at: row.last_test_at_ms,
+        last_test_error: row.last_test_error,
         usage: AdminAnthropicUpstreamUsageRollup {
             input_uncached_tokens: non_negative_i64_to_u64(row.input_uncached_tokens),
             input_cached_tokens: non_negative_i64_to_u64(row.input_cached_tokens),
@@ -68,14 +100,27 @@ impl PostgresControlRepository {
             proxy_mode: row.get(7),
             proxy_config_id: row.get(8),
             last_error: row.get(9),
-            created_at_ms: row.get(10),
-            updated_at_ms: row.get(11),
-            input_uncached_tokens: row.get(12),
-            input_cached_tokens: row.get(13),
-            output_tokens: row.get(14),
-            billable_tokens: row.get(15),
-            usage_missing_events: row.get(16),
-            last_used_at_ms: row.get(17),
+            model_ids: model_ids_from_json_text(
+                row.get::<_, String>(0).as_str(),
+                row.get::<_, String>(10).as_str(),
+            ),
+            last_models_status: row.get(11),
+            last_models_latency_ms: row.get(12),
+            last_models_checked_at_ms: row.get(13),
+            last_models_error: row.get(14),
+            last_test_model: row.get(15),
+            last_test_status: row.get(16),
+            last_test_latency_ms: row.get(17),
+            last_test_at_ms: row.get(18),
+            last_test_error: row.get(19),
+            created_at_ms: row.get(20),
+            updated_at_ms: row.get(21),
+            input_uncached_tokens: row.get(22),
+            input_cached_tokens: row.get(23),
+            output_tokens: row.get(24),
+            billable_tokens: row.get(25),
+            usage_missing_events: row.get(26),
+            last_used_at_ms: row.get(27),
         }
     }
 
@@ -97,6 +142,16 @@ impl PostgresControlRepository {
                 c.proxy_mode,
                 c.proxy_config_id,
                 c.last_error,
+                c.model_ids::text,
+                c.last_models_status,
+                c.last_models_latency_ms,
+                c.last_models_checked_at_ms,
+                c.last_models_error,
+                c.last_test_model,
+                c.last_test_status,
+                c.last_test_latency_ms,
+                c.last_test_at_ms,
+                c.last_test_error,
                 c.created_at_ms,
                 c.updated_at_ms,
                 COALESCE(u.input_uncached_tokens, 0),
@@ -184,6 +239,16 @@ impl PostgresControlRepository {
                     c.proxy_mode,
                     c.proxy_config_id,
                     c.last_error,
+                    c.model_ids::text,
+                    c.last_models_status,
+                    c.last_models_latency_ms,
+                    c.last_models_checked_at_ms,
+                    c.last_models_error,
+                    c.last_test_model,
+                    c.last_test_status,
+                    c.last_test_latency_ms,
+                    c.last_test_at_ms,
+                    c.last_test_error,
                     c.created_at_ms,
                     c.updated_at_ms,
                     COALESCE(u.input_uncached_tokens, 0),
@@ -437,5 +502,138 @@ impl AdminAnthropicUpstreamStore for PostgresControlRepository {
         self.bump_dispatch_generation(core_store::PROVIDER_KIRO)
             .await;
         Ok(Some(admin_channel_from_row(row)))
+    }
+
+    async fn load_admin_anthropic_upstream_probe_target(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<AdminAnthropicUpstreamProbeTarget>> {
+        let Some(row) = self.load_anthropic_upstream_channel_row(name).await? else {
+            return Ok(None);
+        };
+        let Some(api_key) = row
+            .api_key
+            .clone()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        else {
+            anyhow::bail!("anthropic upstream channel api key is missing");
+        };
+        let proxy_context = self
+            .load_provider_proxy_resolution_context(core_store::PROVIDER_KIRO)
+            .await?;
+        let (proxy, proxy_error) = match resolve_provider_proxy_config_from_context(
+            &row.proxy_mode,
+            row.proxy_config_id.as_deref(),
+            &proxy_context,
+        ) {
+            Ok(proxy) => (proxy, None),
+            Err(err) => (None, Some(err.to_string())),
+        };
+        Ok(Some(AdminAnthropicUpstreamProbeTarget {
+            name: row.channel_name,
+            base_url: row.base_url,
+            api_key,
+            proxy,
+            proxy_error,
+            last_test_at: row.last_test_at_ms,
+        }))
+    }
+
+    async fn save_admin_anthropic_upstream_models_status(
+        &self,
+        name: &str,
+        update: AdminAnthropicUpstreamModelsStatusUpdate,
+    ) -> anyhow::Result<Option<AdminAnthropicUpstreamChannel>> {
+        self.ensure_connection_alive()?;
+        let model_ids_json = serde_json::to_string(&update.model_ids)
+            .context("serialize anthropic upstream model ids")?;
+        let latency_ms = update
+            .latency_ms
+            .map(|value| value.min(i64::MAX as u64) as i64);
+        let updated_at_ms = now_ms().max(update.checked_at_ms);
+        let updated = self
+            .client
+            .execute(
+                "UPDATE llm_anthropic_upstream_channels
+                 SET model_ids = $2::jsonb,
+                     last_models_status = $3,
+                     last_models_latency_ms = $4,
+                     last_models_checked_at_ms = $5,
+                     last_models_error = $6,
+                     updated_at_ms = $7
+                 WHERE channel_name = $1",
+                &[
+                    &name,
+                    &model_ids_json,
+                    &update.status,
+                    &latency_ms,
+                    &update.checked_at_ms,
+                    &update.error,
+                    &updated_at_ms,
+                ],
+            )
+            .await
+            .context("save postgres anthropic upstream models status")?;
+        if updated == 0 {
+            return Ok(None);
+        }
+        self.load_anthropic_upstream_channel_row(name)
+            .await
+            .map(|row| row.map(admin_channel_from_row))
+    }
+
+    async fn save_admin_anthropic_upstream_test_status(
+        &self,
+        name: &str,
+        update: AdminAnthropicUpstreamTestStatusUpdate,
+    ) -> anyhow::Result<Option<AdminAnthropicUpstreamChannel>> {
+        self.ensure_connection_alive()?;
+        let latency_ms = update
+            .latency_ms
+            .map(|value| value.min(i64::MAX as u64) as i64);
+        let updated_at_ms = now_ms().max(update.checked_at_ms);
+        let updated = self
+            .client
+            .execute(
+                "UPDATE llm_anthropic_upstream_channels
+                 SET last_test_model = $2,
+                     last_test_status = $3,
+                     last_test_latency_ms = $4,
+                     last_test_at_ms = $5,
+                     last_test_error = $6,
+                     updated_at_ms = $7
+                 WHERE channel_name = $1",
+                &[
+                    &name,
+                    &update.model,
+                    &update.status,
+                    &latency_ms,
+                    &update.checked_at_ms,
+                    &update.error,
+                    &updated_at_ms,
+                ],
+            )
+            .await
+            .context("save postgres anthropic upstream test status")?;
+        if updated == 0 {
+            return Ok(None);
+        }
+        self.load_anthropic_upstream_channel_row(name)
+            .await
+            .map(|row| row.map(admin_channel_from_row))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_ids_from_json_text_falls_back_for_malformed_model_array() {
+        assert_eq!(model_ids_from_json_text("anthropic-a", r#"["claude-haiku-4-5"]"#), vec![
+            "claude-haiku-4-5".to_string()
+        ]);
+        assert!(model_ids_from_json_text("anthropic-a", r#"[{"id":"claude"}]"#).is_empty());
     }
 }

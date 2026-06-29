@@ -17,6 +17,9 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use llm_access_anthropic_pool::is_private_or_loopback_ip;
+#[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+use llm_access_core::store::UsageEventSink;
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType, RouteStrategy},
     store::{
@@ -49,7 +52,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::{
     activity::RequestActivitySnapshot,
-    codex_refresh, codex_status, kiro_refresh, kiro_status,
+    anthropic_upstream_probe, codex_refresh, codex_status, kiro_refresh, kiro_status,
     process_memory::{read_current_process_memory_stats, ProcessMemoryStats},
     provider, HttpState,
 };
@@ -73,6 +76,7 @@ const USAGE_WORKER_QUERY_TIMEOUT: Duration = Duration::from_secs(60);
 const PROXY_TRAFFIC_REFRESH_MAX_WINDOW_DAYS: u64 = 30;
 const PROXY_TRAFFIC_REFRESH_BUCKET_MS: i64 = 24 * 60 * 60 * 1000;
 const HOUR_MS: i64 = 60 * 60 * 1000;
+const ADMIN_ANTHROPIC_UPSTREAM_TEST_COOLDOWN_MS: i64 = 30_000;
 const MIN_RUNTIME_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 1;
 const MAX_RUNTIME_USAGE_EVENT_FLUSH_BATCH_SIZE: u64 = 16_384;
 const MIN_RUNTIME_USAGE_EVENT_FLUSH_INTERVAL_SECONDS: u64 = 1;
@@ -242,6 +246,17 @@ struct AdminAnthropicUpstreamChannelsResponse {
     limit: usize,
     offset: usize,
     has_more: bool,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminAnthropicUpstreamProbeResponse {
+    ok: bool,
+    status: String,
+    status_code: Option<u16>,
+    latency_ms: u64,
+    error: Option<String>,
+    channel: core_store::AdminAnthropicUpstreamChannel,
     generated_at: i64,
 }
 
@@ -647,6 +662,11 @@ pub(crate) struct PatchAdminAnthropicUpstreamChannelRequest {
     proxy_config_id: Option<Option<String>>,
     #[serde(default)]
     clear_last_error: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct TestAdminAnthropicUpstreamChannelRequest {
+    model: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2901,6 +2921,152 @@ pub(crate) async fn delete_admin_anthropic_upstream_channel(
     }
 }
 
+pub(crate) async fn refresh_admin_anthropic_upstream_models(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_name(&name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    let target = match state
+        .admin_anthropic_upstream_store
+        .load_admin_anthropic_upstream_probe_target(&name)
+        .await
+    {
+        Ok(Some(target)) => target,
+        Ok(None) => return not_found("Anthropic upstream channel not found").into_response(),
+        Err(err) => {
+            tracing::warn!(
+                channel = %name,
+                error = %err,
+                "failed to load Anthropic upstream probe target"
+            );
+            return internal_error("Failed to load Anthropic upstream channel").into_response();
+        },
+    };
+    let output = anthropic_upstream_probe::refresh_models(&target).await;
+    let update = core_store::AdminAnthropicUpstreamModelsStatusUpdate {
+        model_ids: output.model_ids.clone(),
+        status: output.status.clone(),
+        latency_ms: Some(output.latency_ms),
+        checked_at_ms: output.checked_at_ms,
+        error: output.error.clone(),
+    };
+    match state
+        .admin_anthropic_upstream_store
+        .save_admin_anthropic_upstream_models_status(&name, update)
+        .await
+    {
+        Ok(Some(channel)) => Json(AdminAnthropicUpstreamProbeResponse {
+            ok: output.status == "ok" && output.error.is_none(),
+            status: output.status,
+            status_code: output.status_code,
+            latency_ms: output.latency_ms,
+            error: output.error,
+            channel,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Ok(None) => not_found("Anthropic upstream channel not found").into_response(),
+        Err(err) => {
+            tracing::warn!(
+                channel = %name,
+                error = %err,
+                "failed to save Anthropic upstream models status"
+            );
+            internal_error("Failed to save Anthropic upstream models status").into_response()
+        },
+    }
+}
+
+pub(crate) async fn test_admin_anthropic_upstream_model(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(request): Json<TestAdminAnthropicUpstreamChannelRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let name = match normalize_name(&name) {
+        Ok(name) => name,
+        Err(response) => return response.into_response(),
+    };
+    let model = match normalize_anthropic_upstream_test_request(request) {
+        Ok(model) => model,
+        Err(response) => return response.into_response(),
+    };
+    let target = match state
+        .admin_anthropic_upstream_store
+        .load_admin_anthropic_upstream_probe_target(&name)
+        .await
+    {
+        Ok(Some(target)) => target,
+        Ok(None) => return not_found("Anthropic upstream channel not found").into_response(),
+        Err(err) => {
+            tracing::warn!(
+                channel = %name,
+                error = %err,
+                "failed to load Anthropic upstream probe target"
+            );
+            return internal_error("Failed to load Anthropic upstream channel").into_response();
+        },
+    };
+    if let Err(response) = enforce_anthropic_upstream_test_cooldown(target.last_test_at, now_ms()) {
+        return response.into_response();
+    }
+    let output = anthropic_upstream_probe::test_messages_model(&target, &model).await;
+    let usage_event =
+        anthropic_upstream_probe::usage_event_for_messages_test(&name, &model, &output);
+    let usage_event_id = usage_event.event_id.clone();
+    append_admin_anthropic_probe_usage_event(&state, usage_event).await;
+    let update = core_store::AdminAnthropicUpstreamTestStatusUpdate {
+        model: model.clone(),
+        status: output.status.clone(),
+        latency_ms: Some(output.latency_ms),
+        checked_at_ms: output.checked_at_ms,
+        error: output.error.clone(),
+    };
+    match state
+        .admin_anthropic_upstream_store
+        .save_admin_anthropic_upstream_test_status(&name, update)
+        .await
+    {
+        Ok(Some(channel)) => Json(AdminAnthropicUpstreamProbeResponse {
+            ok: output.status == "ok" && output.error.is_none(),
+            status: output.status,
+            status_code: output.status_code,
+            latency_ms: output.latency_ms,
+            error: output.error,
+            channel,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Ok(None) => {
+            tracing::warn!(
+                channel = %name,
+                model = %model,
+                event_id = %usage_event_id,
+                "admin Anthropic upstream model test completed but channel was deleted before status save"
+            );
+            not_found("Anthropic upstream channel not found").into_response()
+        },
+        Err(err) => {
+            tracing::warn!(
+                channel = %name,
+                error = %err,
+                "failed to save Anthropic upstream test status"
+            );
+            internal_error("Failed to save Anthropic upstream test status").into_response()
+        },
+    }
+}
+
 pub(crate) fn kiro_cache_simulation_config_from_admin_config(
     config: &AdminRuntimeConfig,
 ) -> KiroCacheSimulationConfig {
@@ -4653,6 +4819,33 @@ async fn acquire_admin_usage_query_permit_from_gate(
         .await
         .map_err(|_| too_many_requests("Another admin usage query is already running"))?
         .map_err(|_| internal_error("Admin usage query gate is closed"))
+}
+
+async fn append_admin_anthropic_probe_usage_event(
+    state: &HttpState,
+    event: llm_access_core::usage::UsageEvent,
+) {
+    #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
+    {
+        if let Some(sink) = &state.usage_journal_sink {
+            if let Err(err) = sink.append_usage_event(&event).await {
+                tracing::warn!(
+                    event_id = %event.event_id,
+                    error = %err,
+                    "failed to write admin Anthropic upstream test usage event"
+                );
+            }
+            return;
+        }
+        tracing::warn!(
+            event_id = %event.event_id,
+            "usage journal sink is not configured; admin Anthropic upstream test usage event was not recorded"
+        );
+    }
+    #[cfg(not(any(feature = "duckdb-runtime", feature = "duckdb-bundled")))]
+    {
+        let _ = (state, event);
+    }
 }
 
 fn producer_journal_status(state: &HttpState) -> anyhow::Result<JournalStatusSnapshot> {
@@ -6628,6 +6821,35 @@ fn normalize_anthropic_upstream_channel_patch(
     })
 }
 
+fn normalize_anthropic_upstream_test_request(
+    request: TestAdminAnthropicUpstreamChannelRequest,
+) -> Result<String, AdminHttpError> {
+    let model = request.model.trim().to_string();
+    if model.is_empty() {
+        return Err(bad_request("model is required"));
+    }
+    Ok(model)
+}
+
+fn enforce_anthropic_upstream_test_cooldown(
+    last_test_at_ms: Option<i64>,
+    now_ms: i64,
+) -> Result<(), AdminHttpError> {
+    let Some(last_test_at_ms) = last_test_at_ms else {
+        return Ok(());
+    };
+    let remaining_ms = last_test_at_ms
+        .saturating_add(ADMIN_ANTHROPIC_UPSTREAM_TEST_COOLDOWN_MS)
+        .saturating_sub(now_ms);
+    if remaining_ms <= 0 {
+        return Ok(());
+    }
+    let retry_after_seconds = ((remaining_ms as u64).saturating_add(999)) / 1_000;
+    Err(too_many_requests(&format!(
+        "Anthropic upstream model test is cooling down; retry after {retry_after_seconds}s"
+    )))
+}
+
 fn normalize_route_strategy_input(raw: &str) -> Result<Option<String>, AdminHttpError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -7543,18 +7765,6 @@ fn normalize_ip_token(token: &str) -> Option<String> {
         }
     }
     None
-}
-
-fn is_private_or_loopback_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.octets()[0] == 169 && v4.octets()[1] == 254
-        },
-        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
-    }
 }
 
 fn is_local_host_header(headers: &HeaderMap) -> bool {
@@ -8935,6 +9145,48 @@ mod tests {
             .expect_err("fixed proxy mode should require proxy_config_id");
 
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn normalize_anthropic_upstream_test_request_trims_model() {
+        let request = TestAdminAnthropicUpstreamChannelRequest {
+            model: " claude-sonnet-4-6 ".to_string(),
+        };
+
+        let model = normalize_anthropic_upstream_test_request(request).expect("model");
+
+        assert_eq!(model, "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn normalize_anthropic_upstream_test_request_rejects_empty_model() {
+        let error =
+            normalize_anthropic_upstream_test_request(TestAdminAnthropicUpstreamChannelRequest {
+                model: "   ".to_string(),
+            })
+            .expect_err("empty model should fail");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn enforce_anthropic_upstream_test_cooldown_rejects_recent_probe() {
+        let error =
+            enforce_anthropic_upstream_test_cooldown(Some(1_700_000_000_000), 1_700_000_010_000)
+                .expect_err("recent probe should be rate limited");
+
+        assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn enforce_anthropic_upstream_test_cooldown_allows_expired_or_missing_probe() {
+        enforce_anthropic_upstream_test_cooldown(None, 1_700_000_000_000)
+            .expect("missing last test timestamp should pass");
+        enforce_anthropic_upstream_test_cooldown(
+            Some(1_700_000_000_000),
+            1_700_000_000_000 + ADMIN_ANTHROPIC_UPSTREAM_TEST_COOLDOWN_MS,
+        )
+        .expect("expired cooldown should pass");
     }
 
     #[test]

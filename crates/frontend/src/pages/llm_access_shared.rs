@@ -76,6 +76,10 @@ pub fn format_ms(ts_ms: i64) -> String {
     )
 }
 
+pub fn format_timestamp_opt(ts_ms: Option<i64>) -> String {
+    ts_ms.map(format_ms).unwrap_or_else(|| "-".to_string())
+}
+
 pub fn format_bytes_human(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
     if bytes < 1024 {
