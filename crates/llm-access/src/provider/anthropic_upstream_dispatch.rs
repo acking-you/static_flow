@@ -26,9 +26,12 @@ use llm_access_core::{
     },
     usage::UsageEvent,
 };
-use llm_access_kiro::anthropic::types::MessagesRequest;
+use llm_access_kiro::anthropic::preflight::PreprocessedMessagesRequest;
 
 use super::{
+    anthropic_upstream_diagnostics::{
+        build_direct_anthropic_routing_diagnostics, direct_anthropic_preflight_stats,
+    },
     anthropic_upstream_payload::{
         build_route_payload, prepare_direct_anthropic_payload, DirectAnthropicPreparedPayload,
     },
@@ -205,6 +208,19 @@ pub(super) async fn maybe_dispatch_anthropic_upstream_pool(
         original_model,
         preflight,
     } = prepared;
+    let preflight_stats = direct_anthropic_preflight_stats(&preflight);
+    if preflight_stats.normalized {
+        tracing::info!(
+            key_id = %key.key_id,
+            endpoint = %public_path,
+            model = %original_model,
+            tool_use_id_rewrite_count = preflight_stats.tool_use_id_rewrite_count,
+            normalization_event_count = preflight_stats.normalization_event_count,
+            tool_normalization_event_count = preflight_stats.tool_normalization_event_count,
+            tool_schema_keyword_count = preflight_stats.tool_schema_keyword_count,
+            "direct anthropic request preflight normalized"
+        );
+    }
 
     let context = DirectAnthropicDispatchContext {
         key: &key,
@@ -216,8 +232,7 @@ pub(super) async fn maybe_dispatch_anthropic_upstream_pool(
     let route_queue = order_routes_for_request(routes);
     let mut last_failure: Option<axum::response::Response> = None;
     for route in route_queue {
-        let response =
-            dispatch_one_route(&context, &route, &preflight.request, &mut usage_meta).await;
+        let response = dispatch_one_route(&context, &route, &preflight, &mut usage_meta).await;
         let retryable = is_retryable_direct_status(response.status());
         if !retryable {
             return AnthropicUpstreamDispatchOutcome::Handled(response);
@@ -290,7 +305,7 @@ fn select_weighted_route(
 async fn dispatch_one_route(
     context: &DirectAnthropicDispatchContext<'_>,
     route: &ProviderAnthropicUpstreamRoute,
-    payload: &MessagesRequest,
+    preflight: &PreprocessedMessagesRequest,
     usage_meta: &mut ProviderUsageMetadata,
 ) -> axum::response::Response {
     let _key_permit = match try_acquire_key_permit(
@@ -341,8 +356,13 @@ async fn dispatch_one_route(
             );
         },
     };
+    usage_meta.routing_diagnostics_json = Some(build_direct_anthropic_routing_diagnostics(
+        &route.channel_name,
+        &route.pool_mode_at_event,
+        preflight,
+    ));
     let (route_payload, mapped_model) =
-        match build_route_payload(&route.model_name_map_json, payload) {
+        match build_route_payload(&route.model_name_map_json, &preflight.request) {
             Ok(output) => output,
             Err(err) => {
                 tracing::warn!(
@@ -667,14 +687,16 @@ async fn record_direct_usage(
         request_body_bytes: meta.request_body_bytes,
         quota_failover_count: meta.quota_failover_count,
         retry: meta.retry.clone(),
-        routing_diagnostics_json: Some(
-            serde_json::json!({
+        routing_diagnostics_json: meta.routing_diagnostics_json.clone().or_else(|| {
+            Some(
+                serde_json::json!({
                 "upstream_pool": "direct_anthropic",
                 "channel_name": route.channel_name,
                 "pool_mode": route.pool_mode_at_event,
-            })
-            .to_string(),
-        ),
+                })
+                .to_string(),
+            )
+        }),
         input_uncached_tokens: usage.input_uncached_tokens.max(0),
         input_cached_tokens: usage.input_cached_tokens.max(0),
         output_tokens: usage.output_tokens.max(0),
@@ -777,9 +799,9 @@ mod tests {
     };
 
     use super::{
-        build_route_payload, is_anthropic_event_stream, is_retryable_direct_status,
-        observe_anthropic_sse_chunk, observe_anthropic_sse_tail, parse_anthropic_sse_usage,
-        prepare_direct_anthropic_payload,
+        build_direct_anthropic_routing_diagnostics, build_route_payload, is_anthropic_event_stream,
+        is_retryable_direct_status, observe_anthropic_sse_chunk, observe_anthropic_sse_tail,
+        parse_anthropic_sse_usage, prepare_direct_anthropic_payload,
     };
 
     #[test]
@@ -922,5 +944,55 @@ data: [DONE]
 
         assert_eq!(prepared.preflight.request.messages[1].content[0]["id"], *rewritten_id);
         assert_eq!(prepared.preflight.request.messages[2].content[0]["tool_use_id"], *rewritten_id);
+    }
+
+    #[test]
+    fn direct_routing_diagnostics_exposes_preflight_summary() {
+        let payload = serde_json::json!({
+            "model": "public-model",
+            "max_tokens": 128,
+            "messages": [
+                {"role": "user", "content": "Run the tool"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu.01:bad",
+                            "name": "read_file",
+                            "input": {"path": "/tmp/test.txt"}
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu.01:bad",
+                            "content": "file content"
+                        }
+                    ]
+                }
+            ]
+        });
+        let prepared = prepare_direct_anthropic_payload(payload.to_string().as_bytes())
+            .expect("direct payload should preprocess through shared Kiro Anthropic preflight");
+
+        let diagnostics = build_direct_anthropic_routing_diagnostics(
+            "channel-a",
+            "preferred_before_kiro",
+            &prepared.preflight,
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(&diagnostics).expect("diagnostics should be JSON");
+
+        assert_eq!(value["upstream_pool"], "direct_anthropic");
+        assert_eq!(value["channel_name"], "channel-a");
+        assert_eq!(value["pool_mode"], "preferred_before_kiro");
+        assert_eq!(value["preflight"]["normalized"], true);
+        assert_eq!(value["preflight"]["tool_use_id_rewrite_count"], 1);
+        assert_eq!(value["preflight"]["tool_use_id_rewrites"][0]["assistant_message_index"], 1);
+        assert_eq!(value["preflight"]["tool_use_id_rewrites"][0]["rewritten_tool_result_count"], 1);
     }
 }

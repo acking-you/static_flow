@@ -233,18 +233,46 @@ fn anthropic_routing_badge(raw: Option<&str>) -> Option<&'static str> {
     }
 }
 
+fn routing_diagnostic_preflight_change_count(raw: Option<&str>) -> Option<u64> {
+    let preflight = raw
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .and_then(|value| value.get("preflight").cloned())?;
+    if !preflight
+        .get("normalized")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let count = [
+        "tool_use_id_rewrite_count",
+        "normalization_event_count",
+        "tool_normalization_event_count",
+        "tool_schema_keyword_count",
+    ]
+    .iter()
+    .filter_map(|key| preflight.get(key).and_then(serde_json::Value::as_u64))
+    .sum::<u64>();
+    (count > 0).then_some(count)
+}
+
 fn anthropic_routing_summary(raw: Option<&str>) -> Option<String> {
     let badge = anthropic_routing_badge(raw)?;
     let channel = routing_diagnostic_string(raw, "channel_name");
     let probe_kind = routing_diagnostic_string(raw, "probe_kind");
-    Some(match (channel, probe_kind) {
-        (Some(channel), Some(probe_kind)) => {
-            format!("{badge} · channel {channel} · {probe_kind}")
-        },
-        (Some(channel), None) => format!("{badge} · channel {channel}"),
-        (None, Some(probe_kind)) => format!("{badge} · {probe_kind}"),
-        (None, None) => badge.to_string(),
-    })
+    let preflight_changes = routing_diagnostic_preflight_change_count(raw);
+    let mut parts = vec![badge.to_string()];
+    if let Some(channel) = channel {
+        parts.push(format!("channel {channel}"));
+    }
+    if let Some(probe_kind) = probe_kind {
+        parts.push(probe_kind);
+    }
+    if let Some(count) = preflight_changes {
+        let noun = if count == 1 { "change" } else { "changes" };
+        parts.push(format!("preflight {count} {noun}"));
+    }
+    Some(parts.join(" · "))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -5885,7 +5913,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        admin_kiro_key_total_pages, build_kiro_billable_multiplier_override_json,
+        admin_kiro_key_total_pages, anthropic_routing_summary,
+        build_kiro_billable_multiplier_override_json,
         build_kiro_billable_multiplier_override_patch, build_kiro_cache_policy_override_json,
         build_kiro_cache_policy_override_patch, format_compact_bytes,
         format_kiro_cache_policy_summary, format_kiro_key_candidate_credit_summary,
@@ -5916,6 +5945,27 @@ mod tests {
         assert_eq!(
             sanitize_kiro_account_group_id(Some(" group-beta "), &groups, true),
             "group-beta"
+        );
+    }
+
+    #[test]
+    fn anthropic_routing_summary_includes_preflight_change_count() {
+        let diagnostics = json!({
+            "upstream_pool": "direct_anthropic",
+            "channel_name": "channel-a",
+            "preflight": {
+                "normalized": true,
+                "tool_use_id_rewrite_count": 1,
+                "normalization_event_count": 1,
+                "tool_normalization_event_count": 0,
+                "tool_schema_keyword_count": 0
+            }
+        })
+        .to_string();
+
+        assert_eq!(
+            anthropic_routing_summary(Some(&diagnostics)),
+            Some("Anthropic 直连 · channel channel-a · preflight 2 changes".to_string())
         );
     }
 
