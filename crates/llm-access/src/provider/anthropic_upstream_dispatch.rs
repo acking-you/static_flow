@@ -209,11 +209,12 @@ pub(super) async fn maybe_dispatch_anthropic_upstream_pool(
         preflight,
     } = prepared;
     let preflight_stats = direct_anthropic_preflight_stats(&preflight);
-    if preflight_stats.normalized {
+    if preflight_stats.normalized() {
         tracing::info!(
             key_id = %key.key_id,
             endpoint = %public_path,
             model = %original_model,
+            preflight_change_count = preflight_stats.change_count,
             tool_use_id_rewrite_count = preflight_stats.tool_use_id_rewrite_count,
             normalization_event_count = preflight_stats.normalization_event_count,
             tool_normalization_event_count = preflight_stats.tool_normalization_event_count,
@@ -991,8 +992,52 @@ data: [DONE]
         assert_eq!(value["channel_name"], "channel-a");
         assert_eq!(value["pool_mode"], "preferred_before_kiro");
         assert_eq!(value["preflight"]["normalized"], true);
+        assert_eq!(value["preflight"]["change_count"], 1);
         assert_eq!(value["preflight"]["tool_use_id_rewrite_count"], 1);
         assert_eq!(value["preflight"]["tool_use_id_rewrites"][0]["assistant_message_index"], 1);
         assert_eq!(value["preflight"]["tool_use_id_rewrites"][0]["rewritten_tool_result_count"], 1);
+    }
+
+    #[test]
+    fn direct_routing_diagnostics_does_not_mark_schema_observations_as_changes() {
+        let payload = serde_json::json!({
+            "model": "public-model",
+            "max_tokens": 128,
+            "tools": [
+                {
+                    "name": "select_value",
+                    "description": "Select a value",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "value": {
+                                "anyOf": [
+                                    {"type": "string"},
+                                    {"type": "number"}
+                                ]
+                            }
+                        }
+                    }
+                }
+            ],
+            "messages": [
+                {"role": "user", "content": "Pick one"}
+            ]
+        });
+        let prepared = prepare_direct_anthropic_payload(payload.to_string().as_bytes())
+            .expect("schema keyword observations should not reject direct preflight");
+
+        let diagnostics =
+            build_direct_anthropic_routing_diagnostics("channel-a", "only", &prepared.preflight);
+        let value: serde_json::Value =
+            serde_json::from_str(&diagnostics).expect("diagnostics should be JSON");
+
+        assert_eq!(value["preflight"]["normalized"], false);
+        assert_eq!(value["preflight"]["change_count"], 0);
+        assert_eq!(value["preflight"]["tool_schema_keyword_count"], 1);
+        assert_eq!(
+            value["preflight"]["tool_validation_summary"]["schema_keyword_counts"]["anyOf"],
+            1
+        );
     }
 }

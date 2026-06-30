@@ -5,11 +5,17 @@ const PREFLIGHT_DETAIL_LIMIT: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct DirectAnthropicPreflightStats {
-    pub(super) normalized: bool,
+    pub(super) change_count: usize,
     pub(super) tool_use_id_rewrite_count: usize,
     pub(super) normalization_event_count: usize,
     pub(super) tool_normalization_event_count: usize,
     pub(super) tool_schema_keyword_count: usize,
+}
+
+impl DirectAnthropicPreflightStats {
+    pub(super) fn normalized(&self) -> bool {
+        self.change_count > 0
+    }
 }
 
 pub(super) fn direct_anthropic_preflight_stats(
@@ -20,18 +26,16 @@ pub(super) fn direct_anthropic_preflight_stats(
         .schema_keyword_counts
         .values()
         .sum();
-    let normalized = !preflight.tool_use_id_rewrites.is_empty()
-        || !preflight.normalization_events.is_empty()
-        || !preflight.tool_normalization_events.is_empty()
-        || preflight
-            .tool_validation_summary
-            .normalized_tool_description_count
-            > 0
-        || preflight.tool_validation_summary.empty_tool_name_count > 0
-        || tool_schema_keyword_count > 0;
+    let change_count = [
+        preflight.tool_use_id_rewrites.len(),
+        preflight.normalization_events.len(),
+        preflight.tool_normalization_events.len(),
+    ]
+    .into_iter()
+    .sum();
 
     DirectAnthropicPreflightStats {
-        normalized,
+        change_count,
         tool_use_id_rewrite_count: preflight.tool_use_id_rewrites.len(),
         normalization_event_count: preflight.normalization_events.len(),
         tool_normalization_event_count: preflight.tool_normalization_events.len(),
@@ -50,7 +54,8 @@ pub(super) fn build_direct_anthropic_routing_diagnostics(
         "channel_name": channel_name,
         "pool_mode": pool_mode,
         "preflight": {
-            "normalized": stats.normalized,
+            "normalized": stats.normalized(),
+            "change_count": stats.change_count,
             "tool_use_id_rewrite_count": stats.tool_use_id_rewrite_count,
             "normalization_event_count": stats.normalization_event_count,
             "tool_normalization_event_count": stats.tool_normalization_event_count,

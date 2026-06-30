@@ -233,6 +233,9 @@ fn anthropic_routing_badge(raw: Option<&str>) -> Option<&'static str> {
     }
 }
 
+const PREFLIGHT_CHANGE_COUNT_KEYS: [&str; 3] =
+    ["tool_use_id_rewrite_count", "normalization_event_count", "tool_normalization_event_count"];
+
 fn routing_diagnostic_preflight_change_count(raw: Option<&str>) -> Option<u64> {
     let preflight = raw
         .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
@@ -244,15 +247,16 @@ fn routing_diagnostic_preflight_change_count(raw: Option<&str>) -> Option<u64> {
     {
         return None;
     }
-    let count = [
-        "tool_use_id_rewrite_count",
-        "normalization_event_count",
-        "tool_normalization_event_count",
-        "tool_schema_keyword_count",
-    ]
-    .iter()
-    .filter_map(|key| preflight.get(key).and_then(serde_json::Value::as_u64))
-    .sum::<u64>();
+    if let Some(count) = preflight
+        .get("change_count")
+        .and_then(serde_json::Value::as_u64)
+    {
+        return (count > 0).then_some(count);
+    }
+    let count = PREFLIGHT_CHANGE_COUNT_KEYS
+        .into_iter()
+        .filter_map(|key| preflight.get(key).and_then(serde_json::Value::as_u64))
+        .sum::<u64>();
     (count > 0).then_some(count)
 }
 
@@ -5955,6 +5959,7 @@ mod tests {
             "channel_name": "channel-a",
             "preflight": {
                 "normalized": true,
+                "change_count": 2,
                 "tool_use_id_rewrite_count": 1,
                 "normalization_event_count": 1,
                 "tool_normalization_event_count": 0,
@@ -5966,6 +5971,49 @@ mod tests {
         assert_eq!(
             anthropic_routing_summary(Some(&diagnostics)),
             Some("Anthropic 直连 · channel channel-a · preflight 2 changes".to_string())
+        );
+    }
+
+    #[test]
+    fn anthropic_routing_summary_omits_schema_observation_only_preflight() {
+        let diagnostics = json!({
+            "upstream_pool": "direct_anthropic",
+            "channel_name": "channel-a",
+            "preflight": {
+                "normalized": false,
+                "change_count": 0,
+                "tool_use_id_rewrite_count": 0,
+                "normalization_event_count": 0,
+                "tool_normalization_event_count": 0,
+                "tool_schema_keyword_count": 2
+            }
+        })
+        .to_string();
+
+        assert_eq!(
+            anthropic_routing_summary(Some(&diagnostics)),
+            Some("Anthropic 直连 · channel channel-a".to_string())
+        );
+    }
+
+    #[test]
+    fn anthropic_routing_summary_omits_legacy_schema_only_preflight() {
+        let diagnostics = json!({
+            "upstream_pool": "direct_anthropic",
+            "channel_name": "channel-a",
+            "preflight": {
+                "normalized": true,
+                "tool_use_id_rewrite_count": 0,
+                "normalization_event_count": 0,
+                "tool_normalization_event_count": 0,
+                "tool_schema_keyword_count": 2
+            }
+        })
+        .to_string();
+
+        assert_eq!(
+            anthropic_routing_summary(Some(&diagnostics)),
+            Some("Anthropic 直连 · channel channel-a".to_string())
         );
     }
 
