@@ -26,9 +26,12 @@ use llm_access_core::{
     },
     usage::UsageEvent,
 };
-use serde_json::Value;
+use llm_access_kiro::anthropic::types::MessagesRequest;
 
 use super::{
+    anthropic_upstream_payload::{
+        build_route_payload, prepare_direct_anthropic_payload, DirectAnthropicPreparedPayload,
+    },
     client::anthropic_upstream_client,
     kiro_error::kiro_json_error,
     kiro_protocol::normalized_kiro_messages_path,
@@ -193,32 +196,15 @@ pub(super) async fn maybe_dispatch_anthropic_upstream_pool(
     capture_client_request_body_json(&mut usage_meta, &replay.body);
 
     let parse_started = Instant::now();
-    let payload = match serde_json::from_slice::<Value>(&replay.body) {
-        Ok(payload) => payload,
-        Err(_) => {
-            return AnthropicUpstreamDispatchOutcome::Handled(kiro_json_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_request_error",
-                "request body must be a valid Anthropic messages JSON payload",
-            ))
-        },
-    };
-    let original_model = match payload
-        .get("model")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(model) => model.to_string(),
-        None => {
-            return AnthropicUpstreamDispatchOutcome::Handled(kiro_json_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_request_error",
-                "model is required",
-            ))
-        },
+    let prepared = match prepare_direct_anthropic_payload(&replay.body) {
+        Ok(prepared) => prepared,
+        Err(err) => return AnthropicUpstreamDispatchOutcome::Handled(err.into_response()),
     };
     usage_meta.mark_pre_handler_done(clamp_duration_ms(parse_started.elapsed()));
+    let DirectAnthropicPreparedPayload {
+        original_model,
+        preflight,
+    } = prepared;
 
     let context = DirectAnthropicDispatchContext {
         key: &key,
@@ -230,7 +216,8 @@ pub(super) async fn maybe_dispatch_anthropic_upstream_pool(
     let route_queue = order_routes_for_request(routes);
     let mut last_failure: Option<axum::response::Response> = None;
     for route in route_queue {
-        let response = dispatch_one_route(&context, &route, &payload, &mut usage_meta).await;
+        let response =
+            dispatch_one_route(&context, &route, &preflight.request, &mut usage_meta).await;
         let retryable = is_retryable_direct_status(response.status());
         if !retryable {
             return AnthropicUpstreamDispatchOutcome::Handled(response);
@@ -300,44 +287,10 @@ fn select_weighted_route(
     Some(routes.remove(index))
 }
 
-fn apply_model_mapping_to_json(
-    model_name_map_json: &str,
-    payload: &mut Value,
-) -> anyhow::Result<Option<String>> {
-    let trimmed = model_name_map_json.trim();
-    if trimmed.is_empty() || trimmed == "{}" {
-        return Ok(None);
-    }
-    let map = serde_json::from_str::<BTreeMap<String, String>>(trimmed)?;
-    let Some(model) = payload.get("model").and_then(Value::as_str) else {
-        return Ok(None);
-    };
-    let Some(target) = map.get(model).cloned() else {
-        return Ok(None);
-    };
-    if target == model {
-        return Ok(None);
-    }
-    let Some(object) = payload.as_object_mut() else {
-        return Ok(None);
-    };
-    object.insert("model".to_string(), Value::String(target.clone()));
-    Ok(Some(target))
-}
-
-fn build_route_payload(
-    model_name_map_json: &str,
-    payload: &Value,
-) -> anyhow::Result<(Value, Option<String>)> {
-    let mut route_payload = payload.clone();
-    let mapped_model = apply_model_mapping_to_json(model_name_map_json, &mut route_payload)?;
-    Ok((route_payload, mapped_model))
-}
-
 async fn dispatch_one_route(
     context: &DirectAnthropicDispatchContext<'_>,
     route: &ProviderAnthropicUpstreamRoute,
-    payload: &Value,
+    payload: &MessagesRequest,
     usage_meta: &mut ProviderUsageMetadata,
 ) -> axum::response::Response {
     let _key_permit = match try_acquire_key_permit(
@@ -826,6 +779,7 @@ mod tests {
     use super::{
         build_route_payload, is_anthropic_event_stream, is_retryable_direct_status,
         observe_anthropic_sse_chunk, observe_anthropic_sse_tail, parse_anthropic_sse_usage,
+        prepare_direct_anthropic_payload,
     };
 
     #[test]
@@ -897,10 +851,18 @@ data: [DONE]
 
     #[test]
     fn builds_route_payload_with_route_specific_model_mapping() {
-        let payload = serde_json::json!({
-            "model": "public-model",
-            "messages": []
-        });
+        let payload = llm_access_kiro::anthropic::types::MessagesRequest {
+            model: "public-model".to_string(),
+            _max_tokens: 128,
+            messages: vec![],
+            stream: false,
+            system: None,
+            tools: None,
+            _tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        };
 
         let (route_a_payload, route_a_model) =
             build_route_payload(r#"{"public-model":"upstream-a"}"#, &payload)
@@ -911,8 +873,54 @@ data: [DONE]
 
         assert_eq!(route_a_model.as_deref(), Some("upstream-a"));
         assert_eq!(route_b_model.as_deref(), Some("upstream-b"));
-        assert_eq!(route_a_payload["model"], "upstream-a");
-        assert_eq!(route_b_payload["model"], "upstream-b");
-        assert_eq!(payload["model"], "public-model");
+        assert_eq!(route_a_payload.model, "upstream-a");
+        assert_eq!(route_b_payload.model, "upstream-b");
+        assert_eq!(payload.model, "public-model");
+    }
+
+    #[test]
+    fn prepares_direct_payload_with_shared_kiro_anthropic_preflight() {
+        let payload = serde_json::json!({
+            "model": "public-model",
+            "max_tokens": 128,
+            "messages": [
+                {"role": "user", "content": "Run the tool"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu.01:bad",
+                            "name": "read_file",
+                            "input": {"path": "/tmp/test.txt"}
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu.01:bad",
+                            "content": "file content"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let prepared = prepare_direct_anthropic_payload(payload.to_string().as_bytes())
+            .expect("direct payload should preprocess through shared Kiro Anthropic preflight");
+        assert_eq!(prepared.original_model, "public-model");
+        assert_eq!(prepared.preflight.tool_use_id_rewrites.len(), 1);
+
+        let rewritten_id = &prepared.preflight.tool_use_id_rewrites[0].rewritten_tool_use_id;
+        assert_ne!(rewritten_id, "toolu.01:bad");
+        assert!(rewritten_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'));
+
+        assert_eq!(prepared.preflight.request.messages[1].content[0]["id"], *rewritten_id);
+        assert_eq!(prepared.preflight.request.messages[2].content[0]["tool_use_id"], *rewritten_id);
     }
 }

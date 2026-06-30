@@ -1,6 +1,7 @@
 //! Anthropic-compatible Kiro request and stream conversion.
 
 pub mod converter;
+pub mod preflight;
 pub mod protected_content;
 pub mod stream;
 pub mod types;
