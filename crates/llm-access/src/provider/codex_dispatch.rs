@@ -52,6 +52,7 @@ use super::{
         completed_response_from_sse_bytes, missing_codex_usage, record_codex_preflight_failure,
         record_codex_usage,
     },
+    codex_stream_error::codex_stream_failure_chunks,
     codex_upstream_error::{
         classify_codex_sse_event_failure, classify_codex_success_error_body,
         classify_codex_upstream_failure, CodexClassifiedUpstreamError, CodexUpstreamErrorClass,
@@ -1245,20 +1246,6 @@ fn codex_status_for_error_class(
     }
 }
 
-/// OpenAI-style `error.code` to attach when surfacing a classified upstream
-/// failure to the client. Codex (and OpenAI-compatible clients) classify some
-/// errors by `code` rather than message text, so emitting the canonical code
-/// lets the client handle the failure cleanly (e.g. an overload becomes a tidy
-/// "high load" notice via `server_is_overloaded`) instead of showing the raw
-/// upstream message verbatim.
-fn codex_surface_code_for_error_class(class: CodexUpstreamErrorClass) -> Option<&'static str> {
-    match class {
-        CodexUpstreamErrorClass::ServerOverloaded => Some("server_is_overloaded"),
-        CodexUpstreamErrorClass::CyberPolicy => Some("cyber_policy"),
-        _ => None,
-    }
-}
-
 /// Record the upstream error class on the usage event, and flag it as a
 /// permanently session-blocking failure when its disposition is the fatal
 /// `cyber_policy` strict-session block, so the usage log can surface both
@@ -1749,7 +1736,7 @@ async fn adapt_codex_upstream_response_from_parts(
             &prepared.original_path,
             effective_status,
             &error.message,
-            codex_surface_code_for_error_class(error.class),
+            error.class.surface_error_code(),
         ));
     }
     if !status.is_success()
@@ -2094,6 +2081,7 @@ async fn stream_codex_upstream_response(
                             &error.message,
                             &error.body,
                         );
+                        capture_codex_error_classification(&mut guard.usage_meta, &error);
                         maybe_remember_codex_session_rejection(
                             codex_session_rejection.as_ref(),
                             guard.route.codex_strict_session_rejection_enabled,
@@ -2109,12 +2097,16 @@ async fn stream_codex_upstream_response(
                             error_class = %error.class.as_str(),
                             "codex stream upstream failure detected after downstream write started"
                         );
-                        // Intentionally stop the stream here without emitting `[DONE]`
-                        // and without forwarding the raw upstream failure event: the
-                        // partial content already reached the client and the failure is
-                        // recorded server-side via the guard above. A well-behaved
-                        // client detects the missing terminal sentinel. (See
-                        // codex_dispatch_streaming_mid_failure_stops_without_done_*.)
+                        let failure_chunks = codex_stream_failure_chunks(
+                            response_adapter,
+                            &guard.prepared.original_path,
+                            effective_status,
+                            &error,
+                        );
+                        for bytes in failure_chunks {
+                            guard.observe_chunk(&bytes, Some("error"));
+                            yield Ok::<Bytes, std::io::Error>(bytes);
+                        }
                         return;
                     }
                     guard.usage_collector.observe_event(&event);
@@ -2194,7 +2186,7 @@ async fn record_codex_stream_preflight_failure(
                 &prepared.original_path,
                 effective_status,
                 &error.message,
-                codex_surface_code_for_error_class(error.class),
+                error.class.surface_error_code(),
             ),
         );
     } else {
@@ -2235,6 +2227,6 @@ async fn record_codex_stream_preflight_failure(
         &prepared.original_path,
         effective_status,
         &error.message,
-        codex_surface_code_for_error_class(error.class),
+        error.class.surface_error_code(),
     )
 }
