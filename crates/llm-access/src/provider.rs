@@ -13,6 +13,7 @@ mod codex_session_affinity;
 mod codex_session_recovery;
 mod codex_session_rejection;
 mod codex_sse;
+mod codex_stream_error;
 mod codex_upstream_error;
 mod entry;
 mod errors;

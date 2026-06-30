@@ -6546,7 +6546,8 @@ async fn codex_dispatch_stops_preflight_buffering_after_lifecycle_event_cap() {
         .await
         .expect("response body");
     let body = String::from_utf8(body.to_vec()).expect("utf8 response");
-    assert!(!body.contains("server_is_overloaded"), "body: {body}");
+    assert!(body.contains("server_is_overloaded"), "body: {body}");
+    assert!(body.contains("[DONE]"), "body: {body}");
 
     let requests = captured.requests.lock().expect("captured requests");
     let auths = requests
@@ -6559,6 +6560,7 @@ async fn codex_dispatch_stops_preflight_buffering_after_lifecycle_event_cap() {
     wait_for_usage_event_count(store.as_ref(), 1).await;
     let events = store.usage_events.lock().expect("usage events");
     assert_eq!(events.len(), 1);
+    assert_eq!(events[0].status_code, i64::from(StatusCode::SERVICE_UNAVAILABLE.as_u16()));
     assert_ne!(events[0].quota_failover_count, 1);
 }
 
@@ -7542,7 +7544,7 @@ async fn codex_dispatch_streaming_first_failure_returns_error_without_sse_body()
 }
 
 #[tokio::test]
-async fn codex_dispatch_streaming_mid_failure_stops_without_done_and_records_failure() {
+async fn codex_dispatch_streaming_mid_failure_emits_error_done_and_records_failure() {
     let _guard = crate::CODEX_UPSTREAM_ENV_LOCK
         .lock()
         .expect("codex upstream env lock");
@@ -7589,8 +7591,8 @@ async fn codex_dispatch_streaming_mid_failure_stops_without_done_and_records_fai
         .expect("response body");
     let body = String::from_utf8(body.to_vec()).expect("utf8 response");
     assert!(body.contains("hello "), "body: {body}");
-    assert!(!body.contains("response.failed"), "body: {body}");
-    assert!(!body.contains("[DONE]"), "body: {body}");
+    assert!(body.contains("tool_choice references a missing tool"), "body: {body}");
+    assert!(body.contains("[DONE]"), "body: {body}");
 
     wait_for_usage_event_count(store.as_ref(), 1).await;
     let events = store.usage_events.lock().expect("usage events");

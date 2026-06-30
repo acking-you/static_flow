@@ -39,6 +39,14 @@ impl CodexUpstreamErrorClass {
             Self::UnexpectedStatus => "unexpected_status",
         }
     }
+
+    pub(crate) fn surface_error_code(self) -> Option<&'static str> {
+        match self {
+            Self::ServerOverloaded => Some("server_is_overloaded"),
+            Self::CyberPolicy => Some("cyber_policy"),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
