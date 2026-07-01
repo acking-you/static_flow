@@ -1,12 +1,24 @@
 //! Model-id mapping and per-model context-window sizing.
 
+const SONNET_5_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+fn is_sonnet_5_public_model(model: &str) -> bool {
+    model == "claude-sonnet-5"
+        || model == "claude-sonnet-5-thinking"
+        || model
+            .strip_prefix("claude-sonnet-5-")
+            .is_some_and(|suffix| SONNET_5_EFFORTS.contains(&suffix))
+        || model
+            .strip_prefix("claude-sonnet-5-thinking-")
+            .is_some_and(|suffix| SONNET_5_EFFORTS.contains(&suffix))
+}
 
 /// Maps an Anthropic model name (e.g. `"claude-sonnet-4-6"`) to the
 /// canonical Kiro model identifier. Returns `None` for unrecognized models.
 pub fn map_model(model: &str) -> Option<String> {
     let model = model.to_lowercase();
     let normalized = model.replace('.', "-");
-    if normalized == "claude-sonnet-5" || normalized == "claude-sonnet-5-thinking" {
+    if is_sonnet_5_public_model(&normalized) {
         return Some("claude-sonnet-5".to_string());
     }
     if model.contains("sonnet") {
@@ -58,8 +70,10 @@ mod tests {
     fn get_context_window_size_matches_latest_kiro_model_rules() {
         assert_eq!(map_model("claude-sonnet-5"), Some("claude-sonnet-5".to_string()));
         assert_eq!(map_model("claude-sonnet-5-thinking"), Some("claude-sonnet-5".to_string()));
+        assert_eq!(map_model("claude-sonnet-5-max"), Some("claude-sonnet-5".to_string()));
         assert_eq!(get_context_window_size("claude-sonnet-5"), 1_000_000);
         assert_eq!(get_context_window_size("claude-sonnet-5-thinking"), 1_000_000);
+        assert_eq!(get_context_window_size("claude-sonnet-5-max"), 1_000_000);
         assert_eq!(get_context_window_size("claude-sonnet-4-6"), 1_000_000);
         assert_eq!(get_context_window_size("claude-opus-4-20250514"), 1_000_000);
         assert_eq!(map_model("claude-opus-4-8"), Some("claude-opus-4.8".to_string()));

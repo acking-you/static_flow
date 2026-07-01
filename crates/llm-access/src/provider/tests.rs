@@ -2589,6 +2589,34 @@ fn override_kiro_thinking_preserves_sonnet_5_effort_ladder() {
 }
 
 #[test]
+fn override_kiro_thinking_sets_sonnet_5_effort_from_model_aliases() {
+    for effort in ["low", "medium", "high", "xhigh", "max"] {
+        let mut payload: llm_access_kiro::anthropic::types::MessagesRequest =
+            serde_json::from_value(json!({
+                "model": format!("claude-sonnet-5-{effort}"),
+                "max_tokens": 64,
+                "messages": [{
+                    "role": "user",
+                    "content": "hello"
+                }]
+            }))
+            .expect("request should deserialize");
+
+        super::override_kiro_thinking_from_model_name(&mut payload);
+
+        let thinking = payload.thinking.expect("thinking should be populated");
+        assert_eq!(thinking.thinking_type, "adaptive");
+        assert_eq!(
+            payload
+                .output_config
+                .and_then(|config| config.effort)
+                .as_deref(),
+            Some(effort)
+        );
+    }
+}
+
+#[test]
 fn normalize_kiro_kmodel_name_maps_opus_dot_names_back_to_public_names() {
     assert_eq!(super::normalize_kiro_kmodel_name("claude-opus-4.8"), "claude-opus-4-8");
     assert_eq!(super::normalize_kiro_kmodel_name("claude-opus-4.7"), "claude-opus-4-7");
@@ -7025,6 +7053,11 @@ async fn kiro_models_fetches_local_catalog_on_root_models_route() {
         .collect::<Vec<_>>();
     assert!(ids.contains(&"claude-sonnet-5"));
     assert!(ids.contains(&"claude-sonnet-5-thinking"));
+    assert!(ids.contains(&"claude-sonnet-5-low"));
+    assert!(ids.contains(&"claude-sonnet-5-medium"));
+    assert!(ids.contains(&"claude-sonnet-5-high"));
+    assert!(ids.contains(&"claude-sonnet-5-xhigh"));
+    assert!(ids.contains(&"claude-sonnet-5-max"));
     assert!(ids.contains(&"claude-opus-4-7"));
     assert!(ids.contains(&"claude-opus-4-7-thinking"));
     assert!(ids.contains(&"claude-opus-4-8"));

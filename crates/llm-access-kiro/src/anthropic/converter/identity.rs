@@ -12,14 +12,25 @@ use crate::anthropic::types::MessagesRequest;
 const MODEL_IDENTITY_PREFIX: &str = "You are powered by the model named ";
 const MODEL_IDENTITY_DELIMITER: &str = ". The exact model ID is ";
 const CLAUDE_CODE_MEMORY_PATH_MARKER: &str = "/.claude/projects/";
+const SONNET_5_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 fn requested_model_identity_id(model: &str) -> &str {
     model.strip_suffix("-thinking").unwrap_or(model)
 }
 
 fn requested_model_identity_name(model: &str) -> Option<&'static str> {
-    match requested_model_identity_id(model) {
-        "claude-sonnet-5" => Some("Sonnet 5"),
+    let model_id = requested_model_identity_id(model);
+    if model_id == "claude-sonnet-5"
+        || model_id
+            .strip_prefix("claude-sonnet-5-thinking-")
+            .is_some_and(|suffix| SONNET_5_EFFORTS.contains(&suffix))
+        || model_id
+            .strip_prefix("claude-sonnet-5-")
+            .is_some_and(|suffix| SONNET_5_EFFORTS.contains(&suffix))
+    {
+        return Some("Sonnet 5");
+    }
+    match model_id {
         "claude-opus-4-8" => Some("Opus 4.8"),
         "claude-opus-4-7" => Some("Opus 4.7"),
         "claude-opus-4-6" => Some("Opus 4.6"),

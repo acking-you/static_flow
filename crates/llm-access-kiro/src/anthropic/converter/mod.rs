@@ -813,7 +813,15 @@ mod tests {
 
     #[test]
     fn convert_request_uses_sonnet_5_upstream_model_id() {
-        for public_model in ["claude-sonnet-5", "claude-sonnet-5-thinking"] {
+        for public_model in [
+            "claude-sonnet-5",
+            "claude-sonnet-5-thinking",
+            "claude-sonnet-5-low",
+            "claude-sonnet-5-medium",
+            "claude-sonnet-5-high",
+            "claude-sonnet-5-xhigh",
+            "claude-sonnet-5-max",
+        ] {
             let mut req = base_request(vec![AnthropicMessage {
                 role: "user".to_string(),
                 content: serde_json::json!("Hello"),
@@ -1798,24 +1806,26 @@ mod tests {
 
     #[test]
     fn convert_request_injects_sonnet_5_model_identity() {
-        let mut req = base_request(vec![AnthropicMessage {
-            role: "user".to_string(),
-            content: serde_json::json!("Hello"),
-        }]);
-        req.model = "claude-sonnet-5".to_string();
-        req.system = Some(vec![SystemMessage {
-            text: "You are Claude Code, Anthropic's official CLI for Claude.".to_string(),
-        }]);
+        for model in ["claude-sonnet-5", "claude-sonnet-5-max", "claude-sonnet-5-thinking-max"] {
+            let mut req = base_request(vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Hello"),
+            }]);
+            req.model = model.to_string();
+            req.system = Some(vec![SystemMessage {
+                text: "You are Claude Code, Anthropic's official CLI for Claude.".to_string(),
+            }]);
 
-        let result = convert_request(&req).expect("conversion should succeed");
-        let system_prefix = match &result.conversation_state.history[0] {
-            Message::User(message) => &message.user_input_message.content,
-            other => panic!("expected injected system user message, got {other:?}"),
-        };
+            let result = convert_request(&req).expect("conversion should succeed");
+            let system_prefix = match &result.conversation_state.history[0] {
+                Message::User(message) => &message.user_input_message.content,
+                other => panic!("expected injected system user message, got {other:?}"),
+            };
 
-        assert!(system_prefix.contains(
-            "You are powered by the model named Sonnet 5. The exact model ID is claude-sonnet-5."
-        ));
+            assert!(system_prefix.contains(&format!(
+                "You are powered by the model named Sonnet 5. The exact model ID is {model}."
+            )));
+        }
     }
 
     #[test]

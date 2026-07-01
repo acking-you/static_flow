@@ -28,6 +28,8 @@ use super::{
     kiro_session_affinity::KiroSessionAffinity, KiroCacheContext, KIRO_REQUEST_SESSION_ID_HEADERS,
 };
 
+const SONNET_5_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
 pub fn apply_kiro_model_mapping(
     model_name_map_json: &str,
     payload: &mut MessagesRequest,
@@ -47,11 +49,24 @@ pub fn apply_kiro_model_mapping(
     payload.model = target_model.clone();
     Ok(Some((source_model, target_model)))
 }
+
+fn sonnet_5_effort_from_model_name(model: &str) -> Option<&'static str> {
+    let suffix = model
+        .strip_prefix("claude-sonnet-5-thinking-")
+        .or_else(|| model.strip_prefix("claude-sonnet-5-"))?;
+    SONNET_5_EFFORTS
+        .iter()
+        .copied()
+        .find(|effort| *effort == suffix)
+}
+
 pub fn override_kiro_thinking_from_model_name(payload: &mut MessagesRequest) {
     let model = payload.model.to_lowercase();
     let normalized_model = model.replace('.', "-");
-    let is_sonnet_5 =
-        normalized_model == "claude-sonnet-5" || normalized_model == "claude-sonnet-5-thinking";
+    let sonnet_5_effort = sonnet_5_effort_from_model_name(&normalized_model);
+    let is_sonnet_5 = normalized_model == "claude-sonnet-5"
+        || normalized_model == "claude-sonnet-5-thinking"
+        || sonnet_5_effort.is_some();
     if !model.contains("thinking") && !is_sonnet_5 {
         return;
     }
@@ -73,7 +88,9 @@ pub fn override_kiro_thinking_from_model_name(payload: &mut MessagesRequest) {
             effort: None,
             format: None,
         });
-        if output_config.effort.is_none() {
+        if let Some(effort) = sonnet_5_effort {
+            output_config.effort = Some(effort.to_string());
+        } else if output_config.effort.is_none() {
             output_config.effort = Some(if is_sonnet_5 { "high" } else { "xhigh" }.to_string());
         }
     }
