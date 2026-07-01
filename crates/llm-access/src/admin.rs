@@ -24,7 +24,7 @@ use llm_access_core::{
     provider::{ProtocolFamily, ProviderType, RouteStrategy},
     store::{
         self as core_store, AdminAccountContributionRequest, AdminAccountGroupPatch,
-        AdminCodexAccountPatch, AdminCodexImportJobItemResult, AdminKeyPatch, AdminPageRequest,
+        AdminCodexAccountPatch, AdminCodexImportJobItemResult, AdminKeyPatch,
         AdminProxyConfigPatch, AdminReviewQueueAction, AdminRuntimeConfig, NewAdminAccountGroup,
         NewAdminCodexAccount, NewAdminCodexImportJob, NewAdminCodexImportJobItem, NewAdminKey,
         NewAdminKiroAccount, NewAdminProxyConfig, UpdateAdminRuntimeConfig, KEY_STATUS_ACTIVE,
@@ -521,10 +521,14 @@ struct AdminLegacyKiroProxyMigrationResponse {
     generated_at: i64,
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct ListKiroAccountStatusesRequest {
+#[derive(Debug, Deserialize, Default)]
+pub(crate) struct AdminKiroAccountListQuery {
     #[serde(default)]
     prefix: Option<String>,
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    issue: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
     #[serde(default)]
@@ -2717,15 +2721,19 @@ pub(crate) async fn get_admin_kiro_usage_event(
 pub(crate) async fn list_admin_kiro_accounts(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Query(query): Query<AdminListQuery>,
+    Query(query): Query<AdminKiroAccountListQuery>,
 ) -> Response {
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    let page_request = admin_page_request(query);
+    let page_request = admin_kiro_account_page_request(&query, DEFAULT_ADMIN_LIST_LIMIT);
+    let page_query = match admin_kiro_account_page_query(&query) {
+        Ok(query) => query,
+        Err(response) => return response.into_response(),
+    };
     match state
         .admin_kiro_account_store
-        .list_admin_kiro_accounts_page(page_request)
+        .list_admin_kiro_accounts_filtered_page(&page_query, page_request)
         .await
     {
         Ok(page) => Json(AdminKiroAccountsResponse {
@@ -2745,23 +2753,19 @@ pub(crate) async fn list_admin_kiro_accounts(
 pub(crate) async fn list_admin_kiro_account_statuses(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Query(query): Query<ListKiroAccountStatusesRequest>,
+    Query(query): Query<AdminKiroAccountListQuery>,
 ) -> Response {
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
     }
-    let page_request = AdminPageRequest {
-        limit: query.limit.unwrap_or(24).clamp(1, 200),
-        offset: query.offset.unwrap_or(0),
+    let page_request = admin_kiro_account_page_request(&query, 24);
+    let page_query = match admin_kiro_account_page_query(&query) {
+        Ok(query) => query,
+        Err(response) => return response.into_response(),
     };
-    let prefix = query
-        .prefix
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
     let page = match state
         .admin_kiro_account_store
-        .list_admin_kiro_accounts_filtered_page(prefix, page_request)
+        .list_admin_kiro_accounts_filtered_page(&page_query, page_request)
         .await
     {
         Ok(page) => page,
@@ -4761,6 +4765,51 @@ fn admin_page_request(query: AdminListQuery) -> core_store::AdminPageRequest {
             .clamp(1, MAX_ADMIN_LIST_LIMIT),
         offset: query.offset.unwrap_or(0),
     }
+}
+
+fn admin_kiro_account_page_request(
+    query: &AdminKiroAccountListQuery,
+    default_limit: usize,
+) -> core_store::AdminPageRequest {
+    core_store::AdminPageRequest {
+        limit: query
+            .limit
+            .unwrap_or(default_limit)
+            .clamp(1, MAX_ADMIN_LIST_LIMIT),
+        offset: query.offset.unwrap_or(0),
+    }
+}
+
+fn admin_kiro_account_page_query(
+    query: &AdminKiroAccountListQuery,
+) -> Result<core_store::AdminKiroAccountPageQuery, AdminHttpError> {
+    let issue = match query
+        .issue
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+    {
+        Some(issue) if issue == core_store::ADMIN_KIRO_ACCOUNT_ISSUE_ABNORMAL => Some(issue),
+        Some(issue) if issue == core_store::ADMIN_KIRO_ACCOUNT_ISSUE_AUTH_401 => Some(issue),
+        Some(_) => return Err(bad_request("Unsupported Kiro account issue filter")),
+        None => None,
+    };
+    Ok(core_store::AdminKiroAccountPageQuery {
+        prefix: query
+            .prefix
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        q: query
+            .q
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        issue,
+    })
 }
 
 fn generate_id(prefix: &str) -> String {
@@ -8003,6 +8052,9 @@ mod tests {
             has_refresh_token: true,
             disabled: false,
             disabled_reason: None,
+            issue_kind: None,
+            issue_summary: None,
+            issue_at_ms: None,
             source: None,
             source_db_path: None,
             last_imported_at: None,

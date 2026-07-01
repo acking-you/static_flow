@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use llm_access_core::{
     provider::RouteStrategy,
     store::{
-        self as core_store, AdminKiroAccount, AdminKiroAccountPatch, AdminKiroAccountStore,
-        AdminKiroAccountsPage, AdminKiroBalanceView, AdminKiroCacheView,
+        self as core_store, AdminKiroAccount, AdminKiroAccountPageQuery, AdminKiroAccountPatch,
+        AdminKiroAccountStore, AdminKiroAccountsPage, AdminKiroBalanceView, AdminKiroCacheView,
         AdminKiroStatusCacheUpdate, AdminPageRequest, KiroStatusRefreshTarget, NewAdminKiroAccount,
         ProviderKiroRoute,
     },
@@ -292,9 +292,23 @@ impl PostgresControlRepository {
     async fn list_kiro_admin_account_rows_page_filtered(
         &self,
         page: AdminPageRequest,
-        prefix: Option<&str>,
+        query: &AdminKiroAccountPageQuery,
     ) -> anyhow::Result<(Vec<KiroAdminAccountListRow>, usize)> {
+        if query
+            .q
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            || query
+                .issue
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+        {
+            return self
+                .list_kiro_admin_account_rows_page_query(page, query)
+                .await;
+        }
         self.ensure_connection_alive()?;
+        let prefix = query.prefix.as_deref();
         let normalized_prefix = prefix
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -695,6 +709,296 @@ impl PostgresControlRepository {
         Ok((accounts, total))
     }
 
+    async fn list_kiro_admin_account_rows_page_query(
+        &self,
+        page: AdminPageRequest,
+        query: &AdminKiroAccountPageQuery,
+    ) -> anyhow::Result<(Vec<KiroAdminAccountListRow>, usize)> {
+        self.ensure_connection_alive()?;
+        let prefix_like = query
+            .prefix
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("{}%", value.to_ascii_lowercase()))
+            .unwrap_or_default();
+        let has_prefix = !prefix_like.is_empty();
+        let search_like = query
+            .q
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("%{}%", value.to_ascii_lowercase()))
+            .unwrap_or_default();
+        let has_search = !search_like.is_empty();
+        let issue = query
+            .issue
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_lowercase);
+        let from_and_where = r#"
+                 FROM llm_kiro_accounts a
+                 LEFT JOIN llm_kiro_status_cache s ON s.account_name = a.account_name
+                 WHERE (NOT $2::boolean OR lower(a.account_name) LIKE $1)
+                   AND (
+                       $3::text IS NULL
+                       OR (
+                           $3::text = 'auth_401'
+                           AND (
+                               lower(COALESCE(a.last_error, '')) LIKE '%401%'
+                               OR lower(COALESCE(a.last_error, '')) LIKE '%unauthorized%'
+                               OR lower(COALESCE(s.last_error, '')) LIKE '%401%'
+                               OR lower(COALESCE(s.last_error, '')) LIKE '%unauthorized%'
+                               OR lower(COALESCE(s.cache_json ->> 'error_message', '')) LIKE '%401%'
+                               OR lower(COALESCE(s.cache_json ->> 'error_message', '')) LIKE '%unauthorized%'
+                           )
+                       )
+                       OR (
+                           $3::text = 'abnormal'
+                           AND (
+                               a.status <> 'active'
+                               OR CASE
+                                   WHEN jsonb_typeof(a.auth_json -> 'disabled') = 'boolean'
+                                   THEN (a.auth_json ->> 'disabled')::boolean
+                                   ELSE false
+                               END
+                               OR NULLIF(BTRIM(a.last_error), '') IS NOT NULL
+                               OR s.status = 'error'
+                               OR NULLIF(BTRIM(s.last_error), '') IS NOT NULL
+                               OR NULLIF(BTRIM(s.cache_json ->> 'error_message'), '') IS NOT NULL
+                           )
+                       )
+                   )
+                   AND (
+                       NOT $5::boolean
+                       OR lower(a.account_name) LIKE $4
+                       OR lower(COALESCE(a.profile_arn, '')) LIKE $4
+                       OR lower(COALESCE(a.user_id, '')) LIKE $4
+                       OR lower(COALESCE(a.auth_json ->> 'provider', '')) LIKE $4
+                       OR lower(COALESCE(a.auth_json ->> 'email', '')) LIKE $4
+                       OR lower(COALESCE(a.auth_json ->> 'source', '')) LIKE $4
+                       OR lower(COALESCE(a.auth_json ->> 'subscriptionTitle', '')) LIKE $4
+                       OR lower(COALESCE(a.auth_json ->> 'subscription_title', '')) LIKE $4
+                       OR lower(COALESCE(a.auth_json ->> 'profileArn', '')) LIKE $4
+                       OR lower(COALESCE(a.auth_json ->> 'profile_arn', '')) LIKE $4
+                       OR lower(COALESCE(a.auth_json ->> 'machineId', '')) LIKE $4
+                       OR lower(COALESCE(a.auth_json ->> 'machine_id', '')) LIKE $4
+                       OR lower(COALESCE(a.last_error, '')) LIKE $4
+                       OR lower(COALESCE(s.last_error, '')) LIKE $4
+                       OR lower(COALESCE(s.cache_json ->> 'error_message', '')) LIKE $4
+                       OR lower(COALESCE(s.balance_json ->> 'user_id', '')) LIKE $4
+                       OR lower(COALESCE(s.balance_json ->> 'subscription_title', '')) LIKE $4
+                   )"#;
+        let total_sql = format!("SELECT COUNT(*){from_and_where}");
+        let total = self
+            .client
+            .query_one(&total_sql, &[&prefix_like, &has_prefix, &issue, &search_like, &has_search])
+            .await
+            .context("count searched postgres kiro admin account rows")?
+            .get::<_, i64>(0)
+            .max(0) as usize;
+        let sql = format!(
+            r#"SELECT
+                    a.account_name,
+                    a.auth_method,
+                    a.profile_arn,
+                    a.user_id,
+                    a.status,
+                    NULLIF(BTRIM(a.auth_json ->> 'provider'), ''),
+                    NULLIF(BTRIM(a.auth_json ->> 'email'), ''),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                a.auth_json ->> 'expiresAt',
+                                a.auth_json ->> 'expires_at'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                a.auth_json ->> 'profileArn',
+                                a.auth_json ->> 'profile_arn'
+                            )
+                        ),
+                        ''
+                    ),
+                    COALESCE(
+                        NULLIF(BTRIM(a.auth_json ->> 'refreshToken'), ''),
+                        NULLIF(BTRIM(a.auth_json ->> 'refresh_token'), '')
+                    ) IS NOT NULL,
+                    CASE
+                        WHEN jsonb_typeof(a.auth_json -> 'disabled') = 'boolean'
+                        THEN (a.auth_json ->> 'disabled')::boolean
+                        ELSE false
+                    END,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                a.auth_json ->> 'disabledReason',
+                                a.auth_json ->> 'disabled_reason'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(BTRIM(a.auth_json ->> 'source'), ''),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                a.auth_json ->> 'sourceDbPath',
+                                a.auth_json ->> 'source_db_path'
+                            )
+                        ),
+                        ''
+                    ),
+                    CASE
+                        WHEN jsonb_typeof(a.auth_json -> 'lastImportedAt') = 'number'
+                        THEN (a.auth_json ->> 'lastImportedAt')::bigint
+                        WHEN jsonb_typeof(a.auth_json -> 'last_imported_at') = 'number'
+                        THEN (a.auth_json ->> 'last_imported_at')::bigint
+                        ELSE NULL
+                    END,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                a.auth_json ->> 'subscriptionTitle',
+                                a.auth_json ->> 'subscription_title'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(BTRIM(a.auth_json ->> 'region'), ''),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                a.auth_json ->> 'authRegion',
+                                a.auth_json ->> 'auth_region'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                a.auth_json ->> 'apiRegion',
+                                a.auth_json ->> 'api_region'
+                            )
+                        ),
+                        ''
+                    ),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                a.auth_json ->> 'machineId',
+                                a.auth_json ->> 'machine_id'
+                            )
+                        ),
+                        ''
+                    ),
+                    a.max_concurrency,
+                    CASE
+                        WHEN jsonb_typeof(a.auth_json -> 'kiroChannelMaxConcurrency') = 'number'
+                        THEN (a.auth_json ->> 'kiroChannelMaxConcurrency')::bigint
+                        WHEN jsonb_typeof(a.auth_json -> 'kiro_channel_max_concurrency')
+                            = 'number'
+                        THEN (a.auth_json ->> 'kiro_channel_max_concurrency')::bigint
+                        ELSE NULL
+                    END,
+                    a.min_start_interval_ms,
+                    CASE
+                        WHEN jsonb_typeof(a.auth_json -> 'kiroChannelMinStartIntervalMs')
+                            = 'number'
+                        THEN (a.auth_json ->> 'kiroChannelMinStartIntervalMs')::bigint
+                        WHEN jsonb_typeof(a.auth_json -> 'kiro_channel_min_start_interval_ms')
+                            = 'number'
+                        THEN (a.auth_json ->> 'kiro_channel_min_start_interval_ms')::bigint
+                        ELSE NULL
+                    END,
+                    CASE
+                        WHEN jsonb_typeof(a.auth_json -> 'minimumRemainingCreditsBeforeBlock')
+                            = 'number'
+                        THEN (
+                            a.auth_json ->> 'minimumRemainingCreditsBeforeBlock'
+                        )::double precision
+                        WHEN jsonb_typeof(
+                            a.auth_json -> 'minimum_remaining_credits_before_block'
+                        ) = 'number'
+                        THEN (
+                            a.auth_json ->> 'minimum_remaining_credits_before_block'
+                        )::double precision
+                        ELSE NULL
+                    END,
+                    CASE
+                        WHEN jsonb_typeof(a.auth_json -> 'manualUsageLimit') = 'number'
+                        THEN (a.auth_json ->> 'manualUsageLimit')::double precision
+                        WHEN jsonb_typeof(a.auth_json -> 'manual_usage_limit') = 'number'
+                        THEN (a.auth_json ->> 'manual_usage_limit')::double precision
+                        ELSE NULL
+                    END AS manual_usage_limit,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                a.auth_json ->> 'proxyMode',
+                                a.auth_json ->> 'proxy_mode'
+                            )
+                        ),
+                        ''
+                    ) AS proxy_mode,
+                    a.proxy_config_id AS proxy_config_id,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                a.auth_json ->> 'proxyConfigId',
+                                a.auth_json ->> 'proxy_config_id'
+                            )
+                        ),
+                        ''
+                    ) AS auth_proxy_config_id,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                a.auth_json ->> 'proxyUrl',
+                                a.auth_json ->> 'proxy_url'
+                            )
+                        ),
+                        ''
+                    ) AS proxy_url,
+                    a.last_error AS last_error,
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(
+                                a.auth_json ->> 'poolStrategy',
+                                a.auth_json ->> 'pool_strategy'
+                            )
+                        ),
+                        ''
+                    ) AS pool_strategy
+                 {from_and_where}
+                 ORDER BY a.created_at_ms DESC, a.account_name DESC
+                 LIMIT $6 OFFSET $7"#
+        );
+        let rows = self
+            .client
+            .query(&sql, &[
+                &prefix_like,
+                &has_prefix,
+                &issue,
+                &search_like,
+                &has_search,
+                &(page.limit.max(1) as i64),
+                &(page.offset as i64),
+            ])
+            .await
+            .context("list searched postgres kiro admin account rows page")?;
+        let accounts = rows
+            .into_iter()
+            .map(decode_kiro_admin_account_list_row)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok((accounts, total))
+    }
+
     pub(super) async fn get_kiro_account_row(
         &self,
         account_name: &str,
@@ -816,6 +1120,17 @@ impl PostgresControlRepository {
             .disabled_reason
             .clone()
             .or_else(|| row.last_error.clone());
+        let issue = core_store::classify_admin_kiro_account_issue(
+            &row.status,
+            disabled,
+            disabled_reason.as_deref(),
+            row.last_error.as_deref(),
+            cache.error_message.as_deref(),
+            cache.last_checked_at.or(cache.last_success_at),
+        );
+        let (issue_kind, issue_summary, issue_at_ms) = issue
+            .map(|issue| (Some(issue.kind), Some(issue.summary), issue.at_ms))
+            .unwrap_or((None, None, None));
         let manual_usage_limit = row
             .manual_usage_limit
             .and_then(normalize_manual_usage_limit);
@@ -842,6 +1157,9 @@ impl PostgresControlRepository {
             has_refresh_token: row.has_refresh_token,
             disabled,
             disabled_reason,
+            issue_kind,
+            issue_summary,
+            issue_at_ms,
             source: row.source.clone(),
             source_db_path: row.source_db_path.clone(),
             last_imported_at: row.last_imported_at,
@@ -917,6 +1235,17 @@ impl PostgresControlRepository {
         let disabled_reason =
             optional_json_string_any(&auth, &["disabledReason", "disabled_reason"])
                 .or_else(|| record.last_error.clone());
+        let issue = core_store::classify_admin_kiro_account_issue(
+            &record.status,
+            disabled,
+            disabled_reason.as_deref(),
+            record.last_error.as_deref(),
+            cache.error_message.as_deref(),
+            cache.last_checked_at.or(cache.last_success_at),
+        );
+        let (issue_kind, issue_summary, issue_at_ms) = issue
+            .map(|issue| (Some(issue.kind), Some(issue.summary), issue.at_ms))
+            .unwrap_or((None, None, None));
         let manual_usage_limit = kiro_manual_usage_limit_from_auth_json(&auth);
         let balance =
             if disabled { None } else { calibrate_kiro_balance(balance, manual_usage_limit) };
@@ -947,6 +1276,9 @@ impl PostgresControlRepository {
                 .is_some(),
             disabled,
             disabled_reason,
+            issue_kind,
+            issue_summary,
+            issue_at_ms,
             source: optional_json_string_any(&auth, &["source"]),
             source_db_path: optional_json_string_any(&auth, &["sourceDbPath", "source_db_path"]),
             last_imported_at: optional_json_i64_any(&auth, &["lastImportedAt", "last_imported_at"]),
@@ -1098,13 +1430,13 @@ impl AdminKiroAccountStore for PostgresControlRepository {
         &self,
         page: AdminPageRequest,
     ) -> anyhow::Result<AdminKiroAccountsPage> {
-        self.list_admin_kiro_accounts_filtered_page(None, page)
+        self.list_admin_kiro_accounts_filtered_page(&AdminKiroAccountPageQuery::default(), page)
             .await
     }
 
     async fn list_admin_kiro_accounts_filtered_page(
         &self,
-        prefix: Option<&str>,
+        query: &AdminKiroAccountPageQuery,
         page: AdminPageRequest,
     ) -> anyhow::Result<AdminKiroAccountsPage> {
         let page = AdminPageRequest {
@@ -1112,7 +1444,7 @@ impl AdminKiroAccountStore for PostgresControlRepository {
             offset: page.offset,
         };
         let (rows, total) = self
-            .list_kiro_admin_account_rows_page_filtered(page, prefix)
+            .list_kiro_admin_account_rows_page_filtered(page, query)
             .await?;
         let context = self.load_kiro_admin_account_view_context().await?;
         let accounts = rows

@@ -2375,10 +2375,16 @@ mod tests {
         );
 
         let filtered = repo
-            .list_admin_kiro_accounts_filtered_page(Some("kiro-credit"), AdminPageRequest {
-                limit: 10,
-                offset: 0,
-            })
+            .list_admin_kiro_accounts_filtered_page(
+                &llm_access_core::store::AdminKiroAccountPageQuery {
+                    prefix: Some("kiro-credit".to_string()),
+                    ..llm_access_core::store::AdminKiroAccountPageQuery::default()
+                },
+                AdminPageRequest {
+                    limit: 10,
+                    offset: 0,
+                },
+            )
             .await
             .expect("list filtered kiro account page");
         assert_eq!(filtered.accounts.len(), 1);

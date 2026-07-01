@@ -5,7 +5,93 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     codex_account::AdminAccountsSummary, DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS,
+    KEY_STATUS_ACTIVE,
 };
+
+/// Kiro account filter kind matching every non-normal account state.
+pub const ADMIN_KIRO_ACCOUNT_ISSUE_ABNORMAL: &str = "abnormal";
+/// Kiro account issue kind for expired or rejected upstream credentials.
+pub const ADMIN_KIRO_ACCOUNT_ISSUE_AUTH_401: &str = "auth_401";
+/// Kiro account issue kind for non-auth account or cache errors.
+pub const ADMIN_KIRO_ACCOUNT_ISSUE_ERROR: &str = "error";
+/// Kiro account issue kind for disabled or otherwise inactive accounts.
+pub const ADMIN_KIRO_ACCOUNT_ISSUE_DISABLED: &str = "disabled";
+
+/// Admin-facing Kiro account issue classification.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminKiroAccountIssue {
+    /// Stable issue kind used by API filters and UI badges.
+    pub kind: String,
+    /// Human-readable source error.
+    pub summary: String,
+    /// Timestamp associated with the source error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at_ms: Option<i64>,
+}
+
+/// Page-level filters for admin Kiro account listings.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdminKiroAccountPageQuery {
+    /// Case-insensitive account-name prefix.
+    pub prefix: Option<String>,
+    /// Case-insensitive free-text search across account identity and errors.
+    pub q: Option<String>,
+    /// Stable issue kind filter.
+    pub issue: Option<String>,
+}
+
+/// Classify operator-actionable Kiro account errors.
+pub fn classify_admin_kiro_account_issue(
+    status: &str,
+    disabled: bool,
+    disabled_reason: Option<&str>,
+    account_error: Option<&str>,
+    cache_error: Option<&str>,
+    issue_at_ms: Option<i64>,
+) -> Option<AdminKiroAccountIssue> {
+    let messages = [account_error, cache_error, disabled_reason];
+    if let Some(message) = messages
+        .into_iter()
+        .filter_map(non_empty_message)
+        .find(|message| kiro_error_is_auth_401(message))
+    {
+        return Some(AdminKiroAccountIssue {
+            kind: ADMIN_KIRO_ACCOUNT_ISSUE_AUTH_401.to_string(),
+            summary: message.to_string(),
+            at_ms: issue_at_ms,
+        });
+    }
+    if let Some(message) = [account_error, cache_error]
+        .into_iter()
+        .filter_map(non_empty_message)
+        .next()
+    {
+        return Some(AdminKiroAccountIssue {
+            kind: ADMIN_KIRO_ACCOUNT_ISSUE_ERROR.to_string(),
+            summary: message.to_string(),
+            at_ms: issue_at_ms,
+        });
+    }
+    if disabled || status != KEY_STATUS_ACTIVE {
+        return Some(AdminKiroAccountIssue {
+            kind: ADMIN_KIRO_ACCOUNT_ISSUE_DISABLED.to_string(),
+            summary: non_empty_message(disabled_reason)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("account status is {status}")),
+            at_ms: None,
+        });
+    }
+    None
+}
+
+fn non_empty_message(message: Option<&str>) -> Option<&str> {
+    message.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn kiro_error_is_auth_401(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("401") || lower.contains("unauthorized")
+}
 
 /// Admin-facing Kiro account balance snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -111,6 +197,15 @@ pub struct AdminKiroAccount {
     /// Disable/error reason.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
+    /// Stable issue kind when the account has an actionable error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue_kind: Option<String>,
+    /// Source error for the actionable issue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue_summary: Option<String>,
+    /// Timestamp associated with the actionable issue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue_at_ms: Option<i64>,
     /// Import source label.
     pub source: Option<String>,
     /// Import source DB path.
@@ -300,5 +395,64 @@ mod tests {
         assert_eq!(calibrated.remaining, 880.0);
         assert_eq!(calibrated.upstream_usage_limit, None);
         assert_eq!(calibrated.manual_usage_limit, None);
+    }
+
+    #[test]
+    fn classifies_kiro_unauthorized_errors_as_auth_401_issue() {
+        let issue = classify_admin_kiro_account_issue(
+            "active",
+            false,
+            None,
+            Some("upstream status refresh failed"),
+            Some("Kiro status API returned 401 Unauthorized"),
+            Some(123_456),
+        )
+        .expect("401 error should be classified");
+
+        assert_eq!(issue.kind, ADMIN_KIRO_ACCOUNT_ISSUE_AUTH_401);
+        assert_eq!(issue.summary, "Kiro status API returned 401 Unauthorized");
+        assert_eq!(issue.at_ms, Some(123_456));
+    }
+
+    #[test]
+    fn classifies_non_auth_errors_as_error_issue() {
+        let issue = classify_admin_kiro_account_issue(
+            "active",
+            false,
+            None,
+            Some("upstream status refresh failed"),
+            Some("temporary upstream timeout"),
+            Some(123_456),
+        )
+        .expect("non-auth error should be classified");
+
+        assert_eq!(issue.kind, ADMIN_KIRO_ACCOUNT_ISSUE_ERROR);
+        assert_eq!(issue.summary, "upstream status refresh failed");
+        assert_eq!(issue.at_ms, Some(123_456));
+    }
+
+    #[test]
+    fn classifies_disabled_accounts_as_disabled_issue() {
+        let issue = classify_admin_kiro_account_issue(
+            "disabled",
+            true,
+            Some("manually disabled"),
+            None,
+            None,
+            None,
+        )
+        .expect("disabled account should be classified");
+
+        assert_eq!(issue.kind, ADMIN_KIRO_ACCOUNT_ISSUE_DISABLED);
+        assert_eq!(issue.summary, "manually disabled");
+        assert_eq!(issue.at_ms, None);
+    }
+
+    #[test]
+    fn leaves_active_clean_accounts_unclassified() {
+        assert_eq!(
+            classify_admin_kiro_account_issue("active", false, None, None, None, Some(123_456),),
+            None
+        );
     }
 }

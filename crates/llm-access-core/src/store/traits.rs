@@ -29,8 +29,9 @@ use super::{
         AdminKeysPage, AdminPageRequest, NewAdminKey,
     },
     kiro_account::{
-        AdminKiroAccount, AdminKiroAccountPatch, AdminKiroAccountsPage, AdminKiroBalanceView,
-        AdminKiroStatusCacheUpdate, KiroStatusRefreshTarget, NewAdminKiroAccount,
+        AdminKiroAccount, AdminKiroAccountPageQuery, AdminKiroAccountPatch, AdminKiroAccountsPage,
+        AdminKiroBalanceView, AdminKiroStatusCacheUpdate, KiroStatusRefreshTarget,
+        NewAdminKiroAccount,
     },
     proxy::{
         AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch, AdminProxyEndpointCheckUpdate,
@@ -763,11 +764,11 @@ pub trait AdminKiroAccountStore: Send + Sync {
         page: AdminPageRequest,
     ) -> anyhow::Result<AdminKiroAccountsPage>;
 
-    /// List one page of persisted Kiro accounts, optionally filtered by a
-    /// case-insensitive account-name prefix.
+    /// List one page of persisted Kiro accounts, optionally filtered by
+    /// account-name prefix, free-text query, or actionable issue kind.
     async fn list_admin_kiro_accounts_filtered_page(
         &self,
-        prefix: Option<&str>,
+        query: &AdminKiroAccountPageQuery,
         page: AdminPageRequest,
     ) -> anyhow::Result<AdminKiroAccountsPage>;
 

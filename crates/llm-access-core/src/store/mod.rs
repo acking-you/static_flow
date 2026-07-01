@@ -65,8 +65,11 @@ pub use keys::{
     AdminKiroKeyCandidateCreditSummary, AdminPageRequest, NewAdminKey,
 };
 pub use kiro_account::{
-    AdminKiroAccount, AdminKiroAccountPatch, AdminKiroAccountsPage, AdminKiroBalanceView,
+    classify_admin_kiro_account_issue, AdminKiroAccount, AdminKiroAccountIssue,
+    AdminKiroAccountPageQuery, AdminKiroAccountPatch, AdminKiroAccountsPage, AdminKiroBalanceView,
     AdminKiroCacheView, AdminKiroStatusCacheUpdate, KiroStatusRefreshTarget, NewAdminKiroAccount,
+    ADMIN_KIRO_ACCOUNT_ISSUE_ABNORMAL, ADMIN_KIRO_ACCOUNT_ISSUE_AUTH_401,
+    ADMIN_KIRO_ACCOUNT_ISSUE_DISABLED, ADMIN_KIRO_ACCOUNT_ISSUE_ERROR,
 };
 pub use proxy::{
     default_proxy_bindings, AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch,

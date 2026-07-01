@@ -27,9 +27,9 @@ use super::{
         AdminKey, AdminKeyPatch, AdminKeysPage, AdminKeysSummary, AdminPageRequest, NewAdminKey,
     },
     kiro_account::{
-        AdminKiroAccount, AdminKiroAccountPatch, AdminKiroAccountsPage, AdminKiroBalanceView,
-        AdminKiroCacheView, AdminKiroStatusCacheUpdate, KiroStatusRefreshTarget,
-        NewAdminKiroAccount,
+        AdminKiroAccount, AdminKiroAccountPageQuery, AdminKiroAccountPatch, AdminKiroAccountsPage,
+        AdminKiroBalanceView, AdminKiroCacheView, AdminKiroStatusCacheUpdate,
+        KiroStatusRefreshTarget, NewAdminKiroAccount,
     },
     proxy::{
         default_proxy_binding, default_proxy_bindings, AdminProxyBinding, AdminProxyConfig,
@@ -821,7 +821,7 @@ impl AdminKiroAccountStore for EmptyAdminKiroAccountStore {
 
     async fn list_admin_kiro_accounts_filtered_page(
         &self,
-        _prefix: Option<&str>,
+        _query: &AdminKiroAccountPageQuery,
         page: AdminPageRequest,
     ) -> anyhow::Result<AdminKiroAccountsPage> {
         Ok(AdminKiroAccountsPage {
@@ -855,6 +855,9 @@ impl AdminKiroAccountStore for EmptyAdminKiroAccountStore {
             has_refresh_token: false,
             disabled: account.status != KEY_STATUS_ACTIVE,
             disabled_reason: None,
+            issue_kind: None,
+            issue_summary: None,
+            issue_at_ms: None,
             source: None,
             source_db_path: None,
             last_imported_at: None,

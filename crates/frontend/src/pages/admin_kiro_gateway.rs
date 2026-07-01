@@ -59,6 +59,14 @@ fn kiro_account_status_cta_text() -> &'static str {
     "Open Account Status Page"
 }
 
+fn kiro_account_status_abnormal_href() -> &'static str {
+    if cfg!(feature = "mock") {
+        "/static_flow/admin/kiro-gateway/accounts?issue=abnormal"
+    } else {
+        "/admin/kiro-gateway/accounts?issue=abnormal"
+    }
+}
+
 fn should_load_kiro_usage_preview(active_tab: &str) -> bool {
     active_tab == TAB_USAGE
 }
@@ -1479,6 +1487,13 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
         .unwrap_or_else(|| "-".to_string());
     let last_imported = format_timestamp_opt(account.last_imported_at);
     let disabled_reason = format_kiro_disabled_reason(account.disabled_reason.as_deref());
+    let issue_label = account.issue_kind.as_deref().map(|kind| match kind {
+        "auth_401" => "401 auth".to_string(),
+        "error" => "error".to_string(),
+        "disabled" => "disabled issue".to_string(),
+        _ => kind.to_string(),
+    });
+    let issue_at = format_timestamp_opt(account.issue_at_ms);
     let manual_limit_label = account
         .manual_usage_limit
         .map(format_float4)
@@ -1498,6 +1513,11 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                                 { "disabled" }
                             </span>
                         }
+                        if let Some(issue_label) = issue_label.clone() {
+                            <span class={classes!("inline-flex", "items-center", "rounded-full", "border", "border-red-500/25", "bg-red-500/10", "px-2.5", "py-1", "text-[11px]", "font-semibold", "uppercase", "tracking-[0.16em]", "text-red-700", "dark:text-red-200")}>
+                                { issue_label }
+                            </span>
+                        }
                     </div>
                     <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
                         { format!("{} · provider {} · refresh {}", account.auth_method, account.provider.clone().unwrap_or_else(|| "-".to_string()), if account.has_refresh_token { "present" } else { "missing" }) }
@@ -1515,6 +1535,11 @@ pub(crate) fn kiro_account_card(props: &KiroAccountCardProps) -> Html {
                             kiro_pool_strategy_label(&account.pool_strategy)
                         ) }
                     </p>
+                    if let Some(issue_summary) = account.issue_summary.clone() {
+                        <p class={classes!("mt-1", "mb-0", "text-xs", "font-mono", "text-red-700", "dark:text-red-200", "break-all")}>
+                            { format!("issue {issue_at}: {issue_summary}") }
+                        </p>
+                    }
                     if let Some(cache_error) = account.cache.error_message.clone() {
                         <p class={classes!("mt-1", "mb-0", "text-xs", "font-mono", "text-amber-700", "dark:text-amber-200")}>
                             { cache_error }
@@ -5185,15 +5210,23 @@ pub fn admin_kiro_gateway_page() -> Html {
                     <div>
                         <h2 class={classes!("m-0", "font-mono", "text-base", "font-bold", "text-[var(--text)]")}>{ "Account Status" }</h2>
                         <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
-                            { "状态卡片已经移到独立 admin 页面。那里保留现有卡片样式，并补上分页和名称前缀搜索。" }
+                            { "状态卡片已经移到独立 admin 页面。那里保留现有卡片样式，并补上分页、全文检索和异常筛选。" }
                         </p>
                     </div>
-                    <Link<Route>
-                        to={kiro_account_status_route()}
-                        classes={classes!("btn-terminal", "btn-terminal-primary")}
-                    >
-                        { kiro_account_status_cta_text() }
-                    </Link<Route>>
+                    <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                        <a
+                            href={kiro_account_status_abnormal_href()}
+                            class={classes!("btn-terminal", "btn-terminal-primary")}
+                        >
+                            { "Abnormal Accounts" }
+                        </a>
+                        <Link<Route>
+                            to={kiro_account_status_route()}
+                            classes={classes!("btn-terminal")}
+                        >
+                            { kiro_account_status_cta_text() }
+                        </Link<Route>>
+                    </div>
                 </div>
                 <div class={classes!("mt-4", "grid", "gap-4", "lg:grid-cols-3")}>
                     <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-5")}>
@@ -5922,12 +5955,12 @@ mod tests {
         build_kiro_billable_multiplier_override_patch, build_kiro_cache_policy_override_json,
         build_kiro_cache_policy_override_patch, format_compact_bytes,
         format_kiro_cache_policy_summary, format_kiro_key_candidate_credit_summary,
-        kiro_account_status_cta_text, kiro_account_status_route, kiro_cache_token_percent,
-        kiro_key_route_summary, kiro_preferred_pool_candidate_note, kiro_preferred_pool_warning,
-        parse_kiro_cache_policy_form_json, parse_manual_usage_limit_input,
-        sanitize_kiro_account_group_id, should_load_kiro_account_inventory,
-        should_load_kiro_group_inventory, should_load_kiro_group_options,
-        should_load_kiro_inventory, should_load_kiro_key_inventory,
+        kiro_account_status_abnormal_href, kiro_account_status_cta_text, kiro_account_status_route,
+        kiro_cache_token_percent, kiro_key_route_summary, kiro_preferred_pool_candidate_note,
+        kiro_preferred_pool_warning, parse_kiro_cache_policy_form_json,
+        parse_manual_usage_limit_input, sanitize_kiro_account_group_id,
+        should_load_kiro_account_inventory, should_load_kiro_group_inventory,
+        should_load_kiro_group_options, should_load_kiro_inventory, should_load_kiro_key_inventory,
         should_load_kiro_models_inventory, should_load_kiro_usage_preview,
         should_reset_kiro_cache_policy_editor, TAB_ACCOUNTS, TAB_GROUPS, TAB_KEYS, TAB_OVERVIEW,
         TAB_USAGE,
@@ -6228,6 +6261,11 @@ mod tests {
     #[test]
     fn kiro_account_status_route_points_to_admin_page() {
         assert_eq!(kiro_account_status_route(), Route::AdminKiroAccountStatus);
+    }
+
+    #[test]
+    fn kiro_account_status_abnormal_href_opens_abnormal_filter() {
+        assert!(kiro_account_status_abnormal_href().ends_with("/accounts?issue=abnormal"));
     }
 
     #[test]

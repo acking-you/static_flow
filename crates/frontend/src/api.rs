@@ -10968,6 +10968,9 @@ pub struct KiroAccountView {
     pub has_refresh_token: bool,
     pub disabled: bool,
     pub disabled_reason: Option<String>,
+    pub issue_kind: Option<String>,
+    pub issue_summary: Option<String>,
+    pub issue_at_ms: Option<i64>,
     pub source: Option<String>,
     pub source_db_path: Option<String>,
     pub last_imported_at: Option<i64>,
@@ -11055,6 +11058,8 @@ pub struct AdminKiroAccountStatusesResponse {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AdminKiroAccountStatusesQuery {
     pub prefix: Option<String>,
+    pub q: Option<String>,
+    pub issue: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -11065,6 +11070,12 @@ fn build_admin_kiro_account_statuses_url(query: &AdminKiroAccountStatusesQuery) 
     let mut params = Vec::new();
     if let Some(prefix) = query.prefix.as_deref() {
         params.push(format!("prefix={}", urlencoding::encode(prefix)));
+    }
+    if let Some(q) = query.q.as_deref() {
+        params.push(format!("q={}", urlencoding::encode(q)));
+    }
+    if let Some(issue) = query.issue.as_deref() {
+        params.push(format!("issue={}", urlencoding::encode(issue)));
     }
     if let Some(limit) = query.limit {
         params.push(format!("limit={limit}"));
@@ -12358,6 +12369,24 @@ mod tests {
     }
 
     #[test]
+    fn kiro_account_view_parses_issue_fields() {
+        let account: KiroAccountView = serde_json::from_value(serde_json::json!({
+            "name": "kiro-a",
+            "issue_kind": "auth_401",
+            "issue_summary": "Kiro status API returned 401 Unauthorized",
+            "issue_at_ms": 123456
+        }))
+        .expect("account should parse");
+
+        assert_eq!(account.issue_kind.as_deref(), Some("auth_401"));
+        assert_eq!(
+            account.issue_summary.as_deref(),
+            Some("Kiro status API returned 401 Unauthorized")
+        );
+        assert_eq!(account.issue_at_ms, Some(123_456));
+    }
+
+    #[test]
     fn admin_kiro_cache_stats_response_defaults_are_empty() {
         let response: AdminKiroCacheStatsResponse =
             serde_json::from_str(r#"{"mode":"prefix_tree"}"#).expect("response should parse");
@@ -12535,12 +12564,16 @@ mod tests {
     fn build_admin_kiro_account_statuses_url_encodes_prefix_and_window() {
         let url = build_admin_kiro_account_statuses_url(&AdminKiroAccountStatusesQuery {
             prefix: Some("alpha team".to_string()),
+            q: Some("ntagueik".to_string()),
+            issue: Some("abnormal".to_string()),
             limit: Some(24),
             offset: Some(48),
         });
 
         assert!(url.contains("/admin/kiro-gateway/accounts/statuses"));
         assert!(url.contains("prefix=alpha%20team"));
+        assert!(url.contains("q=ntagueik"));
+        assert!(url.contains("issue=abnormal"));
         assert!(url.contains("limit=24"));
         assert!(url.contains("offset=48"));
     }

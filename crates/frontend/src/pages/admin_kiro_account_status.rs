@@ -15,14 +15,39 @@ use crate::{
 
 const DEFAULT_STATUS_PAGE_SIZE: usize = 24;
 const STATUS_PAGE_SIZE_OPTIONS: [usize; 3] = [12, 24, 48];
+const KIRO_ACCOUNT_ISSUE_ABNORMAL: &str = "abnormal";
+const KIRO_ACCOUNT_ISSUE_AUTH_401: &str = "auth_401";
 
-fn normalized_admin_kiro_status_prefix(raw: &str) -> Option<String> {
+fn normalized_admin_kiro_status_query(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         None
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn admin_kiro_status_issue_from_query_string(search: &str) -> Option<String> {
+    search
+        .trim_start_matches('?')
+        .split('&')
+        .filter_map(|part| {
+            let (key, value) = part.split_once('=').unwrap_or((part, ""));
+            if key == "issue" {
+                urlencoding::decode(value)
+                    .ok()
+                    .map(|value| value.trim().to_ascii_lowercase())
+            } else {
+                None
+            }
+        })
+        .find(|value| value == KIRO_ACCOUNT_ISSUE_ABNORMAL || value == KIRO_ACCOUNT_ISSUE_AUTH_401)
+}
+
+fn initial_admin_kiro_status_issue_filter() -> Option<String> {
+    web_sys::window()
+        .and_then(|window| window.location().search().ok())
+        .and_then(|search| admin_kiro_status_issue_from_query_string(&search))
 }
 
 fn admin_kiro_status_total_pages(total: usize, page_size: usize) -> usize {
@@ -32,7 +57,8 @@ fn admin_kiro_status_total_pages(total: usize, page_size: usize) -> usize {
 #[function_component(AdminKiroAccountStatusPage)]
 pub fn admin_kiro_account_status_page() -> Html {
     let search_input = use_state(String::new);
-    let active_prefix = use_state(|| None::<String>);
+    let active_query = use_state(|| None::<String>);
+    let issue_filter = use_state(initial_admin_kiro_status_issue_filter);
     let current_page = use_state(|| 1usize);
     let page_size = use_state(|| DEFAULT_STATUS_PAGE_SIZE);
     let response = use_state(|| None::<AdminKiroAccountStatusesResponse>);
@@ -57,7 +83,8 @@ pub fn admin_kiro_account_status_page() -> Html {
     };
 
     {
-        let active_prefix = active_prefix.clone();
+        let active_query = active_query.clone();
+        let issue_filter = issue_filter.clone();
         let current_page = current_page.clone();
         let page_size = page_size.clone();
         let response = response.clone();
@@ -65,9 +92,16 @@ pub fn admin_kiro_account_status_page() -> Html {
         let loading = loading.clone();
         let error = error.clone();
         use_effect_with(
-            ((*active_prefix).clone(), *current_page, *page_size, *refresh_tick),
+            (
+                (*active_query).clone(),
+                (*issue_filter).clone(),
+                *current_page,
+                *page_size,
+                *refresh_tick,
+            ),
             move |_| {
-                let active_prefix_value = (*active_prefix).clone();
+                let active_query_value = (*active_query).clone();
+                let issue_filter_value = (*issue_filter).clone();
                 let current_page_value = *current_page;
                 let page_size_value = *page_size;
                 let response = response.clone();
@@ -77,7 +111,9 @@ pub fn admin_kiro_account_status_page() -> Html {
                 wasm_bindgen_futures::spawn_local(async move {
                     loading.set(true);
                     let query = AdminKiroAccountStatusesQuery {
-                        prefix: active_prefix_value,
+                        prefix: None,
+                        q: active_query_value,
+                        issue: issue_filter_value,
                         limit: Some(page_size_value),
                         offset: Some(
                             current_page_value
@@ -108,21 +144,41 @@ pub fn admin_kiro_account_status_page() -> Html {
 
     let on_search = {
         let search_input = search_input.clone();
-        let active_prefix = active_prefix.clone();
+        let active_query = active_query.clone();
         let current_page = current_page.clone();
         Callback::from(move |_| {
-            active_prefix.set(normalized_admin_kiro_status_prefix(&search_input));
+            active_query.set(normalized_admin_kiro_status_query(&search_input));
             current_page.set(1);
         })
     };
 
     let on_clear = {
         let search_input = search_input.clone();
-        let active_prefix = active_prefix.clone();
+        let active_query = active_query.clone();
+        let issue_filter = issue_filter.clone();
         let current_page = current_page.clone();
         Callback::from(move |_| {
             search_input.set(String::new());
-            active_prefix.set(None);
+            active_query.set(None);
+            issue_filter.set(None);
+            current_page.set(1);
+        })
+    };
+
+    let on_show_abnormal = {
+        let issue_filter = issue_filter.clone();
+        let current_page = current_page.clone();
+        Callback::from(move |_| {
+            issue_filter.set(Some(KIRO_ACCOUNT_ISSUE_ABNORMAL.to_string()));
+            current_page.set(1);
+        })
+    };
+
+    let on_show_auth_401 = {
+        let issue_filter = issue_filter.clone();
+        let current_page = current_page.clone();
+        Callback::from(move |_| {
+            issue_filter.set(Some(KIRO_ACCOUNT_ISSUE_AUTH_401.to_string()));
             current_page.set(1);
         })
     };
@@ -168,9 +224,13 @@ pub fn admin_kiro_account_status_page() -> Html {
         .as_ref()
         .map_or(*page_size, |value| value.limit.max(1));
     let total_pages = admin_kiro_status_total_pages(total, effective_limit);
-    let active_prefix_label = (*active_prefix)
-        .clone()
-        .unwrap_or_else(|| "all".to_string());
+    let active_query_label = (*active_query).clone().unwrap_or_else(|| "all".to_string());
+    let issue_filter_label = (*issue_filter).clone().unwrap_or_else(|| "all".to_string());
+    let empty_hint = if issue_filter.as_deref() == Some(KIRO_ACCOUNT_ISSUE_ABNORMAL) {
+        "当前没有匹配到非正常 Kiro 账号。"
+    } else {
+        "当前筛选条件下没有匹配到任何 Kiro 账号。"
+    };
 
     html! {
         <main class={classes!("container", "py-8", "space-y-5")}>
@@ -181,7 +241,7 @@ pub fn admin_kiro_account_status_page() -> Html {
                             { "Kiro Account Status" }
                         </h1>
                         <p class={classes!("mt-2", "mb-0", "text-sm", "text-[var(--muted)]")}>
-                            { "卡片样式保持不变，这里只负责分页浏览、按前缀检索和刷新状态。" }
+                            { "卡片样式保持不变，这里负责分页浏览、全文检索、异常快筛和刷新状态。" }
                         </p>
                     </div>
                     <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
@@ -209,10 +269,10 @@ pub fn admin_kiro_account_status_page() -> Html {
                     </div>
                 }
 
-                <div class={classes!("mt-4", "grid", "gap-3", "lg:grid-cols-[minmax(0,1fr)_auto_auto_auto]")}>
+                <div class={classes!("mt-4", "grid", "gap-3", "lg:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto_auto]")}>
                     <input
                         class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-2", "text-sm", "font-mono")}
-                        placeholder="prefix search"
+                        placeholder="search account, user, email, error"
                         value={(*search_input).clone()}
                         oninput={{
                             let search_input = search_input.clone();
@@ -234,13 +294,19 @@ pub fn admin_kiro_account_status_page() -> Html {
                     <button type="button" class={classes!("btn-terminal")} onclick={on_search}>
                         { "Search" }
                     </button>
+                    <button type="button" class={classes!("btn-terminal")} onclick={on_show_abnormal}>
+                        { "Abnormal" }
+                    </button>
+                    <button type="button" class={classes!("btn-terminal")} onclick={on_show_auth_401}>
+                        { "401" }
+                    </button>
                     <button type="button" class={classes!("btn-terminal")} onclick={on_clear}>
                         { "Clear" }
                     </button>
                 </div>
 
                 <div class={classes!("mt-3", "font-mono", "text-xs", "text-[var(--muted)]")}>
-                    { format!("prefix {} · total {} · page {}/{}", active_prefix_label, total, *current_page, total_pages) }
+                    { format!("issue {} · query {} · total {} · page {}/{}", issue_filter_label, active_query_label, total, *current_page, total_pages) }
                 </div>
             </section>
 
@@ -257,7 +323,7 @@ pub fn admin_kiro_account_status_page() -> Html {
                     <EmptyState
                         icon="fa-inbox"
                         title="没有匹配的 Kiro 账号"
-                        hint="当前筛选条件下没有匹配到任何 Kiro 账号。"
+                        hint={empty_hint}
                     />
                 </section>
             } else if let Some(status_response) = response.as_ref().as_ref() {
@@ -293,9 +359,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalized_admin_kiro_status_prefix_trims_empty_input() {
-        assert_eq!(normalized_admin_kiro_status_prefix("   "), None);
-        assert_eq!(normalized_admin_kiro_status_prefix("  alpha "), Some("alpha".to_string()));
+    fn normalized_admin_kiro_status_query_trims_empty_input() {
+        assert_eq!(normalized_admin_kiro_status_query("   "), None);
+        assert_eq!(normalized_admin_kiro_status_query("  alpha "), Some("alpha".to_string()));
+    }
+
+    #[test]
+    fn admin_kiro_status_issue_from_query_string_accepts_abnormal_and_auth_401() {
+        assert_eq!(
+            admin_kiro_status_issue_from_query_string("?issue=abnormal"),
+            Some("abnormal".to_string())
+        );
+        assert_eq!(
+            admin_kiro_status_issue_from_query_string("?q=ntagueik&issue=auth_401"),
+            Some("auth_401".to_string())
+        );
+        assert_eq!(admin_kiro_status_issue_from_query_string("?issue=other"), None);
     }
 
     #[test]
