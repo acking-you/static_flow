@@ -65,7 +65,7 @@ const MAX_RUNTIME_REQUEST_BODY_BYTES: u64 = 256 * 1024 * 1024;
 const MIN_RUNTIME_REQUEST_BODY_BYTES: u64 = 1024;
 const MAX_RUNTIME_ACCOUNT_FAILURE_RETRY_LIMIT: u64 = 100;
 const MIN_RUNTIME_ACCOUNT_FAILURE_RETRY_LIMIT: u64 = 0;
-const MIN_RUNTIME_STATUS_REFRESH_INTERVAL_SECONDS: u64 = 240;
+const MIN_RUNTIME_STATUS_REFRESH_INTERVAL_SECONDS: u64 = 30;
 const MAX_RUNTIME_STATUS_REFRESH_INTERVAL_SECONDS: u64 = 3_600;
 const MAX_RUNTIME_STATUS_ACCOUNT_JITTER_SECONDS: u64 = 60;
 const MAX_RUNTIME_CODEX_AFFINITY_MAX_ENTRIES: u64 = 1_000_000;
@@ -6390,7 +6390,7 @@ fn validate_runtime_refresh_window(
             ..=MAX_RUNTIME_STATUS_REFRESH_INTERVAL_SECONDS)
             .contains(&max_seconds)
     {
-        return Err(bad_request("refresh window seconds must be between 240 and 3600"));
+        return Err(bad_request("refresh window seconds must be between 30 and 3600"));
     }
     if min_seconds > max_seconds {
         return Err(bad_request("refresh min interval must be less than or equal to max interval"));
@@ -8473,6 +8473,37 @@ mod tests {
         assert_eq!(updated.codex_fallback_affinity_ttl_seconds, 900);
         assert_eq!(updated.codex_fallback_affinity_prefix_bytes, 2_048);
         assert_eq!(updated.codex_fallback_affinity_min_body_bytes, 64);
+    }
+
+    #[test]
+    fn runtime_config_update_accepts_30_second_status_refresh_floor() {
+        let updated =
+            apply_runtime_config_update(AdminRuntimeConfig::default(), UpdateAdminRuntimeConfig {
+                codex_status_refresh_min_interval_seconds: Some(30),
+                codex_status_refresh_max_interval_seconds: Some(240),
+                kiro_status_refresh_min_interval_seconds: Some(30),
+                kiro_status_refresh_max_interval_seconds: Some(240),
+                ..UpdateAdminRuntimeConfig::default()
+            })
+            .expect("30 second status refresh floor should be accepted");
+
+        assert_eq!(updated.codex_status_refresh_min_interval_seconds, 30);
+        assert_eq!(updated.codex_status_refresh_max_interval_seconds, 240);
+        assert_eq!(updated.kiro_status_refresh_min_interval_seconds, 30);
+        assert_eq!(updated.kiro_status_refresh_max_interval_seconds, 240);
+    }
+
+    #[test]
+    fn runtime_config_update_rejects_status_refresh_below_30_seconds() {
+        let error =
+            apply_runtime_config_update(AdminRuntimeConfig::default(), UpdateAdminRuntimeConfig {
+                codex_status_refresh_min_interval_seconds: Some(29),
+                codex_status_refresh_max_interval_seconds: Some(240),
+                ..UpdateAdminRuntimeConfig::default()
+            })
+            .expect_err("status refresh below 30 seconds should be rejected");
+
+        assert_eq!(error.message, "refresh window seconds must be between 30 and 3600");
     }
 
     #[test]

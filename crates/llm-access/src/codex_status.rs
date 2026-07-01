@@ -1,9 +1,10 @@
-//! Codex public rate-limit status refresh loop for standalone `llm-access`.
+//! Codex public rate-limit status refresh integration for standalone
+//! `llm-access`.
 
 use std::{collections::BTreeMap, fmt, sync::Arc, time::Duration};
 
 use anyhow::Context;
-use futures_util::{stream, StreamExt};
+use async_trait::async_trait;
 use llm_access_core::store::{
     is_terminal_codex_auth_error, AdminCodexAccount, AdminCodexAccountStore, AdminConfigStore,
     AdminRuntimeConfig, CodexCredits, CodexPublicAccountStatus, CodexRateLimitBucket,
@@ -12,10 +13,13 @@ use llm_access_core::store::{
 };
 use rand::Rng;
 use serde::Deserialize;
+use tokio::sync::Mutex;
 
-use crate::{codex_refresh, provider, runtime::LlmAccessRuntime};
-
-const CODEX_STATUS_REFRESH_CONCURRENCY: usize = 4;
+use crate::{
+    codex_refresh, provider,
+    refresh_scheduler::{RefreshTask, RefreshTaskProvider},
+    runtime::LlmAccessRuntime,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 struct UsageStatusPayload {
@@ -209,137 +213,101 @@ impl CodexStatusAccount for CodexStatusRefreshTarget {
     }
 }
 
-/// Start Codex public status warmup and periodic refresh for `/llm-access`.
-pub(crate) fn spawn_codex_status_refresher(runtime: &LlmAccessRuntime) {
-    let config_store = runtime.admin_config_store();
-    let account_store = runtime.admin_codex_account_store();
-    let route_store = runtime.provider_route_store();
-    let status_store = runtime.public_status_store();
-    tokio::spawn({
-        let config_store = Arc::clone(&config_store);
-        let account_store = Arc::clone(&account_store);
-        let route_store = Arc::clone(&route_store);
-        let status_store = Arc::clone(&status_store);
-        async move {
-            if let Err(err) =
-                refresh_codex_status(&config_store, &account_store, &route_store, &status_store)
-                    .await
-            {
-                tracing::warn!("initial Codex public status refresh failed: {err:#}");
-            }
-        }
-    });
-    tokio::spawn(async move {
-        loop {
-            let delay = match config_store.get_admin_runtime_config().await {
-                Ok(config) => next_codex_refresh_delay(&config),
-                Err(err) => {
-                    tracing::warn!("failed to load Codex status refresh config: {err:#}");
-                    next_codex_refresh_delay(&AdminRuntimeConfig::default())
-                },
-            };
-            tokio::time::sleep(delay).await;
-            if let Err(err) =
-                refresh_codex_status(&config_store, &account_store, &route_store, &status_store)
-                    .await
-            {
-                tracing::warn!("failed to refresh cached Codex public status: {err:#}");
-            }
-        }
-    });
+pub(crate) fn refresh_provider(runtime: &LlmAccessRuntime) -> Arc<dyn RefreshTaskProvider> {
+    Arc::new(CodexStatusRefreshProvider {
+        config_store: runtime.admin_config_store(),
+        account_store: runtime.admin_codex_account_store(),
+        route_store: runtime.provider_route_store(),
+        status_store: runtime.public_status_store(),
+        snapshot_lock: Arc::new(Mutex::new(())),
+    })
 }
 
-async fn refresh_codex_status(
-    config_store: &Arc<dyn AdminConfigStore>,
-    account_store: &Arc<dyn AdminCodexAccountStore>,
-    route_store: &Arc<dyn ProviderRouteStore>,
-    status_store: &Arc<dyn PublicStatusStore>,
-) -> anyhow::Result<()> {
-    let config = config_store
-        .get_admin_runtime_config()
-        .await
-        .context("load Codex status refresh config")?;
-    let source_url = compute_usage_url(&provider::codex_upstream_base_url());
-    let existing = status_store.codex_rate_limit_status().await.ok();
-    let accounts = prioritize_codex_refresh_targets(
-        account_store
-            .list_codex_status_refresh_targets()
+struct CodexStatusRefreshProvider {
+    config_store: Arc<dyn AdminConfigStore>,
+    account_store: Arc<dyn AdminCodexAccountStore>,
+    route_store: Arc<dyn ProviderRouteStore>,
+    status_store: Arc<dyn PublicStatusStore>,
+    // Network refreshes run in parallel through the shared scheduler, but the
+    // public status document is a whole-snapshot write. Serialize the read /
+    // merge / save section so one worker cannot overwrite another account's
+    // freshly persisted buckets.
+    snapshot_lock: Arc<Mutex<()>>,
+}
+
+#[async_trait]
+impl RefreshTaskProvider for CodexStatusRefreshProvider {
+    fn name(&self) -> &'static str {
+        "codex"
+    }
+
+    async fn list_tasks(&self) -> anyhow::Result<Vec<RefreshTask>> {
+        let existing = self.status_store.codex_rate_limit_status().await.ok();
+        let accounts = prioritize_codex_refresh_targets(
+            self.account_store
+                .list_codex_status_refresh_targets()
+                .await
+                .context("list Codex status refresh targets")?,
+            existing.as_ref(),
+        );
+        tracing::debug!(account_count = accounts.len(), "listed Codex refresh targets");
+        Ok(accounts
+            .into_iter()
+            .map(|account| RefreshTask::with_payload(self.name(), account.name.clone(), account))
+            .collect())
+    }
+
+    async fn refresh_task(&self, task: &RefreshTask) -> anyhow::Result<()> {
+        let account = task
+            .payload::<CodexStatusRefreshTarget>()
+            .context("Codex refresh task payload missing account target")?;
+        tracing::debug!(account_name = %account.name(), "refreshing Codex account status");
+        let config = self
+            .config_store
+            .get_admin_runtime_config()
             .await
-            .context("list Codex status refresh targets")?,
-        existing.as_ref(),
-    );
-    let mut refreshed = seed_full_refresh_statuses(&accounts, existing);
-    status_store
-        .save_codex_rate_limit_status(build_background_refresh_snapshot(
-            &accounts,
-            &refreshed,
-            None,
-            None,
-            &source_url,
-            config.codex_status_refresh_max_interval_seconds,
-        ))
-        .await
-        .context("persist initial Codex public status snapshot")?;
-    let refreshes = stream::iter(
-        accounts
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(index, account)| {
-                let account_store = Arc::clone(account_store);
-                let route_store = Arc::clone(route_store);
-                let config = config.clone();
-                async move {
-                    if index > 0 {
-                        let jitter = next_codex_account_jitter(&config);
-                        if !jitter.is_zero() {
-                            tokio::time::sleep(jitter).await;
-                        }
-                    }
-                    let next = refresh_account_status(
-                        &account,
-                        account_store.as_ref(),
-                        route_store.as_ref(),
-                        &config,
-                        false,
-                    )
-                    .await;
-                    (index, account.name.clone(), next)
-                }
-            }),
-    )
-    .buffered(CODEX_STATUS_REFRESH_CONCURRENCY);
-    tokio::pin!(refreshes);
-    while let Some((index, account_name, next)) = refreshes.next().await {
-        if let Ok(latest) = status_store.codex_rate_limit_status().await {
-            refreshed =
-                rebase_unprocessed_refresh_statuses(&accounts, refreshed, Some(latest), index);
-        }
-        let previous = refreshed[index].clone();
-        refreshed[index] = merge_background_refresh_result(previous, next);
-        let latest_snapshot = status_store.codex_rate_limit_status().await.ok();
+            .context("load Codex status refresh config")?;
+        let next = refresh_account_status(
+            account,
+            self.account_store.as_ref(),
+            self.route_store.as_ref(),
+            &config,
+            false,
+        )
+        .await;
+        let source_url = compute_usage_url(&provider::codex_upstream_base_url());
+        let _guard = self.snapshot_lock.lock().await;
+        let latest_snapshot = self.status_store.codex_rate_limit_status().await.ok();
+        let previous = previous_account_status_from_snapshot(account, latest_snapshot.clone());
+        let refreshed = merge_background_refresh_result(previous, next);
         let latest_accounts = prioritize_codex_refresh_targets(
-            account_store
+            self.account_store
                 .list_codex_status_refresh_targets()
                 .await
                 .context("reload Codex status refresh targets during status refresh")?,
             latest_snapshot.as_ref(),
         );
-        status_store
-            .save_codex_rate_limit_status(build_background_refresh_snapshot(
+        self.status_store
+            .save_codex_rate_limit_status(merge_account_status_refresh(
                 &latest_accounts,
-                &refreshed,
                 latest_snapshot,
-                Some(&account_name),
+                account.name(),
+                refreshed,
                 &source_url,
                 config.codex_status_refresh_max_interval_seconds,
             ))
             .await
-            .context("persist incremental Codex public status snapshot")?;
-        crate::allocator::collect_process_allocator();
+            .context("persist Codex public status snapshot")
     }
-    crate::allocator::collect_process_allocator();
-    Ok(())
+
+    async fn next_delay(&self) -> anyhow::Result<Duration> {
+        let config = self
+            .config_store
+            .get_admin_runtime_config()
+            .await
+            .context("load Codex status refresh config")?;
+        Ok(next_codex_refresh_delay(&config))
+    }
 }
 
 fn prioritize_codex_refresh_targets(
@@ -672,6 +640,17 @@ fn seed_full_refresh_statuses<A: CodexStatusAccount>(
         .collect()
 }
 
+fn previous_account_status_from_snapshot<A: CodexStatusAccount>(
+    account: &A,
+    existing: Option<CodexRateLimitStatus>,
+) -> AccountStatusRefresh {
+    seed_full_refresh_statuses(std::slice::from_ref(account), existing)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| initial_account_status(account))
+}
+
+#[cfg(test)]
 fn account_status_refresh_from_cached_snapshot<A: CodexStatusAccount>(
     account: &A,
     existing_accounts: &mut BTreeMap<String, CodexPublicAccountStatus>,
@@ -701,6 +680,7 @@ fn account_status_refresh_from_cached_snapshot<A: CodexStatusAccount>(
     }
 }
 
+#[cfg(test)]
 fn rebase_unprocessed_refresh_statuses<A: CodexStatusAccount>(
     accounts: &[A],
     mut refreshed: Vec<AccountStatusRefresh>,
@@ -975,6 +955,7 @@ fn merge_account_status_refresh<A: CodexStatusAccount>(
     build_status_snapshot(merged, source_url, refresh_interval_seconds)
 }
 
+#[cfg(test)]
 fn build_background_refresh_snapshot<A: CodexStatusAccount>(
     accounts: &[A],
     refreshed: &[AccountStatusRefresh],
@@ -993,6 +974,7 @@ fn build_background_refresh_snapshot<A: CodexStatusAccount>(
     build_status_snapshot(merged, source_url, refresh_interval_seconds)
 }
 
+#[cfg(test)]
 fn merge_background_refresh_accounts<A: CodexStatusAccount>(
     accounts: &[A],
     mut refreshed_by_name: BTreeMap<String, AccountStatusRefresh>,
@@ -1047,6 +1029,7 @@ fn merge_background_refresh_accounts<A: CodexStatusAccount>(
         .collect()
 }
 
+#[cfg(test)]
 fn account_status_refresh_name(refresh: &AccountStatusRefresh) -> &str {
     match refresh {
         AccountStatusRefresh::Ready {
@@ -1614,15 +1597,6 @@ fn next_codex_refresh_delay(config: &AdminRuntimeConfig) -> Duration {
     let max = config.codex_status_refresh_max_interval_seconds.max(min);
     let seconds = rand::thread_rng().gen_range(min..=max);
     Duration::from_secs(seconds)
-}
-
-fn next_codex_account_jitter(config: &AdminRuntimeConfig) -> Duration {
-    let max = config.codex_status_account_jitter_max_seconds;
-    if max == 0 {
-        Duration::ZERO
-    } else {
-        Duration::from_secs(rand::thread_rng().gen_range(0..=max))
-    }
 }
 
 fn now_ms() -> i64 {

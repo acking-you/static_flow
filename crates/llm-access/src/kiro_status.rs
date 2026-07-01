@@ -1,8 +1,9 @@
-//! Kiro account status refresh loop for the standalone LLM access service.
+//! Kiro account status refresh integration for the shared background scheduler.
 
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Context;
+use async_trait::async_trait;
 use llm_access_core::store::{
     AdminConfigStore, AdminKiroAccountStore, AdminKiroBalanceView, AdminKiroCacheView,
     AdminKiroStatusCacheUpdate, AdminRuntimeConfig, KiroStatusRefreshTarget, ProviderKiroRoute,
@@ -11,78 +12,62 @@ use llm_access_core::store::{
 use llm_access_kiro::wire::UsageLimitsResponse;
 use rand::Rng;
 
-use crate::{kiro_refresh, runtime::LlmAccessRuntime};
+use crate::{
+    kiro_refresh,
+    refresh_scheduler::{RefreshTask, RefreshTaskProvider},
+    runtime::LlmAccessRuntime,
+};
 
-/// Start the same Kiro status warmup and periodic refresh loop that the
-/// monolithic backend used before request selection.
-pub(crate) fn spawn_kiro_status_refresher(runtime: &LlmAccessRuntime) {
-    let config_store = runtime.admin_config_store();
-    let account_store = runtime.admin_kiro_account_store();
-    let route_store = runtime.provider_route_store();
-    tokio::spawn({
-        let config_store = Arc::clone(&config_store);
-        let account_store = Arc::clone(&account_store);
-        let route_store = Arc::clone(&route_store);
-        async move {
-            if let Err(err) =
-                refresh_all_kiro_statuses(&config_store, &account_store, &route_store).await
-            {
-                tracing::warn!("initial Kiro cached status refresh failed: {err:#}");
-            }
-        }
-    });
-    tokio::spawn(async move {
-        loop {
-            let delay = match config_store.get_admin_runtime_config().await {
-                Ok(config) => next_kiro_refresh_delay(&config),
-                Err(err) => {
-                    tracing::warn!("failed to load Kiro status refresh config: {err:#}");
-                    next_kiro_refresh_delay(&AdminRuntimeConfig::default())
-                },
-            };
-            tokio::time::sleep(delay).await;
-            if let Err(err) =
-                refresh_all_kiro_statuses(&config_store, &account_store, &route_store).await
-            {
-                tracing::warn!("failed to refresh cached Kiro statuses: {err:#}");
-            }
-        }
-    });
+pub(crate) fn refresh_provider(runtime: &LlmAccessRuntime) -> Arc<dyn RefreshTaskProvider> {
+    Arc::new(KiroStatusRefreshProvider {
+        config_store: runtime.admin_config_store(),
+        account_store: runtime.admin_kiro_account_store(),
+        route_store: runtime.provider_route_store(),
+    })
 }
 
-async fn refresh_all_kiro_statuses(
-    config_store: &Arc<dyn AdminConfigStore>,
-    account_store: &Arc<dyn AdminKiroAccountStore>,
-    route_store: &Arc<dyn ProviderRouteStore>,
-) -> anyhow::Result<()> {
-    let config = config_store
-        .get_admin_runtime_config()
-        .await
-        .context("load Kiro status refresh config")?;
-    let accounts = account_store
-        .list_kiro_status_refresh_targets()
-        .await
-        .context("list Kiro status refresh targets")?;
-    for (index, account) in accounts.into_iter().enumerate() {
-        if index > 0 {
-            let jitter = next_kiro_account_jitter(&config);
-            if !jitter.is_zero() {
-                tokio::time::sleep(jitter).await;
-            }
-        }
-        if let Err(err) =
-            refresh_account_status(&account, account_store.as_ref(), route_store.as_ref()).await
-        {
-            tracing::warn!(
-                account_name = %account.name,
-                error = %err,
-                "failed to refresh Kiro account status"
-            );
-        }
-        crate::allocator::collect_process_allocator();
+struct KiroStatusRefreshProvider {
+    config_store: Arc<dyn AdminConfigStore>,
+    account_store: Arc<dyn AdminKiroAccountStore>,
+    route_store: Arc<dyn ProviderRouteStore>,
+}
+
+#[async_trait]
+impl RefreshTaskProvider for KiroStatusRefreshProvider {
+    fn name(&self) -> &'static str {
+        "kiro"
     }
-    crate::allocator::collect_process_allocator();
-    Ok(())
+
+    async fn list_tasks(&self) -> anyhow::Result<Vec<RefreshTask>> {
+        let accounts = self
+            .account_store
+            .list_kiro_status_refresh_targets()
+            .await
+            .context("list Kiro status refresh targets")?;
+        tracing::debug!(account_count = accounts.len(), "listed Kiro refresh targets");
+        Ok(accounts
+            .into_iter()
+            .map(|account| RefreshTask::with_payload(self.name(), account.name.clone(), account))
+            .collect())
+    }
+
+    async fn refresh_task(&self, task: &RefreshTask) -> anyhow::Result<()> {
+        let account = task
+            .payload::<KiroStatusRefreshTarget>()
+            .context("Kiro refresh task payload missing account target")?;
+        tracing::debug!(account_name = %account.name, "refreshing Kiro account status");
+        refresh_account_status(account, self.account_store.as_ref(), self.route_store.as_ref())
+            .await
+    }
+
+    async fn next_delay(&self) -> anyhow::Result<Duration> {
+        let config = self
+            .config_store
+            .get_admin_runtime_config()
+            .await
+            .context("load Kiro status refresh config")?;
+        Ok(next_kiro_refresh_delay(&config))
+    }
 }
 
 async fn refresh_account_status(
@@ -234,15 +219,6 @@ fn next_kiro_refresh_delay(config: &AdminRuntimeConfig) -> Duration {
         rand::thread_rng().gen_range(min_seconds..=max_seconds)
     };
     Duration::from_secs(seconds)
-}
-
-fn next_kiro_account_jitter(config: &AdminRuntimeConfig) -> Duration {
-    if config.kiro_status_account_jitter_max_seconds == 0 {
-        return Duration::ZERO;
-    }
-    Duration::from_secs(
-        rand::thread_rng().gen_range(0..=config.kiro_status_account_jitter_max_seconds),
-    )
 }
 
 fn status_expires_at(now: i64, refresh_interval_seconds: u64) -> i64 {

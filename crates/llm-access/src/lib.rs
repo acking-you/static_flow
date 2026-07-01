@@ -23,6 +23,7 @@ mod process_memory;
 /// Provider request entrypoints.
 pub mod provider;
 mod public;
+mod refresh_scheduler;
 mod request_context;
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 mod rollup_backlog;
@@ -580,8 +581,13 @@ pub async fn serve(config: ServeConfig) -> anyhow::Result<()> {
         config.storage.node_identity.as_ref(),
         cluster_role,
     ) {
-        codex_status::spawn_codex_status_refresher(&service_runtime);
-        kiro_status::spawn_kiro_status_refresher(&service_runtime);
+        refresh_scheduler::spawn_refresh_scheduler(
+            vec![
+                codex_status::refresh_provider(&service_runtime),
+                kiro_status::refresh_provider(&service_runtime),
+            ],
+            refresh_scheduler::RefreshSchedulerConfig::from_env(),
+        );
         kiro_latency::spawn_kiro_latency_refresher(
             service_runtime.admin_config_store(),
             service_runtime.kiro_latency_ranker(),

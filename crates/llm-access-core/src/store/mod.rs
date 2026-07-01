@@ -118,9 +118,9 @@ pub const DEFAULT_ACCOUNT_FAILURE_RETRY_LIMIT: u64 = 10;
 /// Default Codex client version sent to upstream requests.
 pub const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.142.0";
 /// Default lower bound for randomized Codex status refresh.
-pub const DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS: u64 = 240;
+pub const DEFAULT_CODEX_STATUS_REFRESH_MIN_INTERVAL_SECONDS: u64 = 30;
 /// Default upper bound for randomized Codex status refresh.
-pub const DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS: u64 = 300;
+pub const DEFAULT_CODEX_STATUS_REFRESH_MAX_INTERVAL_SECONDS: u64 = 240;
 /// Default maximum Codex account refresh jitter.
 pub const DEFAULT_CODEX_STATUS_ACCOUNT_JITTER_MAX_SECONDS: u64 = 10;
 /// Default weighted auto-routing multiplier for Free Codex accounts.
@@ -148,9 +148,9 @@ pub const DEFAULT_CODEX_FALLBACK_AFFINITY_MIN_BODY_BYTES: u64 = 128;
 /// Default per-account concurrency for Codex image generation/edit requests.
 pub const DEFAULT_CODEX_IMAGE_GENERATION_MAX_CONCURRENCY: u64 = 3;
 /// Default lower bound for randomized Kiro status refresh.
-pub const DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS: u64 = 240;
+pub const DEFAULT_KIRO_STATUS_REFRESH_MIN_INTERVAL_SECONDS: u64 = 30;
 /// Default upper bound for randomized Kiro status refresh.
-pub const DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS: u64 = 300;
+pub const DEFAULT_KIRO_STATUS_REFRESH_MAX_INTERVAL_SECONDS: u64 = 240;
 /// Default maximum Kiro account refresh jitter.
 pub const DEFAULT_KIRO_STATUS_ACCOUNT_JITTER_MAX_SECONDS: u64 = 10;
 /// Default usage-event flush batch size.

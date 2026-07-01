@@ -37,6 +37,7 @@ grep -F 'Environment=mimalloc_disallow_arena_alloc=1' "$OUT_DIR/llm-access.servi
 grep -F 'Environment=mimalloc_purge_delay=0' "$OUT_DIR/llm-access.service"
 assert_absent 'Environment=LLM_ACCESS_BACKGROUND_STATUS_REFRESH_ENABLED=0' "$OUT_DIR/llm-access.service"
 grep -F 'Environment=LLM_ACCESS_USAGE_JOURNAL_DIR=/var/lib/staticflow/llm-access/usage-journal' "$OUT_DIR/llm-access.service"
+grep -F 'Environment=LLM_ACCESS_BACKGROUND_REFRESH_WORKERS=32' "$OUT_DIR/llm-access.service"
 assert_absent '--sqlite-control' "$OUT_DIR/llm-access.service"
 assert_absent '--duckdb-active-dir ${LLM_ACCESS_DUCKDB_ACTIVE_DIR}' "$OUT_DIR/llm-access.service"
 assert_absent 'Environment=LLM_ACCESS_DUCKDB_ACTIVE_DIR=/var/lib/staticflow/llm-access/analytics-active' "$OUT_DIR/llm-access.service"
