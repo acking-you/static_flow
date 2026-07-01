@@ -1,4 +1,0 @@
-interface:
-  display_name: "Kiro Social Google Onboarder"
-  short_description: "Automate Kiro social Google login and llm-access import."
-  default_prompt: "Use Kiro social Google onboarding to log in a Google account through the required proxy, import it into llm-access, and verify student credits."
