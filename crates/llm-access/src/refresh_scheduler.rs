@@ -221,22 +221,40 @@ async fn dispatch_due_tasks_once(
                 skipped_count += 1;
                 continue;
             }
-            let key = task.key.clone();
             let queued = QueuedRefreshTask {
                 provider: Arc::clone(provider),
                 task,
             };
-            if let Err(err) = sender.try_send(queued) {
-                let mut state = state.lock().await;
-                state.release(&key);
-                skipped_count += 1;
-                tracing::warn!(
-                    provider = key.provider,
-                    account_name = %key.account_name,
-                    "background refresh queue is full or closed: {err}"
-                );
-            } else {
-                queued_count += 1;
+            match sender.try_send(queued) {
+                Ok(()) => {
+                    queued_count += 1;
+                },
+                Err(mpsc::error::TrySendError::Full(queued)) => {
+                    let key = queued.task.key.clone();
+                    let mut state = state.lock().await;
+                    state.release(&key);
+                    skipped_count += 1;
+                    tracing::debug!(
+                        provider = key.provider,
+                        account_name = %key.account_name,
+                        listed_count,
+                        queued_count,
+                        skipped_count,
+                        "background refresh queue reached capacity; remaining due tasks will retry on the next tick"
+                    );
+                    return;
+                },
+                Err(mpsc::error::TrySendError::Closed(queued)) => {
+                    let key = queued.task.key.clone();
+                    let mut state = state.lock().await;
+                    state.release(&key);
+                    tracing::warn!(
+                        provider = key.provider,
+                        account_name = %key.account_name,
+                        "background refresh queue closed; dispatcher cannot enqueue more tasks"
+                    );
+                    return;
+                },
             }
         }
         tracing::debug!(
@@ -319,6 +337,29 @@ fn normalize_worker_count(raw: Option<&str>) -> usize {
 mod tests {
     use super::*;
 
+    struct TestProvider {
+        tasks: Vec<RefreshTask>,
+    }
+
+    #[async_trait]
+    impl RefreshTaskProvider for TestProvider {
+        fn name(&self) -> &'static str {
+            "test"
+        }
+
+        async fn list_tasks(&self) -> anyhow::Result<Vec<RefreshTask>> {
+            Ok(self.tasks.clone())
+        }
+
+        async fn refresh_task(&self, _task: &RefreshTask) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn next_delay(&self) -> anyhow::Result<Duration> {
+            Ok(Duration::from_secs(30))
+        }
+    }
+
     #[test]
     fn worker_count_defaults_to_at_least_32() {
         assert_eq!(normalize_worker_count(None), 32);
@@ -338,5 +379,26 @@ mod tests {
         state.complete(&task.key, 1_500);
         assert!(!state.claim_if_due(&task, 1_499));
         assert!(state.claim_if_due(&task, 1_500));
+    }
+
+    #[tokio::test]
+    async fn full_queue_releases_task_for_next_tick_retry() {
+        let due_task = RefreshTask::new("test", "due-account");
+        let provider: Arc<dyn RefreshTaskProvider> = Arc::new(TestProvider {
+            tasks: vec![due_task.clone()],
+        });
+        let (sender, _receiver) = mpsc::channel(1);
+        assert!(sender
+            .try_send(QueuedRefreshTask {
+                provider: Arc::clone(&provider),
+                task: RefreshTask::new("test", "already-queued"),
+            })
+            .is_ok());
+        let state = Arc::new(Mutex::new(SchedulerState::default()));
+
+        dispatch_due_tasks_once(&[provider], &sender, &state).await;
+
+        let mut state = state.lock().await;
+        assert!(state.claim_if_due(&due_task, now_ms()));
     }
 }
