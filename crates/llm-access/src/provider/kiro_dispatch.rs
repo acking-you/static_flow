@@ -87,6 +87,62 @@ use crate::kiro_refresh;
 const INCONSISTENT_ROUTE_CONFIGURATION_MESSAGE: &str = "Route configuration is inconsistent.";
 const KIRO_SAME_ACCOUNT_MAX_ATTEMPTS: usize = 3;
 
+fn kiro_model_group_preferred_account_names_for_model(
+    routes: &[ProviderKiroRoute],
+    requested_model: &str,
+) -> Option<HashSet<String>> {
+    let requested_model = requested_model.trim();
+    if requested_model.is_empty() {
+        return None;
+    }
+    routes
+        .first()
+        .and_then(|route| {
+            route
+                .model_group_preferred_account_names
+                .get(requested_model)
+        })
+        .map(|account_names| account_names.iter().cloned().collect())
+}
+
+fn log_kiro_model_group_preference_routing(
+    key: &AuthenticatedKey,
+    endpoint: &str,
+    requested_model: &str,
+    effective_model: &str,
+    model_preferred_account_names: Option<&HashSet<String>>,
+    preferred_account_name: Option<&str>,
+) {
+    let Some(model_preferred_account_names) = model_preferred_account_names else {
+        tracing::debug!(
+            key_id = %key.key_id,
+            key_name = %key.key_name,
+            endpoint = %endpoint,
+            requested_model = %requested_model,
+            effective_model = %effective_model,
+            "kiro model group routing preference not configured for request model"
+        );
+        return;
+    };
+    let mut preferred_account_names = model_preferred_account_names
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    preferred_account_names.sort_unstable();
+    tracing::info!(
+        key_id = %key.key_id,
+        key_name = %key.key_name,
+        endpoint = %endpoint,
+        requested_model = %requested_model,
+        effective_model = %effective_model,
+        preferred_account_count = preferred_account_names.len(),
+        preferred_account_names = ?preferred_account_names,
+        sticky_affinity_account = preferred_account_name.unwrap_or(""),
+        sticky_affinity_ignored = preferred_account_name.is_some(),
+        "kiro model group routing preference is active"
+    );
+}
+
 fn route_private_prompt_safety(
     route: &ProviderKiroRoute,
     conversion: &ConversionResult,
@@ -243,6 +299,7 @@ pub async fn dispatch_kiro_proxy(
     };
     usage_meta.mark_pre_handler_done(clamp_duration_ms(parse_started.elapsed()));
     usage_meta.last_message_content = extract_last_message_from_kiro_messages(&payload);
+    let requested_model = payload.model.clone();
     if let Err(err) = apply_kiro_model_mapping(&routes[0].model_name_map_json, &mut payload) {
         return kiro_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -251,6 +308,8 @@ pub async fn dispatch_kiro_proxy(
         );
     }
     let effective_model = payload.model.clone();
+    let model_group_preferred_account_names =
+        kiro_model_group_preferred_account_names_for_model(&routes, &requested_model);
     let route_mcp_web_search = websearch::should_route_mcp_web_search(&payload);
     if !route_mcp_web_search {
         websearch::remove_web_search_tools(&mut payload);
@@ -403,6 +462,8 @@ pub async fn dispatch_kiro_proxy(
             kiro_session_affinity,
             kiro_latency_ranker,
             affinity_session_id,
+            requested_model,
+            model_group_preferred_account_names,
             request_input_tokens,
             usage_meta,
         })
@@ -485,6 +546,14 @@ pub async fn dispatch_kiro_proxy(
     let preferred_account_name = affinity_session_id
         .as_deref()
         .and_then(|session_id| kiro_session_affinity.lookup(&key.key_id, session_id));
+    log_kiro_model_group_preference_routing(
+        &key,
+        public_path,
+        &requested_model,
+        &effective_model,
+        model_group_preferred_account_names.as_ref(),
+        preferred_account_name.as_deref(),
+    );
     // New session (has a session id but no existing affinity): balance it onto
     // the least-bound account. Skipped for single-account keys (nothing to
     // spread). Computed once — affinity only mutates on success after the loop,
@@ -500,6 +569,7 @@ pub async fn dispatch_kiro_proxy(
             &failed_accounts,
             kiro_latency_ranker.as_ref(),
             preferred_account_name.as_deref(),
+            model_group_preferred_account_names.as_ref(),
             session_counts.as_ref(),
         )
         .await
@@ -1226,6 +1296,8 @@ async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
         kiro_session_affinity,
         kiro_latency_ranker,
         affinity_session_id,
+        requested_model,
+        model_group_preferred_account_names,
         request_input_tokens,
         mut usage_meta,
     } = input;
@@ -1262,6 +1334,14 @@ async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
     let preferred_account_name = affinity_session_id
         .as_deref()
         .and_then(|session_id| kiro_session_affinity.lookup(&key.key_id, session_id));
+    log_kiro_model_group_preference_routing(
+        &key,
+        "/mcp",
+        &requested_model,
+        payload.model.as_str(),
+        model_group_preferred_account_names.as_ref(),
+        preferred_account_name.as_deref(),
+    );
     // New session (has a session id but no existing affinity): balance it onto
     // the least-bound account. Skipped for single-account keys (nothing to
     // spread). Computed once — affinity only mutates on success after the loop,
@@ -1277,6 +1357,7 @@ async fn dispatch_kiro_websearch(input: KiroWebsearchDispatch) -> Response {
             &failed_accounts,
             kiro_latency_ranker.as_ref(),
             preferred_account_name.as_deref(),
+            model_group_preferred_account_names.as_ref(),
             session_counts.as_ref(),
         )
         .await

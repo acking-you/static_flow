@@ -117,6 +117,9 @@ fn decode_key_bundle(row: &PgRow) -> anyhow::Result<KeyBundle> {
                 .try_get_optional_string("preferred_pool_strategy")?
                 .unwrap_or_else(core_store::default_kiro_pool_strategy),
             model_name_map_json: row.get(15),
+            kiro_model_group_preferences_json: row
+                .try_get_optional_string("kiro_model_group_preferences_json")?
+                .or_else(|| Some("{}".to_string())),
             request_max_concurrency: row.get(16),
             request_min_start_interval_ms: row.get(17),
             codex_fast_enabled: row.get::<_, Option<bool>>(18).unwrap_or(true),
@@ -196,6 +199,10 @@ pub fn admin_key_from_bundle(bundle: &KeyBundle) -> AdminKey {
         auto_account_names: decode_optional_json(bundle.route.auto_account_names_json.as_deref()),
         preferred_pool_strategy: bundle.route.preferred_pool_strategy.clone(),
         model_name_map: decode_optional_json(bundle.route.model_name_map_json.as_deref()),
+        kiro_model_group_preferences: decode_optional_json(
+            bundle.route.kiro_model_group_preferences_json.as_deref(),
+        )
+        .unwrap_or_default(),
         request_max_concurrency: bundle
             .route
             .request_max_concurrency

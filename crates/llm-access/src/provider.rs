@@ -33,7 +33,7 @@ mod usage_meta;
 mod util;
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -419,6 +419,8 @@ struct KiroWebsearchDispatch {
     kiro_session_affinity: Arc<KiroSessionAffinity>,
     kiro_latency_ranker: Arc<KiroLatencyRanker>,
     affinity_session_id: Option<String>,
+    requested_model: String,
+    model_group_preferred_account_names: Option<HashSet<String>>,
     request_input_tokens: i32,
     usage_meta: ProviderUsageMetadata,
 }

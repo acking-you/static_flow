@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::Context;
 use llm_access_core::store::{
@@ -165,6 +165,10 @@ pub(crate) struct CachedKiroRequestSnapshot {
     /// still decode and keep old Kiro behavior.
     #[serde(default = "default_anthropic_upstream_pool_mode")]
     pub anthropic_upstream_pool_mode: String,
+    /// Exact request-model to preferred account names. Defaulted so older
+    /// Valkey payloads keep legacy affinity/ordering behavior.
+    #[serde(default)]
+    pub model_group_preferred_account_names: BTreeMap<String, Vec<String>>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
     pub request_validation_enabled: bool,

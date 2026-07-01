@@ -1552,6 +1552,7 @@ fn static_kiro_route() -> ProviderKiroRoute {
         cctest_proxy_base_url: None,
         cctest_proxy_api_key: None,
         model_name_map_json: "{}".to_string(),
+        model_group_preferred_account_names: BTreeMap::new(),
         cache_kmodels_json: llm_access_core::store::default_kiro_cache_kmodels_json(),
         cache_policy_json: llm_access_core::store::default_kiro_cache_policy_json(),
         context_usage_min_request_tokens:
@@ -1876,9 +1877,88 @@ async fn kiro_selection_prefers_sticky_account_when_immediately_available() {
         &ranker,
         Some("beta"),
         None,
+        None,
     )
     .await
     .expect("sticky beta should be selected");
+
+    assert_eq!(route.account_name, "beta");
+}
+
+#[tokio::test]
+async fn kiro_selection_model_group_preference_outranks_sticky_account() {
+    let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
+    let routes = vec![
+        kiro_route_for_selection("alpha", "user-alpha", 90.0, None),
+        kiro_route_for_selection("beta", "user-beta", 10.0, None),
+    ];
+    let ranker = crate::kiro_latency::KiroLatencyRanker::default();
+    let model_preferred_accounts = HashSet::from(["alpha".to_string()]);
+
+    let (route, _permit) = super::select_kiro_route_with_account_permit(
+        &scheduler,
+        &routes,
+        &HashSet::new(),
+        &ranker,
+        Some("beta"),
+        Some(&model_preferred_accounts),
+        None,
+    )
+    .await
+    .expect("model group preference should select alpha");
+
+    assert_eq!(route.account_name, "alpha");
+}
+
+#[tokio::test]
+async fn kiro_selection_model_group_preference_empty_set_still_ignores_sticky_account() {
+    let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
+    let routes = vec![
+        kiro_route_for_selection("alpha", "user-alpha", 90.0, None),
+        kiro_route_for_selection("beta", "user-beta", 10.0, None),
+    ];
+    let ranker = crate::kiro_latency::KiroLatencyRanker::default();
+    let model_preferred_accounts = HashSet::new();
+
+    let (route, _permit) = super::select_kiro_route_with_account_permit(
+        &scheduler,
+        &routes,
+        &HashSet::new(),
+        &ranker,
+        Some("beta"),
+        Some(&model_preferred_accounts),
+        None,
+    )
+    .await
+    .expect("empty model group preference should still bypass sticky affinity");
+
+    assert_eq!(route.account_name, "alpha");
+}
+
+#[tokio::test]
+async fn kiro_selection_model_group_preference_soft_falls_back_when_locally_throttled() {
+    let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
+    let routes = vec![
+        kiro_route_for_selection("alpha", "user-alpha", 90.0, None),
+        kiro_route_for_selection("beta", "user-beta", 10.0, None),
+    ];
+    let _held = scheduler
+        .try_acquire("user-alpha", 1, 0, Instant::now())
+        .expect("alpha should be occupied");
+    let ranker = crate::kiro_latency::KiroLatencyRanker::default();
+    let model_preferred_accounts = HashSet::from(["alpha".to_string()]);
+
+    let (route, _permit) = super::select_kiro_route_with_account_permit(
+        &scheduler,
+        &routes,
+        &HashSet::new(),
+        &ranker,
+        None,
+        Some(&model_preferred_accounts),
+        None,
+    )
+    .await
+    .expect("available fallback account should be selected");
 
     assert_eq!(route.account_name, "beta");
 }
@@ -1901,6 +1981,7 @@ async fn kiro_selection_skips_sticky_account_when_locally_throttled() {
         &HashSet::new(),
         &ranker,
         Some("beta"),
+        None,
         None,
     )
     .await
@@ -1935,6 +2016,7 @@ async fn kiro_selection_returns_rate_limit_when_all_accounts_are_upstream_cooled
             &routes,
             &HashSet::new(),
             &ranker,
+            None,
             None,
             None,
         ),
@@ -1982,6 +2064,7 @@ async fn kiro_selection_returns_rate_limit_when_preferred_account_is_upstream_co
             &ranker,
             Some("beta"),
             None,
+            None,
         ),
     )
     .await
@@ -2026,6 +2109,7 @@ async fn kiro_selection_rechecks_when_upstream_cooldown_expires_before_local_slo
             &routes,
             &HashSet::new(),
             &ranker,
+            None,
             None,
             None,
         ),
@@ -2168,6 +2252,7 @@ async fn kiro_selection_falls_back_when_preferred_pool_is_throttled() {
         &ranker,
         None,
         None,
+        None,
     )
     .await
     .expect("fallback balanced route should be selected");
@@ -2202,6 +2287,7 @@ async fn kiro_selection_keeps_sticky_account_across_pool_preference() {
         &HashSet::new(),
         &ranker,
         Some("alpha"),
+        None,
         None,
     )
     .await

@@ -588,6 +588,8 @@ pub(crate) struct PatchLlmGatewayKeyRequest {
     #[serde(default)]
     model_name_map: Option<BTreeMap<String, String>>,
     #[serde(default)]
+    kiro_model_group_preferences: Option<BTreeMap<String, String>>,
+    #[serde(default)]
     request_max_concurrency: Option<u64>,
     #[serde(default)]
     request_min_start_interval_ms: Option<u64>,
@@ -2612,6 +2614,9 @@ pub(crate) async fn patch_admin_kiro_key(
         Ok(patch) => patch,
         Err(response) => return response.into_response(),
     };
+    if let Err(response) = validate_kiro_model_group_preferences(&state, &patch).await {
+        return response.into_response();
+    }
     match state.admin_key_store.patch_admin_key(&key_id, patch).await {
         Ok(Some(key)) if key.provider_type == PROVIDER_KIRO => {
             match resolve_key_effective_kiro_cache_policy(&state, key).await {
@@ -6568,6 +6573,39 @@ fn select_kiro_candidate_account_names(
     }
 }
 
+async fn validate_kiro_model_group_preferences(
+    state: &HttpState,
+    patch: &AdminKeyPatch,
+) -> Result<(), AdminHttpError> {
+    let Some(preferences) = patch.kiro_model_group_preferences.as_ref() else {
+        return Ok(());
+    };
+    if preferences.is_empty() {
+        return Ok(());
+    }
+    let groups = state
+        .admin_account_group_store
+        .list_admin_account_groups(PROVIDER_KIRO)
+        .await
+        .map_err(|_| internal_error("Failed to load Kiro account groups"))?;
+    let group_ids = groups
+        .iter()
+        .map(|group| group.id.as_str())
+        .collect::<HashSet<_>>();
+
+    // model -> group id -> Kiro account group
+    // Rejecting bad links here keeps request routing deterministic.
+    for (model, group_id) in preferences {
+        if !group_ids.contains(group_id.as_str()) {
+            return Err(bad_request(&format!(
+                "kiro_model_group_preferences references unknown Kiro account group `{group_id}` \
+                 for model `{model}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn normalize_key_patch(
     request: PatchLlmGatewayKeyRequest,
 ) -> Result<AdminKeyPatch, AdminHttpError> {
@@ -6605,6 +6643,9 @@ fn normalize_key_patch(
         .as_deref()
         .map(normalize_anthropic_upstream_pool_mode_input)
         .transpose()?;
+    let kiro_model_group_preferences = request
+        .kiro_model_group_preferences
+        .map(core_store::normalize_kiro_model_group_preferences);
     let request_max_concurrency = if request.request_max_concurrency_unlimited {
         Some(None)
     } else {
@@ -6651,6 +6692,7 @@ fn normalize_key_patch(
         preferred_pool_strategy,
         kiro_anthropic_upstream_pool_mode,
         model_name_map: request.model_name_map.map(Some),
+        kiro_model_group_preferences,
         request_max_concurrency,
         request_min_start_interval_ms,
         codex_fast_enabled: request.codex_fast_enabled,
@@ -7963,6 +8005,7 @@ mod tests {
             preferred_pool_strategy: None,
             kiro_anthropic_upstream_pool_mode: None,
             model_name_map: None,
+            kiro_model_group_preferences: None,
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             request_max_concurrency_unlimited: false,
@@ -8013,6 +8056,7 @@ mod tests {
             auto_account_names: None,
             preferred_pool_strategy: core_store::default_kiro_pool_strategy(),
             model_name_map: None,
+            kiro_model_group_preferences: BTreeMap::new(),
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             codex_fast_enabled: true,

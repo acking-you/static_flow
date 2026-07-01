@@ -1,7 +1,7 @@
 //! Provider route-candidate reads, account-name resolution, and the
 //! `ProviderRouteStore` impl.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -434,6 +434,55 @@ impl PostgresControlRepository {
             other => anyhow::bail!("unsupported route strategy `{other}`"),
         }
     }
+
+    /// Resolve model preference group ids against the already-authorized key
+    /// candidate pool.
+    ///
+    /// ```text
+    /// key route config -> base candidates
+    /// model -> group id -> group accounts
+    ///                  \-> intersection with base candidates
+    /// ```
+    pub(super) async fn resolve_kiro_model_group_preferred_account_names(
+        &self,
+        route: &KeyRouteConfig,
+        selected_account_names: &[String],
+    ) -> anyhow::Result<BTreeMap<String, Vec<String>>> {
+        let raw_preferences = decode_optional_json::<BTreeMap<String, String>>(
+            route.kiro_model_group_preferences_json.as_deref(),
+        )
+        .unwrap_or_default();
+        let preferences = core_store::normalize_kiro_model_group_preferences(raw_preferences);
+        if preferences.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let selected = selected_account_names
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut resolved = BTreeMap::new();
+        for (model, group_id) in preferences {
+            let group = self
+                .get_admin_account_group_row(&group_id)
+                .await?
+                .with_context(|| {
+                    format!("configured kiro model group preference `{group_id}` does not exist")
+                })?;
+            if group.provider_type != core_store::PROVIDER_KIRO {
+                anyhow::bail!(
+                    "configured kiro model group preference belongs to a different provider"
+                );
+            }
+            let account_names = group
+                .account_names
+                .into_iter()
+                .filter(|account_name| selected.contains(account_name))
+                .collect::<Vec<_>>();
+            resolved.insert(model, account_names);
+        }
+        Ok(resolved)
+    }
 }
 #[async_trait]
 impl ProviderRouteStore for PostgresControlRepository {
@@ -672,6 +721,9 @@ impl ProviderRouteStore for PostgresControlRepository {
                 cctest_proxy_base_url: snapshot.cctest_proxy_base_url.clone(),
                 cctest_proxy_api_key: snapshot.cctest_proxy_api_key.clone(),
                 model_name_map_json: snapshot.model_name_map_json.clone(),
+                model_group_preferred_account_names: snapshot
+                    .model_group_preferred_account_names
+                    .clone(),
                 cache_kmodels_json: snapshot.cache_kmodels_json.clone(),
                 cache_policy_json: snapshot.cache_policy_json.clone(),
                 context_usage_min_request_tokens: snapshot.context_usage_min_request_tokens,
@@ -858,6 +910,7 @@ impl ProviderRouteStore for PostgresControlRepository {
             cctest_proxy_base_url: runtime_config.kiro_cctest_proxy_base_url,
             cctest_proxy_api_key: runtime_config.kiro_cctest_proxy_api_key,
             model_name_map_json: "{}".to_string(),
+            model_group_preferred_account_names: BTreeMap::new(),
             cache_kmodels_json: runtime_config.kiro_cache_kmodels_json,
             cache_policy_json: runtime_config.kiro_cache_policy_json,
             context_usage_min_request_tokens: runtime_config

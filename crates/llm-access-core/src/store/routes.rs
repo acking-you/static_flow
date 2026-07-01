@@ -1,6 +1,8 @@
 //! Provider routing contracts: authenticated key, provider proxy config,
 //! Codex/Kiro route + auth-update views, and JWT/auth-error helpers.
 
+use std::collections::BTreeMap;
+
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde_json::Value;
 
@@ -234,6 +236,8 @@ pub struct ProviderKiroRoute {
     pub cctest_proxy_api_key: Option<String>,
     /// JSON object mapping public model names to upstream Kiro model names.
     pub model_name_map_json: String,
+    /// Exact request-model to preferred account names resolved from key config.
+    pub model_group_preferred_account_names: BTreeMap<String, Vec<String>>,
     /// Effective Kiro cache k-model JSON for this key.
     pub cache_kmodels_json: String,
     /// Effective Kiro cache policy JSON for this key.

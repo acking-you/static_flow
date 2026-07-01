@@ -70,6 +70,9 @@ pub struct AdminKey {
     pub preferred_pool_strategy: String,
     /// Model name mapping.
     pub model_name_map: Option<BTreeMap<String, String>>,
+    /// Exact Kiro request-model to preferred account-group map.
+    #[serde(default)]
+    pub kiro_model_group_preferences: BTreeMap<String, String>,
     /// Per-key request concurrency cap.
     pub request_max_concurrency: Option<u64>,
     /// Per-key request pacing interval.
@@ -382,6 +385,8 @@ pub struct AdminKeyPatch {
     pub preferred_pool_strategy: Option<String>,
     /// New model name map.
     pub model_name_map: Option<Option<BTreeMap<String, String>>>,
+    /// New exact Kiro request-model to preferred account-group map.
+    pub kiro_model_group_preferences: Option<BTreeMap<String, String>>,
     /// New per-key request concurrency cap.
     pub request_max_concurrency: Option<Option<u64>>,
     /// New per-key request pacing interval.
@@ -455,6 +460,7 @@ mod tests {
             auto_account_names: None,
             preferred_pool_strategy: "balanced".to_string(),
             model_name_map: None,
+            kiro_model_group_preferences: BTreeMap::new(),
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             codex_fast_enabled: true,

@@ -793,6 +793,26 @@ fn kiro_key_route_summary(
     }
 }
 
+fn kiro_model_group_preferences_summary(
+    preferences: &BTreeMap<String, String>,
+    account_groups: &[AdminAccountGroupOptionView],
+) -> String {
+    if preferences.is_empty() {
+        return "0 rules".to_string();
+    }
+    let mut entries = preferences
+        .iter()
+        .take(3)
+        .map(|(model, group_id)| {
+            format!("{model} -> {}", kiro_group_name_for_id(account_groups, group_id))
+        })
+        .collect::<Vec<_>>();
+    if preferences.len() > entries.len() {
+        entries.push(format!("+{}", preferences.len() - entries.len()));
+    }
+    format!("{} rules · {}", preferences.len(), entries.join(" · "))
+}
+
 fn kiro_pool_strategy_label(strategy: &str) -> &'static str {
     match llm_store::normalize_kiro_pool_strategy(strategy) {
         Some(llm_store::KIRO_POOL_STRATEGY_BALANCED) => "亲和 + 动态",
@@ -1795,6 +1815,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
     let anthropic_upstream_pool_mode =
         use_state(|| props.key_item.kiro_anthropic_upstream_pool_mode.clone());
     let model_name_map = use_state(|| props.key_item.model_name_map.clone().unwrap_or_default());
+    let model_group_preferences = use_state(|| props.key_item.kiro_model_group_preferences.clone());
     let kiro_request_validation_enabled =
         use_state(|| props.key_item.kiro_request_validation_enabled);
     let kiro_cache_estimation_enabled = use_state(|| props.key_item.kiro_cache_estimation_enabled);
@@ -1820,6 +1841,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
     let billable_multiplier_settings_expanded = use_state(|| false);
     let route_settings_expanded = use_state(|| false);
     let model_mapping_expanded = use_state(|| false);
+    let model_group_routing_open = use_state(|| false);
     let saving = use_state(|| false);
     let feedback = use_state(|| None::<String>);
 
@@ -1835,6 +1857,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let preferred_pool_strategy = preferred_pool_strategy.clone();
         let anthropic_upstream_pool_mode = anthropic_upstream_pool_mode.clone();
         let model_name_map = model_name_map.clone();
+        let model_group_preferences = model_group_preferences.clone();
         let kiro_request_validation_enabled = kiro_request_validation_enabled.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
         let kiro_zero_cache_debug_enabled = kiro_zero_cache_debug_enabled.clone();
@@ -1852,6 +1875,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let key_billable_multiplier_effective_baseline =
             key_billable_multiplier_effective_baseline.clone();
         let billable_multiplier_settings_expanded = billable_multiplier_settings_expanded.clone();
+        let model_group_routing_open = model_group_routing_open.clone();
         let initial_effective_billable_multiplier_json_for_effect =
             initial_effective_billable_multiplier_json.clone();
         use_effect_with((props.key_item.clone(), props.account_groups.clone()), move |_| {
@@ -1872,6 +1896,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             preferred_pool_strategy.set(key_item.preferred_pool_strategy.clone());
             anthropic_upstream_pool_mode.set(key_item.kiro_anthropic_upstream_pool_mode.clone());
             model_name_map.set(key_item.model_name_map.clone().unwrap_or_default());
+            model_group_preferences.set(key_item.kiro_model_group_preferences.clone());
             kiro_request_validation_enabled.set(key_item.kiro_request_validation_enabled);
             kiro_cache_estimation_enabled.set(key_item.kiro_cache_estimation_enabled);
             kiro_zero_cache_debug_enabled.set(key_item.kiro_zero_cache_debug_enabled);
@@ -1890,6 +1915,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             key_billable_multiplier_effective_baseline
                 .set(initial_effective_billable_multiplier_json_for_effect.clone());
             billable_multiplier_settings_expanded.set(false);
+            model_group_routing_open.set(false);
             || ()
         });
     }
@@ -1914,6 +1940,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let preferred_pool_strategy = preferred_pool_strategy.clone();
         let anthropic_upstream_pool_mode = anthropic_upstream_pool_mode.clone();
         let model_name_map = model_name_map.clone();
+        let model_group_preferences = model_group_preferences.clone();
         let kiro_request_validation_enabled = kiro_request_validation_enabled.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
         let kiro_zero_cache_debug_enabled = kiro_zero_cache_debug_enabled.clone();
@@ -1948,6 +1975,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let preferred_pool_strategy_value = (*preferred_pool_strategy).clone();
             let anthropic_upstream_pool_mode_value = (*anthropic_upstream_pool_mode).clone();
             let model_name_map_value = (*model_name_map).clone();
+            let model_group_preferences_value = (*model_group_preferences).clone();
             let kiro_request_validation_enabled_value = *kiro_request_validation_enabled;
             let kiro_cache_estimation_enabled_value = *kiro_cache_estimation_enabled;
             let kiro_zero_cache_debug_enabled_value = *kiro_zero_cache_debug_enabled;
@@ -2028,6 +2056,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                         anthropic_upstream_pool_mode_value.as_str(),
                     ),
                     model_name_map: Some(&model_name_map_value),
+                    kiro_model_group_preferences: Some(&model_group_preferences_value),
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
                     codex_fast_enabled: None,
@@ -2089,6 +2118,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let preferred_pool_strategy = preferred_pool_strategy.clone();
         let anthropic_upstream_pool_mode = anthropic_upstream_pool_mode.clone();
         let model_name_map = model_name_map.clone();
+        let model_group_preferences = model_group_preferences.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
         let kiro_zero_cache_debug_enabled = kiro_zero_cache_debug_enabled.clone();
         let kiro_full_request_logging_enabled = kiro_full_request_logging_enabled.clone();
@@ -2108,6 +2138,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let preferred_pool_strategy_value = (*preferred_pool_strategy).clone();
             let anthropic_upstream_pool_mode_value = (*anthropic_upstream_pool_mode).clone();
             let model_name_map_value = (*model_name_map).clone();
+            let model_group_preferences_value = (*model_group_preferences).clone();
             let kiro_cache_estimation_enabled_value = *kiro_cache_estimation_enabled;
             let kiro_zero_cache_debug_enabled_value = *kiro_zero_cache_debug_enabled;
             let kiro_full_request_logging_enabled_value = *kiro_full_request_logging_enabled;
@@ -2143,6 +2174,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                         anthropic_upstream_pool_mode_value.as_str(),
                     ),
                     model_name_map: Some(&model_name_map_value),
+                    kiro_model_group_preferences: Some(&model_group_preferences_value),
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
                     codex_fast_enabled: None,
@@ -2230,6 +2262,58 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
     let on_reset_model_map = {
         let model_name_map = model_name_map.clone();
         Callback::from(move |_| model_name_map.set(BTreeMap::new()))
+    };
+    let on_reset_model_group_preferences = {
+        let model_group_preferences = model_group_preferences.clone();
+        Callback::from(move |_| model_group_preferences.set(BTreeMap::new()))
+    };
+    let on_save_model_group_preferences = {
+        let key_id = props.key_item.id.clone();
+        let key_name = props.key_item.name.clone();
+        let model_group_preferences = model_group_preferences.clone();
+        let model_group_routing_open = model_group_routing_open.clone();
+        let saving = saving.clone();
+        let feedback = feedback.clone();
+        let on_flash = props.on_flash.clone();
+        let on_reload = props.on_reload.clone();
+        Callback::from(move |_| {
+            if *saving {
+                return;
+            }
+            let key_id = key_id.clone();
+            let key_name = key_name.clone();
+            let preferences_value = (*model_group_preferences).clone();
+            let model_group_routing_open = model_group_routing_open.clone();
+            let saving = saving.clone();
+            let feedback = feedback.clone();
+            let on_flash = on_flash.clone();
+            let on_reload = on_reload.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                saving.set(true);
+                feedback.set(None);
+                match patch_admin_kiro_key(&key_id, PatchAdminLlmGatewayKeyRequest {
+                    kiro_model_group_preferences: Some(&preferences_value),
+                    ..PatchAdminLlmGatewayKeyRequest::default()
+                })
+                .await
+                {
+                    Ok(_) => {
+                        feedback.set(Some("Saved model routing.".to_string()));
+                        model_group_routing_open.set(false);
+                        on_flash.emit((format!("Saved model routing for `{key_name}`."), false));
+                        on_reload.emit(());
+                    },
+                    Err(err) => {
+                        feedback.set(Some(err.clone()));
+                        on_flash.emit((
+                            format!("Failed to save model routing for `{key_name}`.\n{err}"),
+                            true,
+                        ));
+                    },
+                }
+                saving.set(false);
+            });
+        })
     };
     let on_restore_inherit = {
         let key_id = props.key_item.id.clone();
@@ -2373,6 +2457,10 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             .collect::<Vec<_>>()
             .join(" · ")
     };
+    let model_group_routing_summary = kiro_model_group_preferences_summary(
+        &model_group_preferences,
+        props.account_groups.as_slice(),
+    );
     html! {
         <article class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "p-4")}>
             <div class={classes!("flex", "items-start", "justify-between", "gap-3", "flex-wrap")}>
@@ -2955,6 +3043,26 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                 </div>
                 <div class={classes!("md:col-span-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3")}>
                     <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
+                        <div class={classes!("min-w-0")}>
+                            <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Model Group Routing" }</div>
+                            <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]", "break-words")}>
+                                { model_group_routing_summary.clone() }
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            class={classes!("btn-terminal", "text-xs")}
+                            onclick={{
+                                let model_group_routing_open = model_group_routing_open.clone();
+                                Callback::from(move |_| model_group_routing_open.set(true))
+                            }}
+                        >
+                            { "Configure" }
+                        </button>
+                    </div>
+                </div>
+                <div class={classes!("md:col-span-2", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3")}>
+                    <div class={classes!("flex", "items-center", "justify-between", "gap-3", "flex-wrap")}>
                         <div>
                             <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Model Mapping" }</div>
                             <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]")}>
@@ -3033,6 +3141,126 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     }
                 </div>
             </div>
+
+            if *model_group_routing_open {
+                <div class={classes!("fixed", "inset-0", "z-50")}>
+                    <button
+                        type="button"
+                        class={classes!("absolute", "inset-0", "h-full", "w-full", "border-0", "bg-black/45", "p-0")}
+                        aria-label="Close model group routing"
+                        onclick={{
+                            let model_group_routing_open = model_group_routing_open.clone();
+                            Callback::from(move |_| model_group_routing_open.set(false))
+                        }}
+                    />
+                    <section class={classes!("absolute", "right-0", "top-0", "flex", "h-full", "w-full", "max-w-3xl", "flex-col", "border-l", "border-[var(--border)]", "bg-[var(--surface)]", "shadow-2xl")}>
+                        <div class={classes!("flex", "items-start", "justify-between", "gap-3", "border-b", "border-[var(--border)]", "px-5", "py-4")}>
+                            <div class={classes!("min-w-0")}>
+                                <div class={classes!("text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Model Group Routing" }</div>
+                                <h4 class={classes!("m-0", "mt-1", "text-base", "font-semibold", "text-[var(--text)]")}>
+                                    { props.key_item.name.clone() }
+                                </h4>
+                                <div class={classes!("mt-1", "text-xs", "text-[var(--muted)]", "break-words")}>
+                                    { model_group_routing_summary.clone() }
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal", "text-xs")}
+                                onclick={{
+                                    let model_group_routing_open = model_group_routing_open.clone();
+                                    Callback::from(move |_| model_group_routing_open.set(false))
+                                }}
+                            >
+                                { "Close" }
+                            </button>
+                        </div>
+                        <div class={classes!("min-h-0", "flex-1", "overflow-y-auto", "px-5", "py-4")}>
+                            if props.available_models.is_empty() {
+                                <div class={classes!("rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-4", "py-4", "text-sm", "text-[var(--muted)]")}>
+                                    { "No model inventory loaded." }
+                                </div>
+                            } else {
+                                <div class={classes!("grid", "gap-2")}>
+                                    { for props.available_models.iter().map(|model| {
+                                        let model_id = model.id.clone();
+                                        let selected_group_id = (*model_group_preferences)
+                                            .get(&model_id)
+                                            .cloned()
+                                            .unwrap_or_default();
+                                        let model_group_preferences = model_group_preferences.clone();
+                                        let account_groups = props.account_groups.clone();
+                                        html! {
+                                            <div class={classes!("grid", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "lg:grid-cols-[minmax(0,1fr)_minmax(16rem,22rem)]")}>
+                                                <div class={classes!("min-w-0")}>
+                                                    <div class={classes!("text-sm", "font-semibold", "text-[var(--text)]")}>{ model.display_name.clone() }</div>
+                                                    <div class={classes!("mt-1", "break-all", "font-mono", "text-[11px]", "text-[var(--muted)]")}>{ model.id.clone() }</div>
+                                                </div>
+                                                <label class={classes!("text-sm")}>
+                                                    <div class={classes!("mb-1", "text-xs", "uppercase", "tracking-[0.16em]", "text-[var(--muted)]")}>{ "Preferred Group" }</div>
+                                                    <select
+                                                        class={classes!("w-full", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface)]", "px-3", "py-2", "text-sm")}
+                                                        value={selected_group_id}
+                                                        onchange={Callback::from(move |event: Event| {
+                                                            let input: HtmlSelectElement = event.target_unchecked_into();
+                                                            let selected = input.value();
+                                                            let mut next = (*model_group_preferences).clone();
+                                                            if selected.trim().is_empty() {
+                                                                next.remove(&model_id);
+                                                            } else {
+                                                                next.insert(model_id.clone(), selected);
+                                                            }
+                                                            model_group_preferences.set(next);
+                                                        })}
+                                                    >
+                                                        <option value="">{ "Default routing" }</option>
+                                                        { for account_groups.iter().map(|group| html! {
+                                                            <option value={group.id.clone()}>
+                                                                { format!("{} · {} accounts", group.name, group.account_count) }
+                                                            </option>
+                                                        }) }
+                                                    </select>
+                                                </label>
+                                            </div>
+                                        }
+                                    }) }
+                                </div>
+                            }
+                        </div>
+                        <div class={classes!("flex", "items-center", "justify-between", "gap-3", "border-t", "border-[var(--border)]", "px-5", "py-4", "flex-wrap")}>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal", "text-xs")}
+                                onclick={on_reset_model_group_preferences.clone()}
+                                disabled={*saving}
+                            >
+                                { "Reset" }
+                            </button>
+                            <div class={classes!("flex", "items-center", "gap-2", "flex-wrap")}>
+                                <button
+                                    type="button"
+                                    class={classes!("btn-terminal", "text-xs")}
+                                    onclick={{
+                                        let model_group_routing_open = model_group_routing_open.clone();
+                                        Callback::from(move |_| model_group_routing_open.set(false))
+                                    }}
+                                    disabled={*saving}
+                                >
+                                    { "Cancel" }
+                                </button>
+                                <button
+                                    type="button"
+                                    class={classes!("btn-terminal", "btn-terminal-primary", "text-xs")}
+                                    onclick={on_save_model_group_preferences.clone()}
+                                    disabled={*saving}
+                                >
+                                    { if *saving { "Saving..." } else { "Save Routing" } }
+                                </button>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            }
 
             <div class={classes!("mt-4", "flex", "items-center", "gap-2", "flex-wrap")}>
                 <button type="button" class={classes!("btn-terminal", "btn-terminal-primary")} onclick={on_save} disabled={*saving}>

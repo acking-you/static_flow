@@ -431,6 +431,7 @@ impl AdminKeyStore for EmptyAdminKeyStore {
             auto_account_names: None,
             preferred_pool_strategy: default_kiro_pool_strategy(),
             model_name_map: None,
+            kiro_model_group_preferences: std::collections::BTreeMap::new(),
             request_max_concurrency: key.request_max_concurrency,
             request_min_start_interval_ms: key.request_min_start_interval_ms,
             codex_fast_enabled: true,

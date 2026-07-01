@@ -1747,6 +1747,7 @@ impl AdminKiroAccountStore for PostgresControlRepository {
             cctest_proxy_base_url: runtime_config.kiro_cctest_proxy_base_url,
             cctest_proxy_api_key: runtime_config.kiro_cctest_proxy_api_key,
             model_name_map_json: "{}".to_string(),
+            model_group_preferred_account_names: BTreeMap::new(),
             cache_kmodels_json: runtime_config.kiro_cache_kmodels_json,
             cache_policy_json: runtime_config.kiro_cache_policy_json,
             context_usage_min_request_tokens: runtime_config

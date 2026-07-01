@@ -204,6 +204,7 @@ pub async fn select_kiro_route_with_account_permit(
     failed_accounts: &HashSet<String>,
     latency_ranker: &KiroLatencyRanker,
     preferred_account_name: Option<&str>,
+    model_preferred_account_names: Option<&HashSet<String>>,
     session_counts: Option<&HashMap<String, usize>>,
 ) -> Result<(ProviderKiroRoute, KiroRequestLease), Response> {
     if routes.is_empty() {
@@ -213,6 +214,7 @@ pub async fn select_kiro_route_with_account_permit(
             "kiro route is not configured",
         ));
     }
+    let model_preference_active = model_preferred_account_names.is_some();
     let queued_at = Instant::now();
     loop {
         let mut saw_local_limit = false;
@@ -221,7 +223,9 @@ pub async fn select_kiro_route_with_account_permit(
         let mut shortest_upstream_wait: Option<Duration> = None;
         let mut saw_candidate = false;
         let proxy_cooldowns = scheduler.proxy_cooldown_snapshot();
-        if let Some(preferred_route) = preferred_account_name
+        if let Some(preferred_route) = (!model_preference_active)
+            .then_some(())
+            .and(preferred_account_name)
             .and_then(|account_name| {
                 routes.iter().find(|route| {
                     route.account_name == account_name
@@ -252,11 +256,12 @@ pub async fn select_kiro_route_with_account_permit(
                 return Ok((preferred_route.clone(), permit));
             }
         }
-        for route in selection_ordered_kiro_routes(
+        for route in selection_ordered_kiro_routes_with_model_preference(
             routes,
             scheduler,
             latency_ranker,
             now_millis(),
+            model_preferred_account_names,
             session_counts,
         ) {
             if failed_accounts.contains(&route.account_name) {
@@ -398,19 +403,39 @@ pub async fn hydrate_kiro_route_for_dispatch(
 /// Ordering contract, highest precedence first:
 /// 1. proxy health: candidates whose proxy is in cooldown sort last (global, so
 ///    a throttled preferred-pool route never shadows a healthy fallback);
-/// 2. fewest bound affinity sessions (global; only active when `session_counts`
+/// 2. exact model-group preference, when configured for the request model;
+/// 3. fewest bound affinity sessions (global; only active when `session_counts`
 ///    is supplied for new-session balancing, inert otherwise);
-/// 3. pool rank: the key's preferred pool first, then the remaining pools in
+/// 4. pool rank: the key's preferred pool first, then the remaining pools in
 ///    `KIRO_POOL_STRATEGIES` order;
-/// 4. pool-specific tiebreakers — `balanced`: latency band, last-started,
+/// 5. pool-specific tiebreakers — `balanced`: latency band, last-started,
 ///    remaining credits desc; `credit_first`: remaining credits desc, latency
 ///    band, last-started;
-/// 5. account name, as the deterministic final tiebreaker.
+/// 6. account name, as the deterministic final tiebreaker.
+#[cfg(test)]
 pub fn selection_ordered_kiro_routes<'a>(
     routes: &'a [ProviderKiroRoute],
     scheduler: &KiroRequestScheduler,
     latency_ranker: &KiroLatencyRanker,
     now_ms: i64,
+    session_counts: Option<&HashMap<String, usize>>,
+) -> Vec<&'a ProviderKiroRoute> {
+    selection_ordered_kiro_routes_with_model_preference(
+        routes,
+        scheduler,
+        latency_ranker,
+        now_ms,
+        None,
+        session_counts,
+    )
+}
+
+fn selection_ordered_kiro_routes_with_model_preference<'a>(
+    routes: &'a [ProviderKiroRoute],
+    scheduler: &KiroRequestScheduler,
+    latency_ranker: &KiroLatencyRanker,
+    now_ms: i64,
+    model_preferred_account_names: Option<&HashSet<String>>,
     session_counts: Option<&HashMap<String, usize>>,
 ) -> Vec<&'a ProviderKiroRoute> {
     if routes.len() <= 1 {
@@ -422,6 +447,7 @@ pub fn selection_ordered_kiro_routes<'a>(
         route: &'a ProviderKiroRoute,
         pool_strategy: &'static str,
         proxy_in_cooldown: bool,
+        model_preferred: bool,
         session_count: Option<usize>,
         last_started_at: Option<Instant>,
         latency_band: Option<i64>,
@@ -462,6 +488,14 @@ pub fn selection_ordered_kiro_routes<'a>(
                 let ordering = left_count.cmp(&right_count);
                 (ordering != std::cmp::Ordering::Equal).then_some(ordering)
             },
+            _ => None,
+        }
+    }
+
+    fn compare_model_preferred(left: bool, right: bool) -> Option<std::cmp::Ordering> {
+        match (left, right) {
+            (true, false) => Some(std::cmp::Ordering::Less),
+            (false, true) => Some(std::cmp::Ordering::Greater),
             _ => None,
         }
     }
@@ -569,8 +603,10 @@ pub fn selection_ordered_kiro_routes<'a>(
         preferred_pool_strategy: &str,
     ) -> Ordering {
         // New-session spread stays global: pool preference only applies after
-        // proxy cooldown and active session count have been considered.
+        // proxy cooldown, model preference, and active session count have been
+        // considered.
         compare_proxy_cooldown(left.proxy_in_cooldown, right.proxy_in_cooldown)
+            .or_else(|| compare_model_preferred(left.model_preferred, right.model_preferred))
             .or_else(|| compare_session_count(left.session_count, right.session_count))
             .or_else(|| compare_pool_rank(left, right, preferred_pool_strategy))
             .or_else(|| compare_pool_tiebreakers(left, right))
@@ -644,6 +680,8 @@ pub fn selection_ordered_kiro_routes<'a>(
                 proxy_in_cooldown: proxy_key
                     .as_deref()
                     .is_some_and(|key| proxy_cooldowns.contains_key(key)),
+                model_preferred: model_preferred_account_names
+                    .is_some_and(|account_names| account_names.contains(&route.account_name)),
                 session_count: identity_session_counts.as_ref().map(|counts| {
                     counts
                         .get(route.routing_identity.as_str())
