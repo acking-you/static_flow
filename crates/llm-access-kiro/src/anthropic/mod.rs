@@ -10,7 +10,9 @@ pub mod websearch;
 use self::types::{CountTokensRequest, CountTokensResponse, Model, ModelsResponse};
 use crate::token;
 
-const SUPPORTED_MODEL_CATALOG: [(&str, &str, i64); 14] = [
+const SUPPORTED_MODEL_CATALOG: [(&str, &str, i64); 16] = [
+    ("claude-sonnet-5", "Claude Sonnet 5", 1782777600),
+    ("claude-sonnet-5-thinking", "Claude Sonnet 5 (Thinking)", 1782777600),
     ("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5", 1727568000),
     ("claude-sonnet-4-5-20250929-thinking", "Claude Sonnet 4.5 (Thinking)", 1727568000),
     ("claude-opus-4-5-20251101", "Claude Opus 4.5", 1730419200),

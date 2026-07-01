@@ -697,6 +697,8 @@ mod tests {
     #[test]
     fn convert_request_promotes_stable_system_role_messages_for_supported_kiro_models() {
         let models = [
+            "claude-sonnet-5",
+            "claude-sonnet-5-thinking",
             "claude-sonnet-4-5-20250929",
             "claude-sonnet-4-5-20250929-thinking",
             "claude-opus-4-5-20251101",
@@ -805,6 +807,27 @@ mod tests {
                     .content,
                 "second question",
                 "{model}"
+            );
+        }
+    }
+
+    #[test]
+    fn convert_request_uses_sonnet_5_upstream_model_id() {
+        for public_model in ["claude-sonnet-5", "claude-sonnet-5-thinking"] {
+            let mut req = base_request(vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Hello"),
+            }]);
+            req.model = public_model.to_string();
+
+            let result = convert_request(&req).expect("conversion should succeed");
+            assert_eq!(
+                result
+                    .conversation_state
+                    .current_message
+                    .user_input_message
+                    .model_id,
+                "claude-sonnet-5"
             );
         }
     }
@@ -1770,6 +1793,28 @@ mod tests {
         assert!(system_prefix.contains("You are Claude Code, Anthropic's official CLI"));
         assert!(system_prefix.contains(
             "You are powered by the model named Opus 4.8. The exact model ID is claude-opus-4-8."
+        ));
+    }
+
+    #[test]
+    fn convert_request_injects_sonnet_5_model_identity() {
+        let mut req = base_request(vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::json!("Hello"),
+        }]);
+        req.model = "claude-sonnet-5".to_string();
+        req.system = Some(vec![SystemMessage {
+            text: "You are Claude Code, Anthropic's official CLI for Claude.".to_string(),
+        }]);
+
+        let result = convert_request(&req).expect("conversion should succeed");
+        let system_prefix = match &result.conversation_state.history[0] {
+            Message::User(message) => &message.user_input_message.content,
+            other => panic!("expected injected system user message, got {other:?}"),
+        };
+
+        assert!(system_prefix.contains(
+            "You are powered by the model named Sonnet 5. The exact model ID is claude-sonnet-5."
         ));
     }
 

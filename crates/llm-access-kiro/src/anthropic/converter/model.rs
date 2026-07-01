@@ -5,6 +5,10 @@
 /// canonical Kiro model identifier. Returns `None` for unrecognized models.
 pub fn map_model(model: &str) -> Option<String> {
     let model = model.to_lowercase();
+    let normalized = model.replace('.', "-");
+    if normalized == "claude-sonnet-5" || normalized == "claude-sonnet-5-thinking" {
+        return Some("claude-sonnet-5".to_string());
+    }
     if model.contains("sonnet") {
         if model.contains("4-6") || model.contains("4.6") {
             Some("claude-sonnet-4.6".to_string())
@@ -29,11 +33,12 @@ pub fn map_model(model: &str) -> Option<String> {
 }
 
 /// Returns the context window size (in tokens) for the given model.
-/// 4.6-generation models get 1M; everything else defaults to 200K.
+/// Newer long-context Kiro models get 1M; everything else defaults to 200K.
 pub fn get_context_window_size(model: &str) -> i32 {
     match map_model(model) {
         Some(mapped)
-            if mapped == "claude-sonnet-4.6"
+            if mapped == "claude-sonnet-5"
+                || mapped == "claude-sonnet-4.6"
                 || mapped == "claude-opus-4.6"
                 || mapped == "claude-opus-4.7"
                 || mapped == "claude-opus-4.8" =>
@@ -51,6 +56,10 @@ mod tests {
 
     #[test]
     fn get_context_window_size_matches_latest_kiro_model_rules() {
+        assert_eq!(map_model("claude-sonnet-5"), Some("claude-sonnet-5".to_string()));
+        assert_eq!(map_model("claude-sonnet-5-thinking"), Some("claude-sonnet-5".to_string()));
+        assert_eq!(get_context_window_size("claude-sonnet-5"), 1_000_000);
+        assert_eq!(get_context_window_size("claude-sonnet-5-thinking"), 1_000_000);
         assert_eq!(get_context_window_size("claude-sonnet-4-6"), 1_000_000);
         assert_eq!(get_context_window_size("claude-opus-4-20250514"), 1_000_000);
         assert_eq!(map_model("claude-opus-4-8"), Some("claude-opus-4.8".to_string()));

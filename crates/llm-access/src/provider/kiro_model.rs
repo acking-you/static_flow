@@ -49,7 +49,10 @@ pub fn apply_kiro_model_mapping(
 }
 pub fn override_kiro_thinking_from_model_name(payload: &mut MessagesRequest) {
     let model = payload.model.to_lowercase();
-    if !model.contains("thinking") {
+    let normalized_model = model.replace('.', "-");
+    let is_sonnet_5 =
+        normalized_model == "claude-sonnet-5" || normalized_model == "claude-sonnet-5-thinking";
+    if !model.contains("thinking") && !is_sonnet_5 {
         return;
     }
     let is_high_reasoning_opus = model.contains("opus")
@@ -59,22 +62,19 @@ pub fn override_kiro_thinking_from_model_name(payload: &mut MessagesRequest) {
             || model.contains("4.7")
             || model.contains("4-8")
             || model.contains("4.8"));
+    let is_adaptive = is_high_reasoning_opus || is_sonnet_5;
     payload.thinking = Some(Thinking {
-        thinking_type: if is_high_reasoning_opus {
-            "adaptive".to_string()
-        } else {
-            "enabled".to_string()
-        },
+        thinking_type: if is_adaptive { "adaptive".to_string() } else { "enabled".to_string() },
         display: None,
         budget_tokens: 20_000,
     });
-    if is_high_reasoning_opus {
+    if is_adaptive {
         let output_config = payload.output_config.get_or_insert(OutputConfig {
             effort: None,
             format: None,
         });
         if output_config.effort.is_none() {
-            output_config.effort = Some("xhigh".to_string());
+            output_config.effort = Some(if is_sonnet_5 { "high" } else { "xhigh" }.to_string());
         }
     }
 }

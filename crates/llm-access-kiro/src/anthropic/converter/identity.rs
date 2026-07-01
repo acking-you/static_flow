@@ -19,6 +19,7 @@ fn requested_model_identity_id(model: &str) -> &str {
 
 fn requested_model_identity_name(model: &str) -> Option<&'static str> {
     match requested_model_identity_id(model) {
+        "claude-sonnet-5" => Some("Sonnet 5"),
         "claude-opus-4-8" => Some("Opus 4.8"),
         "claude-opus-4-7" => Some("Opus 4.7"),
         "claude-opus-4-6" => Some("Opus 4.6"),
