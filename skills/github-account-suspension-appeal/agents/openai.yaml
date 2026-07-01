@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub Account Appeal"
+  short_description: "Draft varied GitHub suspension appeals"
+  default_prompt: "Use $github-account-suspension-appeal to draft a concise GitHub account suspension appeal."
