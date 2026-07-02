@@ -775,7 +775,7 @@ impl ControlStore for PostgresControlRepository {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
+    use std::{collections::HashSet, sync::OnceLock};
 
     use anyhow::Context;
     use llm_access_core::{
@@ -798,6 +798,7 @@ mod tests {
     use super::SqlxClient;
 
     static TEST_DB_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    static TEST_DB_INITIALIZED: OnceLock<tokio::sync::Mutex<HashSet<String>>> = OnceLock::new();
 
     async fn test_db_guard() -> tokio::sync::MutexGuard<'static, ()> {
         TEST_DB_LOCK
@@ -806,10 +807,38 @@ mod tests {
             .await
     }
 
-    async fn reset_test_db(database_url: &str) -> anyhow::Result<()> {
-        crate::initialize_postgres_target(database_url)
+    fn test_db_initialization_key(database_url: &str) -> String {
+        format!("{:x}", Sha256::digest(database_url.as_bytes()))
+    }
+
+    fn mark_test_db_needs_initialization(
+        initialized: &mut HashSet<String>,
+        database_url: &str,
+    ) -> bool {
+        initialized.insert(test_db_initialization_key(database_url))
+    }
+
+    async fn ensure_test_db_schema(database_url: &str) -> anyhow::Result<()> {
+        let initialized =
+            TEST_DB_INITIALIZED.get_or_init(|| tokio::sync::Mutex::new(HashSet::new()));
+        let mut initialized = initialized.lock().await;
+        if !mark_test_db_needs_initialization(&mut initialized, database_url) {
+            return Ok(());
+        }
+
+        if let Err(error) = crate::initialize_postgres_target(database_url)
             .await
-            .context("initialize postgres test database")?;
+            .context("initialize postgres test database")
+        {
+            initialized.remove(&test_db_initialization_key(database_url));
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
+    async fn reset_test_db(database_url: &str) -> anyhow::Result<()> {
+        ensure_test_db_schema(database_url).await?;
         let client = SqlxClient::connect(database_url)
             .await
             .context("connect postgres test database")?;
@@ -846,6 +875,24 @@ mod tests {
             .context("truncate postgres test fixtures")?;
         client.close().await;
         Ok(())
+    }
+
+    #[test]
+    fn test_db_initialization_marker_runs_once_per_database_url() {
+        let mut initialized = HashSet::new();
+
+        assert!(mark_test_db_needs_initialization(
+            &mut initialized,
+            "postgres://user:secret@localhost/one"
+        ));
+        assert!(!mark_test_db_needs_initialization(
+            &mut initialized,
+            "postgres://user:secret@localhost/one"
+        ));
+        assert!(mark_test_db_needs_initialization(
+            &mut initialized,
+            "postgres://user:secret@localhost/two"
+        ));
     }
 
     async fn seed_test_key_bundle(database_url: &str) -> anyhow::Result<()> {
