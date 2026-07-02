@@ -58,6 +58,8 @@ pub struct KeyRouteConfig {
     pub preferred_pool_strategy: String,
     /// JSON object mapping public model names to upstream model names.
     pub model_name_map_json: Option<String>,
+    /// JSON object mapping exact Kiro request-model names to account-group ids.
+    pub kiro_model_group_preferences_json: Option<String>,
     /// Optional per-key concurrency cap.
     pub request_max_concurrency: Option<i64>,
     /// Optional per-key pacing interval.

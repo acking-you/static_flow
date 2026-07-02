@@ -484,6 +484,12 @@ impl PostgresControlRepository {
                     .collect(),
             )
             .await?;
+        let model_group_preferred_account_names = self
+            .resolve_kiro_model_group_preferred_account_names(
+                &bundle.route,
+                &selected_account_names,
+            )
+            .await?;
         let cache_policy_json = effective_kiro_cache_policy_json(
             &runtime_config.kiro_cache_policy_json,
             bundle.route.kiro_cache_policy_override_json.as_deref(),
@@ -503,6 +509,7 @@ impl PostgresControlRepository {
             anthropic_upstream_pool_mode: core_store::canonical_anthropic_upstream_pool_mode(Some(
                 &bundle.route.kiro_anthropic_upstream_pool_mode,
             )),
+            model_group_preferred_account_names,
             request_max_concurrency: bundle
                 .route
                 .request_max_concurrency

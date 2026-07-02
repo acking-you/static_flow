@@ -178,6 +178,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "anthropic_upstream_probe_state",
         sql: include_str!("../migrations/postgres/0034_anthropic_upstream_probe_state.sql"),
     },
+    SqlMigration {
+        version: 35,
+        name: "kiro_model_group_preferences",
+        sql: include_str!("../migrations/postgres/0035_kiro_model_group_preferences.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.

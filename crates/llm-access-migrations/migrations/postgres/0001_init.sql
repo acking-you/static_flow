@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS llm_key_route_config (
         preferred_pool_strategy IN ('balanced', 'credit_first')
     ),
     model_name_map_json JSONB,
+    kiro_model_group_preferences_json JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (
+        jsonb_typeof(kiro_model_group_preferences_json) = 'object'
+    ),
     request_max_concurrency BIGINT,
     request_min_start_interval_ms BIGINT,
     codex_fast_enabled BOOLEAN NOT NULL DEFAULT TRUE,

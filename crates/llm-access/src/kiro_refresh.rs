@@ -934,6 +934,7 @@ mod tests {
             cctest_proxy_base_url: None,
             cctest_proxy_api_key: None,
             model_name_map_json: "{}".to_string(),
+            model_group_preferred_account_names: std::collections::BTreeMap::new(),
             cache_kmodels_json: llm_access_core::store::default_kiro_cache_kmodels_json(),
             cache_policy_json: llm_access_core::store::default_kiro_cache_policy_json(),
             context_usage_min_request_tokens:

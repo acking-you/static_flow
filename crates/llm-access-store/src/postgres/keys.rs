@@ -116,7 +116,9 @@ impl PostgresControlRepository {
                     r.kiro_cctest_text_handling_enabled
                         AS kiro_cctest_text_handling_enabled,
                     r.kiro_anthropic_upstream_pool_mode
-                        AS kiro_anthropic_upstream_pool_mode
+                        AS kiro_anthropic_upstream_pool_mode,
+                    r.kiro_model_group_preferences_json::text
+                        AS kiro_model_group_preferences_json
                  FROM llm_keys k
                  LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
                  LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -167,7 +169,9 @@ impl PostgresControlRepository {
                     r.kiro_cctest_text_handling_enabled
                         AS kiro_cctest_text_handling_enabled,
                     r.kiro_anthropic_upstream_pool_mode
-                        AS kiro_anthropic_upstream_pool_mode
+                        AS kiro_anthropic_upstream_pool_mode,
+                    r.kiro_model_group_preferences_json::text
+                        AS kiro_model_group_preferences_json
                  FROM llm_keys k
                  LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
                  LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -294,7 +298,9 @@ impl PostgresControlRepository {
                     r.kiro_cctest_text_handling_enabled
                         AS kiro_cctest_text_handling_enabled,
                     r.kiro_anthropic_upstream_pool_mode
-                        AS kiro_anthropic_upstream_pool_mode
+                        AS kiro_anthropic_upstream_pool_mode,
+                    r.kiro_model_group_preferences_json::text
+                        AS kiro_model_group_preferences_json
                  FROM llm_keys k
                  LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
                  LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -376,6 +382,7 @@ impl PostgresControlRepository {
                             NULLIF(r.kiro_anthropic_upstream_pool_mode, ''),
                             'disabled'
                         ) AS kiro_anthropic_upstream_pool_mode,
+                        r.kiro_model_group_preferences_json,
                         g.account_names_json AS group_account_names_json,
                         COALESCE(NULLIF(r.route_strategy, ''), 'auto') AS route_strategy_norm
                     FROM llm_keys k
@@ -567,7 +574,9 @@ impl PostgresControlRepository {
                     page_keys.kiro_cctest_text_handling_enabled
                         AS kiro_cctest_text_handling_enabled,
                     page_keys.kiro_anthropic_upstream_pool_mode
-                        AS kiro_anthropic_upstream_pool_mode
+                        AS kiro_anthropic_upstream_pool_mode,
+                    page_keys.kiro_model_group_preferences_json::text
+                        AS kiro_model_group_preferences_json
                  FROM page_keys
                  LEFT JOIN key_candidate_summary summary
                    ON summary.key_id = page_keys.key_id
@@ -633,11 +642,26 @@ impl PostgresControlRepository {
                     r.kiro_cctest_text_handling_enabled
                         AS kiro_cctest_text_handling_enabled,
                     r.kiro_anthropic_upstream_pool_mode
-                        AS kiro_anthropic_upstream_pool_mode
+                        AS kiro_anthropic_upstream_pool_mode,
+                    r.kiro_model_group_preferences_json::text
+                        AS kiro_model_group_preferences_json
                  FROM llm_keys k
                  JOIN llm_key_route_config r ON r.key_id = k.key_id
                  LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
-                 WHERE k.provider_type = $1 AND r.account_group_id = $2
+                 WHERE k.provider_type = $1
+                   AND (
+                        r.account_group_id = $2
+                        OR EXISTS (
+                            SELECT 1
+                            FROM jsonb_each_text(
+                                COALESCE(
+                                    r.kiro_model_group_preferences_json,
+                                    '{}'::jsonb
+                                )
+                            ) AS model_group(model_name, referenced_group_id)
+                            WHERE model_group.referenced_group_id = $2
+                        )
+                   )
                  ORDER BY k.created_at_ms DESC, k.key_id DESC
                  LIMIT 1",
                 &[&provider_type, &group_id],
@@ -705,11 +729,12 @@ impl PostgresControlRepository {
                     kiro_cctest_text_handling_enabled,
                     kiro_cache_policy_override_json,
                     kiro_billable_model_multipliers_override_json,
-                    kiro_anthropic_upstream_pool_mode
+                    kiro_anthropic_upstream_pool_mode,
+                    kiro_model_group_preferences_json
                  ) VALUES (
                     $1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10, $11, $12,
                     $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23::jsonb,
-                    $24
+                    $24, COALESCE($25::jsonb, '{}'::jsonb)
                  )
                  ON CONFLICT(key_id) DO UPDATE SET
                     route_strategy = EXCLUDED.route_strategy,
@@ -745,7 +770,9 @@ impl PostgresControlRepository {
                     kiro_billable_model_multipliers_override_json =
                         EXCLUDED.kiro_billable_model_multipliers_override_json,
                     kiro_anthropic_upstream_pool_mode =
-                        EXCLUDED.kiro_anthropic_upstream_pool_mode",
+                        EXCLUDED.kiro_anthropic_upstream_pool_mode,
+                    kiro_model_group_preferences_json =
+                        EXCLUDED.kiro_model_group_preferences_json",
                 &[
                     &route.key_id,
                     &route.route_strategy,
@@ -771,6 +798,7 @@ impl PostgresControlRepository {
                     &route.kiro_cache_policy_override_json,
                     &route.kiro_billable_model_multipliers_override_json,
                     &route.kiro_anthropic_upstream_pool_mode,
+                    &route.kiro_model_group_preferences_json,
                 ],
             )
             .await
@@ -950,7 +978,9 @@ impl AdminKeyStore for PostgresControlRepository {
                 r.kiro_cctest_text_handling_enabled
                     AS kiro_cctest_text_handling_enabled,
                 r.kiro_anthropic_upstream_pool_mode
-                    AS kiro_anthropic_upstream_pool_mode
+                    AS kiro_anthropic_upstream_pool_mode,
+                r.kiro_model_group_preferences_json::text
+                    AS kiro_model_group_preferences_json
              FROM llm_keys k
              LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
              LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -1022,6 +1052,7 @@ impl AdminKeyStore for PostgresControlRepository {
             account_group_id: None,
             preferred_pool_strategy: core_store::default_kiro_pool_strategy(),
             model_name_map_json: None,
+            kiro_model_group_preferences_json: Some("{}".to_string()),
             request_max_concurrency: key.request_max_concurrency.map(|value| value as i64),
             request_min_start_interval_ms: key
                 .request_min_start_interval_ms
@@ -1109,6 +1140,12 @@ impl AdminKeyStore for PostgresControlRepository {
                 .map(serde_json::to_string)
                 .transpose()
                 .context("serialize postgres model name map")?;
+        }
+        if let Some(value) = patch.kiro_model_group_preferences.as_ref() {
+            bundle.route.kiro_model_group_preferences_json = Some(
+                serde_json::to_string(value)
+                    .context("serialize postgres kiro model group preferences")?,
+            );
         }
         if let Some(value) = patch.request_max_concurrency {
             bundle.route.request_max_concurrency = value.map(|value| value as i64);

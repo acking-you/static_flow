@@ -6132,6 +6132,8 @@ pub struct AdminLlmGatewayKeyView {
     #[serde(default = "default_anthropic_upstream_pool_mode")]
     pub kiro_anthropic_upstream_pool_mode: String,
     pub model_name_map: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub kiro_model_group_preferences: BTreeMap<String, String>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
     #[serde(default = "default_true")]
@@ -9030,6 +9032,7 @@ pub async fn create_admin_llm_gateway_key(
             preferred_pool_strategy: default_kiro_pool_strategy(),
             kiro_anthropic_upstream_pool_mode: default_anthropic_upstream_pool_mode(),
             model_name_map: None,
+            kiro_model_group_preferences: BTreeMap::new(),
             request_max_concurrency,
             request_min_start_interval_ms,
             kiro_request_validation_enabled: true,
@@ -9096,6 +9099,7 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub preferred_pool_strategy: Option<&'a str>,
     pub kiro_anthropic_upstream_pool_mode: Option<&'a str>,
     pub model_name_map: Option<&'a BTreeMap<String, String>>,
+    pub kiro_model_group_preferences: Option<&'a BTreeMap<String, String>>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
     pub codex_fast_enabled: Option<bool>,
@@ -9136,6 +9140,7 @@ pub async fn patch_admin_llm_gateway_key(
             request.preferred_pool_strategy,
             request.kiro_anthropic_upstream_pool_mode,
             request.model_name_map,
+            request.kiro_model_group_preferences,
             request.request_max_concurrency,
             request.request_min_start_interval_ms,
             request.codex_fast_enabled,
@@ -9235,6 +9240,11 @@ pub async fn patch_admin_llm_gateway_key(
             let value = serde_json::to_value(model_name_map)
                 .map_err(|e| format!("Serialize error: {:?}", e))?;
             body.insert("model_name_map".to_string(), value);
+        }
+        if let Some(preferences) = request.kiro_model_group_preferences {
+            let value = serde_json::to_value(preferences)
+                .map_err(|e| format!("Serialize error: {:?}", e))?;
+            body.insert("kiro_model_group_preferences".to_string(), value);
         }
         if let Some(request_max_concurrency) = request.request_max_concurrency {
             body.insert(
@@ -11445,6 +11455,7 @@ pub async fn create_admin_kiro_key(
             preferred_pool_strategy: default_kiro_pool_strategy(),
             kiro_anthropic_upstream_pool_mode: default_anthropic_upstream_pool_mode(),
             model_name_map: None,
+            kiro_model_group_preferences: BTreeMap::new(),
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
             kiro_request_validation_enabled: true,
@@ -11513,6 +11524,7 @@ pub async fn patch_admin_kiro_key(
             request.preferred_pool_strategy,
             request.kiro_anthropic_upstream_pool_mode,
             request.model_name_map,
+            request.kiro_model_group_preferences,
             request.request_max_concurrency,
             request.request_min_start_interval_ms,
             request.kiro_request_validation_enabled,
@@ -11607,6 +11619,11 @@ pub async fn patch_admin_kiro_key(
             let value = serde_json::to_value(model_name_map)
                 .map_err(|e| format!("Serialize error: {:?}", e))?;
             body.insert("model_name_map".to_string(), value);
+        }
+        if let Some(preferences) = request.kiro_model_group_preferences {
+            let value = serde_json::to_value(preferences)
+                .map_err(|e| format!("Serialize error: {:?}", e))?;
+            body.insert("kiro_model_group_preferences".to_string(), value);
         }
         if let Some(kiro_request_validation_enabled) = request.kiro_request_validation_enabled {
             body.insert(

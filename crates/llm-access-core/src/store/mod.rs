@@ -14,6 +14,7 @@ mod empty;
 mod groups;
 mod keys;
 mod kiro_account;
+mod kiro_model_routing;
 mod proxy;
 mod public;
 mod routes;
@@ -70,6 +71,9 @@ pub use kiro_account::{
     AdminKiroCacheView, AdminKiroStatusCacheUpdate, KiroStatusRefreshTarget, NewAdminKiroAccount,
     ADMIN_KIRO_ACCOUNT_ISSUE_ABNORMAL, ADMIN_KIRO_ACCOUNT_ISSUE_AUTH_401,
     ADMIN_KIRO_ACCOUNT_ISSUE_DISABLED, ADMIN_KIRO_ACCOUNT_ISSUE_ERROR,
+};
+pub use kiro_model_routing::{
+    kiro_model_group_preference, normalize_kiro_model_group_preferences, KiroModelGroupPreferences,
 };
 pub use proxy::{
     default_proxy_bindings, AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch,

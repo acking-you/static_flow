@@ -775,7 +775,7 @@ impl ControlStore for PostgresControlRepository {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
+    use std::{collections::HashSet, sync::OnceLock};
 
     use anyhow::Context;
     use llm_access_core::{
@@ -787,9 +787,9 @@ mod tests {
             AdminKiroAccountStore, AdminPageRequest, AdminProxyConfigPatch, AdminProxyStore,
             AdminProxyTrafficSnapshot, AdminReviewQueueStore, AnthropicUpstreamChannelUsageDelta,
             ControlStore, KeyUsageRollupDelta, NewAdminAnthropicUpstreamChannel,
-            NewAdminProxyConfig, NewPublicAccountContributionRequest, ProxyTrafficTotals,
-            PublicSubmissionStore, PublicUsageStore, UsageEventSink, UsageRollupBatch,
-            UsageRollupBatchSink,
+            NewAdminProxyConfig, NewPublicAccountContributionRequest, ProviderRouteStore,
+            ProxyTrafficTotals, PublicSubmissionStore, PublicUsageStore, UsageEventSink,
+            UsageRollupBatch, UsageRollupBatchSink,
         },
     };
     use serde::Serialize;
@@ -798,6 +798,7 @@ mod tests {
     use super::SqlxClient;
 
     static TEST_DB_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    static TEST_DB_INITIALIZED: OnceLock<tokio::sync::Mutex<HashSet<String>>> = OnceLock::new();
 
     async fn test_db_guard() -> tokio::sync::MutexGuard<'static, ()> {
         TEST_DB_LOCK
@@ -806,10 +807,38 @@ mod tests {
             .await
     }
 
-    async fn reset_test_db(database_url: &str) -> anyhow::Result<()> {
-        crate::initialize_postgres_target(database_url)
+    fn test_db_initialization_key(database_url: &str) -> String {
+        format!("{:x}", Sha256::digest(database_url.as_bytes()))
+    }
+
+    fn mark_test_db_needs_initialization(
+        initialized: &mut HashSet<String>,
+        database_url: &str,
+    ) -> bool {
+        initialized.insert(test_db_initialization_key(database_url))
+    }
+
+    async fn ensure_test_db_schema(database_url: &str) -> anyhow::Result<()> {
+        let initialized =
+            TEST_DB_INITIALIZED.get_or_init(|| tokio::sync::Mutex::new(HashSet::new()));
+        let mut initialized = initialized.lock().await;
+        if !mark_test_db_needs_initialization(&mut initialized, database_url) {
+            return Ok(());
+        }
+
+        if let Err(error) = crate::initialize_postgres_target(database_url)
             .await
-            .context("initialize postgres test database")?;
+            .context("initialize postgres test database")
+        {
+            initialized.remove(&test_db_initialization_key(database_url));
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
+    async fn reset_test_db(database_url: &str) -> anyhow::Result<()> {
+        ensure_test_db_schema(database_url).await?;
         let client = SqlxClient::connect(database_url)
             .await
             .context("connect postgres test database")?;
@@ -846,6 +875,24 @@ mod tests {
             .context("truncate postgres test fixtures")?;
         client.close().await;
         Ok(())
+    }
+
+    #[test]
+    fn test_db_initialization_marker_runs_once_per_database_url() {
+        let mut initialized = HashSet::new();
+
+        assert!(mark_test_db_needs_initialization(
+            &mut initialized,
+            "postgres://user:secret@localhost/one"
+        ));
+        assert!(!mark_test_db_needs_initialization(
+            &mut initialized,
+            "postgres://user:secret@localhost/one"
+        ));
+        assert!(mark_test_db_needs_initialization(
+            &mut initialized,
+            "postgres://user:secret@localhost/two"
+        ));
     }
 
     async fn seed_test_key_bundle(database_url: &str) -> anyhow::Result<()> {
@@ -1149,6 +1196,89 @@ mod tests {
             .expect("lookup result")
             .expect("key must exist");
         assert_eq!(key.key_name, "external");
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_skips_missing_kiro_model_group_preference() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        let client = SqlxClient::connect(&database_url)
+            .await
+            .expect("connect postgres test database");
+        let key_hash = format!("{:x}", Sha256::digest(b"kiro-secret"));
+        client
+            .execute(
+                "INSERT INTO llm_keys (
+                    key_id, name, secret, key_hash, status, provider_type, protocol_family,
+                    public_visible, quota_billable_limit, created_at_ms, updated_at_ms
+                 ) VALUES (
+                    'kiro-key', 'kiro', 'kiro-secret', $1, 'active', 'kiro', 'anthropic',
+                    TRUE, 1000, 1700000000000, 1700000000000
+                 )",
+                &[&key_hash],
+            )
+            .await
+            .expect("insert postgres kiro key");
+        client
+            .batch_execute(
+                "INSERT INTO llm_key_route_config (
+                    key_id, route_strategy, fixed_account_name, auto_account_names_json,
+                    account_group_id, preferred_pool_strategy, model_name_map_json,
+                    kiro_model_group_preferences_json, request_max_concurrency,
+                    request_min_start_interval_ms, codex_fast_enabled,
+                    kiro_request_validation_enabled, kiro_cache_estimation_enabled,
+                    kiro_zero_cache_debug_enabled, kiro_full_request_logging_enabled,
+                    kiro_cache_policy_override_json,
+                    kiro_billable_model_multipliers_override_json
+                 ) VALUES (
+                    'kiro-key', 'auto', NULL, '[\"kiro-a\"]'::jsonb, NULL, 'balanced', NULL,
+                    '{\"claude-sonnet-4\":\"missing-group\"}'::jsonb, NULL, NULL,
+                    TRUE, FALSE, FALSE, FALSE, FALSE, NULL, NULL
+                 );
+                 INSERT INTO llm_key_usage_rollups (
+                    key_id, input_uncached_tokens, input_cached_tokens, output_tokens,
+                    billable_tokens, credit_total, credit_missing_events, last_used_at_ms,
+                    updated_at_ms
+                 ) VALUES (
+                    'kiro-key', 0, 0, 0, 0, '0', 0, NULL, 1700000000000
+                 );
+                 INSERT INTO llm_kiro_accounts (
+                    account_name, auth_method, account_id, profile_arn, user_id,
+                    status, auth_json, max_concurrency, min_start_interval_ms,
+                    proxy_config_id, last_refresh_at_ms, last_error, created_at_ms, updated_at_ms
+                 ) VALUES (
+                    'kiro-a', 'social', NULL, NULL, 'user-a', 'active', '{}'::jsonb,
+                    1, 0, NULL, NULL, NULL, 1700000000000, 1700000000000
+                 );",
+            )
+            .await
+            .expect("insert postgres kiro route fixture");
+        client.close().await;
+        let repo = super::PostgresControlRepository::connect(&database_url, None)
+            .await
+            .expect("connect postgres repository");
+
+        let key = repo
+            .authenticate_bearer_secret("kiro-secret")
+            .await
+            .expect("authenticate kiro key")
+            .expect("kiro key must exist");
+        let routes = repo
+            .resolve_kiro_route_candidates(&key)
+            .await
+            .expect("resolve kiro route candidates");
+
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].account_name, "kiro-a");
+        assert!(!routes[0]
+            .model_group_preferred_account_names
+            .contains_key("claude-sonnet-4"));
     }
 
     #[tokio::test]
