@@ -214,7 +214,8 @@ pub async fn select_kiro_route_with_account_permit(
             "kiro route is not configured",
         ));
     }
-    let model_preference_active = model_preferred_account_names.is_some();
+    let model_preference_active =
+        model_preferred_account_names.is_some_and(|account_names| !account_names.is_empty());
     let queued_at = Instant::now();
     loop {
         let mut saw_local_limit = false;

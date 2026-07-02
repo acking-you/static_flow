@@ -349,7 +349,6 @@ impl PostgresControlRepository {
                         k.created_at_ms, k.updated_at_ms,
                         r.route_strategy, r.fixed_account_name, r.auto_account_names_json,
                         r.account_group_id, r.model_name_map_json,
-                        r.kiro_model_group_preferences_json,
                         r.request_max_concurrency, r.request_min_start_interval_ms,
                         r.codex_fast_enabled, r.codex_strict_session_rejection_enabled,
                         r.codex_image_generation_enabled,
@@ -383,6 +382,7 @@ impl PostgresControlRepository {
                             NULLIF(r.kiro_anthropic_upstream_pool_mode, ''),
                             'disabled'
                         ) AS kiro_anthropic_upstream_pool_mode,
+                        r.kiro_model_group_preferences_json,
                         g.account_names_json AS group_account_names_json,
                         COALESCE(NULLIF(r.route_strategy, ''), 'auto') AS route_strategy_norm
                     FROM llm_keys k

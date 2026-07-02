@@ -1911,7 +1911,7 @@ async fn kiro_selection_model_group_preference_outranks_sticky_account() {
 }
 
 #[tokio::test]
-async fn kiro_selection_model_group_preference_empty_set_still_ignores_sticky_account() {
+async fn kiro_selection_model_group_preference_empty_set_keeps_sticky_account() {
     let scheduler = llm_access_kiro::scheduler::KiroRequestScheduler::new();
     let routes = vec![
         kiro_route_for_selection("alpha", "user-alpha", 90.0, None),
@@ -1930,9 +1930,9 @@ async fn kiro_selection_model_group_preference_empty_set_still_ignores_sticky_ac
         None,
     )
     .await
-    .expect("empty model group preference should still bypass sticky affinity");
+    .expect("empty model group preference should keep sticky affinity");
 
-    assert_eq!(route.account_name, "alpha");
+    assert_eq!(route.account_name, "beta");
 }
 
 #[tokio::test]

@@ -463,16 +463,23 @@ impl PostgresControlRepository {
             .collect::<BTreeSet<_>>();
         let mut resolved = BTreeMap::new();
         for (model, group_id) in preferences {
-            let group = self
-                .get_admin_account_group_row(&group_id)
-                .await?
-                .with_context(|| {
-                    format!("configured kiro model group preference `{group_id}` does not exist")
-                })?;
-            if group.provider_type != core_store::PROVIDER_KIRO {
-                anyhow::bail!(
-                    "configured kiro model group preference belongs to a different provider"
+            let Some(group) = self.get_admin_account_group_row(&group_id).await? else {
+                tracing::warn!(
+                    group_id = %group_id,
+                    model = %model,
+                    "configured Kiro model group preference does not exist; skipping"
                 );
+                continue;
+            };
+            if group.provider_type != core_store::PROVIDER_KIRO {
+                tracing::warn!(
+                    group_id = %group_id,
+                    model = %model,
+                    provider_type = %group.provider_type,
+                    "configured Kiro model group preference belongs to a different provider; \
+                     skipping"
+                );
+                continue;
             }
             let account_names = group
                 .account_names
